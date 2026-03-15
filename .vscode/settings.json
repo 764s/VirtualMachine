@@ -1,0 +1,6 @@
+{
+        "files.exclude": {
+        "**/.*": true,
+        "!.vscode": true   // 保留 .vscode 文件夹
+    }
+}
