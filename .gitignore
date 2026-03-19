@@ -77,5 +77,5 @@ crashlytics-build.properties
 .vscode/
 .idea/
 
-/StandaloneRunner/bin
-/StandaloneRunner/obj
+/StandaloneRunner/bin/
+/StandaloneRunner/obj/
