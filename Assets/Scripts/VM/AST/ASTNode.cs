@@ -42,6 +42,7 @@ namespace FFVM.AST
         Wait,
         WaitFor,
         Yield,
+        Defer,
         ExprStatement,
 
         // Top-level declarations
@@ -276,6 +277,15 @@ namespace FFVM.AST
     public class YieldStmt : Stmt
     {
         public YieldStmt() : base(NodeKind.Yield) { }
+    }
+
+    /// <summary>
+    /// defer { ... } — register a cleanup block to execute on scope exit or forced kill.
+    /// </summary>
+    public class DeferStmt : Stmt
+    {
+        public BlockStmt Body { get; }
+        public DeferStmt(BlockStmt body) : base(NodeKind.Defer) { Body = body; }
     }
 
     public class ExprStmt : Stmt

@@ -48,6 +48,8 @@ namespace FFVM
             inst.ModuleSlot = moduleSlot;
             inst.IP = entryIP;
             inst.IsAlive = true;
+            inst.StateFlags = VMStateFlags.Active;
+            inst.WaitTargetInstanceId = -1;
 
             return slot;
         }

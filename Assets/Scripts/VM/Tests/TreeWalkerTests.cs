@@ -1,6 +1,8 @@
+using System;
 using System.Collections.Generic;
 using FFVM;
 using FFVM.AST;
+using UnityEditor;
 using UnityEngine;
 
 /// <summary>
@@ -10,7 +12,8 @@ using UnityEngine;
 /// </summary>
 public static class TreeWalkerTests
 {
-    [UnityEngine.RuntimeInitializeOnLoadMethod(RuntimeInitializeLoadType.AfterSceneLoad)]
+    // [UnityEngine.RuntimeInitializeOnLoadMethod(RuntimeInitializeLoadType.AfterSceneLoad)]
+    [MenuItem("TestVM/RunAll")]
     public static void RunAll()
     {
         int passed = 0;
@@ -457,6 +460,585 @@ public static class TreeWalkerTests
             Assert(pool.Instances[id].Registers.Get(0).ToFloat() == 42.0f,
                 "Snapshot: register restored to 42");
             Assert(pool.Instances[id].IP == 10, "Snapshot: IP restored to 10");
+        }
+
+        // ===== Test 15: Defer — normal path (4.1) =====
+        {
+            // func test() { defer { syscall SetBB(0) }; syscall SetBB(1); return; }
+            // Expected call order: [1, 0] — main flow first, cleanup after
+            var callLog = new List<int>();
+
+            var func = new FuncDecl("test",
+                new List<ParamDecl>(),
+                "void",
+                new BlockStmt(new List<Stmt>
+                {
+                    new DeferStmt(new BlockStmt(new List<Stmt>
+                    {
+                        new ExprStmt(new SyscallExpr(0, "SetBB", new List<Expr>
+                        {
+                            new IntLiteralExpr(0)
+                        }))
+                    })),
+                    new ExprStmt(new SyscallExpr(0, "SetBB", new List<Expr>
+                    {
+                        new IntLiteralExpr(1)
+                    })),
+                    new ReturnStmt(null)
+                }),
+                false
+            );
+
+            var module = new ModuleNode("test_defer_normal");
+            module.Functions.Add(func);
+
+            var walker = new TreeWalker();
+            walker.RegisterSyscall(0, args => { callLog.Add(args[0].AsInt()); return Value.Void(); });
+            walker.LoadModule(module);
+            walker.CallFunction("test");
+
+            Assert(callLog.Count == 2, "Defer normal: exactly 2 syscalls");
+            Assert(callLog.Count == 2 && callLog[0] == 1 && callLog[1] == 0,
+                "Defer normal: order is [1, 0] (main first, cleanup after)");
+        }
+
+        // ===== Test 16: Defer — not fired on wait suspension (4.2 simplified) =====
+        {
+            // func test() { defer { syscall SetBB(0) }; syscall SetBB(1); wait 10; }
+            // On wait suspension: SetBB(1) called, SetBB(0) NOT called (defer pending)
+            var callLog = new List<int>();
+
+            var func = new FuncDecl("test",
+                new List<ParamDecl>(),
+                "void",
+                new BlockStmt(new List<Stmt>
+                {
+                    new DeferStmt(new BlockStmt(new List<Stmt>
+                    {
+                        new ExprStmt(new SyscallExpr(0, "SetBB", new List<Expr>
+                        {
+                            new IntLiteralExpr(0)
+                        }))
+                    })),
+                    new ExprStmt(new SyscallExpr(0, "SetBB", new List<Expr>
+                    {
+                        new IntLiteralExpr(1)
+                    })),
+                    new WaitStmt(new NumberLiteralExpr(10))
+                }),
+                false
+            );
+
+            var module = new ModuleNode("test_defer_wait");
+            module.Functions.Add(func);
+
+            var walker = new TreeWalker();
+            walker.RegisterSyscall(0, args => { callLog.Add(args[0].AsInt()); return Value.Void(); });
+            walker.LoadModule(module);
+
+            bool waitCaught = false;
+            try { walker.CallFunction("test"); }
+            catch (WaitSignal) { waitCaught = true; }
+
+            Assert(waitCaught, "Defer wait: WaitSignal thrown");
+            Assert(callLog.Count == 1 && callLog[0] == 1,
+                "Defer wait: only SetBB(1) called, cleanup NOT fired on suspension");
+            // NOTE: Full wait-resume-cleanup test deferred to Step 6 (bytecode IP resume)
+        }
+
+        // ===== Test 17: Defer + Wait + Kill path (4.3) =====
+        {
+            // func test() { defer { syscall SetBB(0) }; syscall SetBB(1); wait 10; syscall PlayEffect(); }
+            // Sequence: call → SetBB(1) → WaitSignal → Kill() → cleanup SetBB(0)
+            // PlayEffect must NOT execute
+            var callLog = new List<int>();
+            bool playEffectCalled = false;
+
+            var func = new FuncDecl("test",
+                new List<ParamDecl>(),
+                "void",
+                new BlockStmt(new List<Stmt>
+                {
+                    new DeferStmt(new BlockStmt(new List<Stmt>
+                    {
+                        new ExprStmt(new SyscallExpr(0, "SetBB", new List<Expr>
+                        {
+                            new IntLiteralExpr(0)
+                        }))
+                    })),
+                    new ExprStmt(new SyscallExpr(0, "SetBB", new List<Expr>
+                    {
+                        new IntLiteralExpr(1)
+                    })),
+                    new WaitStmt(new NumberLiteralExpr(10)),
+                    new ExprStmt(new SyscallExpr(1, "PlayEffect", new List<Expr>()))
+                }),
+                false
+            );
+
+            var module = new ModuleNode("test_defer_kill");
+            module.Functions.Add(func);
+
+            var walker = new TreeWalker();
+            walker.RegisterSyscall(0, args => { callLog.Add(args[0].AsInt()); return Value.Void(); });
+            walker.RegisterSyscall(1, args => { playEffectCalled = true; return Value.Void(); });
+            walker.LoadModule(module);
+
+            try { walker.CallFunction("test"); }
+            catch (WaitSignal) { /* suspended */ }
+
+            // Kill while waiting — cleanup should fire
+            walker.Kill();
+
+            Assert(!playEffectCalled, "Defer kill: PlayEffect NOT executed");
+            Assert(callLog.Count == 2 && callLog[0] == 1 && callLog[1] == 0,
+                "Defer kill: SetBB(1) then cleanup SetBB(0)");
+            Assert(walker.IsKilled, "Defer kill: IsKilled flag set");
+        }
+
+        // ===== Test 18: Multi-layer defer LIFO order (4.4) =====
+        {
+            // func test() { defer { A() }; defer { B() }; return; }
+            // Expected order: [B, A] — last registered first executed
+            var callLog = new List<string>();
+
+            var func = new FuncDecl("test",
+                new List<ParamDecl>(),
+                "void",
+                new BlockStmt(new List<Stmt>
+                {
+                    new DeferStmt(new BlockStmt(new List<Stmt>
+                    {
+                        new ExprStmt(new SyscallExpr(0, "A", new List<Expr>()))
+                    })),
+                    new DeferStmt(new BlockStmt(new List<Stmt>
+                    {
+                        new ExprStmt(new SyscallExpr(1, "B", new List<Expr>()))
+                    })),
+                    new ReturnStmt(null)
+                }),
+                false
+            );
+
+            var module = new ModuleNode("test_defer_lifo");
+            module.Functions.Add(func);
+
+            var walker = new TreeWalker();
+            walker.RegisterSyscall(0, args => { callLog.Add("A"); return Value.Void(); });
+            walker.RegisterSyscall(1, args => { callLog.Add("B"); return Value.Void(); });
+            walker.LoadModule(module);
+            walker.CallFunction("test");
+
+            Assert(callLog.Count == 2 && callLog[0] == "B" && callLog[1] == "A",
+                "Defer LIFO: order is [B, A]");
+        }
+
+        // ===== Test 19: Save/Load with Cleanup stack (5.1) =====
+        {
+            var pool = new InstancePool();
+            pool.Init();
+            var ring = new SnapshotRingBuffer();
+
+            int id = pool.Allocate(0, 0);
+            pool.Instances[id].StateFlags = VMStateFlags.Active;
+            pool.Instances[id].CleanupDepth = 1;
+            pool.Instances[id].CleanupStack.Set(0, new CleanupFrame { CleanupEntryIP = 42 });
+
+            ring.SaveState(ref pool, 100);
+
+            // Modify all fields
+            pool.Instances[id].StateFlags = VMStateFlags.Completed;
+            pool.Instances[id].CleanupDepth = 3;
+            pool.Instances[id].CleanupStack.Set(0, new CleanupFrame { CleanupEntryIP = 999 });
+
+            // Rollback
+            bool loaded = ring.LoadState(ref pool, 100);
+            Assert(loaded, "Snapshot cleanup: load succeeded");
+            Assert(pool.Instances[id].StateFlags == VMStateFlags.Active,
+                "Snapshot cleanup: StateFlags restored to Active");
+            Assert(pool.Instances[id].CleanupDepth == 1,
+                "Snapshot cleanup: CleanupDepth restored to 1");
+            Assert(pool.Instances[id].CleanupStack.Get(0).CleanupEntryIP == 42,
+                "Snapshot cleanup: CleanupEntryIP restored to 42");
+        }
+
+        // ===== Test 20: StateFlags snapshot consistency (5.2) =====
+        {
+            var pool = new InstancePool();
+            pool.Init();
+            var ring = new SnapshotRingBuffer();
+
+            int id = pool.Allocate(0, 0);
+            pool.Instances[id].StateFlags = VMStateFlags.Killed;
+
+            ring.SaveState(ref pool, 200);
+
+            pool.Instances[id].StateFlags = VMStateFlags.Active;
+
+            bool loaded = ring.LoadState(ref pool, 200);
+            Assert(loaded, "Snapshot flags: load succeeded");
+            Assert(pool.Instances[id].StateFlags == VMStateFlags.Killed,
+                "Snapshot flags: restored to Killed");
+        }
+
+        // TODO: 0 GC regression test — bytecode phase (Step 6)
+        // TreeWalker uses managed objects (Environment, List, exceptions), so zero-GC
+        // validation is not applicable here. Will be verified in bytecode interpreter.
+
+        // =================================================================
+        //  Phase A — Bytecode Path Tests (Step 6d)
+        // =================================================================
+
+        // ===== Test 21: Bytecode normal path (6d.2) =====
+        {
+            // Bytecode equivalent:
+            //   defer { SetBB(0) }; SetBB(1); wait 10; PlayEffect(); return;
+            //
+            // IP 0: PUSH_CLEANUP 7     → register cleanup at IP 7
+            // IP 1: LOAD_CONST R0, #1  → R0 = 1  (const[1])
+            // IP 2: SYSCALL 0          → SetBB(R0=1)
+            // IP 3: WAIT 10
+            // IP 4: SYSCALL 1          → PlayEffect()
+            // IP 5: RETURN             → cleanup depth>0 → InCleanup, jump IP 7
+            // --- cleanup block ---
+            // IP 6: NOP (unreachable, spacer)
+            // IP 7: LOAD_CONST R0, #0  → R0 = 0  (const[0])
+            // IP 8: SYSCALL 0          → SetBB(R0=0)
+            // IP 9: RETURN             → InCleanup, depth=0 → Completed
+
+            var syscallLog = new List<string>();
+
+            var program = new VMProgram(
+                new Instruction[]
+                {
+                    new Instruction(OpCode.PUSH_CLEANUP, 7),      // IP 0
+                    new Instruction(OpCode.LOAD_CONST, 0, 1),     // IP 1: R0 = const[1] = 1
+                    new Instruction(OpCode.SYSCALL, 0),            // IP 2: SetBB
+                    new Instruction(OpCode.WAIT, 10),              // IP 3
+                    new Instruction(OpCode.SYSCALL, 1),            // IP 4: PlayEffect
+                    new Instruction(OpCode.RETURN),                // IP 5
+                    new Instruction(OpCode.NOP),                   // IP 6: spacer
+                    new Instruction(OpCode.LOAD_CONST, 0, 0),     // IP 7: R0 = const[0] = 0
+                    new Instruction(OpCode.SYSCALL, 0),            // IP 8: SetBB
+                    new Instruction(OpCode.RETURN),                // IP 9
+                },
+                new Number[] { Number.FromInt(0), Number.FromInt(1) },
+                1
+            );
+
+            var world = new VMWorld();
+            world.Modules.Load(0, program);
+            world.Syscalls.Register(0, "SetBB", (ref VMInstanceState s) =>
+            {
+                syscallLog.Add($"SetBB({s.Registers.Get(0).ToInt()})");
+            });
+            world.Syscalls.Register(1, "PlayEffect", (ref VMInstanceState s) =>
+            {
+                syscallLog.Add("PlayEffect");
+            });
+
+            int id = world.SpawnInstance(0, 0);
+
+            // Tick 1: executes PUSH_CLEANUP, LOAD_CONST, SYSCALL SetBB(1), WAIT 10 → suspends
+            world.Tick();
+            Assert(syscallLog.Count == 1 && syscallLog[0] == "SetBB(1)",
+                "BC normal: tick 1 → SetBB(1)");
+
+            // Tick 2-11: wait countdown (10 ticks)
+            for (int t = 0; t < 10; t++) world.Tick();
+            Assert(syscallLog.Count == 1, "BC normal: waiting, no new syscalls");
+
+            // Tick 12: resume → PlayEffect, RETURN → cleanup SetBB(0), RETURN → Completed
+            world.Tick();
+            Assert(syscallLog.Count == 3, "BC normal: 3 total syscalls");
+            Assert(syscallLog[1] == "PlayEffect", "BC normal: PlayEffect after wait");
+            Assert(syscallLog[2] == "SetBB(0)", "BC normal: cleanup SetBB(0)");
+            Assert((world.Pool.Instances[id].StateFlags & VMStateFlags.Completed) != 0,
+                "BC normal: Completed flag set");
+        }
+
+        // ===== Test 22: Bytecode kill path (6d.3) =====
+        {
+            // Same bytecode as Test 21
+            var syscallLog = new List<string>();
+
+            var program = new VMProgram(
+                new Instruction[]
+                {
+                    new Instruction(OpCode.PUSH_CLEANUP, 7),
+                    new Instruction(OpCode.LOAD_CONST, 0, 1),
+                    new Instruction(OpCode.SYSCALL, 0),
+                    new Instruction(OpCode.WAIT, 10),
+                    new Instruction(OpCode.SYSCALL, 1),            // PlayEffect — should NOT execute
+                    new Instruction(OpCode.RETURN),
+                    new Instruction(OpCode.NOP),
+                    new Instruction(OpCode.LOAD_CONST, 0, 0),
+                    new Instruction(OpCode.SYSCALL, 0),
+                    new Instruction(OpCode.RETURN),
+                },
+                new Number[] { Number.FromInt(0), Number.FromInt(1) },
+                1
+            );
+
+            var world = new VMWorld();
+            world.Modules.Load(0, program);
+            world.Syscalls.Register(0, "SetBB", (ref VMInstanceState s) =>
+            {
+                syscallLog.Add($"SetBB({s.Registers.Get(0).ToInt()})");
+            });
+            world.Syscalls.Register(1, "PlayEffect", (ref VMInstanceState s) =>
+            {
+                syscallLog.Add("PlayEffect");
+            });
+
+            int id = world.SpawnInstance(0, 0);
+
+            // Tick 1: runs to WAIT 10
+            world.Tick();
+            Assert(syscallLog.Count == 1 && syscallLog[0] == "SetBB(1)",
+                "BC kill: tick 1 → SetBB(1)");
+
+            // Kill while waiting
+            world.Pool.Instances[id].StateFlags |= VMStateFlags.Killed;
+
+            // Tick 2: Killed → enter cleanup → SetBB(0) → Completed
+            world.Tick();
+            Assert(syscallLog.Count == 2, "BC kill: 2 total syscalls (no PlayEffect)");
+            Assert(syscallLog[1] == "SetBB(0)", "BC kill: cleanup SetBB(0)");
+            Assert((world.Pool.Instances[id].StateFlags & VMStateFlags.Completed) != 0,
+                "BC kill: Completed flag set");
+        }
+
+        // ===== Test 23: Killed priority > WaitCounter (6d.4) =====
+        {
+            var syscallLog = new List<string>();
+
+            var program = new VMProgram(
+                new Instruction[]
+                {
+                    new Instruction(OpCode.PUSH_CLEANUP, 4),
+                    new Instruction(OpCode.SYSCALL, 0),            // main work
+                    new Instruction(OpCode.WAIT, 100),             // long wait
+                    new Instruction(OpCode.RETURN),
+                    // cleanup block at IP 4
+                    new Instruction(OpCode.SYSCALL, 1),            // cleanup work
+                    new Instruction(OpCode.RETURN),
+                },
+                new Number[0],
+                0
+            );
+
+            var world = new VMWorld();
+            world.Modules.Load(0, program);
+            world.Syscalls.Register(0, "Main", (ref VMInstanceState s) => { syscallLog.Add("Main"); });
+            world.Syscalls.Register(1, "Cleanup", (ref VMInstanceState s) => { syscallLog.Add("Cleanup"); });
+
+            int id = world.SpawnInstance(0, 0);
+
+            // Tick 1: PUSH_CLEANUP, Main, WAIT 100 → suspended with WaitCounter=100
+            world.Tick();
+            Assert(world.Pool.Instances[id].WaitCounter == 100,
+                "BC kill-prio: WaitCounter = 100");
+
+            // Kill while WaitCounter > 0
+            world.Pool.Instances[id].StateFlags |= VMStateFlags.Killed;
+
+            // Tick 2: Killed takes priority over WaitCounter → cleanup runs
+            world.Tick();
+            Assert(syscallLog.Count == 2 && syscallLog[1] == "Cleanup",
+                "BC kill-prio: cleanup ran despite WaitCounter > 0");
+            Assert((world.Pool.Instances[id].StateFlags & VMStateFlags.Completed) != 0,
+                "BC kill-prio: Completed");
+        }
+
+        // ===== Test 24: Bytecode multi-layer defer LIFO (6d.5) =====
+        {
+            // defer { A() }; defer { B() }; return;
+            // IP 0: PUSH_CLEANUP 5     → cleanup A at IP 5
+            // IP 1: PUSH_CLEANUP 8     → cleanup B at IP 8
+            // IP 2: RETURN             → InCleanup, pop top (B at IP 8)
+            // -- cleanup B --
+            // IP 3: NOP (spacer)
+            // IP 4: NOP (spacer)
+            // IP 5: SYSCALL 0 (A)
+            // IP 6: RETURN             → InCleanup, depth=0 → Completed
+            // IP 7: NOP (spacer)
+            // IP 8: SYSCALL 1 (B)
+            // IP 9: RETURN             → InCleanup, depth>0, pop next (A at IP 5)
+
+            var syscallLog = new List<string>();
+
+            var program = new VMProgram(
+                new Instruction[]
+                {
+                    new Instruction(OpCode.PUSH_CLEANUP, 5),      // IP 0: cleanup A at IP 5
+                    new Instruction(OpCode.PUSH_CLEANUP, 8),      // IP 1: cleanup B at IP 8
+                    new Instruction(OpCode.RETURN),                // IP 2: normal → InCleanup
+                    new Instruction(OpCode.NOP),                   // IP 3
+                    new Instruction(OpCode.NOP),                   // IP 4
+                    new Instruction(OpCode.SYSCALL, 0),            // IP 5: A()
+                    new Instruction(OpCode.RETURN),                // IP 6
+                    new Instruction(OpCode.NOP),                   // IP 7
+                    new Instruction(OpCode.SYSCALL, 1),            // IP 8: B()
+                    new Instruction(OpCode.RETURN),                // IP 9
+                },
+                new Number[0],
+                0
+            );
+
+            var world = new VMWorld();
+            world.Modules.Load(0, program);
+            world.Syscalls.Register(0, "A", (ref VMInstanceState s) => { syscallLog.Add("A"); });
+            world.Syscalls.Register(1, "B", (ref VMInstanceState s) => { syscallLog.Add("B"); });
+
+            int id = world.SpawnInstance(0, 0);
+            world.Tick();
+
+            Assert(syscallLog.Count == 2, "BC LIFO: 2 cleanup syscalls");
+            Assert(syscallLog[0] == "B" && syscallLog[1] == "A",
+                "BC LIFO: order is [B, A]");
+            Assert((world.Pool.Instances[id].StateFlags & VMStateFlags.Completed) != 0,
+                "BC LIFO: Completed");
+        }
+
+        // =================================================================
+        //  Phase B — Bytecode Save/Load + 0 GC Tests (Step 6e)
+        // =================================================================
+
+        // ===== Test 25: Save/Load then resume — same behavior (6e.1) =====
+        {
+            // Same bytecode: defer{SetBB(0)}; SetBB(1); wait 10; PlayEffect; return
+            // Run A: straight through (reference)
+            // Run B: save after WAIT, tick 5 more, load, then resume to completion
+            // Assert: identical syscall sequences
+
+            var programInstructions = new Instruction[]
+            {
+                new Instruction(OpCode.PUSH_CLEANUP, 7),
+                new Instruction(OpCode.LOAD_CONST, 0, 1),     // R0 = 1
+                new Instruction(OpCode.SYSCALL, 0),            // SetBB(1)
+                new Instruction(OpCode.WAIT, 10),
+                new Instruction(OpCode.SYSCALL, 1),            // PlayEffect
+                new Instruction(OpCode.RETURN),
+                new Instruction(OpCode.NOP),                   // spacer
+                new Instruction(OpCode.LOAD_CONST, 0, 0),     // R0 = 0
+                new Instruction(OpCode.SYSCALL, 0),            // SetBB(0)
+                new Instruction(OpCode.RETURN),
+            };
+            var consts = new Number[] { Number.FromInt(0), Number.FromInt(1) };
+
+            // --- Run A: reference run (no save/load) ---
+            var logA = new List<string>();
+            {
+                var prog = new VMProgram(programInstructions, consts, 1);
+                var w = new VMWorld();
+                w.Modules.Load(0, prog);
+                w.Syscalls.Register(0, "SetBB", (ref VMInstanceState s) =>
+                    { logA.Add($"SetBB({s.Registers.Get(0).ToInt()})"); });
+                w.Syscalls.Register(1, "PlayEffect", (ref VMInstanceState s) =>
+                    { logA.Add("PlayEffect"); });
+                w.SpawnInstance(0, 0);
+
+                // Tick until completed
+                for (int t = 0; t < 20; t++) w.Tick();
+            }
+
+            // --- Run B: save at WAIT, tick 5 more (diverge), load, resume ---
+            var logB = new List<string>();
+            {
+                var prog = new VMProgram(programInstructions, consts, 1);
+                var w = new VMWorld();
+                w.Modules.Load(0, prog);
+                w.Syscalls.Register(0, "SetBB", (ref VMInstanceState s) =>
+                    { logB.Add($"SetBB({s.Registers.Get(0).ToInt()})"); });
+                w.Syscalls.Register(1, "PlayEffect", (ref VMInstanceState s) =>
+                    { logB.Add("PlayEffect"); });
+                w.SpawnInstance(0, 0);
+
+                // Tick 1: execute to WAIT
+                w.Tick();
+
+                // Save state at frame 1
+                w.SaveState();
+                int savedFrame = w.FrameNumber;
+
+                // Tick 5 more (diverge state — WaitCounter counts down)
+                for (int t = 0; t < 5; t++) w.Tick();
+
+                // Load back to saved state
+                logB.Clear(); // discard diverged syscall log
+                w.LoadState(savedFrame);
+
+                // Re-register syscalls (they capture logB which we cleared)
+                // Actually they still reference logB, which is cleared — that's fine.
+                // Now add back SetBB(1) since it was logged before save and we cleared.
+                logB.Add("SetBB(1)"); // restore the pre-save entry
+
+                // Tick to completion from restored state
+                for (int t = 0; t < 20; t++) w.Tick();
+            }
+
+            Assert(logA.Count == logB.Count,
+                $"Save/Load resume: same syscall count ({logA.Count} vs {logB.Count})");
+            bool seqMatch = logA.Count == logB.Count;
+            for (int i = 0; i < logA.Count && seqMatch; i++)
+                seqMatch = logA[i] == logB[i];
+            Assert(seqMatch,
+                "Save/Load resume: identical syscall sequence");
+        }
+
+        // ===== Test 26: 0 GC in bytecode Tick loop (6e.2) =====
+        {
+            // Setup: program with SYSCALL + WAIT + cleanup, pre-allocate everything
+            var program = new VMProgram(
+                new Instruction[]
+                {
+                    new Instruction(OpCode.PUSH_CLEANUP, 5),
+                    new Instruction(OpCode.SYSCALL, 0),
+                    new Instruction(OpCode.WAIT, 1),
+                    new Instruction(OpCode.RETURN),
+                    new Instruction(OpCode.NOP),
+                    // cleanup block
+                    new Instruction(OpCode.SYSCALL, 0),
+                    new Instruction(OpCode.RETURN),
+                },
+                new Number[0],
+                0
+            );
+
+            var world = new VMWorld();
+            world.Modules.Load(0, program);
+            world.Syscalls.Register(0, "Noop", (ref VMInstanceState s) => { /* no alloc */ });
+
+            // Warmup: run a few rounds to JIT and stabilize
+            for (int warm = 0; warm < 5; warm++)
+            {
+                int wid = world.SpawnInstance(0, 0);
+                for (int t = 0; t < 10; t++) world.Tick();
+                world.DestroyInstance(wid);
+            }
+
+            // Measure: spawn + tick to completion, check GC
+            GC.Collect();
+            GC.WaitForPendingFinalizers();
+            GC.Collect();
+            long memBefore = GC.GetTotalMemory(false);
+
+            const int rounds = 20;
+            for (int r = 0; r < rounds; r++)
+            {
+                int mid = world.SpawnInstance(0, 0);
+                for (int t = 0; t < 10; t++) world.Tick();
+                world.DestroyInstance(mid);
+            }
+
+            long memAfter = GC.GetTotalMemory(false);
+            long delta = memAfter - memBefore;
+
+            // Allow small tolerance (GC measurement is approximate)
+            // Any significant allocation (e.g. boxing, delegate alloc) would show >1KB
+            Assert(delta < 1024,
+                $"0 GC: bytecode tick delta = {delta} bytes (< 1024)");
         }
 
         // ===== Summary =====

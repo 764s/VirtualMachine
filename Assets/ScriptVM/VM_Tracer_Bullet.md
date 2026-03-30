@@ -267,7 +267,11 @@ Syscall_PlayEffect(ulong selfEntityId, ulong effectId)
 
 ---
 
-## 十、验证清单（必须全部通过）
+## 十、验证清单
+
+> 验证分为两阶段：Phase A 是曳光弹成立的硬门槛，必须全部通过才允许继续扩展。Phase B 是曳光弹通过后应立即补充的约束验证，但不阻塞 Phase A 闭环。
+
+### Phase A：必须通过（曳光弹成立门槛）
 
 ### 10.1 运行时结构验证
 
@@ -305,6 +309,8 @@ Syscall_PlayEffect(ulong selfEntityId, ulong effectId)
 
 ---
 
+### Phase B：通过后立即验证（不阻塞 Phase A 闭环）
+
 ### 10.4 Save / Load 验证
 
 必须至少做一次中途 Save / Load：
@@ -334,13 +340,15 @@ Syscall_PlayEffect(ulong selfEntityId, ulong effectId)
 
 ## 十一、失败判定条件
 
+> Phase A 失败条件（立即阻断）：1-3、6-7。Phase B 失败条件（Phase A 通过后验证）：4-5。
+
 只要出现以下任意一种情况，就应判定这颗曳光弹失败：
 
 1. `ExecutionContextComponent` 之外还藏着关键脚本状态
 2. `wait` 依赖宿主协程或对象回调残留
 3. Kill 时 Cleanup 无法稳定执行
-4. 运行过程中出现 GC 分配
-5. Save / Load 后执行结果不一致
+4. 运行过程中出现 GC 分配（Phase B）
+5. Save / Load 后执行结果不一致（Phase B）
 6. `PlayEffect` 在被打断路径中误触发
 7. 为了跑通这颗曳光弹，被迫引入动态列表、托管引用或对象图状态
 

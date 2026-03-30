@@ -24,6 +24,30 @@ namespace FFVM
     }
 
     /// <summary>
+    /// VM instance lifecycle flags. Used by Tick() to drive execution, cleanup, and termination.
+    /// </summary>
+    [System.Flags]
+    public enum VMStateFlags : byte
+    {
+        None      = 0,
+        Active    = 1,
+        Killed    = 2,
+        InCleanup = 4,
+        Completed = 8,
+    }
+
+    /// <summary>
+    /// A single cleanup entry on the fixed-depth cleanup stack.
+    /// Stores the bytecode IP of a cleanup (defer) block.
+    /// </summary>
+    [StructLayout(LayoutKind.Sequential)]
+    public struct CleanupFrame
+    {
+        /// <summary>Instruction pointer of the cleanup block entry.</summary>
+        public int CleanupEntryIP;
+    }
+
+    /// <summary>
     /// A single call frame on the lightweight call stack.
     /// Stored as value type for memcpy snapshot.
     /// </summary>
@@ -65,6 +89,10 @@ namespace FFVM
         // Status flags
         public VMError ErrorFlag;
         public bool IsAlive;
+        public VMStateFlags StateFlags;
+
+        // Cleanup stack
+        public byte CleanupDepth;
 
         // ----- Fixed-size arrays (inline for blittable memcpy) -----
 
@@ -73,6 +101,9 @@ namespace FFVM
 
         // Call stack frames: 16 max depth
         public CallStackFrames CallStack;
+
+        // Cleanup stack frames: 8 max depth
+        public CleanupFrames CleanupStack;
     }
 
     /// <summary>
@@ -130,6 +161,31 @@ namespace FFVM
         public unsafe void Set(int index, CallFrame value)
         {
             fixed (CallFrame* ptr = &F00)
+            {
+                ptr[index] = value;
+            }
+        }
+    }
+
+    /// <summary>
+    /// Inline fixed-size cleanup stack. 8 × CleanupFrame.
+    /// </summary>
+    [StructLayout(LayoutKind.Sequential)]
+    public struct CleanupFrames
+    {
+        public CleanupFrame F00, F01, F02, F03, F04, F05, F06, F07;
+
+        public unsafe CleanupFrame Get(int index)
+        {
+            fixed (CleanupFrame* ptr = &F00)
+            {
+                return ptr[index];
+            }
+        }
+
+        public unsafe void Set(int index, CleanupFrame value)
+        {
+            fixed (CleanupFrame* ptr = &F00)
             {
                 ptr[index] = value;
             }

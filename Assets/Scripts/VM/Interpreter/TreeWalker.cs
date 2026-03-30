@@ -162,7 +162,10 @@ namespace FFVM.AST
 
         private Environment _globalEnv;
         private int _callDepth;
+        private readonly List<BlockStmt> _deferStack = new List<BlockStmt>();
+        private bool _killed;
 
+        public bool IsKilled => _killed;
         public Action<string> Log { get; set; }
 
         public TreeWalker()
@@ -203,15 +206,32 @@ namespace FFVM.AST
             }
 
             _callDepth = 0;
+            _deferStack.Clear();
+            _killed = false;
+
+            Value result;
             try
             {
                 ExecuteBlock(func.Body, env);
-                return Value.Void();
+                result = Value.Void();
             }
             catch (ReturnSignal ret)
             {
-                return ret.ReturnValue;
+                result = ret.ReturnValue;
             }
+
+            ExecuteCleanups(env);
+            return result;
+        }
+
+        /// <summary>
+        /// Force-kill this execution: runs all registered Cleanup blocks in LIFO order,
+        /// then prevents further main-flow execution.
+        /// </summary>
+        public void Kill()
+        {
+            _killed = true;
+            ExecuteCleanups(_globalEnv);
         }
 
         // ===== Statement Execution =====
@@ -257,6 +277,10 @@ namespace FFVM.AST
                     int targetId = EvalExpr(waitFor.TargetInstanceId, env).AsInt();
                     throw new WaitForSignal(targetId);
                 }
+
+                case DeferStmt deferStmt:
+                    _deferStack.Add(deferStmt.Body);
+                    break;
 
                 case YieldStmt _:
                     throw new YieldSignal();
@@ -494,6 +518,17 @@ namespace FFVM.AST
                 args[i] = EvalExpr(syscall.Arguments[i], env);
 
             return handler(args);
+        }
+
+        // ===== Cleanup =====
+
+        private void ExecuteCleanups(Environment env)
+        {
+            for (int i = _deferStack.Count - 1; i >= 0; i--)
+            {
+                ExecuteBlock(_deferStack[i], env);
+            }
+            _deferStack.Clear();
         }
 
         private Value EvalFieldAccess(FieldAccessExpr fieldAccess, Environment env)

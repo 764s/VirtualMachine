@@ -8,9 +8,13 @@ namespace FFVM
     {
         public InstancePool Pool;
         public SyscallTable Syscalls { get; }
+        public VMModuleTable Modules { get; }
 
         private readonly SnapshotRingBuffer _snapshots;
         private int _frameNumber;
+
+        /// <summary>Max instructions executed per instance per Tick to prevent infinite loops.</summary>
+        public int MaxStepsPerTick = 1024;
 
         public int FrameNumber => _frameNumber;
 
@@ -18,6 +22,7 @@ namespace FFVM
         {
             Pool.Init();
             Syscalls = new SyscallTable();
+            Modules = new VMModuleTable();
             _snapshots = new SnapshotRingBuffer();
             _frameNumber = 0;
         }
@@ -61,10 +66,7 @@ namespace FFVM
         }
 
         /// <summary>
-        /// Advance one frame. Ticks all alive instances:
-        /// - Decrements wait counters
-        /// - Checks wait_for targets
-        /// - (Future: executes bytecode until yield/wait/completion)
+        /// Advance one frame. Ticks all alive instances through the bytecode interpreter.
         /// </summary>
         public void Tick()
         {
@@ -76,26 +78,153 @@ namespace FFVM
                 if (!inst.IsAlive || inst.ErrorFlag != VMError.None)
                     continue;
 
-                // Handle wait counter
-                if (inst.WaitCounter > 0)
+                // 1. Already completed → skip
+                if ((inst.StateFlags & VMStateFlags.Completed) != 0)
+                    continue;
+
+                // 2. Killed but not yet in cleanup
+                if ((inst.StateFlags & VMStateFlags.Killed) != 0 &&
+                    (inst.StateFlags & VMStateFlags.InCleanup) == 0)
+                {
+                    if (inst.CleanupDepth > 0)
+                    {
+                        inst.StateFlags |= VMStateFlags.InCleanup;
+                        inst.CleanupDepth--;
+                        inst.IP = inst.CleanupStack.Get(inst.CleanupDepth).CleanupEntryIP;
+                    }
+                    else
+                    {
+                        inst.StateFlags |= VMStateFlags.Completed;
+                        continue;
+                    }
+                }
+
+                // 3. Wait counter (only when not killed)
+                if (inst.WaitCounter > 0 && (inst.StateFlags & VMStateFlags.Killed) == 0)
                 {
                     inst.WaitCounter--;
                     continue;
                 }
 
-                // Handle wait_for: check if target instance is still alive
-                if (inst.WaitTargetInstanceId >= 0)
+                // 4. Handle wait_for: check if target instance is still alive
+                if (inst.WaitTargetInstanceId >= 0 && (inst.StateFlags & VMStateFlags.Killed) == 0)
                 {
                     ref VMInstanceState target = ref Pool.Instances[inst.WaitTargetInstanceId];
-                    if (target.IsAlive)
+                    if (target.IsAlive && (target.StateFlags & VMStateFlags.Completed) == 0)
                         continue; // Still waiting
 
                     inst.WaitTargetInstanceId = -1; // Target finished, resume
                 }
 
-                // TODO Phase 3.5+: Execute bytecode instructions here
-                // For now this is a stub — the tree-walker is the Phase 2 executor
+                ExecuteInstance(ref inst);
             }
+        }
+
+        private void ExecuteInstance(ref VMInstanceState inst)
+        {
+            VMProgram program = Modules.Get(inst.ModuleSlot);
+            if (program == null)
+            {
+                inst.ErrorFlag = VMError.PanicModuleNotLoaded;
+                return;
+            }
+
+            var code = program.Instructions;
+            var consts = program.Constants;
+            int steps = 0;
+
+            while (steps < MaxStepsPerTick)
+            {
+                if (inst.IP < 0 || inst.IP >= code.Length)
+                {
+                    inst.ErrorFlag = VMError.PanicOutOfBounds;
+                    return;
+                }
+
+                ref Instruction op = ref code[inst.IP];
+                steps++;
+
+                switch (op.Code)
+                {
+                    case OpCode.NOP:
+                        inst.IP++;
+                        break;
+
+                    case OpCode.LOAD_CONST:
+                        inst.Registers.Set(op.A, consts[op.B]);
+                        inst.IP++;
+                        break;
+
+                    case OpCode.SYSCALL:
+                        Syscalls.Invoke(op.A, ref inst);
+                        if (inst.ErrorFlag != VMError.None) return;
+                        inst.IP++;
+                        break;
+
+                    case OpCode.WAIT:
+                        inst.WaitCounter = op.A;
+                        inst.IP++;
+                        return; // Yield to next tick
+
+                    case OpCode.PUSH_CLEANUP:
+                        if (inst.CleanupDepth >= VMConstants.MaxCleanupDepth)
+                        {
+                            inst.ErrorFlag = VMError.PanicStackOverflow;
+                            return;
+                        }
+                        inst.CleanupStack.Set(inst.CleanupDepth, new CleanupFrame { CleanupEntryIP = op.A });
+                        inst.CleanupDepth++;
+                        inst.IP++;
+                        break;
+
+                    case OpCode.POP_CLEANUP:
+                        if (inst.CleanupDepth > 0) inst.CleanupDepth--;
+                        inst.IP++;
+                        break;
+
+                    case OpCode.RETURN:
+                        if ((inst.StateFlags & VMStateFlags.InCleanup) != 0)
+                        {
+                            // Finished one cleanup block
+                            if (inst.CleanupDepth > 0)
+                            {
+                                // More cleanup blocks to run (LIFO)
+                                inst.CleanupDepth--;
+                                inst.IP = inst.CleanupStack.Get(inst.CleanupDepth).CleanupEntryIP;
+                            }
+                            else
+                            {
+                                // All cleanups done
+                                inst.StateFlags &= ~VMStateFlags.InCleanup;
+                                inst.StateFlags |= VMStateFlags.Completed;
+                                return;
+                            }
+                        }
+                        else
+                        {
+                            // Normal return — enter cleanup if any
+                            if (inst.CleanupDepth > 0)
+                            {
+                                inst.StateFlags |= VMStateFlags.InCleanup;
+                                inst.CleanupDepth--;
+                                inst.IP = inst.CleanupStack.Get(inst.CleanupDepth).CleanupEntryIP;
+                            }
+                            else
+                            {
+                                inst.StateFlags |= VMStateFlags.Completed;
+                                return;
+                            }
+                        }
+                        break;
+
+                    default:
+                        inst.ErrorFlag = VMError.PanicIllegalInstruction;
+                        return;
+                }
+            }
+
+            // Hit step limit — treat as runaway
+            inst.ErrorFlag = VMError.PanicIllegalInstruction;
         }
     }
 }

@@ -3,9 +3,17 @@ namespace FFVM
     public static class VMConstants
     {
         // Instance limits
+        //
+        // 内存预算参考 (VMSlot = 8 bytes):
+        //   单实例 RAM ≈ MaxRegisters × 8 = 512 bytes (仅寄存器部分)
+        //   全实例 RAM ≈ MaxInstances × ~740 bytes ≈ 92 KB
+        //   快照环总量 ≈ 全实例 RAM × SnapshotRingSize ≈ 740 KB
+        //   调参时以此为锚点评估内存压力
+        //
         public const int MaxInstances = 128;
         public const int MaxRegisters = 64;
         public const int MaxCallDepth = 16;
+        public const int MaxCleanupDepth = 8;
 
         // Module limits
         public const int MaxModules = 64;
