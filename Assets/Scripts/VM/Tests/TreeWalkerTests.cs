@@ -1200,9 +1200,11 @@ public static class TreeWalkerTests
             Assert(logRefPost.Count == logRollbackPost.Count,
                 $"V2 rollback: syscall count match ({logRefPost.Count} vs {logRollbackPost.Count})");
 
-            bool v2SeqMatch = logRefPost.Count == logRollbackPost.Count;
-            for (int i = 0; i < logRefPost.Count && v2SeqMatch; i++)
+            bool v2SeqMatch = true;
+            int v2MinCount = Math.Min(logRefPost.Count, logRollbackPost.Count);
+            for (int i = 0; i < v2MinCount && v2SeqMatch; i++)
                 v2SeqMatch = logRefPost[i] == logRollbackPost[i];
+            v2SeqMatch = v2SeqMatch && (logRefPost.Count == logRollbackPost.Count);
             Assert(v2SeqMatch,
                 "V2 rollback: syscall sequence bit-exact");
 
