@@ -4,6 +4,7 @@ using FFVM;
 using FFVM.AST;
 using UnityEditor;
 using UnityEngine;
+using Stopwatch = System.Diagnostics.Stopwatch;
 
 /// <summary>
 /// Phase 2 validation: hand-built AST → tree-walker interpreter.
@@ -1670,6 +1671,265 @@ public static class TreeWalkerTests
             for (int i = 0; i < logA2.Count && seqOk; i++)
                 seqOk = logA2[i] == logB2[i];
             Assert(seqOk, "Save/Load loop: syscall sequence bit-exact");
+        }
+
+        // =================================================================
+        //  V3: Single-Instance Performance Benchmark (§4.6 V3)
+        //  VM bytecode vs equivalent C# logic — measure overhead ratio.
+        //  Same logic: loop 10000 iterations with arithmetic + branch + syscall.
+        //  Using Number type in both paths for fair data-type comparison.
+        // =================================================================
+
+        // ===== Test 40: V3 — Single-instance performance benchmark =====
+        {
+            int v3Iters = 10000;
+            int v3Runs = 100;
+
+            // --- VM bytecode program ---
+            // Loop v3Iters times: arithmetic + branch + syscall (every 3rd iteration)
+            // Registers: R0=i, R1=limit, R2=step(1), R3=acc, R4=temp, R5=cmp, R6=divisor(3), R7=mod
+            var v3Program = new VMProgram(
+                new Instruction[]
+                {
+                    new Instruction(OpCode.LOAD_CONST, 0, 0),          // IP 0:  R0 = 0 (counter)
+                    new Instruction(OpCode.LOAD_CONST, 1, 1),          // IP 1:  R1 = limit
+                    new Instruction(OpCode.LOAD_CONST, 2, 2),          // IP 2:  R2 = 1 (step)
+                    new Instruction(OpCode.LOAD_CONST, 3, 0),          // IP 3:  R3 = 0 (accumulator)
+                    new Instruction(OpCode.LOAD_CONST, 6, 3),          // IP 4:  R6 = 3 (divisor)
+                    // loop start (IP 5):
+                    new Instruction(OpCode.CMP_GTE, 5, 0, 1),         // IP 5:  R5 = (i >= limit)?
+                    new Instruction(OpCode.JUMP_IF_NOT_ZERO, 16, 5),   // IP 6:  if done → exit
+                    new Instruction(OpCode.ADD, 3, 3, 0),              // IP 7:  acc += i
+                    new Instruction(OpCode.MUL, 4, 0, 2),              // IP 8:  temp = i * 1
+                    new Instruction(OpCode.SUB, 4, 4, 2),              // IP 9:  temp -= 1
+                    new Instruction(OpCode.ADD, 3, 3, 4),              // IP 10: acc += temp
+                    new Instruction(OpCode.MOD, 7, 0, 6),              // IP 11: R7 = i % 3
+                    new Instruction(OpCode.JUMP_IF_NOT_ZERO, 14, 7),   // IP 12: if i%3 != 0 → skip syscall
+                    new Instruction(OpCode.SYSCALL, 0),                 // IP 13: noop syscall
+                    // skip_syscall (IP 14):
+                    new Instruction(OpCode.ADD, 0, 0, 2),              // IP 14: i++
+                    new Instruction(OpCode.JUMP, 5),                    // IP 15: → loop start
+                    // exit (IP 16):
+                    new Instruction(OpCode.RETURN),                     // IP 16
+                },
+                new Number[]
+                {
+                    Number.FromInt(0),          // [0] = 0
+                    Number.FromInt(v3Iters),    // [1] = limit
+                    Number.FromInt(1),          // [2] = 1
+                    Number.FromInt(3),          // [3] = divisor
+                },
+                8
+            );
+
+            var v3World = new VMWorld();
+            v3World.MaxStepsPerTick = v3Iters * 15; // enough for full loop
+            v3World.Modules.Load(0, v3Program);
+            v3World.Syscalls.Register(0, "BenchNoop", (ref VMInstanceState s) => { });
+
+            // --- Correctness check ---
+            {
+                int vid = v3World.SpawnInstance(0, 0);
+                v3World.Tick();
+                int vmAcc = v3World.Pool.Instances[vid].Registers.Get(3).ToInt();
+                v3World.DestroyInstance(vid);
+                // Expected: sum(0..9999) + sum(i-1 for i=0..9999)
+                //         = 49995000 + 49985000 = 99980000
+                Assert(vmAcc == 99980000,
+                    $"V3 correctness: acc = {vmAcc} (== 99980000)");
+            }
+
+            // --- Warmup VM ---
+            for (int w = 0; w < 10; w++)
+            {
+                int wid = v3World.SpawnInstance(0, 0);
+                v3World.Tick();
+                v3World.DestroyInstance(wid);
+            }
+
+            // --- Measure VM ---
+            var v3sw = Stopwatch.StartNew();
+            for (int r = 0; r < v3Runs; r++)
+            {
+                int id = v3World.SpawnInstance(0, 0);
+                v3World.Tick();
+                v3World.DestroyInstance(id);
+            }
+            v3sw.Stop();
+            double v3VmTotalMs = v3sw.Elapsed.TotalMilliseconds;
+            double v3VmPerRunUs = (v3VmTotalMs / v3Runs) * 1000.0;
+
+            // --- C# equivalent using Number type ---
+            Number csLimit = Number.FromInt(v3Iters);
+            Number csStep = Number.FromInt(1);
+            Number csDivisor = Number.FromInt(3);
+
+            // Warmup C#
+            for (int w = 0; w < 10; w++)
+            {
+                Number csI = Number.Zero;
+                Number csAcc = Number.Zero;
+                int csSC = 0;
+                while (csI < csLimit)
+                {
+                    csAcc = csAcc + csI;
+                    Number t = csI * csStep;
+                    t = t - csStep;
+                    csAcc = csAcc + t;
+                    if (csI % csDivisor == Number.Zero) csSC++;
+                    csI = csI + csStep;
+                }
+            }
+
+            // Measure C#
+            v3sw.Restart();
+            for (int r = 0; r < v3Runs; r++)
+            {
+                Number csI = Number.Zero;
+                Number csAcc = Number.Zero;
+                int csSC = 0;
+                while (csI < csLimit)
+                {
+                    csAcc = csAcc + csI;
+                    Number t = csI * csStep;
+                    t = t - csStep;
+                    csAcc = csAcc + t;
+                    if (csI % csDivisor == Number.Zero) csSC++;
+                    csI = csI + csStep;
+                }
+            }
+            v3sw.Stop();
+            double v3CsTotalMs = v3sw.Elapsed.TotalMilliseconds;
+            double v3CsPerRunUs = (v3CsTotalMs / v3Runs) * 1000.0;
+
+            double v3Ratio = v3VmPerRunUs / v3CsPerRunUs;
+
+            Debug.Log($"[BENCH] V3 Single-Instance Performance:");
+            Debug.Log($"[BENCH]   VM bytecode : {v3VmPerRunUs:F1} µs/run ({v3Iters} iterations)");
+            Debug.Log($"[BENCH]   C# native   : {v3CsPerRunUs:F1} µs/run ({v3Iters} iterations)");
+            Debug.Log($"[BENCH]   Ratio       : {v3Ratio:F1}x");
+
+            Assert(v3Ratio < 50.0,
+                $"V3 perf: VM/C# ratio = {v3Ratio:F1}x (expected < 50x, reference 10-30x)");
+        }
+
+        // =================================================================
+        //  V4: N-Instance Throughput Benchmark (§4.6 V4)
+        //  128 → 256 → 512 → 1024 instances × ~50 instructions/tick.
+        //  Pass condition: 128 instances × 50 instr/tick < 1ms.
+        //  Uses multiple VMWorlds for counts exceeding MaxInstances (128).
+        // =================================================================
+
+        // ===== Test 41: V4 — N-instance throughput =====
+        {
+            // Program: ~57 instructions per instance (5-iteration loop), single-tick completion
+            // R0=i, R1=5(limit), R2=1(step), R3=acc, R4=temp, R5=cmp
+            var v4Program = new VMProgram(
+                new Instruction[]
+                {
+                    new Instruction(OpCode.LOAD_CONST, 0, 0),         // IP 0:  R0 = 0 (counter)
+                    new Instruction(OpCode.LOAD_CONST, 1, 1),         // IP 1:  R1 = 5 (limit)
+                    new Instruction(OpCode.LOAD_CONST, 2, 2),         // IP 2:  R2 = 1 (step)
+                    new Instruction(OpCode.LOAD_CONST, 3, 0),         // IP 3:  R3 = 0 (acc)
+                    // loop (IP 4):
+                    new Instruction(OpCode.CMP_GTE, 5, 0, 1),        // IP 4:  R5 = (i >= 5)?
+                    new Instruction(OpCode.JUMP_IF_NOT_ZERO, 14, 5),  // IP 5:  if done → exit
+                    new Instruction(OpCode.ADD, 3, 3, 0),             // IP 6:  acc += i
+                    new Instruction(OpCode.MUL, 4, 0, 2),             // IP 7:  temp = i * 1
+                    new Instruction(OpCode.SUB, 4, 4, 2),             // IP 8:  temp -= 1
+                    new Instruction(OpCode.ADD, 3, 3, 4),             // IP 9:  acc += temp
+                    new Instruction(OpCode.ADD, 0, 0, 2),             // IP 10: i++
+                    new Instruction(OpCode.SYSCALL, 0),               // IP 11: noop
+                    new Instruction(OpCode.NOP),                      // IP 12: padding
+                    new Instruction(OpCode.JUMP, 4),                  // IP 13: → loop
+                    // exit (IP 14):
+                    new Instruction(OpCode.RETURN),                   // IP 14
+                },
+                new Number[]
+                {
+                    Number.FromInt(0),  // [0] = 0
+                    Number.FromInt(5),  // [1] = 5
+                    Number.FromInt(1),  // [2] = 1
+                },
+                6
+            );
+
+            // --- V4 correctness check ---
+            {
+                var cw = new VMWorld();
+                cw.Modules.Load(0, v4Program);
+                cw.Syscalls.Register(0, "Noop", (ref VMInstanceState s) => { });
+                int cid = cw.SpawnInstance(0, 0);
+                cw.Tick();
+                int v4Acc = cw.Pool.Instances[cid].Registers.Get(3).ToInt();
+                // i=0: acc=0+0=0, temp=0-1=-1, acc=0+(-1)=-1
+                // i=1: acc=-1+1=0, temp=1-1=0, acc=0+0=0
+                // i=2: acc=0+2=2, temp=2-1=1, acc=2+1=3
+                // i=3: acc=3+3=6, temp=3-1=2, acc=6+2=8
+                // i=4: acc=8+4=12, temp=4-1=3, acc=12+3=15
+                Assert(v4Acc == 15,
+                    $"V4 correctness: acc = {v4Acc} (== 15)");
+            }
+
+            // --- Benchmark at each scale ---
+            int v4Rounds = 1000;
+            int[] v4Scales = new int[] { 128, 256, 512, 1024 };
+
+            Debug.Log($"[BENCH] V4 N-Instance Throughput (~57 instr/instance):");
+
+            foreach (int targetN in v4Scales)
+            {
+                int worldCount = (targetN + VMConstants.MaxInstances - 1) / VMConstants.MaxInstances; // ceiling division
+                int instancesPerWorld = VMConstants.MaxInstances;
+
+                // Create worlds
+                var v4Worlds = new VMWorld[worldCount];
+                for (int w = 0; w < worldCount; w++)
+                {
+                    v4Worlds[w] = new VMWorld();
+                    v4Worlds[w].Modules.Load(0, v4Program);
+                    v4Worlds[w].Syscalls.Register(0, "Noop", (ref VMInstanceState s) => { });
+                }
+
+                // Warmup
+                for (int warm = 0; warm < 10; warm++)
+                {
+                    for (int w = 0; w < worldCount; w++)
+                    {
+                        for (int i = 0; i < instancesPerWorld; i++)
+                            v4Worlds[w].SpawnInstance(0, 0);
+                        v4Worlds[w].Tick();
+                        for (int i = 0; i < instancesPerWorld; i++)
+                            v4Worlds[w].DestroyInstance(i);
+                    }
+                }
+
+                // Measure
+                var v4sw = Stopwatch.StartNew();
+                for (int r = 0; r < v4Rounds; r++)
+                {
+                    for (int w = 0; w < worldCount; w++)
+                    {
+                        for (int i = 0; i < instancesPerWorld; i++)
+                            v4Worlds[w].SpawnInstance(0, 0);
+                        v4Worlds[w].Tick();
+                        for (int i = 0; i < instancesPerWorld; i++)
+                            v4Worlds[w].DestroyInstance(i);
+                    }
+                }
+                v4sw.Stop();
+
+                double v4AvgMs = v4sw.Elapsed.TotalMilliseconds / v4Rounds;
+                double v4PerInstanceUs = (v4AvgMs * 1000.0) / targetN;
+
+                Debug.Log($"[BENCH]   {targetN,4} instances: {v4AvgMs:F3} ms/tick ({v4PerInstanceUs:F2} µs/instance)");
+
+                if (targetN == 128)
+                {
+                    Assert(v4AvgMs < 1.0,
+                        $"V4 throughput: 128 instances × ~57 instr = {v4AvgMs:F3} ms (< 1ms)");
+                }
+            }
         }
 
         // ===== Summary =====
