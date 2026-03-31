@@ -2,6 +2,27 @@
 
 > 本文是 VMScript.md ~ VMScript4.md、VM_Architecture_Rules.md、VM_Runtime_Layout.md、VM_OpCodes_Draft.md、VM_Tracer_Bullet.md 及后续讨论的压缩总结。目标是作为单一入口文档，完整描述理想意图、当前曳光弹范围、每项决策的理由与妥协，以及未来补全路径。
 
+### 文档目录结构
+
+```
+Assets/ScriptVM/
+  VM_Summary.md              ← 本文（唯一入口文档）
+  Refs/                      ← 子文件：当前活跃的引用文档
+    VM_Architecture_Rules.md     架构硬约束（20 条纪律）
+    VM_Runtime_Layout.md         运行时内存布局
+    VM_OpCodes_Draft.md          OpCode 设计草案
+    VM_Tracer_Bullet.md          曳光弹验证方案
+    VM_Optimization_Outlook.md   性能优化展望（14 项方向）
+  Plan/                      ← 计划文件
+    TracerBullet_Checklist.md    曳光弹检查清单
+  Archive/                   ← 归档：早期讨论稿（已被本文压缩替代）
+    VMScript.md ~ VMScript4.md   初期需求与设计讨论
+```
+
+- **Refs/**：VM_Summary.md 引用的子文档，包含各专题的详细说明。
+- **Plan/**：计划与检查清单。
+- **Archive/**：早期分散的讨论稿，内容已合并入本文，保留仅供追溯。
+
 ---
 
 ## 一、项目背景与核心问题
@@ -507,7 +528,7 @@ skill TracerBullet
 
 ## 八、架构硬约束速查
 
-以下是 VM_Architecture_Rules.md 中的 20 条硬纪律的浓缩速查：
+以下是 [VM_Architecture_Rules.md](Refs/VM_Architecture_Rules.md) 中的 20 条硬纪律的浓缩速查：
 
 1. 脚本文本 = 唯一真理源
 2. UI = await 驱动的视图投影
@@ -704,7 +725,7 @@ func main() {
 
 ## 十、性能优化展望
 
-> 详见 [VM_Optimization_Outlook.md](VM_Optimization_Outlook.md)
+> 详见 [VM_Optimization_Outlook.md](Refs/VM_Optimization_Outlook.md)
 
 当前编译脚本性能基准为 5-7x（vs 等价 C#），手写字节码基准为 1.7x。在不改变功能语义的前提下，已识别 14 项优化方向，按 5 个层级排列：
 
