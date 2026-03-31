@@ -740,3 +740,40 @@ func main() {
 **预估目标**：Tier 1 + Tier 2 完成后，编译脚本基准从 5-7x 降至 **2-3x**，手写字节码从 1.7x 降至 **~1.2x**。
 
 最大单一赢利点是 **O1（消除 fixed pin）**，推荐作为第一个实施项。
+
+---
+
+## 十一、已知缺口与改进指引
+
+> 本节由步骤 6 完成后的自审生成，记录当前代码和文档中已确认的缺口，作为后续步骤的输入。
+
+### 11.1 代码缺口
+
+| # | 位置 | 问题 | 优先级 | 建议修复时机 |
+|---|------|------|--------|-------------|
+| G1 | `Parser` / `BytecodeCompiler` | `wait_for` 仅有 VM 运行时实现（`OpCode.WAIT_FOR`），Parser 和 Compiler 尚未接入；当前脚本无法使用 `wait_for` 语法 | 高 | 步骤 7 |
+| G2 | `BytecodeCompiler` | `POP_CLEANUP` 从未被编译器生成；`defer` 块 Cleanup 由 VM 运行时隐式处理，但 `using` 需要显式 emit | 中 | 步骤 7（using 接入时） |
+| G3 | `BytecodeCompiler.BinOpCode()` / `UnOpCode()` | 遇到未知 `NodeKind` 时静默返回 `NOP`，不报错 | 中 | 步骤 7 前 |
+| G4 | `VMWorld.ExecuteInstance()` | 步数上限耗尽时报 `PanicIllegalInstruction`，应为独立错误码（如 `PanicStepLimitExceeded`） | 低 | 任意时机 |
+
+### 11.2 测试缺口
+
+| # | 场景 | 当前状态 |
+|---|------|---------|
+| T1 | `wait_for` 运行时路径 | VM 层有实现但无测试覆盖 |
+| T2 | 除以零 | 未测试（当前返回 0，未验证） |
+| T3 | 步数上限触发 | 未测试 |
+| T4 | 实例池满溢 | 未测试 |
+| T5 | Fix64 模式（`USE_FIXPOINT`） | 全部测试在 float 模式下运行，未验证定点数路径 |
+| T6 | `bool` / `float` 字面量解析 | Lexer/Parser 未覆盖 |
+
+### 11.3 文档缺口（来自档案交叉审查）
+
+以下内容存在于 Archive 早期讨论稿中，但尚未合并入本文：
+
+| # | 来源 | 内容 | 是否需要补充 |
+|---|------|------|-------------|
+| D1 | VMScript.md | "条件→目标→数据效果→视觉效果"技能流水线模式 | 建议补入 §1.2 或 §2 |
+| D2 | VMScript2.md | 历史失败教训表（XSLT/XBL/ASP.NET/Flash/AMD/GWT/WebComponents → 设计约束推导） | 建议补入 §9 选型理由 |
+| D3 | VMScript4.md | 项目级成功标准（5 类验收维度） | 建议补入 §7 或新增验收标准节 |
+| D4 | VMScript4.md | 设计验证递进轴线（曳光弹 → 编辑器 → 实战接入） | 已隐含在 §7 推进顺序中，可补充显式描述 |

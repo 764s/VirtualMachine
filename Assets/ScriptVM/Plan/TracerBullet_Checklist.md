@@ -253,8 +253,8 @@ Phase A 通过后立即验证 Save/Load 一致性和零 GC。这些不阻塞 Pha
 
 ### Step 6c: 字节码解释循环 (VMWorld.Tick 内核)
 
-- [ ] 6c.1 在 `VMWorld` 中新增 `VMModuleTable ModuleTable` 字段
-- [ ] 6c.2 重写 `VMWorld.Tick()` 中对每个 alive 实例的处理逻辑：
+- [x] 6c.1 在 `VMWorld` 中新增 `VMModuleTable ModuleTable` 字段
+- [x] 6c.2 重写 `VMWorld.Tick()` 中对每个 alive 实例的处理逻辑：
 
 ```
 对每个 alive 实例：
@@ -349,11 +349,14 @@ Phase A 通过后立即验证 Save/Load 一致性和零 GC。这些不阻塞 Pha
 - ✅ Save/Load 一致性已验证
 - ✅ 零 GC 已验证
 
-接下来按 VM_Summary §七 步骤 7 起继续：
+**已完成步骤：**
+
+- ✅ 步骤 7：MOVE/COPY → JUMP/JUMP_IF → 比较/布尔（已合并到步骤 5）
+- ✅ 步骤 8：Lexer + Parser + BytecodeCompiler（步骤 6）
+
+接下来按 VM_Summary §七 继续：
 
 ```
-→ 7. 补充 MOVE/COPY → JUMP/JUMP_IF → 比较/布尔
-→ 8. 设计并确定脚本语法 → 实现 Lexer + Parser
-→ 9. 实现 using 语法 + Paired Syscall → 理想 Cleanup 模式
-→ 10. 编辑器流程图投影
+→ 步骤 7（原 9）: 实现 using 语法 + Paired Syscall → 理想 Cleanup 模式
+→ 步骤 8（原 10）: 编辑器流程图投影
 ```
