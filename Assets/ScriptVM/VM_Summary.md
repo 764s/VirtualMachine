@@ -351,6 +351,45 @@ skill TracerBullet
 | 通过条件 | 128 实例 × 50 条指令/Tick 总耗时 < 1ms（在目标硬件上） |
 | 结果 | ✅ Test 41 通过：128 实例 = 0.391ms, 256 = 0.762ms, 512 = 0.883ms, 1024 = 1.961ms（近线性扩展，128 实例远低于 1ms） |
 
+#### V3-B: 编译脚本性能基准（Compiled Script Benchmark） — ✅ 通过
+
+| 项目 | 内容 |
+|------|------|
+| 目的 | 测量编译器生成的字节码（文本脚本 → 编译 → 执行）与等价 C# 逻辑的性能差距 |
+| 前置 | Lexer + Parser + BytecodeCompiler 完成 |
+| 区别于 V3 | V3 使用手写/手动构造的字节码（代表 VM 解释器开销下限）；V3-B 使用编译器从文本脚本生成的字节码（代表实际开发者编写脚本时的真实性能） |
+| 方法 | 5 组相同逻辑的 FFVM 脚本和 C# 代码（均使用 `Number` 结构体），20 轮预热 + 200 轮测量取平均，`Stopwatch` 计时 |
+| 通过条件 | 所有 5 组值匹配（VM 结果 == C# 结果），记录倍率 |
+| 自动化 | `run-benchmarks.cmd` 一键执行，输出机器可解析格式，自动生成 `benchmarks/benchmark_results.md` 报告 |
+| Unity 运行 | 菜单 `TestVM → RunBenchmarks`，结果输出到 Unity Console |
+
+**5 组基准测试：**
+
+| 编号 | 名称 | 逻辑 | 规模 | 指令数 |
+|------|------|------|------|--------|
+| B01 | ArithLoop | 算术 + 取模 + 分支（每 3 次调 Syscall） | 10,000 轮 | 32 |
+| B02 | Fibonacci | 迭代斐波那契（swap 循环） | fib(25) | 20 |
+| B03 | NestedLoop | O(n²) 嵌套循环 + 乘法累加 | 100×100 | 26 |
+| B04 | Branching | 4 路 if/else-if 分支链 | 10,000 轮 | 41 |
+| B05 | Accumulator | 纯 ADD 累加（最小开销基准线） | 50,000 轮 | 16 |
+
+**最新结果（Release，.NET 6.0，20 核）：**
+
+| Benchmark | VM (µs) | C# (µs) | Ratio |
+|-----------|---------|---------|-------|
+| B01_ArithLoop | 540.7 | 78.7 | **6.87x** |
+| B02_Fibonacci | 0.6 | 0.1 | **6.05x** |
+| B03_NestedLoop | 189.9 | 32.4 | **5.86x** |
+| B04_Branching | 463.9 | 81.5 | **5.69x** |
+| B05_Accumulator | 819.0 | 163.8 | **5.00x** |
+
+**性能分析：**
+
+- **编译脚本 5-7x** vs **手写字节码 1.7x（V3）**：差距来自编译器生成的额外指令——`LOAD_CONST`、`MOVE`、寄存器间搬运、表达式临时寄存器分配等。手写字节码可以最优化寄存器使用，而编译器为通用性牺牲了部分效率。
+- **两个数字都有意义**：1.7x 代表 VM 解释器本身的开销下限（天花板不高）；5-7x 代表开发者写脚本时的真实感受。
+- **对比其他嵌入式脚本引擎**：Lua 5.4 解释器通常 20-40x，MoonSharp 50-100x，xLua 10-30x。FFVM 编译脚本的 5-7x 已优于多数通用脚本方案。
+- **绝对值视角**：50K 次纯累加（B05）约 820µs，单帧预算 16.6ms（60fps），脚本开销占比极低。
+
 #### V5: 帧内 Profiler 验证（真实 Syscall 接入后） — ⚪ 待前置
 
 | 项目 | 内容 |
@@ -379,7 +418,11 @@ skill TracerBullet
 | 字节码 | `OpCode`（26 条指令）+ `Instruction` + `VMProgram` + `VMModuleTable` | ✅ 完成 |
 | 调度 | `VMWorld`（Tick 字节码解释循环 + Spawn/Destroy/Save/Load） | ✅ 完成 |
 | 解释器 | `TreeWalker`（Phase 2 原型，含 defer + Kill） | ✅ 完成 |
-| 测试 | 102 项 Assert 全部通过（Phase A + B + Step 5 + V3/V4，TreeWalker + 字节码 + V1 GC + V2 回滚 + V3 性能 + V4 吞吐） | ✅ Step 5 + V3/V4 通过 |
+| 词法分析 | `Lexer`（手写，14 关键字 + 运算符 + 字面量 + 注释） | ✅ 完成 |
+| 语法分析 | `Parser`（手写递归下降，source → `ModuleNode` AST，含错误恢复） | ✅ 完成 |
+| 编译器 | `BytecodeCompiler`（AST → `VMProgram`，寄存器分配：r0-15 scratch / r16-47 locals / r48-63 temps） | ✅ 完成 |
+| 测试 | 164 项 Assert 全部通过（85 TreeWalker + 62 Compiler + 17 Performance），另有 5 项自动化性能基准 | ✅ Step 6 通过 |
+| 性能基准 | `BenchmarkRunner`（5 组 VM vs C# 对比基准）+ `run-benchmarks.cmd` 自动化管线 → `benchmark_results.md` | ✅ 完成 |
 
 ### 5.2 未完成（按优先级排列）
 
@@ -390,7 +433,8 @@ skill TracerBullet
 | P1 | `JUMP`/`JUMP_IF` OpCode + 比较/布尔运算 | ✅ 完成（Test 30-36） |
 | P1 | Step 5 新指令零 GC + 快照正确性验证 | ✅ 通过（Test 38, 39） |
 | P1 | V3 单实例性能基准 + V4 N 实例吞吐上限 | ✅ 通过（Test 40: 3.8x, Test 41: 0.391ms/128inst） |
-| P2 | Lexer + Parser（手写递归下降） | 阻塞文本脚本 |
+| P2 | Lexer + Parser（手写递归下降） | ✅ 完成（Lexer + Parser + BytecodeCompiler，20 项端到端编译器测试 C01-C20 通过） |
+| P2 | 自动化性能基准管线（BenchmarkRunner + run-benchmarks.cmd） | ✅ 完成（5 组 VM vs C# 对比，编译脚本 5-7x ratio） |
 | P2 | `using` 语法 + Paired Syscall 协议 | 阻塞理想 Cleanup 模式 |
 | P3 | V5 帧内 Profiler 验证（真实 Syscall 接入后） | 阻塞编辑器 UI |
 | P3 | 编辑器流程图投影 | 不阻塞 VM 核心 |
@@ -401,8 +445,8 @@ skill TracerBullet
 
 | 当前妥协 | 理由 | 未来补全路径 |
 |----------|------|-------------|
-| 手写 AST，无 Parser | 先验证 VM 物理闭环，Parser 依赖语法设计稳定 | 曳光弹通过 → 确定语法 → 手写递归下降 Parser（~800 行） |
-| TreeWalker 代替字节码 VM | Phase 2 快速验证语义正确性 | P0：实现字节码解释循环，用字节码重新通过曳光弹全部验证 |
+| ~~手写 AST，无 Parser~~ | ~~先验证 VM 物理闭环~~ | ✅ 完成：Lexer + Parser + BytecodeCompiler，端到端文本 → 字节码 → 执行 |
+| ~~TreeWalker 代替字节码 VM~~ | ~~Phase 2 快速验证语义正确性~~ | ✅ 完成：字节码解释循环 + 编译器流水线均已实现 |
 | `defer` 代替 `using` | `using` 需要 Paired Syscall 注册协议 + 编译器支持 | P2：Parser 阶段实现 `using` 语法，SyscallTable 扩展配对注册 API |
 | 开发期 float（`Number`） | 快速迭代，Fix64 调试较痛苦 | float 模式仅用于开发迭代，正式测试和上线构建必须 `USE_FIXPOINT` |
 | 无 `MOVE`/`COPY` | 曳光弹不需要寄存器搬运 | ~~曳光弹通过后立即补充~~ ✅ Step 5 完成 |
@@ -438,7 +482,12 @@ skill TracerBullet
   │  V4: N 实例吞吐上限    ← ✅ 通过 (128inst=0.391ms)   │
   └────────────────────────────────────────────────────────┘
       ↓
-6. 设计并确定脚本语法 → 实现 Lexer + Parser
+6. 设计并确定脚本语法 → 实现 Lexer + Parser + BytecodeCompiler       ✅
+      ↓
+  ┌────────────────────────────────────────────────────────┐
+  │  编译器测试 C01-C20    ← ✅ 62 项 Assert 全部通过    │
+  │  自动化性能基准 B01-B05 ← ✅ 编译脚本 5-7x ratio     │
+  └────────────────────────────────────────────────────────┘
       ↓
 7. 实现 using 语法 + Paired Syscall → 理想 Cleanup 模式
       ↓
