@@ -331,7 +331,7 @@ skill TracerBullet
 | 通过条件 | Syscall 调用序列完全一致，最终 StateFlags 完全一致 |
 | 结果 | ✅ Test 28 通过：syscall sequence bit-exact，StateFlags match |
 
-#### V3: 单实例性能基准 — ⚪ 待前置
+#### V3: 单实例性能基准 — ✅ 通过
 
 | 项目 | 内容 |
 |------|------|
@@ -339,10 +339,9 @@ skill TracerBullet
 | 前置 | MOVE/JUMP 补完（否则指令序列不具代表性） |
 | 方法 | 同一段逻辑（循环 + 分支 + 算术 + Syscall）分别用 VM 字节码和纯 C# 实现，`Stopwatch` 跑 N 轮取平均，输出倍率 |
 | 通过条件 | 记录倍率即可（参考值：解释器通常 10-30x，超过 50x 需排查） |
-| 最早可做 | 步骤 7 完成后 |
-| 必须通过 | 进入步骤 8（Parser）前 |
+| 结果 | ✅ Test 40 通过：VM = 5913 µs, C# = 1575 µs, ratio = 3.8x（远优于 50x 上限） |
 
-#### V4: N 实例吞吐上限 — ⚪ 待前置
+#### V4: N 实例吞吐上限 — ✅ 通过
 
 | 项目 | 内容 |
 |------|------|
@@ -350,8 +349,7 @@ skill TracerBullet
 | 前置 | 同 V3 |
 | 方法 | 从 128 → 256 → 512 → 1024 逐级加实例数，每轮跑固定 Tick 数，记录耗时曲线 |
 | 通过条件 | 128 实例 × 50 条指令/Tick 总耗时 < 1ms（在目标硬件上） |
-| 最早可做 | 紧接 V3 |
-| 必须通过 | 进入步骤 8 前 |
+| 结果 | ✅ Test 41 通过：128 实例 = 0.391ms, 256 = 0.762ms, 512 = 0.883ms, 1024 = 1.961ms（近线性扩展，128 实例远低于 1ms） |
 
 #### V5: 帧内 Profiler 验证（真实 Syscall 接入后） — ⚪ 待前置
 
@@ -381,7 +379,7 @@ skill TracerBullet
 | 字节码 | `OpCode`（26 条指令）+ `Instruction` + `VMProgram` + `VMModuleTable` | ✅ 完成 |
 | 调度 | `VMWorld`（Tick 字节码解释循环 + Spawn/Destroy/Save/Load） | ✅ 完成 |
 | 解释器 | `TreeWalker`（Phase 2 原型，含 defer + Kill） | ✅ 完成 |
-| 测试 | 98 项 Assert 全部通过（Phase A + B + Step 5，TreeWalker + 字节码 + V1 GC + V2 回滚） | ✅ Step 5 通过 |
+| 测试 | 102 项 Assert 全部通过（Phase A + B + Step 5 + V3/V4，TreeWalker + 字节码 + V1 GC + V2 回滚 + V3 性能 + V4 吞吐） | ✅ V4 通过 |
 
 ### 5.2 未完成（按优先级排列）
 
@@ -391,7 +389,7 @@ skill TracerBullet
 | P1 | `MOVE`/`COPY` OpCode | ✅ 完成（Test 29, 37） |
 | P1 | `JUMP`/`JUMP_IF` OpCode + 比较/布尔运算 | ✅ 完成（Test 30-36） |
 | P1 | Step 5 新指令零 GC + 快照正确性验证 | ✅ 通过（Test 38, 39） |
-| P1 | V3 单实例性能基准 + V4 N 实例吞吐上限 | 阻塞 Parser |
+| P1 | V3 单实例性能基准 + V4 N 实例吞吐上限 | ✅ 通过（Test 40: 3.8x, Test 41: 0.391ms/128inst） |
 | P2 | Lexer + Parser（手写递归下降） | 阻塞文本脚本 |
 | P2 | `using` 语法 + Paired Syscall 协议 | 阻塞理想 Cleanup 模式 |
 | P3 | V5 帧内 Profiler 验证（真实 Syscall 接入后） | 阻塞编辑器 UI |
@@ -436,9 +434,8 @@ skill TracerBullet
 5. 补充 MOVE/COPY → JUMP/JUMP_IF → 比较/布尔                       ✅
       ↓
   ┌────────────────────────────────────────────────────────┐
-  │  V3: 单实例性能基准    ← 步骤 5 完成后可做           │
-  │  V4: N 实例吞吐上限    ← 紧接 V3                       │
-  │  通过条件见 §4.6，必须在进入步骤 6 前全部通过        │
+  │  V3: 单实例性能基准    ← ✅ 通过 (3.8x)             │
+  │  V4: N 实例吞吐上限    ← ✅ 通过 (128inst=0.391ms)   │
   └────────────────────────────────────────────────────────┘
       ↓
 6. 设计并确定脚本语法 → 实现 Lexer + Parser
