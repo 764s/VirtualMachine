@@ -379,7 +379,7 @@ skill TracerBullet
 | 字节码 | `OpCode`（26 条指令）+ `Instruction` + `VMProgram` + `VMModuleTable` | ✅ 完成 |
 | 调度 | `VMWorld`（Tick 字节码解释循环 + Spawn/Destroy/Save/Load） | ✅ 完成 |
 | 解释器 | `TreeWalker`（Phase 2 原型，含 defer + Kill） | ✅ 完成 |
-| 测试 | 102 项 Assert 全部通过（Phase A + B + Step 5 + V3/V4，TreeWalker + 字节码 + V1 GC + V2 回滚 + V3 性能 + V4 吞吐） | ✅ V4 通过 |
+| 测试 | 102 项 Assert 全部通过（Phase A + B + Step 5 + V3/V4，TreeWalker + 字节码 + V1 GC + V2 回滚 + V3 性能 + V4 吞吐） | ✅ Step 5 + V3/V4 通过 |
 
 ### 5.2 未完成（按优先级排列）
 

@@ -1879,7 +1879,7 @@ public static class TreeWalkerTests
 
             foreach (int targetN in v4Scales)
             {
-                int worldCount = (targetN + VMConstants.MaxInstances - 1) / VMConstants.MaxInstances;
+                int worldCount = (targetN + VMConstants.MaxInstances - 1) / VMConstants.MaxInstances; // ceiling division
                 int instancesPerWorld = VMConstants.MaxInstances;
 
                 // Create worlds
