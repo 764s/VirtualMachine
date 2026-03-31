@@ -20,3 +20,14 @@ namespace UnityEngine
         public RuntimeInitializeOnLoadMethodAttribute(RuntimeInitializeLoadType loadType) { }
     }
 }
+
+namespace UnityEditor
+{
+    [AttributeUsage(AttributeTargets.Method)]
+    public sealed class MenuItemAttribute : Attribute
+    {
+        public MenuItemAttribute(string itemName) { }
+        public MenuItemAttribute(string itemName, bool isValidateFunction) { }
+        public MenuItemAttribute(string itemName, bool isValidateFunction, int priority) { }
+    }
+}
