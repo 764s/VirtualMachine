@@ -1216,6 +1216,462 @@ public static class TreeWalkerTests
                 "V2 rollback: instance completed in reference run");
         }
 
+        // =================================================================
+        //  Step 5: MOVE/COPY + JUMP/JUMP_IF + Arithmetic + Compare/Boolean
+        //  Bytecode-level tests for Phase 2 opcodes.
+        // =================================================================
+
+        // ===== Test 29: MOVE — register-to-register copy =====
+        {
+            // R0 = 42; R1 = MOVE(R0); assert R1 == 42
+            var program = new VMProgram(
+                new Instruction[]
+                {
+                    new Instruction(OpCode.LOAD_CONST, 0, 0),    // IP 0: R0 = 42
+                    new Instruction(OpCode.MOVE, 1, 0),          // IP 1: R1 = R0
+                    new Instruction(OpCode.RETURN),              // IP 2
+                },
+                new Number[] { Number.FromInt(42) },
+                2
+            );
+
+            var world = new VMWorld();
+            world.Modules.Load(0, program);
+            int id = world.SpawnInstance(0, 0);
+            world.Tick();
+
+            Assert(world.Pool.Instances[id].Registers.Get(1).ToInt() == 42,
+                "MOVE: R1 = R0 = 42");
+            Assert((world.Pool.Instances[id].StateFlags & VMStateFlags.Completed) != 0,
+                "MOVE: Completed");
+        }
+
+        // ===== Test 30: Arithmetic opcodes (ADD, SUB, MUL, DIV, MOD) =====
+        {
+            // R0=10, R1=3
+            // R2 = R0 + R1 = 13
+            // R3 = R0 - R1 = 7
+            // R4 = R0 * R1 = 30
+            // R5 = R0 / R1 = 3  (integer div in float mode: 10/3 = 3.333, ToInt=3)
+            // R6 = R0 % R1 = 1
+            var program = new VMProgram(
+                new Instruction[]
+                {
+                    new Instruction(OpCode.LOAD_CONST, 0, 0),    // R0 = 10
+                    new Instruction(OpCode.LOAD_CONST, 1, 1),    // R1 = 3
+                    new Instruction(OpCode.ADD, 2, 0, 1),        // R2 = R0 + R1
+                    new Instruction(OpCode.SUB, 3, 0, 1),        // R3 = R0 - R1
+                    new Instruction(OpCode.MUL, 4, 0, 1),        // R4 = R0 * R1
+                    new Instruction(OpCode.DIV, 5, 0, 1),        // R5 = R0 / R1
+                    new Instruction(OpCode.MOD, 6, 0, 1),        // R6 = R0 % R1
+                    new Instruction(OpCode.RETURN),
+                },
+                new Number[] { Number.FromInt(10), Number.FromInt(3) },
+                7
+            );
+
+            var world = new VMWorld();
+            world.Modules.Load(0, program);
+            int id = world.SpawnInstance(0, 0);
+            world.Tick();
+
+            ref VMInstanceState arithInst = ref world.Pool.Instances[id];
+            Assert(arithInst.Registers.Get(2).ToInt() == 13, "Arith: 10 + 3 = 13");
+            Assert(arithInst.Registers.Get(3).ToInt() == 7, "Arith: 10 - 3 = 7");
+            Assert(arithInst.Registers.Get(4).ToInt() == 30, "Arith: 10 * 3 = 30");
+            Assert(arithInst.Registers.Get(5).ToInt() == 3, "Arith: 10 / 3 = 3");
+            Assert(arithInst.Registers.Get(6).ToInt() == 1, "Arith: 10 % 3 = 1");
+        }
+
+        // ===== Test 31: Comparison opcodes =====
+        {
+            // R0=5, R1=10, R2=5
+            // R3  = (R0 == R2) → 1     (5 == 5)
+            // R4  = (R0 == R1) → 0     (5 == 10)
+            // R5  = (R0 != R1) → 1     (5 != 10)
+            // R6  = (R0 <  R1) → 1     (5 < 10)
+            // R7  = (R1 <  R0) → 0     (10 < 5)
+            // R8  = (R0 <= R2) → 1     (5 <= 5)
+            // R9  = (R0 >  R1) → 0     (5 > 10)
+            // R10 = (R0 >= R2) → 1     (5 >= 5)
+            var program = new VMProgram(
+                new Instruction[]
+                {
+                    new Instruction(OpCode.LOAD_CONST, 0, 0),       // R0 = 5
+                    new Instruction(OpCode.LOAD_CONST, 1, 1),       // R1 = 10
+                    new Instruction(OpCode.LOAD_CONST, 2, 0),       // R2 = 5
+                    new Instruction(OpCode.CMP_EQ, 3, 0, 2),        // R3 = (5 == 5) → 1
+                    new Instruction(OpCode.CMP_EQ, 4, 0, 1),        // R4 = (5 == 10) → 0
+                    new Instruction(OpCode.CMP_NEQ, 5, 0, 1),       // R5 = (5 != 10) → 1
+                    new Instruction(OpCode.CMP_LT, 6, 0, 1),        // R6 = (5 < 10) → 1
+                    new Instruction(OpCode.CMP_LT, 7, 1, 0),        // R7 = (10 < 5) → 0
+                    new Instruction(OpCode.CMP_LTE, 8, 0, 2),       // R8 = (5 <= 5) → 1
+                    new Instruction(OpCode.CMP_GT, 9, 0, 1),        // R9 = (5 > 10) → 0
+                    new Instruction(OpCode.CMP_GTE, 10, 0, 2),      // R10 = (5 >= 5) → 1
+                    new Instruction(OpCode.RETURN),
+                },
+                new Number[] { Number.FromInt(5), Number.FromInt(10) },
+                11
+            );
+
+            var world = new VMWorld();
+            world.Modules.Load(0, program);
+            int id = world.SpawnInstance(0, 0);
+            world.Tick();
+
+            ref VMInstanceState cmpInst = ref world.Pool.Instances[id];
+            Assert(cmpInst.Registers.Get(3).ToInt() == 1, "CMP: 5 == 5 → 1");
+            Assert(cmpInst.Registers.Get(4).ToInt() == 0, "CMP: 5 == 10 → 0");
+            Assert(cmpInst.Registers.Get(5).ToInt() == 1, "CMP: 5 != 10 → 1");
+            Assert(cmpInst.Registers.Get(6).ToInt() == 1, "CMP: 5 < 10 → 1");
+            Assert(cmpInst.Registers.Get(7).ToInt() == 0, "CMP: 10 < 5 → 0");
+            Assert(cmpInst.Registers.Get(8).ToInt() == 1, "CMP: 5 <= 5 → 1");
+            Assert(cmpInst.Registers.Get(9).ToInt() == 0, "CMP: 5 > 10 → 0");
+            Assert(cmpInst.Registers.Get(10).ToInt() == 1, "CMP: 5 >= 5 → 1");
+        }
+
+        // ===== Test 32: Boolean and unary opcodes (AND, OR, NOT, NEG) =====
+        {
+            // R0=1 (true), R1=0 (false), R2=7 (truthy)
+            // R3 = AND(R0, R2) → 1   (1 && 7)
+            // R4 = AND(R0, R1) → 0   (1 && 0)
+            // R5 = OR(R0, R1)  → 1   (1 || 0)
+            // R6 = OR(R1, R1)  → 0   (0 || 0)
+            // R7 = NOT(R1)     → 1   (!0)
+            // R8 = NOT(R2)     → 0   (!7)
+            // R9 = NEG(R2)     → -7  (-7)
+            var program = new VMProgram(
+                new Instruction[]
+                {
+                    new Instruction(OpCode.LOAD_CONST, 0, 0),    // R0 = 1
+                    new Instruction(OpCode.LOAD_CONST, 1, 1),    // R1 = 0
+                    new Instruction(OpCode.LOAD_CONST, 2, 2),    // R2 = 7
+                    new Instruction(OpCode.AND, 3, 0, 2),        // R3 = AND(1, 7) → 1
+                    new Instruction(OpCode.AND, 4, 0, 1),        // R4 = AND(1, 0) → 0
+                    new Instruction(OpCode.OR, 5, 0, 1),         // R5 = OR(1, 0) → 1
+                    new Instruction(OpCode.OR, 6, 1, 1),         // R6 = OR(0, 0) → 0
+                    new Instruction(OpCode.NOT, 7, 1),           // R7 = NOT(0) → 1
+                    new Instruction(OpCode.NOT, 8, 2),           // R8 = NOT(7) → 0
+                    new Instruction(OpCode.NEG, 9, 2),           // R9 = NEG(7) → -7
+                    new Instruction(OpCode.RETURN),
+                },
+                new Number[] { Number.FromInt(1), Number.FromInt(0), Number.FromInt(7) },
+                10
+            );
+
+            var world = new VMWorld();
+            world.Modules.Load(0, program);
+            int id = world.SpawnInstance(0, 0);
+            world.Tick();
+
+            ref VMInstanceState boolInst = ref world.Pool.Instances[id];
+            Assert(boolInst.Registers.Get(3).ToInt() == 1, "Bool: AND(1,7) → 1");
+            Assert(boolInst.Registers.Get(4).ToInt() == 0, "Bool: AND(1,0) → 0");
+            Assert(boolInst.Registers.Get(5).ToInt() == 1, "Bool: OR(1,0) → 1");
+            Assert(boolInst.Registers.Get(6).ToInt() == 0, "Bool: OR(0,0) → 0");
+            Assert(boolInst.Registers.Get(7).ToInt() == 1, "Bool: NOT(0) → 1");
+            Assert(boolInst.Registers.Get(8).ToInt() == 0, "Bool: NOT(7) → 0");
+            Assert(boolInst.Registers.Get(9).ToInt() == -7, "Unary: NEG(7) → -7");
+        }
+
+        // ===== Test 33: JUMP unconditional =====
+        {
+            // R0 = 1; JUMP → skip R0 = 99; assert R0 == 1
+            var program = new VMProgram(
+                new Instruction[]
+                {
+                    new Instruction(OpCode.LOAD_CONST, 0, 0),    // IP 0: R0 = 1
+                    new Instruction(OpCode.JUMP, 3),             // IP 1: JUMP → IP 3
+                    new Instruction(OpCode.LOAD_CONST, 0, 1),    // IP 2: R0 = 99 (SKIPPED)
+                    new Instruction(OpCode.RETURN),              // IP 3
+                },
+                new Number[] { Number.FromInt(1), Number.FromInt(99) },
+                1
+            );
+
+            var world = new VMWorld();
+            world.Modules.Load(0, program);
+            int id = world.SpawnInstance(0, 0);
+            world.Tick();
+
+            Assert(world.Pool.Instances[id].Registers.Get(0).ToInt() == 1,
+                "JUMP: skipped over R0=99, R0 still 1");
+        }
+
+        // ===== Test 34: JUMP_IF_ZERO / JUMP_IF_NOT_ZERO =====
+        {
+            // R0=0, R1=5
+            // JUMP_IF_ZERO(R0) → taken → R2=1
+            // JUMP_IF_NOT_ZERO(R1) → taken → R3=1
+            // Final: R2=1 (zero-branch taken), R3=1 (nonzero-branch taken)
+            var program = new VMProgram(
+                new Instruction[]
+                {
+                    new Instruction(OpCode.LOAD_CONST, 0, 0),             // IP 0: R0 = 0
+                    new Instruction(OpCode.LOAD_CONST, 1, 1),             // IP 1: R1 = 5
+                    new Instruction(OpCode.JUMP_IF_ZERO, 5, 0),           // IP 2: if R0==0 → JUMP IP 5
+                    new Instruction(OpCode.LOAD_CONST, 2, 2),             // IP 3: R2 = 99 (SKIPPED)
+                    new Instruction(OpCode.JUMP, 6),                      // IP 4: skip next
+                    new Instruction(OpCode.LOAD_CONST, 2, 3),             // IP 5: R2 = 1 (taken)
+                    new Instruction(OpCode.JUMP_IF_NOT_ZERO, 9, 1),       // IP 6: if R1!=0 → JUMP IP 9
+                    new Instruction(OpCode.LOAD_CONST, 3, 2),             // IP 7: R3 = 99 (SKIPPED)
+                    new Instruction(OpCode.JUMP, 10),                     // IP 8: skip next
+                    new Instruction(OpCode.LOAD_CONST, 3, 3),             // IP 9: R3 = 1 (taken)
+                    new Instruction(OpCode.RETURN),                       // IP 10
+                },
+                new Number[] { Number.FromInt(0), Number.FromInt(5), Number.FromInt(99), Number.FromInt(1) },
+                4
+            );
+
+            var world = new VMWorld();
+            world.Modules.Load(0, program);
+            int id = world.SpawnInstance(0, 0);
+            world.Tick();
+
+            ref VMInstanceState brInst = ref world.Pool.Instances[id];
+            Assert(brInst.Registers.Get(2).ToInt() == 1,
+                "Branch: JUMP_IF_ZERO taken when R0==0");
+            Assert(brInst.Registers.Get(3).ToInt() == 1,
+                "Branch: JUMP_IF_NOT_ZERO taken when R1!=0");
+        }
+
+        // ===== Test 35: Loop — sum 1..10 = 55 using JUMP + comparison =====
+        {
+            // Equivalent to: sum=0; i=1; while(i<=10) { sum+=i; i+=1; } return sum;
+            // R0 = sum (accumulator)
+            // R1 = i (counter)
+            // R2 = 10 (limit)
+            // R3 = 1 (increment)
+            // R4 = temp (comparison result)
+            var program = new VMProgram(
+                new Instruction[]
+                {
+                    new Instruction(OpCode.LOAD_CONST, 0, 0),         // IP 0: R0 = 0  (sum)
+                    new Instruction(OpCode.LOAD_CONST, 1, 1),         // IP 1: R1 = 1  (i)
+                    new Instruction(OpCode.LOAD_CONST, 2, 2),         // IP 2: R2 = 10 (limit)
+                    new Instruction(OpCode.LOAD_CONST, 3, 1),         // IP 3: R3 = 1  (step)
+                    // loop start:
+                    new Instruction(OpCode.CMP_GT, 4, 1, 2),         // IP 4: R4 = (i > 10)?
+                    new Instruction(OpCode.JUMP_IF_NOT_ZERO, 9, 4),  // IP 5: if R4 → exit loop (IP 9)
+                    new Instruction(OpCode.ADD, 0, 0, 1),             // IP 6: sum += i
+                    new Instruction(OpCode.ADD, 1, 1, 3),             // IP 7: i += 1
+                    new Instruction(OpCode.JUMP, 4),                  // IP 8: → loop start
+                    // loop exit:
+                    new Instruction(OpCode.RETURN),                   // IP 9
+                },
+                new Number[] { Number.FromInt(0), Number.FromInt(1), Number.FromInt(10) },
+                5
+            );
+
+            var world = new VMWorld();
+            world.Modules.Load(0, program);
+            int id = world.SpawnInstance(0, 0);
+            world.Tick();
+
+            Assert(world.Pool.Instances[id].Registers.Get(0).ToInt() == 55,
+                "Loop: sum(1..10) = 55");
+            Assert((world.Pool.Instances[id].StateFlags & VMStateFlags.Completed) != 0,
+                "Loop: Completed");
+        }
+
+        // ===== Test 36: If/Else — max(a, b) using conditional jump =====
+        {
+            // max(5, 8): R0=5, R1=8
+            // if R0 > R1 then R2=R0 else R2=R1
+            var program = new VMProgram(
+                new Instruction[]
+                {
+                    new Instruction(OpCode.LOAD_CONST, 0, 0),          // IP 0: R0 = 5
+                    new Instruction(OpCode.LOAD_CONST, 1, 1),          // IP 1: R1 = 8
+                    new Instruction(OpCode.CMP_GT, 3, 0, 1),           // IP 2: R3 = (5 > 8)?
+                    new Instruction(OpCode.JUMP_IF_NOT_ZERO, 6, 3),    // IP 3: if true → IP 6
+                    // else branch:
+                    new Instruction(OpCode.MOVE, 2, 1),                // IP 4: R2 = R1 (8)
+                    new Instruction(OpCode.JUMP, 7),                   // IP 5: skip then branch
+                    // then branch:
+                    new Instruction(OpCode.MOVE, 2, 0),                // IP 6: R2 = R0 (5)
+                    new Instruction(OpCode.RETURN),                    // IP 7
+                },
+                new Number[] { Number.FromInt(5), Number.FromInt(8) },
+                4
+            );
+
+            var world = new VMWorld();
+            world.Modules.Load(0, program);
+            int id = world.SpawnInstance(0, 0);
+            world.Tick();
+
+            Assert(world.Pool.Instances[id].Registers.Get(2).ToInt() == 8,
+                "If/Else: max(5,8) = 8");
+        }
+
+        // ===== Test 37: MOVE preserves value after source overwrite =====
+        {
+            // R0=42; R1=MOVE(R0); R0=99; assert R1 still 42
+            var program = new VMProgram(
+                new Instruction[]
+                {
+                    new Instruction(OpCode.LOAD_CONST, 0, 0),    // R0 = 42
+                    new Instruction(OpCode.MOVE, 1, 0),          // R1 = R0 (copy)
+                    new Instruction(OpCode.LOAD_CONST, 0, 1),    // R0 = 99
+                    new Instruction(OpCode.RETURN),
+                },
+                new Number[] { Number.FromInt(42), Number.FromInt(99) },
+                2
+            );
+
+            var world = new VMWorld();
+            world.Modules.Load(0, program);
+            int id = world.SpawnInstance(0, 0);
+            world.Tick();
+
+            Assert(world.Pool.Instances[id].Registers.Get(1).ToInt() == 42,
+                "MOVE copy: R1 preserved after R0 overwrite");
+            Assert(world.Pool.Instances[id].Registers.Get(0).ToInt() == 99,
+                "MOVE copy: R0 changed to 99");
+        }
+
+        // ===== Test 38: 0 GC — new opcodes don't allocate =====
+        {
+            // Program exercises all new opcodes:
+            // MOVE, ADD, SUB, MUL, DIV, MOD, CMP_EQ, CMP_LT, AND, OR, NOT, NEG,
+            // JUMP, JUMP_IF_ZERO, JUMP_IF_NOT_ZERO
+            // loop 10 iterations then return
+            var program = new VMProgram(
+                new Instruction[]
+                {
+                    new Instruction(OpCode.LOAD_CONST, 0, 0),         // IP 0: R0 = 0 (counter)
+                    new Instruction(OpCode.LOAD_CONST, 1, 1),         // IP 1: R1 = 10 (limit)
+                    new Instruction(OpCode.LOAD_CONST, 2, 2),         // IP 2: R2 = 1 (step)
+                    // loop start:
+                    new Instruction(OpCode.CMP_LT, 3, 0, 1),         // IP 3: R3 = (R0 < 10)?
+                    new Instruction(OpCode.JUMP_IF_ZERO, 17, 3),      // IP 4: exit if done
+                    new Instruction(OpCode.ADD, 0, 0, 2),             // IP 5: R0 += 1
+                    new Instruction(OpCode.SUB, 4, 1, 0),             // IP 6: R4 = 10 - R0
+                    new Instruction(OpCode.MUL, 5, 0, 2),             // IP 7: R5 = R0 * 1
+                    new Instruction(OpCode.MOVE, 6, 5),               // IP 8: R6 = R5
+                    new Instruction(OpCode.CMP_EQ, 7, 0, 1),         // IP 9: R7 = (R0 == 10)?
+                    new Instruction(OpCode.CMP_LTE, 8, 0, 1),        // IP 10: R8 = (R0 <= 10)?
+                    new Instruction(OpCode.AND, 9, 7, 8),             // IP 11: R9 = AND(R7, R8)
+                    new Instruction(OpCode.OR, 10, 7, 3),             // IP 12: R10 = OR(R7, R3)
+                    new Instruction(OpCode.NOT, 11, 7),               // IP 13: R11 = NOT(R7)
+                    new Instruction(OpCode.NEG, 12, 0),               // IP 14: R12 = -R0
+                    new Instruction(OpCode.MOD, 13, 0, 2),            // IP 15: R13 = R0 % 1
+                    new Instruction(OpCode.JUMP, 3),                  // IP 16: → loop start
+                    // exit:
+                    new Instruction(OpCode.RETURN),                   // IP 17
+                },
+                new Number[] { Number.FromInt(0), Number.FromInt(10), Number.FromInt(1) },
+                14
+            );
+
+            var world = new VMWorld();
+            world.Modules.Load(0, program);
+            world.Syscalls.Register(0, "Noop", (ref VMInstanceState s) => { });
+
+            // Warmup
+            for (int warm = 0; warm < 50; warm++)
+            {
+                int wid = world.SpawnInstance(0, 0);
+                world.Tick();
+                world.DestroyInstance(wid);
+            }
+
+            // Measure
+            long gcBefore = GC.GetAllocatedBytesForCurrentThread();
+            for (int r = 0; r < 20; r++)
+            {
+                int mid = world.SpawnInstance(0, 0);
+                world.Tick();
+                world.DestroyInstance(mid);
+            }
+            long gcAfter = GC.GetAllocatedBytesForCurrentThread();
+            long gcDelta = gcAfter - gcBefore;
+
+            Assert(gcDelta == 0,
+                $"0 GC new opcodes: delta = {gcDelta} bytes (== 0)");
+        }
+
+        // ===== Test 39: Save/Load correctness with new opcodes =====
+        {
+            // Loop: sum = 0; i = 1; while i <= 20: sum += i; i++; end
+            // Save at frame 5 (mid-loop), diverge, load, resume — must match reference
+            var progInstr = new Instruction[]
+            {
+                new Instruction(OpCode.LOAD_CONST, 0, 0),         // IP 0: R0 = 0 (sum)
+                new Instruction(OpCode.LOAD_CONST, 1, 1),         // IP 1: R1 = 1 (i)
+                new Instruction(OpCode.LOAD_CONST, 2, 2),         // IP 2: R2 = 20 (limit)
+                new Instruction(OpCode.LOAD_CONST, 3, 1),         // IP 3: R3 = 1 (step)
+                // loop start (IP 4):
+                new Instruction(OpCode.CMP_GT, 4, 1, 2),         // IP 4: R4 = (i > 20)?
+                new Instruction(OpCode.JUMP_IF_NOT_ZERO, 10, 4), // IP 5: if done → IP 10
+                new Instruction(OpCode.ADD, 0, 0, 1),             // IP 6: sum += i
+                new Instruction(OpCode.ADD, 1, 1, 3),             // IP 7: i += 1
+                new Instruction(OpCode.WAIT, 1),                  // IP 8: wait 1 frame (spread across ticks)
+                new Instruction(OpCode.JUMP, 4),                  // IP 9: → loop start
+                // exit:
+                new Instruction(OpCode.SYSCALL, 0),               // IP 10: report result
+                new Instruction(OpCode.RETURN),                   // IP 11
+            };
+            var progConsts = new Number[]
+            {
+                Number.FromInt(0), Number.FromInt(1), Number.FromInt(20),
+            };
+
+            // --- Run A: reference (no save/load) ---
+            var logA2 = new List<string>();
+            int finalSumA;
+            {
+                var prog = new VMProgram(progInstr, progConsts, 5);
+                var w = new VMWorld();
+                w.Modules.Load(0, prog);
+                w.Syscalls.Register(0, "Report", (ref VMInstanceState s) =>
+                    { logA2.Add($"sum={s.Registers.Get(0).ToInt()}"); });
+                w.SpawnInstance(0, 0);
+                // Each iteration: 1 tick execute + 1 tick wait = 2 ticks
+                // 20 iterations × 2 = 40 ticks + 1 for report+return
+                for (int t = 0; t < 60; t++) w.Tick();
+                finalSumA = w.Pool.Instances[0].Registers.Get(0).ToInt();
+            }
+
+            // --- Run B: save at tick 5, diverge, load, resume ---
+            var logB2 = new List<string>();
+            int finalSumB;
+            {
+                var prog = new VMProgram(progInstr, progConsts, 5);
+                var w = new VMWorld();
+                w.Modules.Load(0, prog);
+                w.Syscalls.Register(0, "Report", (ref VMInstanceState s) =>
+                    { logB2.Add($"sum={s.Registers.Get(0).ToInt()}"); });
+                w.SpawnInstance(0, 0);
+
+                for (int t = 0; t < 5; t++) w.Tick();
+                w.SaveState();
+                int sf = w.FrameNumber;
+
+                // Diverge
+                for (int t = 0; t < 10; t++) w.Tick();
+
+                // Load back
+                logB2.Clear();
+                w.LoadState(sf);
+
+                // Resume
+                for (int t = 0; t < 60; t++) w.Tick();
+                finalSumB = w.Pool.Instances[0].Registers.Get(0).ToInt();
+            }
+
+            Assert(finalSumA == 210, $"Save/Load loop: reference sum = {finalSumA} (== 210)");
+            Assert(finalSumA == finalSumB,
+                $"Save/Load loop: rollback sum matches ({finalSumA} vs {finalSumB})");
+            Assert(logA2.Count == logB2.Count && logA2.Count > 0,
+                $"Save/Load loop: syscall count match ({logA2.Count} vs {logB2.Count})");
+            bool seqOk = logA2.Count == logB2.Count;
+            for (int i = 0; i < logA2.Count && seqOk; i++)
+                seqOk = logA2[i] == logB2[i];
+            Assert(seqOk, "Save/Load loop: syscall sequence bit-exact");
+        }
+
         // ===== Summary =====
         Debug.Log($"========================================");
         Debug.Log($"TreeWalker Tests: {passed} passed, {failed} failed");

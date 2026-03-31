@@ -263,7 +263,9 @@ skill TracerBullet
 7. Save/Load 后执行行为一致
 8. 全流程零 GC
 
-### 4.4 最小 OpCode 集（7 条）
+### 4.4 OpCode 集
+
+#### Phase 1：曳光弹核心（7 条）
 
 | OpCode | 职责 |
 |--------|------|
@@ -275,7 +277,19 @@ skill TracerBullet
 | `POP_CLEANUP` | 正常离开作用域时注销 Cleanup |
 | `RETURN` | 结束/Cleanup 驱动切换点 |
 
-曳光弹通过后应**立即补充** `MOVE`/`COPY`（最高优先级，否则分支/循环/函数调用都无法实现），然后再扩展 `JUMP`/`JUMP_IF`。
+#### Phase 2：Step 5 扩展（19 条）
+
+| OpCode | 职责 |
+|--------|------|
+| `MOVE` | 寄存器间复制 Reg[A] = Reg[B] |
+| `JUMP` | 无条件跳转 IP = A |
+| `JUMP_IF_ZERO` | 条件跳转：Reg[B] == 0 → IP = A |
+| `JUMP_IF_NOT_ZERO` | 条件跳转：Reg[B] != 0 → IP = A |
+| `ADD/SUB/MUL/DIV/MOD` | 算术运算 Reg[A] = Reg[B] op Reg[C] |
+| `CMP_EQ/NEQ/LT/LTE/GT/GTE` | 比较运算 → 0 或 1 |
+| `AND/OR` | 布尔运算（非零为真） |
+| `NOT` | 逻辑取反 |
+| `NEG` | 算术取负 |
 
 ### 4.5 示意字节码
 
@@ -364,18 +378,19 @@ skill TracerBullet
 | 实例池 | `InstancePool`（确定性 free stack） | ✅ 完成 |
 | 快照 | `SnapshotRingBuffer`（8 帧环，零分配） | ✅ 完成 |
 | Syscall | `SyscallTable`（256 slot，热替换） | ✅ 完成 |
-| 字节码 | `OpCode`（7 条指令）+ `Instruction` + `VMProgram` + `VMModuleTable` | ✅ 完成 |
+| 字节码 | `OpCode`（26 条指令）+ `Instruction` + `VMProgram` + `VMModuleTable` | ✅ 完成 |
 | 调度 | `VMWorld`（Tick 字节码解释循环 + Spawn/Destroy/Save/Load） | ✅ 完成 |
 | 解释器 | `TreeWalker`（Phase 2 原型，含 defer + Kill） | ✅ 完成 |
-| 测试 | 63 项 Assert 全部通过（Phase A + B，TreeWalker + 字节码 + V1 GC + V2 回滚） | ✅ V1/V2 通过 |
+| 测试 | 98 项 Assert 全部通过（Phase A + B + Step 5，TreeWalker + 字节码 + V1 GC + V2 回滚） | ✅ Step 5 通过 |
 
 ### 5.2 未完成（按优先级排列）
 
 | 优先级 | 内容 | 阻塞关系 |
 |--------|------|----------|
 | P0 | V1 GC 精确验证 + V2 回滚正确性验证 | ✅ 通过（Test 27, 28） |
-| P1 | `MOVE`/`COPY` OpCode | 阻塞分支/循环/函数调用 |
-| P1 | `JUMP`/`JUMP_IF` OpCode + 比较/布尔运算 | 阻塞分支/循环 |
+| P1 | `MOVE`/`COPY` OpCode | ✅ 完成（Test 29, 37） |
+| P1 | `JUMP`/`JUMP_IF` OpCode + 比较/布尔运算 | ✅ 完成（Test 30-36） |
+| P1 | Step 5 新指令零 GC + 快照正确性验证 | ✅ 通过（Test 38, 39） |
 | P1 | V3 单实例性能基准 + V4 N 实例吞吐上限 | 阻塞 Parser |
 | P2 | Lexer + Parser（手写递归下降） | 阻塞文本脚本 |
 | P2 | `using` 语法 + Paired Syscall 协议 | 阻塞理想 Cleanup 模式 |
@@ -392,8 +407,8 @@ skill TracerBullet
 | TreeWalker 代替字节码 VM | Phase 2 快速验证语义正确性 | P0：实现字节码解释循环，用字节码重新通过曳光弹全部验证 |
 | `defer` 代替 `using` | `using` 需要 Paired Syscall 注册协议 + 编译器支持 | P2：Parser 阶段实现 `using` 语法，SyscallTable 扩展配对注册 API |
 | 开发期 float（`Number`） | 快速迭代，Fix64 调试较痛苦 | float 模式仅用于开发迭代，正式测试和上线构建必须 `USE_FIXPOINT` |
-| 无 `MOVE`/`COPY` | 曳光弹不需要寄存器搬运 | 曳光弹通过后立即补充，优先级高于 `JUMP` |
-| 无分支/循环 OpCode | 曳光弹业务不含分支 | `MOVE` 之后补 `JUMP`/`JUMP_IF`，再补比较/布尔运算 |
+| 无 `MOVE`/`COPY` | 曳光弹不需要寄存器搬运 | ~~曳光弹通过后立即补充~~ ✅ Step 5 完成 |
+| 无分支/循环 OpCode | 曳光弹业务不含分支 | ~~`MOVE` 之后补 `JUMP`/`JUMP_IF`~~ ✅ Step 5 完成 |
 | 无编辑器 UI | 编辑器依赖稳定 AST 和编译器 | AST/编译器稳定后开始流程图主视图 |
 | 无 Handle64 批处理 | 曳光弹业务不涉及多目标 | 函数调用和基本控制流稳定后，补充 Handle 批处理 Syscall 协议 |
 | ~~CleanupFrames 尚未加入 VMInstanceState~~ | ✅ 已完成 | 曳光弹 Step 1 |
@@ -418,7 +433,7 @@ skill TracerBullet
   │  V2: 回滚正确性验证      ← ✅ 通过                 │
   └────────────────────────────────────────────────────────┘
       ↓
-5. 补充 MOVE/COPY → JUMP/JUMP_IF → 比较/布尔
+5. 补充 MOVE/COPY → JUMP/JUMP_IF → 比较/布尔                       ✅
       ↓
   ┌────────────────────────────────────────────────────────┐
   │  V3: 单实例性能基准    ← 步骤 5 完成后可做           │
