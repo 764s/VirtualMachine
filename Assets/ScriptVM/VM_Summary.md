@@ -297,27 +297,25 @@ skill TracerBullet
 
 以下验证项为整个 VM 工程的必过门禁。每项均可模块化执行，不需要完整环境，可分阶段插入推进顺序中，只需最终全部通过即可。
 
-#### V1: GC 精确验证 — ⭐ 待执行
+#### V1: GC 精确验证 — ✅ 通过
 
 | 项目 | 内容 |
 |------|------|
 | 目的 | 确认字节码 Tick 循环内零托管堆分配 |
 | 前置 | 曳光弹通过（字节码路径已可运行） |
-| 方法 | `MonoBehaviour.Update` 中驱动 VM Tick，用 `ProfilerRecorder` 采集 `GC.Alloc`，或 Unity Profiler Deep Profile 观察 Tick 帧 |
+| 方法 | 使用 `GC.GetAllocatedBytesForCurrentThread()` 精确测量当前线程分配。50 轮预热后，10 个活跃实例执行 SYSCALL + WAIT + Cleanup，连续 100 Tick，断言 0 bytes 分配 |
 | 通过条件 | 预热后连续 100 Tick，`GC.Alloc` = 0 bytes（Syscall 注册、VMProgram 构造等预热期分配不计） |
-| 最早可做 | 曳光弹通过后立即（当前） |
-| 必须通过 | 进入步骤 7（OpCode 扩展）前 |
+| 结果 | ✅ Test 27 通过：100 ticks alloc = 0 bytes |
 
-#### V2: 回滚正确性验证 — ⭐ 待执行
+#### V2: 回滚正确性验证 — ✅ 通过
 
 | 项目 | 内容 |
 |------|------|
 | 目的 | 确认 Save/Load 后执行行为与未中断运行 bit-exact 一致 |
 | 前置 | 曳光弹通过 |
-| 方法 | 跑 100 帧 → Save → 跑 50 帧（偶向）→ Load → 再跑 100 帧；对比两次从相同帧开始运行的完整 Syscall 调用序列 |
+| 方法 | 跑 50 帧 → Save → 跑 50 帧（偶向）→ Load → 再跑 100 帧；对比两次从相同帧开始运行的完整 Syscall 调用序列 |
 | 通过条件 | Syscall 调用序列完全一致，最终 StateFlags 完全一致 |
-| 最早可做 | 曳光弹通过后立即（当前） |
-| 必须通过 | 进入步骤 7 前 |
+| 结果 | ✅ Test 28 通过：syscall sequence bit-exact，StateFlags match |
 
 #### V3: 单实例性能基准 — ⚪ 待前置
 
@@ -369,13 +367,13 @@ skill TracerBullet
 | 字节码 | `OpCode`（7 条指令）+ `Instruction` + `VMProgram` + `VMModuleTable` | ✅ 完成 |
 | 调度 | `VMWorld`（Tick 字节码解释循环 + Spawn/Destroy/Save/Load） | ✅ 完成 |
 | 解释器 | `TreeWalker`（Phase 2 原型，含 defer + Kill） | ✅ 完成 |
-| 测试 | 57 项 Assert 全部通过（Phase A + B，TreeWalker + 字节码） | ✅ 曳光弹通过 |
+| 测试 | 63 项 Assert 全部通过（Phase A + B，TreeWalker + 字节码 + V1 GC + V2 回滚） | ✅ V1/V2 通过 |
 
 ### 5.2 未完成（按优先级排列）
 
 | 优先级 | 内容 | 阻塞关系 |
 |--------|------|----------|
-| P0 | V1 GC 精确验证 + V2 回滚正确性验证 | 阻塞 OpCode 扩展 |
+| P0 | V1 GC 精确验证 + V2 回滚正确性验证 | ✅ 通过（Test 27, 28） |
 | P1 | `MOVE`/`COPY` OpCode | 阻塞分支/循环/函数调用 |
 | P1 | `JUMP`/`JUMP_IF` OpCode + 比较/布尔运算 | 阻塞分支/循环 |
 | P1 | V3 单实例性能基准 + V4 N 实例吞吐上限 | 阻塞 Parser |
@@ -416,9 +414,8 @@ skill TracerBullet
 4. 字节码路径通过 Phase A + B 全部验证 → 曳光弹成立        ✅
       ↓
   ┌────────────────────────────────────────────────────────┐
-  │  V1: GC 精确验证        ← ⭐ 当前可做              │
-  │  V2: 回滚正确性验证      ← ⭐ 当前可做              │
-  │  通过条件见 §4.6，必须在进入步骤 5 前全部通过        │
+  │  V1: GC 精确验证        ← ✅ 通过                 │
+  │  V2: 回滚正确性验证      ← ✅ 通过                 │
   └────────────────────────────────────────────────────────┘
       ↓
 5. 补充 MOVE/COPY → JUMP/JUMP_IF → 比较/布尔

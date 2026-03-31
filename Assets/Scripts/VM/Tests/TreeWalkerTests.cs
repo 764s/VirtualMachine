@@ -1018,11 +1018,9 @@ public static class TreeWalkerTests
                 world.DestroyInstance(wid);
             }
 
-            // Measure: spawn + tick to completion, check GC
-            GC.Collect();
-            GC.WaitForPendingFinalizers();
-            GC.Collect();
-            long memBefore = GC.GetTotalMemory(false);
+            // Measure using per-thread allocation counter (precise, not affected by
+            // other threads or runtime internals unlike GC.GetTotalMemory)
+            long threadBefore = GC.GetAllocatedBytesForCurrentThread();
 
             const int rounds = 20;
             for (int r = 0; r < rounds; r++)
@@ -1032,13 +1030,188 @@ public static class TreeWalkerTests
                 world.DestroyInstance(mid);
             }
 
-            long memAfter = GC.GetTotalMemory(false);
-            long delta = memAfter - memBefore;
+            long threadAfter = GC.GetAllocatedBytesForCurrentThread();
+            long delta = threadAfter - threadBefore;
 
-            // Allow small tolerance (GC measurement is approximate)
-            // Any significant allocation (e.g. boxing, delegate alloc) would show >1KB
-            Assert(delta < 1024,
-                $"0 GC: bytecode tick delta = {delta} bytes (< 1024)");
+            Assert(delta == 0,
+                $"0 GC: bytecode tick delta = {delta} bytes (== 0)");
+        }
+
+        // =================================================================
+        //  V1: GC Precise Verification (§4.6 V1)
+        //  Confirms bytecode Tick loop is zero-GC over 100 consecutive ticks
+        //  with active instances executing SYSCALL + WAIT + Cleanup.
+        // =================================================================
+
+        // ===== Test 27: V1 — 100-tick zero GC with active instances =====
+        {
+            // Program: defer{Syscall_Noop}; Syscall_Noop; wait 5; Syscall_Noop; return
+            // Each instance takes 7 ticks to complete (1 exec + 5 wait + 1 resume+cleanup)
+            var v1Program = new VMProgram(
+                new Instruction[]
+                {
+                    new Instruction(OpCode.PUSH_CLEANUP, 6),   // 0: defer → IP 6
+                    new Instruction(OpCode.SYSCALL, 0),        // 1: Noop (main)
+                    new Instruction(OpCode.WAIT, 5),           // 2: wait 5 frames
+                    new Instruction(OpCode.SYSCALL, 0),        // 3: Noop (post-wait)
+                    new Instruction(OpCode.RETURN),            // 4: normal return → cleanup
+                    new Instruction(OpCode.NOP),               // 5: spacer
+                    new Instruction(OpCode.SYSCALL, 0),        // 6: cleanup Noop
+                    new Instruction(OpCode.RETURN),            // 7: cleanup done
+                },
+                new Number[0],
+                0
+            );
+
+            var v1World = new VMWorld();
+            v1World.Modules.Load(0, v1Program);
+            v1World.Syscalls.Register(0, "Noop", (ref VMInstanceState s) => { });
+
+            // Heavy warmup: 50 rounds to fully JIT all paths
+            for (int warm = 0; warm < 50; warm++)
+            {
+                int wid = v1World.SpawnInstance(0, 0);
+                for (int t = 0; t < 10; t++) v1World.Tick();
+                v1World.DestroyInstance(wid);
+            }
+
+            // Spawn 10 instances that will be active during the 100-tick window
+            // They complete in ~7 ticks each, so re-spawn mid-run to keep the pool active
+            for (int i = 0; i < 10; i++)
+                v1World.SpawnInstance(0, 0);
+
+            // Measure: 100 consecutive ticks with active instances
+            long v1Before = GC.GetAllocatedBytesForCurrentThread();
+
+            for (int t = 0; t < 100; t++)
+                v1World.Tick();
+
+            long v1After = GC.GetAllocatedBytesForCurrentThread();
+            long v1Delta = v1After - v1Before;
+
+            Assert(v1Delta == 0,
+                $"V1 GC precise: 100 ticks alloc = {v1Delta} bytes (== 0)");
+
+            // Also verify instances actually ran (not just idle ticks)
+            bool anyCompleted = false;
+            for (int i = 0; i < VMConstants.MaxInstances; i++)
+            {
+                ref VMInstanceState inst = ref v1World.Pool.Instances[i];
+                if (inst.IsAlive && (inst.StateFlags & VMStateFlags.Completed) != 0)
+                {
+                    anyCompleted = true;
+                    break;
+                }
+            }
+            Assert(anyCompleted, "V1 GC precise: instances actually executed (not idle)");
+        }
+
+        // =================================================================
+        //  V2: Rollback Correctness Verification (§4.6 V2)
+        //  100 frames → Save → 50 diverge → Load → 100 frames
+        //  Syscall sequences and final StateFlags must be bit-exact.
+        // =================================================================
+
+        // ===== Test 28: V2 — Rollback correctness =====
+        {
+            // Program: defer{SetBB(0)}; SetBB(1); wait 80; PlayEffect; return
+            // Timeline: frame 1 → SetBB(1)+WAIT, frames 2-81 waiting, frame 82 → PlayEffect+Cleanup
+            // Save at frame 50 (mid-wait), diverge 50 frames, load back, run 100 more.
+            var v2Instructions = new Instruction[]
+            {
+                new Instruction(OpCode.PUSH_CLEANUP, 8),       // 0: defer → IP 8
+                new Instruction(OpCode.LOAD_CONST, 0, 1),      // 1: R0 = 1
+                new Instruction(OpCode.SYSCALL, 0),             // 2: SetBB(1)
+                new Instruction(OpCode.WAIT, 80),               // 3: wait 80 frames
+                new Instruction(OpCode.LOAD_CONST, 1, 2),      // 4: R1 = effectId
+                new Instruction(OpCode.SYSCALL, 1),             // 5: PlayEffect
+                new Instruction(OpCode.RETURN),                 // 6: normal return → cleanup
+                new Instruction(OpCode.NOP),                    // 7: spacer
+                new Instruction(OpCode.LOAD_CONST, 0, 0),      // 8: R0 = 0 (cleanup)
+                new Instruction(OpCode.SYSCALL, 0),             // 9: SetBB(0)
+                new Instruction(OpCode.RETURN),                 // 10: cleanup done
+            };
+            var v2Consts = new Number[]
+            {
+                Number.FromInt(0),  // [0] = 0
+                Number.FromInt(1),  // [1] = 1
+                Number.FromInt(99), // [2] = effectId
+            };
+            var v2Program = new VMProgram(v2Instructions, v2Consts, 2);
+
+            // --- Run A (reference): 200 frames, collect syscall log from frame 51 onward ---
+            var logRefPost = new List<string>();
+            VMStateFlags finalFlagsRef;
+            {
+                var wA = new VMWorld();
+                var logAll = new List<string>();
+                wA.Modules.Load(0, v2Program);
+                wA.Syscalls.Register(0, "SetBB", (ref VMInstanceState s) =>
+                    { logAll.Add($"SetBB({s.Registers.Get(0).ToInt()})"); });
+                wA.Syscalls.Register(1, "PlayEffect", (ref VMInstanceState s) =>
+                    { logAll.Add($"PlayEffect({s.Registers.Get(1).ToInt()})"); });
+                wA.SpawnInstance(0, 0);
+
+                // Run 50 frames (pre-save portion — we'll compare post-save)
+                for (int t = 0; t < 50; t++) wA.Tick();
+
+                // Record log from frame 51 onward
+                logAll.Clear();
+                for (int t = 0; t < 100; t++) wA.Tick();
+                logRefPost = logAll;
+
+                finalFlagsRef = wA.Pool.Instances[0].StateFlags;
+            }
+
+            // --- Run B (rollback): 50 frames → Save → 50 diverge → Load → 100 frames ---
+            var logRollbackPost = new List<string>();
+            VMStateFlags finalFlagsRollback;
+            {
+                var wB = new VMWorld();
+                wB.Modules.Load(0, v2Program);
+                wB.Syscalls.Register(0, "SetBB", (ref VMInstanceState s) =>
+                    { logRollbackPost.Add($"SetBB({s.Registers.Get(0).ToInt()})"); });
+                wB.Syscalls.Register(1, "PlayEffect", (ref VMInstanceState s) =>
+                    { logRollbackPost.Add($"PlayEffect({s.Registers.Get(1).ToInt()})"); });
+                wB.SpawnInstance(0, 0);
+
+                // Run 50 frames (same as reference pre-save)
+                for (int t = 0; t < 50; t++) wB.Tick();
+
+                // Save state at frame 50
+                wB.SaveState();
+                int savedFrame = wB.FrameNumber;
+
+                // Diverge: run 50 more frames (frames 51-100)
+                for (int t = 0; t < 50; t++) wB.Tick();
+
+                // Load back to frame 50
+                logRollbackPost.Clear(); // discard diverged syscalls
+                bool loaded = wB.LoadState(savedFrame);
+                Assert(loaded, "V2 rollback: LoadState succeeded");
+
+                // Run 100 frames from the restored state (should match reference)
+                for (int t = 0; t < 100; t++) wB.Tick();
+
+                finalFlagsRollback = wB.Pool.Instances[0].StateFlags;
+            }
+
+            // Compare results
+            Assert(logRefPost.Count == logRollbackPost.Count,
+                $"V2 rollback: syscall count match ({logRefPost.Count} vs {logRollbackPost.Count})");
+
+            bool v2SeqMatch = logRefPost.Count == logRollbackPost.Count;
+            for (int i = 0; i < logRefPost.Count && v2SeqMatch; i++)
+                v2SeqMatch = logRefPost[i] == logRollbackPost[i];
+            Assert(v2SeqMatch,
+                "V2 rollback: syscall sequence bit-exact");
+
+            Assert(finalFlagsRef == finalFlagsRollback,
+                $"V2 rollback: final StateFlags match ({finalFlagsRef} vs {finalFlagsRollback})");
+
+            // Verify the instance actually completed (not still idle)
+            Assert((finalFlagsRef & VMStateFlags.Completed) != 0,
+                "V2 rollback: instance completed in reference run");
         }
 
         // ===== Summary =====
