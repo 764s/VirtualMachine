@@ -542,10 +542,10 @@ skill TracerBullet
         G1. wait_for Parser + Compiler 接入（新增 WAIT_FOR OpCode）   ✅
         G2. POP_CLEANUP 首次被编译器生成（using 正常退出路径）         ✅
       确定执行（低优先级，最晚步骤 10 前）：
-        C4. 编译器 "requires cleanup" 强制检查
+        C4. 编译器 "requires cleanup" 强制检查                        ⏳ 延至步骤 10 前
       展望项（暂无排期）：
-        C5. Cleanup 块执行超时保护
-        C6. 嵌套 using 作用域优化
+        C5. Cleanup 块执行超时保护                                    ⏳ 展望
+        C6. 嵌套 using 作用域优化                                     ⏳ 展望
       ↓
   ┌────────────────────────────────────────────────────────┐
   │  V5: 帧内 Profiler 验证  ← 真实 Syscall 接入 ECS 后    │
