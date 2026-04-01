@@ -166,7 +166,16 @@ Assets/ScriptVM/
 
 **曳光弹范围**：用 `defer` 等价验证 Cleanup 栈的物理正确性。`using` 语法在 Parser 阶段实现。
 
-**未来补全**：Parser + 编译器实现 `using` 语法 → Paired Syscall 注册协议 → 编译器 "requires cleanup" 强制检查。
+**实现路线图**（按执行时机分类）：
+
+| # | 实现项 | 分类 | 执行时机 | 说明 |
+|---|--------|------|----------|------|
+| C1 | `using` 语法 Parser 解析 | 确定执行 | 步骤 7 | Parser 支持 `using Syscall(args)` 语句 |
+| C2 | Paired Syscall 注册协议 | 确定执行 | 步骤 7 | SyscallTable 扩展配对注册 API，为 Syscall 绑定反向操作 |
+| C3 | 编译器 emit `PUSH_CLEANUP`/`POP_CLEANUP` for `using` | 确定执行 | 步骤 7 | 修复 G2 缺口：`using` 需要显式 emit Cleanup 指令 |
+| C4 | 编译器 "requires cleanup" 强制检查 | 确定执行（低优先级） | **最晚步骤 8 前** | 标记了 requires_cleanup 的 Syscall 若既未配 `using` 也未配 `defer`，编译报错 |
+| C5 | Cleanup 块执行超时保护 | 展望 | 待定 | 防止 Cleanup 块内死循环阻塞实例回收 |
+| C6 | 嵌套 `using` 作用域优化（合并相邻 PUSH_CLEANUP） | 展望 | 待定 | 性能优化，非功能阻塞 |
 
 ### 3.4 全程 Fix64，表现走 Syscall
 
@@ -457,9 +466,13 @@ skill TracerBullet
 | P1 | V3 单实例性能基准 + V4 N 实例吞吐上限 | ✅ 通过（Test 40: 3.8x, Test 41: 0.391ms/128inst） |
 | P2 | Lexer + Parser（手写递归下降） | ✅ 完成（Lexer + Parser + BytecodeCompiler，20 项端到端编译器测试 C01-C20 通过） |
 | P2 | 自动化性能基准管线（BenchmarkRunner + run-benchmarks.cmd） | ✅ 完成（5 组 VM vs C# 对比，编译脚本 5-7x ratio） |
-| P2 | `using` 语法 + Paired Syscall 协议 | 阻塞理想 Cleanup 模式 |
+| P2 | `using` 语法 Parser 解析（C1） | 确定执行 → 步骤 7 |
+| P2 | Paired Syscall 注册协议（C2） | 确定执行 → 步骤 7 |
+| P2 | 编译器 emit Cleanup 指令 for `using`（C3） | 确定执行 → 步骤 7 |
+| P2（低） | 编译器 "requires cleanup" 强制检查（C4） | 确定执行 → **最晚步骤 8 前** |
 | P3 | V5 帧内 Profiler 验证（真实 Syscall 接入后） | 阻塞编辑器 UI |
 | P3 | 编辑器流程图投影 | 不阻塞 VM 核心 |
+| — | Cleanup 超时保护（C5）/ 嵌套 using 优化（C6） | 展望项，暂无排期 |
 
 ---
 
@@ -469,7 +482,7 @@ skill TracerBullet
 |----------|------|-------------|
 | ~~手写 AST，无 Parser~~ | ~~先验证 VM 物理闭环~~ | ✅ 完成：Lexer + Parser + BytecodeCompiler，端到端文本 → 字节码 → 执行 |
 | ~~TreeWalker 代替字节码 VM~~ | ~~Phase 2 快速验证语义正确性~~ | ✅ 完成：字节码解释循环 + 编译器流水线均已实现 |
-| `defer` 代替 `using` | `using` 需要 Paired Syscall 注册协议 + 编译器支持 | P2：Parser 阶段实现 `using` 语法，SyscallTable 扩展配对注册 API |
+| `defer` 代替 `using` | `using` 需要 Paired Syscall 注册协议 + 编译器支持 | 确定执行 → 步骤 7：C1 Parser 解析 + C2 配对协议 + C3 编译器 emit；C4 强制检查最晚步骤 8 前 |
 | 开发期 float（`Number`） | 快速迭代，Fix64 调试较痛苦 | float 模式仅用于开发迭代，正式测试和上线构建必须 `USE_FIXPOINT` |
 | 无 `MOVE`/`COPY` | 曳光弹不需要寄存器搬运 | ~~曳光弹通过后立即补充~~ ✅ Step 5 完成 |
 | 无分支/循环 OpCode | 曳光弹业务不含分支 | ~~`MOVE` 之后补 `JUMP`/`JUMP_IF`~~ ✅ Step 5 完成 |
@@ -512,10 +525,20 @@ skill TracerBullet
   └────────────────────────────────────────────────────────┘
       ↓
 7. 实现 using 语法 + Paired Syscall → 理想 Cleanup 模式
+      确定执行：
+        C1. using 语法 Parser 解析
+        C2. Paired Syscall 注册协议（SyscallTable 扩展）
+        C3. 编译器 emit PUSH_CLEANUP / POP_CLEANUP for using
+      确定执行（低优先级，最晚步骤 8 前）：
+        C4. 编译器 "requires cleanup" 强制检查
+      展望项（暂无排期）：
+        C5. Cleanup 块执行超时保护
+        C6. 嵌套 using 作用域优化
       ↓
   ┌────────────────────────────────────────────────────────┐
   │  V5: 帧内 Profiler 验证  ← 真实 Syscall 接入 ECS 后    │
   │  通过条件见 §4.6，必须在进入步骤 8 前通过           │
+  │  C4 强制检查必须在进入步骤 8 前就位                  │
   └────────────────────────────────────────────────────────┘
       ↓
 8. 编辑器流程图投影
@@ -544,7 +567,7 @@ skill TracerBullet
 10. 宿主交互 = 统一 Syscall Table
 11. `wait` = 一等语义
 12. 快照/回滚 > 表达便利性
-13. Cleanup = `using`（理想）+ `defer`（逃生舱）+ 编译器强制检查
+13. Cleanup = `using`（理想）+ `defer`（逃生舱）+ 编译器强制检查（实现路线图见 §3.3 C1-C6）
 14. 语法服从 VM 物理法则
 15. AST 禁悬空高级结构
 16. 新提案必须过物理约束校验
@@ -605,9 +628,10 @@ skill TracerBullet
 | # | 位置 | 问题 | 优先级 | 建议修复时机 |
 |---|------|------|--------|-------------|
 | G1 | `Parser` / `BytecodeCompiler` | `wait_for` 仅有 VM 运行时实现（`OpCode.WAIT_FOR`），Parser 和 Compiler 尚未接入；当前脚本无法使用 `wait_for` 语法 | 高 | 步骤 7 |
-| G2 | `BytecodeCompiler` | `POP_CLEANUP` 从未被编译器生成；`defer` 块 Cleanup 由 VM 运行时隐式处理，但 `using` 需要显式 emit | 中 | 步骤 7（using 接入时） |
+| G2 | `BytecodeCompiler` | `POP_CLEANUP` 从未被编译器生成；`defer` 块 Cleanup 由 VM 运行时隐式处理，但 `using` 需要显式 emit（对应 C3） | 中 | 确定执行 → 步骤 7 |
 | G3 | `BytecodeCompiler.BinOpCode()` / `UnOpCode()` | ~~遇到未知 `NodeKind` 时静默返回 `NOP`，不报错~~ → 已修复：添加 `_errors.Add(...)` 报告未知操作符 | 中 | ✅ 已修复 |
 | G4 | `VMWorld.ExecuteInstance()` | ~~步数上限耗尽时报 `PanicIllegalInstruction`~~ → 已修复：新增 `PanicStepLimitExceeded` 错误码 | 低 | ✅ 已修复 |
+| G5 | `BytecodeCompiler` | 编译器缺少 "requires cleanup" 强制检查：标记了 requires_cleanup 的 Syscall 未配 `using`/`defer` 时应编译报错（对应 C4） | 中（低） | 确定执行 → **最晚步骤 8 前** |
 
 ### 11.2 测试缺口
 
