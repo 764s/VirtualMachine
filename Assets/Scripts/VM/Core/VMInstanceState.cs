@@ -17,6 +17,7 @@ namespace FFVM
         PanicOutOfBounds = 4,
         PanicModuleNotLoaded = 5,
         PanicUnresolvedExtern = 6,
+        PanicStepLimitExceeded = 7,
 
         // Soft errors — returned in register, script handles
         SoftSyscallFailed = 128,

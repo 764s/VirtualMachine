@@ -1,0 +1,161 @@
+name: FFVM CI — Build · Test · Benchmark
+
+on:
+  push:
+    branches: [ main, master, 'copilot/**' ]
+  pull_request:
+    branches: [ main, master ]
+  workflow_dispatch:
+
+jobs:
+  # ───────────────────────────────────────────────────
+  #  Job 1: Build + Unit Tests (185 assertions)
+  # ───────────────────────────────────────────────────
+  test:
+    name: Build & Test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+
+      - name: Generate StandaloneRunner.csproj
+        run: |
+          cat > StandaloneRunner/StandaloneRunner.csproj << 'EOF'
+          <Project Sdk="Microsoft.NET.Sdk">
+            <PropertyGroup>
+              <OutputType>Exe</OutputType>
+              <TargetFramework>net8.0</TargetFramework>
+              <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
+              <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+            </PropertyGroup>
+            <ItemGroup>
+              <Compile Include="**/*.cs" />
+              <Compile Include="../Assets/Scripts/VM/**/*.cs" />
+            </ItemGroup>
+          </Project>
+          EOF
+
+      - name: Build
+        run: dotnet build StandaloneRunner/StandaloneRunner.csproj -c Release --nologo
+
+      - name: Run Tests
+        run: |
+          dotnet run --project StandaloneRunner/StandaloneRunner.csproj -c Release --no-build 2>&1 | tee test-output.txt
+          # Fail if any test failed
+          if grep -q '\[FAIL\]' test-output.txt; then
+            echo "::error::One or more tests FAILED"
+            exit 1
+          fi
+          # Extract summary
+          grep 'passed' test-output.txt
+
+      - name: Upload test log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-output
+          path: test-output.txt
+
+  # ───────────────────────────────────────────────────
+  #  Job 2: Benchmarks (VM vs C#)
+  # ───────────────────────────────────────────────────
+  benchmark:
+    name: Benchmarks
+    runs-on: ubuntu-latest
+    needs: test
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+
+      - name: Generate StandaloneRunner.csproj
+        run: |
+          cat > StandaloneRunner/StandaloneRunner.csproj << 'EOF'
+          <Project Sdk="Microsoft.NET.Sdk">
+            <PropertyGroup>
+              <OutputType>Exe</OutputType>
+              <TargetFramework>net8.0</TargetFramework>
+              <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
+              <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+            </PropertyGroup>
+            <ItemGroup>
+              <Compile Include="**/*.cs" />
+              <Compile Include="../Assets/Scripts/VM/**/*.cs" />
+            </ItemGroup>
+          </Project>
+          EOF
+
+      - name: Run FFVM Benchmarks
+        run: |
+          dotnet run --project StandaloneRunner/StandaloneRunner.csproj -c Release -- --bench 2>&1 | tee bench-raw.txt
+
+      - name: Generate benchmark report
+        run: |
+          bash benchmarks/generate-report.sh bench-raw.txt benchmarks/benchmark_ci.md
+
+      - name: Upload benchmark report
+        uses: actions/upload-artifact@v4
+        with:
+          name: benchmark-report
+          path: benchmarks/benchmark_ci.md
+
+  # ───────────────────────────────────────────────────
+  #  Job 3: Cross-language performance comparison
+  # ───────────────────────────────────────────────────
+  cross-lang:
+    name: Cross-Language Benchmarks
+    runs-on: ubuntu-latest
+    needs: test
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Setup Lua
+        run: sudo apt-get update && sudo apt-get install -y lua5.4
+
+      - name: Generate StandaloneRunner.csproj
+        run: |
+          cat > StandaloneRunner/StandaloneRunner.csproj << 'EOF'
+          <Project Sdk="Microsoft.NET.Sdk">
+            <PropertyGroup>
+              <OutputType>Exe</OutputType>
+              <TargetFramework>net8.0</TargetFramework>
+              <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
+              <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+            </PropertyGroup>
+            <ItemGroup>
+              <Compile Include="**/*.cs" />
+              <Compile Include="../Assets/Scripts/VM/**/*.cs" />
+            </ItemGroup>
+          </Project>
+          EOF
+
+      - name: Run cross-language benchmarks
+        run: bash benchmarks/run-cross-lang.sh | tee cross-lang-output.txt
+
+      - name: Upload cross-language report
+        uses: actions/upload-artifact@v4
+        with:
+          name: cross-lang-report
+          path: benchmarks/cross_lang_results.md

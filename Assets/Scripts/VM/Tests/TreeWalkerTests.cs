@@ -1307,6 +1307,165 @@ public static class TreeWalkerTests
 
         // Tests 38-41 (V1b/V2b GC, V3 perf, V4 throughput) → PerformanceTests.cs
 
+        // ===== Test: G4 — Step limit produces PanicStepLimitExceeded =====
+        {
+            // Infinite loop: R0=1, JUMP_IF_NOT_ZERO back to itself
+            var instructions = new Instruction[]
+            {
+                new Instruction { Code = OpCode.LOAD_CONST, A = 0, B = 0 }, // R0 = const[0] = 1
+                new Instruction { Code = OpCode.JUMP_IF_NOT_ZERO, A = 0, B = 0 }, // if R0 != 0 goto 0
+            };
+            var constants = new Number[] { Number.FromInt(1) };
+            var prog = new VMProgram(instructions, constants, 1);
+
+            var world = new VMWorld();
+            world.MaxStepsPerTick = 8;
+            world.Modules.Load(0, prog);
+            int id = world.SpawnInstance(0, 0);
+            world.Tick();
+
+            Assert(world.Pool.Instances[id].ErrorFlag == VMError.PanicStepLimitExceeded,
+                "G4: step limit → PanicStepLimitExceeded (not PanicIllegalInstruction)");
+        }
+
+        // ===== Test T1: wait_for runtime — instance A waits for instance B =====
+        {
+            // Instance B: simple program — LOAD_CONST + RETURN (completes in 1 tick)
+            var progB = new VMProgram(
+                new Instruction[]
+                {
+                    new Instruction(OpCode.LOAD_CONST, 0, 0), // R0 = 42
+                    new Instruction(OpCode.RETURN),
+                },
+                new Number[] { Number.FromInt(42) },
+                1
+            );
+
+            // Instance A: LOAD_CONST + WAIT(1) + SYSCALL + RETURN
+            // A will be suspended via WaitTargetInstanceId before it reaches SYSCALL
+            int reportedA = -1;
+            var progA = new VMProgram(
+                new Instruction[]
+                {
+                    new Instruction(OpCode.LOAD_CONST, 0, 0), // R0 = 99
+                    new Instruction(OpCode.SYSCALL, 0, 0, 1), // Report(R0)
+                    new Instruction(OpCode.RETURN),
+                },
+                new Number[] { Number.FromInt(99) },
+                1
+            );
+
+            var world = new VMWorld();
+            world.Modules.Load(0, progA);
+            world.Modules.Load(1, progB);
+
+            int idA = world.SpawnInstance(0, 0);
+            int idB = world.SpawnInstance(1, 0);
+
+            world.Syscalls.Register(0, "Report", (ref VMInstanceState s) =>
+            {
+                reportedA = s.Registers.Get(0).ToInt();
+            });
+
+            // Set A to wait for B
+            world.Pool.Instances[idA].WaitTargetInstanceId = idB;
+
+            // Tick 1: B completes, A skipped (waiting for B)
+            world.Tick();
+            Assert(reportedA == -1, "T1 wait_for: A still waiting after tick 1");
+            Assert((world.Pool.Instances[idB].StateFlags & VMStateFlags.Completed) != 0,
+                "T1 wait_for: B completed in tick 1");
+
+            // Tick 2: B finished → A resumes and executes SYSCALL
+            world.Tick();
+            Assert(reportedA == 99, "T1 wait_for: A resumed after B completed, reported 99");
+            Assert((world.Pool.Instances[idA].StateFlags & VMStateFlags.Completed) != 0,
+                "T1 wait_for: A completed after resuming");
+        }
+
+        // ===== Test T2a: Division by zero (DIV) → returns 0, no panic =====
+        {
+            var prog = new VMProgram(
+                new Instruction[]
+                {
+                    new Instruction(OpCode.LOAD_CONST, 0, 0), // R0 = 10
+                    new Instruction(OpCode.LOAD_CONST, 1, 1), // R1 = 0
+                    new Instruction(OpCode.DIV, 2, 0, 1),     // R2 = R0 / R1 = 10 / 0
+                    new Instruction(OpCode.RETURN),
+                },
+                new Number[] { Number.FromInt(10), Number.FromInt(0) },
+                3
+            );
+
+            var world = new VMWorld();
+            world.Modules.Load(0, prog);
+            int id = world.SpawnInstance(0, 0);
+            world.Tick();
+
+            Assert(world.Pool.Instances[id].Registers.Get(2) == Number.Zero,
+                "T2a DIV/0: result = 0 (silent)");
+            Assert(world.Pool.Instances[id].ErrorFlag == VMError.None,
+                "T2a DIV/0: no panic");
+            Assert((world.Pool.Instances[id].StateFlags & VMStateFlags.Completed) != 0,
+                "T2a DIV/0: instance completed normally");
+        }
+
+        // ===== Test T2b: Modulo by zero (MOD) → returns 0, no panic =====
+        {
+            var prog = new VMProgram(
+                new Instruction[]
+                {
+                    new Instruction(OpCode.LOAD_CONST, 0, 0), // R0 = 7
+                    new Instruction(OpCode.LOAD_CONST, 1, 1), // R1 = 0
+                    new Instruction(OpCode.MOD, 2, 0, 1),     // R2 = R0 % R1 = 7 % 0
+                    new Instruction(OpCode.RETURN),
+                },
+                new Number[] { Number.FromInt(7), Number.FromInt(0) },
+                3
+            );
+
+            var world = new VMWorld();
+            world.Modules.Load(0, prog);
+            int id = world.SpawnInstance(0, 0);
+            world.Tick();
+
+            Assert(world.Pool.Instances[id].Registers.Get(2) == Number.Zero,
+                "T2b MOD/0: result = 0 (silent)");
+            Assert(world.Pool.Instances[id].ErrorFlag == VMError.None,
+                "T2b MOD/0: no panic");
+        }
+
+        // ===== Test T4: Instance pool exhaustion =====
+        {
+            var prog = new VMProgram(
+                new Instruction[]
+                {
+                    new Instruction(OpCode.LOAD_CONST, 0, 0), // R0 = 1
+                    new Instruction(OpCode.RETURN),
+                },
+                new Number[] { Number.FromInt(1) },
+                1
+            );
+
+            var world = new VMWorld();
+            world.Modules.Load(0, prog);
+
+            // Fill the pool to capacity (128 instances)
+            bool allAllocated = true;
+            for (int i = 0; i < VMConstants.MaxInstances; i++)
+            {
+                int id = world.SpawnInstance(0, 0);
+                if (id < 0) { allAllocated = false; break; }
+            }
+            Assert(allAllocated, "T4 pool: all 128 instances allocated successfully");
+            Assert(world.Pool.ActiveCount == VMConstants.MaxInstances,
+                $"T4 pool: active count = {world.Pool.ActiveCount} (== {VMConstants.MaxInstances})");
+
+            // 129th allocation should fail
+            int overflow = world.SpawnInstance(0, 0);
+            Assert(overflow == -1, "T4 pool: 129th allocation returns -1 (pool full)");
+        }
+
         // ===== Summary =====
         Debug.Log($"========================================");
         Debug.Log($"TreeWalker Tests: {passed} passed, {failed} failed");

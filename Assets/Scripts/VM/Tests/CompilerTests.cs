@@ -630,6 +630,62 @@ func main() {
             Assert(!result.Success, "C20: compile error for unknown function");
         }
 
+        // ===== Test C21: Bool literals (true/false) =====
+        {
+            string source = @"
+func main() {
+    var a: int = true
+    var b: int = false
+    Report(a)
+    Report(b)
+}";
+            var syscalls = new Dictionary<string, int> { { "Report", 0 } };
+            var result = compiler.Compile(source, "main", syscalls);
+            Assert(result.Success, "C21 compile success (bool literals)");
+
+            var reports = new List<int>();
+            var world = new VMWorld();
+            world.Modules.Load(0, result.Program);
+            world.Syscalls.Register(0, "Report", (ref VMInstanceState s) =>
+            {
+                reports.Add(s.Registers.Get(0).ToInt());
+            });
+
+            world.SpawnInstance(0, 0);
+            world.Tick();
+            Assert(reports.Count == 2, $"C21: 2 reports, got {reports.Count}");
+            Assert(reports.Count > 0 && reports[0] == 1, $"C21: true = 1, got {(reports.Count > 0 ? reports[0].ToString() : "?")}");
+            Assert(reports.Count > 1 && reports[1] == 0, $"C21: false = 0, got {(reports.Count > 1 ? reports[1].ToString() : "?")}");
+        }
+
+        // ===== Test C22: Float literals =====
+        {
+            string source = @"
+func main() {
+    var x: int = 3.5
+    var y: int = 2.5
+    Report(x + y)
+    Report(x - y)
+}";
+            var syscalls = new Dictionary<string, int> { { "Report", 0 } };
+            var result = compiler.Compile(source, "main", syscalls);
+            Assert(result.Success, "C22 compile success (float literals)");
+
+            var reports = new List<int>();
+            var world = new VMWorld();
+            world.Modules.Load(0, result.Program);
+            world.Syscalls.Register(0, "Report", (ref VMInstanceState s) =>
+            {
+                reports.Add(s.Registers.Get(0).ToInt());
+            });
+
+            world.SpawnInstance(0, 0);
+            world.Tick();
+            Assert(reports.Count == 2, $"C22: 2 reports, got {reports.Count}");
+            Assert(reports.Count > 0 && reports[0] == 6, $"C22: 3.5+2.5 = 6, got {(reports.Count > 0 ? reports[0].ToString() : "?")}");
+            Assert(reports.Count > 1 && reports[1] == 1, $"C22: 3.5-2.5 = 1, got {(reports.Count > 1 ? reports[1].ToString() : "?")}");
+        }
+
         // ===== Summary =====
         Debug.Log($"========================================");
         Debug.Log($"Compiler Tests: {passed} passed, {failed} failed");
