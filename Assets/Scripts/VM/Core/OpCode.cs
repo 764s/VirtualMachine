@@ -47,6 +47,9 @@ namespace FFVM
         OR           = 51,  // A=destReg, B=lhsReg, C=rhsReg → Reg[A] = (Reg[B]!=0 || Reg[C]!=0) ? 1 : 0
         NOT          = 52,  // A=destReg, B=srcReg            → Reg[A] = (Reg[B]==0) ? 1 : 0
         NEG          = 53,  // A=destReg, B=srcReg            → Reg[A] = -Reg[B]
+
+        // --- Phase 3: function calls ---
+        CALL         = 60,  // A=targetEntryIP, B=callerWindowSize → push CallFrame + jump
     }
 
     /// <summary>
