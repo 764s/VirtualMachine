@@ -14,6 +14,7 @@ namespace FFVM
         LOAD_CONST   = 1,   // A=destReg, B=constIndex
         SYSCALL      = 2,   // A=syscallSlot, B=argStartReg, C=argCount
         WAIT         = 3,   // A=frameCount
+        WAIT_FOR     = 7,   // A=srcReg → WaitTargetInstanceId = Reg[A]
         PUSH_CLEANUP = 4,   // A=cleanupEntryIP
         POP_CLEANUP  = 5,
         RETURN       = 6,

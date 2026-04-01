@@ -43,6 +43,7 @@ namespace FFVM.AST
         WaitFor,
         Yield,
         Defer,
+        Using,
         ExprStatement,
 
         // Top-level declarations
@@ -286,6 +287,23 @@ namespace FFVM.AST
     {
         public BlockStmt Body { get; }
         public DeferStmt(BlockStmt body) : base(NodeKind.Defer) { Body = body; }
+    }
+
+    /// <summary>
+    /// using SyscallName(args) { body } — acquire resource via paired syscall, auto-release on exit/kill.
+    /// Compiles to: SYSCALL(acquire) + PUSH_CLEANUP(release_block) + body + POP_CLEANUP.
+    /// </summary>
+    public class UsingStmt : Stmt
+    {
+        public string SyscallName { get; }
+        public List<Expr> Arguments { get; }
+        public BlockStmt Body { get; }
+        public UsingStmt(string syscallName, List<Expr> arguments, BlockStmt body) : base(NodeKind.Using)
+        {
+            SyscallName = syscallName;
+            Arguments = arguments;
+            Body = body;
+        }
     }
 
     public class ExprStmt : Stmt
