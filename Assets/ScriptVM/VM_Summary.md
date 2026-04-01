@@ -613,12 +613,12 @@ skill TracerBullet
 
 | # | 场景 | 当前状态 |
 |---|------|---------|
-| T1 | `wait_for` 运行时路径 | VM 层有实现但无测试覆盖 |
-| T2 | 除以零 | 未测试（当前返回 0，未验证） |
+| T1 | `wait_for` 运行时路径 | ✅ 已覆盖（TreeWalkerTests T1：实例 A 等待实例 B 完成后恢复执行） |
+| T2 | 除以零 | ✅ 已覆盖（TreeWalkerTests T2a/T2b：DIV/0 和 MOD/0 均返回 0，无 panic） |
 | T3 | 步数上限触发 | ✅ 已覆盖（TreeWalkerTests G4 测试） |
-| T4 | 实例池满溢 | 未测试 |
-| T5 | Fix64 模式（`USE_FIXPOINT`） | 全部测试在 float 模式下运行，未验证定点数路径 |
-| T6 | `bool` / `float` 字面量解析 | Lexer/Parser 未覆盖 |
+| T4 | 实例池满溢 | ✅ 已覆盖（TreeWalkerTests T4：128 实例分配成功，第 129 个返回 -1） |
+| T5 | Fix64 模式（`USE_FIXPOINT`） | 需要 `USE_FIXPOINT` 编译标志的独立构建配置，无法在单次构建中验证 |
+| T6 | `bool` / `float` 字面量解析 | ✅ 已覆盖（CompilerTests C21/C22：true/false 编译为 1/0，3.5+2.5=6） |
 
 ### 11.3 文档缺口（来自档案交叉审查）
 
