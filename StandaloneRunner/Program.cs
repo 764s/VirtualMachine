@@ -11,5 +11,6 @@ public static class Program
         TreeWalkerTests.RunAll();
         CompilerTests.RunAll();
         PerformanceTests.RunAll();
+        SkillScriptTests.RunAll();
     }
 }
