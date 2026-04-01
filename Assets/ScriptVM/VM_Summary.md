@@ -173,7 +173,7 @@ Assets/ScriptVM/
 | C1 | `using` 语法 Parser 解析 | 确定执行 | 步骤 7 | Parser 支持 `using Syscall(args)` 语句 |
 | C2 | Paired Syscall 注册协议 | 确定执行 | 步骤 7 | SyscallTable 扩展配对注册 API，为 Syscall 绑定反向操作 |
 | C3 | 编译器 emit `PUSH_CLEANUP`/`POP_CLEANUP` for `using` | 确定执行 | 步骤 7 | 修复 G2 缺口：`using` 需要显式 emit Cleanup 指令 |
-| C4 | 编译器 "requires cleanup" 强制检查 | 确定执行（低优先级） | **最晚步骤 8 前** | 标记了 requires_cleanup 的 Syscall 若既未配 `using` 也未配 `defer`，编译报错 |
+| C4 | 编译器 "requires cleanup" 强制检查 | 确定执行（低优先级） | **最晚步骤 10 前** | 标记了 requires_cleanup 的 Syscall 若既未配 `using` 也未配 `defer`，编译报错 |
 | C5 | Cleanup 块执行超时保护 | 展望 | 待定 | 防止 Cleanup 块内死循环阻塞实例回收 |
 | C6 | 嵌套 `using` 作用域优化（合并相邻 PUSH_CLEANUP） | 展望 | 待定 | 性能优化，非功能阻塞 |
 
@@ -469,10 +469,16 @@ skill TracerBullet
 | P2 | `using` 语法 Parser 解析（C1） | 确定执行 → 步骤 7 |
 | P2 | Paired Syscall 注册协议（C2） | 确定执行 → 步骤 7 |
 | P2 | 编译器 emit Cleanup 指令 for `using`（C3） | 确定执行 → 步骤 7 |
-| P2（低） | 编译器 "requires cleanup" 强制检查（C4） | 确定执行 → **最晚步骤 8 前** |
+| P2（低） | 编译器 "requires cleanup" 强制检查（C4） | 确定执行 → **最晚步骤 10 前** |
+| P2 | CALL / RET_FUNC OpCode + 跨函数调用 emit（F1-F2） | 确定执行 → 步骤 8 |
+| P2 | 函数调用 GC + 快照回滚验证（F3） | 确定执行 → 步骤 8 |
+| P2（低） | 编译器寄存器生命周期分析 + 跨 await 变量提升（F4） | 确定执行 → **最晚步骤 10 前** |
+| P2 | Parser struct 声明 + 编译器 struct → 寄存器拍平（S1-S3） | 确定执行 → 步骤 9 |
 | P3 | V5 帧内 Profiler 验证（真实 Syscall 接入后） | 阻塞编辑器 UI |
 | P3 | 编辑器流程图投影 | 不阻塞 VM 核心 |
 | — | Cleanup 超时保护（C5）/ 嵌套 using 优化（C6） | 展望项，暂无排期 |
+| — | 结构体函数参数传递（S4） | 展望项，最晚步骤 10 前如需编辑器展示 |
+| — | Handle64 批处理协议 | 展望项，最晚于真实多目标业务接入前 |
 
 ---
 
@@ -482,12 +488,14 @@ skill TracerBullet
 |----------|------|-------------|
 | ~~手写 AST，无 Parser~~ | ~~先验证 VM 物理闭环~~ | ✅ 完成：Lexer + Parser + BytecodeCompiler，端到端文本 → 字节码 → 执行 |
 | ~~TreeWalker 代替字节码 VM~~ | ~~Phase 2 快速验证语义正确性~~ | ✅ 完成：字节码解释循环 + 编译器流水线均已实现 |
-| `defer` 代替 `using` | `using` 需要 Paired Syscall 注册协议 + 编译器支持 | 确定执行 → 步骤 7：C1 Parser 解析 + C2 配对协议 + C3 编译器 emit；C4 强制检查最晚步骤 8 前 |
+| `defer` 代替 `using` | `using` 需要 Paired Syscall 注册协议 + 编译器支持 | 确定执行 → 步骤 7：C1 Parser 解析 + C2 配对协议 + C3 编译器 emit；C4 强制检查最晚步骤 10 前 |
 | 开发期 float（`Number`） | 快速迭代，Fix64 调试较痛苦 | float 模式仅用于开发迭代，正式测试和上线构建必须 `USE_FIXPOINT` |
 | 无 `MOVE`/`COPY` | 曳光弹不需要寄存器搬运 | ~~曳光弹通过后立即补充~~ ✅ Step 5 完成 |
 | 无分支/循环 OpCode | 曳光弹业务不含分支 | ~~`MOVE` 之后补 `JUMP`/`JUMP_IF`~~ ✅ Step 5 完成 |
-| 无编辑器 UI | 编辑器依赖稳定 AST 和编译器 | AST/编译器稳定后开始流程图主视图 |
-| 无 Handle64 批处理 | 曳光弹业务不涉及多目标 | 函数调用和基本控制流稳定后，补充 Handle 批处理 Syscall 协议 |
+| 无编辑器 UI | 编辑器依赖稳定 AST 和编译器 | 步骤 8-9 完成后开始流程图主视图（步骤 10） |
+| 无 Handle64 批处理 | 曳光弹业务不涉及多目标 | 展望项，最晚于真实多目标业务接入前；依赖 Syscall 协议扩展 |
+| 无跨函数 CALL | 曳光弹只需单函数 | 确定执行 → 步骤 8（F1-F3），CallFrame 基础设施已就位 |
+| 无结构体语法 | 曳光弹不需要结构体 | 确定执行 → 步骤 9（S1-S3），设计见 VM_Runtime_Layout.md §5.2 |
 | ~~CleanupFrames 尚未加入 VMInstanceState~~ | ✅ 已完成 | 曳光弹 Step 1 |
 | 黑板 Key 手工映射常量 | 曳光弹只需 1-2 个 Key | 编译器实现后自动分配 ID 并生成静态映射表 |
 | AST 节点已超出曳光弹范围 | 过早扩展（if/while/for/struct 等已实现） | 不删除，但冻结新增功能直到字节码曳光弹通过 |
@@ -529,7 +537,7 @@ skill TracerBullet
         C1. using 语法 Parser 解析
         C2. Paired Syscall 注册协议（SyscallTable 扩展）
         C3. 编译器 emit PUSH_CLEANUP / POP_CLEANUP for using
-      确定执行（低优先级，最晚步骤 8 前）：
+      确定执行（低优先级，最晚步骤 10 前）：
         C4. 编译器 "requires cleanup" 强制检查
       展望项（暂无排期）：
         C5. Cleanup 块执行超时保护
@@ -537,16 +545,50 @@ skill TracerBullet
       ↓
   ┌────────────────────────────────────────────────────────┐
   │  V5: 帧内 Profiler 验证  ← 真实 Syscall 接入 ECS 后    │
-  │  通过条件见 §4.6，必须在进入步骤 8 前通过           │
-  │  C4 强制检查必须在进入步骤 8 前就位                  │
+  │  通过条件见 §4.6，必须在进入步骤 10 前通过          │
+  │  C4 强制检查必须在进入步骤 10 前就位                 │
   └────────────────────────────────────────────────────────┘
       ↓
-8. 编辑器流程图投影
+8. 函数调用 + 固定深度调用栈验证
+      （来源：VM_Tracer_Bullet.md §十二 第 3 项；CallFrame 基础设施已就位）
+      确定执行：
+        F1. CALL / RET_FUNC OpCode（VMWorld.Tick 扩展）
+        F2. 编译器跨函数调用 emit（CallExpr → CALL，区别于 SYSCALL）
+        F3. GC + 快照回滚验证（CallStack 不破坏 blittable / memcpy）
+      确定执行（低优先级，最晚步骤 10 前）：
+        F4. 编译器寄存器生命周期分析 + 跨 await 变量提升
+            （来源：VM_Tracer_Bullet.md §十二 第 2 项"寄存器复用"）
+      ↓
+9. 结构体编译期拍平验证
+      （来源：VM_Tracer_Bullet.md §十二 第 5 项；设计见 VM_Runtime_Layout.md §5.2）
+      确定执行：
+        S1. Parser struct 声明 + 字段类型解析
+        S2. 编译器 struct → 连续寄存器槽位映射
+        S3. 结构体赋值 = 寄存器区块 COPY 验证
+      展望项（最晚步骤 10 前，如需编辑器展示结构体节点）：
+        S4. 结构体作为函数参数 / 返回值的寄存器传递
+      ↓
+  ┌────────────────────────────────────────────────────────┐
+  │  Handle64 批处理协议（展望项）                       │
+  │  来源：VM_Tracer_Bullet.md §十二 第 4 项              │
+  │  不阻塞编辑器，最晚于真实多目标业务接入前实现        │
+  │  依赖 Syscall 协议扩展，独立于函数调用与结构体       │
+  └────────────────────────────────────────────────────────┘
+      ↓
+10. 编辑器流程图投影
 ```
 
 每一步的通过标准都由前一步建立的物理约束决定。任何新能力必须先通过 Architecture Rules 的裁决原则。
 
 验证项均可模块化执行，不需要完整环境，可分阶段插入，只需最终全部通过即可。
+
+> **VM_Tracer_Bullet.md §十二 溯源**：§十二 列出 6 项后续展望，现已全部归入本计划。
+> ① 简单分支 → ✅ 已在步骤 6（Parser if/while/for + Compiler）完成。
+> ② 局部变量与寄存器复用 → ✅ var 声明已在步骤 6 完成；寄存器复用 → F4（步骤 8）。
+> ③ 函数调用与调用栈验证 → 步骤 8（F1-F3）。
+> ④ Handle64 批处理 → 展望项，最晚于真实多目标业务接入前。
+> ⑤ 结构体拍平验证 → 步骤 9（S1-S3）。
+> ⑥ DSL 文本语法 → ✅ 已在步骤 6（Lexer + Parser + BytecodeCompiler）完成。
 
 ---
 
@@ -631,7 +673,7 @@ skill TracerBullet
 | G2 | `BytecodeCompiler` | `POP_CLEANUP` 从未被编译器生成；`defer` 块 Cleanup 由 VM 运行时隐式处理，但 `using` 需要显式 emit（对应 C3） | 中 | 确定执行 → 步骤 7 |
 | G3 | `BytecodeCompiler.BinOpCode()` / `UnOpCode()` | ~~遇到未知 `NodeKind` 时静默返回 `NOP`，不报错~~ → 已修复：添加 `_errors.Add(...)` 报告未知操作符 | 中 | ✅ 已修复 |
 | G4 | `VMWorld.ExecuteInstance()` | ~~步数上限耗尽时报 `PanicIllegalInstruction`~~ → 已修复：新增 `PanicStepLimitExceeded` 错误码 | 低 | ✅ 已修复 |
-| G5 | `BytecodeCompiler` | 编译器缺少 "requires cleanup" 强制检查：标记了 requires_cleanup 的 Syscall 未配 `using`/`defer` 时应编译报错（对应 C4） | 中（低） | 确定执行 → **最晚步骤 8 前** |
+| G5 | `BytecodeCompiler` | 编译器缺少 "requires cleanup" 强制检查：标记了 requires_cleanup 的 Syscall 未配 `using`/`defer` 时应编译报错（对应 C4） | 中（低） | 确定执行 → **最晚步骤 10 前** |
 
 ### 11.2 测试缺口
 
