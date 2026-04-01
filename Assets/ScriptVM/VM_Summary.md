@@ -500,6 +500,10 @@ skill TracerBullet
 | ~~CleanupFrames 尚未加入 VMInstanceState~~ | ✅ 已完成 | 曳光弹 Step 1 |
 | 黑板 Key 手工映射常量 | 曳光弹只需 1-2 个 Key | 编译器实现后自动分配 ID 并生成静态映射表 |
 | AST 节点已超出曳光弹范围 | 过早扩展（if/while/for/struct 等已实现） | 不删除，但冻结新增功能直到字节码曳光弹通过 |
+| Paired Syscall 仅支持"无参反向调用" | 覆盖 80%+ 场景（SetBB/ResetBB, PlayEffect/StopEffect） | 如需带参反向调用，后续扩展 SyscallTable 配对协议 |
+| 不支持跨模块函数调用 | 步骤 8 聚焦同模块内函数调用 | 后续步骤按需扩展 ModuleTable 跨模块解析 |
+| 函数参数上限 = 16（r0-r15 Scratch Zone） | 与 Syscall 参数传递一致，覆盖绝大多数场景 | 如需更多参数，后续扩展寄存器布局 |
+| 无调试符号 / 源码映射 | 先保证 VM 正确性与性能 | 编辑器阶段按需添加（编译器追踪行列号 → bytecode 映射表） |
 
 ---
 
@@ -678,6 +682,7 @@ skill TracerBullet
 | G3 | `BytecodeCompiler.BinOpCode()` / `UnOpCode()` | ~~遇到未知 `NodeKind` 时静默返回 `NOP`，不报错~~ → 已修复：添加 `_errors.Add(...)` 报告未知操作符 | 中 | ✅ 已修复 |
 | G4 | `VMWorld.ExecuteInstance()` | ~~步数上限耗尽时报 `PanicIllegalInstruction`~~ → 已修复：新增 `PanicStepLimitExceeded` 错误码 | 低 | ✅ 已修复 |
 | G5 | `BytecodeCompiler` | 编译器缺少 "requires cleanup" 强制检查：标记了 requires_cleanup 的 Syscall 未配 `using`/`defer` 时应编译报错（对应 C4） | 中（低） | 确定执行 → **最晚步骤 10 前** |
+| G6 | `BytecodeCompiler` | `defer`/`using` Cleanup 块内未禁止 `wait`/`wait_for`：语义上 Cleanup 块不应挂起（会阻塞实例回收），当前编译器无此检查 | 中 | 编译器语义检查阶段（与 C4/C5 同期） |
 
 ### 11.2 测试缺口
 
