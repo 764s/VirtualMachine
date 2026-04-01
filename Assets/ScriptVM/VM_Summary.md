@@ -566,6 +566,11 @@ skill TracerBullet
       确定执行（低优先级，最晚步骤 10 前）：
         F4. 编译器寄存器生命周期分析 + 跨 await 变量提升
             （来源：VM_Tracer_Bullet.md §十二 第 2 项"寄存器复用"）
+      展望项（暂无排期，待 F1-F3 完成 + benchmark 数据后评估）：
+        函数调用路径专项优化 7 项（FO1-FO7）：叶函数跳过压栈、尾调用消除、
+        小函数内联、参数就位检测、返回值直达、自适应寄存器窗口、
+        调用栈深度静态分析。
+        详见 → [Step8_FunctionCall_Checklist.md §展望](Plan/Step8_FunctionCall_Checklist.md#展望函数调用优化方向)
       ↓
 9. 结构体编译期拍平验证
       （来源：VM_Tracer_Bullet.md §十二 第 5 项；设计见 VM_Runtime_Layout.md §5.2）

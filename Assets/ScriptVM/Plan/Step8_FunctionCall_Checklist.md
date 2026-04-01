@@ -262,3 +262,131 @@ CALL 后（callee 视角）：
 | E: 文档更新 | 极小 | 更新 VM_Summary.md |
 
 **总体评估**：任务量中等偏大。建议按 A + B（并行）→ C → D → E 的顺序推进。核心风险在寄存器窗口策略选择（Sub-task A 设计备忘），需在实施前确认方案。
+
+---
+
+## 展望：函数调用优化方向
+
+> 以下优化方向基于步骤 8 实现内容的代码分析，聚焦**函数调用路径**的专项优化。
+> 与 [VM_Optimization_Outlook.md](../Refs/VM_Optimization_Outlook.md) 中的通用 VM 优化（O1-O14）互补但不重叠：
+> 通用优化面向整个解释器/编译器，此处专注于 CALL/RET_FUNC 引入的新开销。
+> 暂无排期，待步骤 8 完成并取得 benchmark 数据后按收益排序实施。
+
+### FO1. 叶函数优化（Leaf Function Optimization）
+
+**现状**：所有函数调用均执行完整 CallFrame push/pop + RegisterBase 偏移，即使 callee 不再调用其他函数。
+
+**优化方案**：编译器静态标记"叶函数"（函数体内无 `CallExpr`）。对叶函数的 CALL，跳过 CallFrame 压栈，直接跳转 + 返回。无需保存/恢复 RegisterBase（callee 不会再偏移）。
+
+**前提**：叶函数内不能有 `wait` / `wait_for`（否则挂起后 CallFrame 缺失导致恢复失败）。编译器需验证此约束。
+
+**预估收益**：叶函数调用开销减少 **~40-60%**（省去 2 次 CallStackFrames Get/Set + 2 次 RegisterBase 修改）。
+
+**复杂度**：低。编译器标记 + VMWorld 一个分支判断。
+
+---
+
+### FO2. 尾调用优化（Tail Call Elimination）
+
+**现状**：`func a() { return b() }` 生成 `CALL b` → `RET_FUNC`，占用两层调用栈。
+
+**优化方案**：当函数末尾语句是 `return f(args)` 时，编译器 emit `TAIL_CALL`（或复用 CALL + 标志位）：不压入新 CallFrame，直接复用当前帧跳转到目标函数。返回时直接回到 caller 的 caller。
+
+**收益场景**：状态机模式（技能多阶段 `phase1 → phase2 → phase3` 链式调用）不再增长调用深度。在 MaxCallDepth=16 硬限下，有效扩展可达调用深度。
+
+**预估收益**：尾调用场景 CallStackDepth 不增长 + 省去一次 push/pop 开销。
+
+**复杂度**：中。需编译器识别尾调用位置 + 新 OpCode 或 CALL 变体 + VMWorld 分发。
+
+---
+
+### FO3. 小函数内联（Small Function Inlining）
+
+**现状**：`func add(a, b) { return a + b }` 调用时生成完整 CALL/RET_FUNC 序列（参数 MOVE + CALL + 函数体 + RET_FUNC + 返回值 MOVE），约 7-8 条指令。
+
+**优化方案**：编译器对函数体 ≤ N 条指令（建议 N=3）的函数，在调用点直接展开函数体字节码，消除 CALL/RET_FUNC 及参数传递开销。
+
+```
+// 内联前（~8 条指令）：
+MOVE r0, r16          // arg a
+MOVE r1, r17          // arg b
+CALL add_entry, 2
+MOVE r48, r0          // result
+
+// 内联后（1 条指令）：
+ADD r48, r16, r17     // 直接算术
+```
+
+**预估收益**：小函数调用 **~80% 指令数减少**。工具函数（min/max/clamp/abs）高度受益。
+
+**复杂度**：中-高。需编译器维护函数体大小统计 + 内联展开 + 寄存器重映射（避免与 caller 冲突）。需防止递归内联。
+
+---
+
+### FO4. 参数就位检测（Argument-in-Place Detection）
+
+**现状**：编译器为每个函数参数生成 `MOVE` 将值拷贝到 scratch zone（r0-r15），即使值已在正确位置。
+
+**优化方案**：编译器在 emit `CALL` 前检查：若第 i 个参数的表达式结果已在 `r[i]`（scratch zone 正确位置），跳过该 MOVE。
+
+**典型场景**：`f(a, b)` 中 `a`/`b` 是刚从另一个 Syscall 返回的 r0/r1 值；连续调用 `g(f())` 返回值不需要搬移。
+
+**预估收益**：每个已就位参数减少 1 条 MOVE。对链式调用场景收益显著。
+
+**复杂度**：低。仅需编译器在 emit MOVE 前添加 `if (srcReg != destReg)` 判断。
+
+---
+
+### FO5. 返回值直达（Return Value Direct Placement）
+
+**现状**：`var x = f()` 生成 `CALL f` → `MOVE r0 → temp` → `MOVE temp → varReg`，两条额外 MOVE。
+
+**优化方案**：结合通用优化 O4（dest-reg hint），编译器识别 `var x = f()` 模式后，CALL 返回的 r0 直接 `MOVE r0 → varReg`（1 条），或未来在 CALL 指令中编码结果目标寄存器（0 条额外 MOVE）。
+
+**预估收益**：每个带返回值的函数调用减少 1-2 条指令。
+
+**复杂度**：低（依赖 O4 基础设施）。可与 O4 同步实施。
+
+---
+
+### FO6. 自适应寄存器窗口（Adaptive Register Window Size）
+
+**现状**：寄存器窗口策略（见本文"设计备忘"）中，窗口偏移量可能是固定值或基于 `LocalRegCount` 动态计算。如果采用固定步长（如 32），则 MaxRegisters=64 下只能支持 2 层嵌套。
+
+**优化方案**：编译器为每个函数精确计算 `LocalRegCount`（实际使用的 r16+ 寄存器数）。CALL 时窗口偏移 = `LocalRegCount`（而非固定步长）。小函数（3 个局部变量）只偏移 3 个寄存器，大函数（20 个局部变量）偏移 20 个。
+
+**收益**：在 MaxRegisters=64 下，如果平均每个函数用 8 个本地寄存器，可支持 (64-16)/8 = 6 层嵌套（远好于固定步长的 2 层）。
+
+**前提**：需配合 F4（寄存器生命周期分析）精确计算活跃寄存器数。
+
+**复杂度**：中。编译器需精确统计 + CALL 指令携带窗口大小操作数（当前 `CALL.B` 已预留 `callerWindowSize`）。
+
+---
+
+### FO7. 调用栈深度静态分析（Static Call Depth Analysis）
+
+**现状**：调用深度超限在运行时检测（`CallStackDepth >= MaxCallDepth` → `VMError.StackOverflow`）。对于非递归程序，实际最大调用深度在编译期可确定。
+
+**优化方案**：编译器构建函数调用图，计算最大调用深度。若 max_depth > MaxCallDepth → 编译期报错（比运行时 panic 更友好）。若 max_depth ≤ 阈值（如 4），可标记程序为"浅调用"，运行时跳过 `CallStackDepth` 检查。
+
+**预估收益**：
+- 编译期捕获深度溢出 → 更好的开发体验
+- "浅调用"标记 → 每条 CALL 省去 1 次分支检查
+
+**复杂度**：中。需编译器构建调用图（注意：递归/间接递归标记为"不可分析"即可）。
+
+---
+
+### 优先级排序建议
+
+| 编号 | 方向 | 推荐优先级 | 理由 |
+|------|------|-----------|------|
+| **FO4** | 参数就位检测 | 🟢 高 | 复杂度极低，几乎无风险，立即可做 |
+| **FO5** | 返回值直达 | 🟢 高 | 依赖 O4，同步实施成本低 |
+| **FO1** | 叶函数优化 | 🟡 中 | 收益显著但需验证 wait 约束 |
+| **FO6** | 自适应窗口 | 🟡 中 | CALL.B 已预留操作数，实施成本可控 |
+| **FO7** | 静态深度分析 | 🟡 中 | 开发体验改善 > 性能收益 |
+| **FO2** | 尾调用优化 | 🔵 低 | 状态机场景有意义，但需新 OpCode |
+| **FO3** | 小函数内联 | 🔵 低 | 收益最大但复杂度最高，建议 benchmark 驱动 |
+
+**核心原则**：步骤 8 完成后先跑 benchmark 取得函数调用路径的性能基线，再按数据驱动决策哪些优化值得投入。
