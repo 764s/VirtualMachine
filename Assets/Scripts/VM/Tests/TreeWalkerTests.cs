@@ -1307,6 +1307,27 @@ public static class TreeWalkerTests
 
         // Tests 38-41 (V1b/V2b GC, V3 perf, V4 throughput) → PerformanceTests.cs
 
+        // ===== Test: G4 — Step limit produces PanicStepLimitExceeded =====
+        {
+            // Infinite loop: R0=1, JUMP_IF_NOT_ZERO back to itself
+            var instructions = new Instruction[]
+            {
+                new Instruction { Code = OpCode.LOAD_CONST, A = 0, B = 0 }, // R0 = const[0] = 1
+                new Instruction { Code = OpCode.JUMP_IF_NOT_ZERO, A = 0, B = 0 }, // if R0 != 0 goto 0
+            };
+            var constants = new Number[] { Number.FromInt(1) };
+            var prog = new VMProgram(instructions, constants, 1);
+
+            var world = new VMWorld();
+            world.MaxStepsPerTick = 8;
+            world.Modules.Load(0, prog);
+            int id = world.SpawnInstance(0, 0);
+            world.Tick();
+
+            Assert(world.Pool.Instances[id].ErrorFlag == VMError.PanicStepLimitExceeded,
+                "G4: step limit → PanicStepLimitExceeded (not PanicIllegalInstruction)");
+        }
+
         // ===== Summary =====
         Debug.Log($"========================================");
         Debug.Log($"TreeWalker Tests: {passed} passed, {failed} failed");

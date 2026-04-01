@@ -606,8 +606,8 @@ skill TracerBullet
 |---|------|------|--------|-------------|
 | G1 | `Parser` / `BytecodeCompiler` | `wait_for` 仅有 VM 运行时实现（`OpCode.WAIT_FOR`），Parser 和 Compiler 尚未接入；当前脚本无法使用 `wait_for` 语法 | 高 | 步骤 7 |
 | G2 | `BytecodeCompiler` | `POP_CLEANUP` 从未被编译器生成；`defer` 块 Cleanup 由 VM 运行时隐式处理，但 `using` 需要显式 emit | 中 | 步骤 7（using 接入时） |
-| G3 | `BytecodeCompiler.BinOpCode()` / `UnOpCode()` | 遇到未知 `NodeKind` 时静默返回 `NOP`，不报错 | 中 | 步骤 7 前 |
-| G4 | `VMWorld.ExecuteInstance()` | 步数上限耗尽时报 `PanicIllegalInstruction`，应为独立错误码（如 `PanicStepLimitExceeded`） | 低 | 任意时机 |
+| G3 | `BytecodeCompiler.BinOpCode()` / `UnOpCode()` | ~~遇到未知 `NodeKind` 时静默返回 `NOP`，不报错~~ → 已修复：添加 `_errors.Add(...)` 报告未知操作符 | 中 | ✅ 已修复 |
+| G4 | `VMWorld.ExecuteInstance()` | ~~步数上限耗尽时报 `PanicIllegalInstruction`~~ → 已修复：新增 `PanicStepLimitExceeded` 错误码 | 低 | ✅ 已修复 |
 
 ### 11.2 测试缺口
 
@@ -615,7 +615,7 @@ skill TracerBullet
 |---|------|---------|
 | T1 | `wait_for` 运行时路径 | VM 层有实现但无测试覆盖 |
 | T2 | 除以零 | 未测试（当前返回 0，未验证） |
-| T3 | 步数上限触发 | 未测试 |
+| T3 | 步数上限触发 | ✅ 已覆盖（TreeWalkerTests G4 测试） |
 | T4 | 实例池满溢 | 未测试 |
 | T5 | Fix64 模式（`USE_FIXPOINT`） | 全部测试在 float 模式下运行，未验证定点数路径 |
 | T6 | `bool` / `float` 字面量解析 | Lexer/Parser 未覆盖 |

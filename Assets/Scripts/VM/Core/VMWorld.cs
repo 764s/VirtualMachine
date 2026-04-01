@@ -336,7 +336,7 @@ namespace FFVM
             }
 
             // Hit step limit — treat as runaway
-            inst.ErrorFlag = VMError.PanicIllegalInstruction;
+            inst.ErrorFlag = VMError.PanicStepLimitExceeded;
         }
     }
 }

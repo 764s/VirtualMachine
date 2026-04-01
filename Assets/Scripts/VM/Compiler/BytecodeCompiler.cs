@@ -479,7 +479,7 @@ namespace FFVM.Compiler
 
         // ===== OpCode mapping =====
 
-        private static OpCode BinOpCode(NodeKind kind)
+        private OpCode BinOpCode(NodeKind kind)
         {
             switch (kind)
             {
@@ -496,17 +496,21 @@ namespace FFVM.Compiler
                 case NodeKind.Gte: return OpCode.CMP_GTE;
                 case NodeKind.And: return OpCode.AND;
                 case NodeKind.Or:  return OpCode.OR;
-                default: return OpCode.NOP;
+                default:
+                    _errors.Add($"Unknown binary operator: {kind}");
+                    return OpCode.NOP;
             }
         }
 
-        private static OpCode UnOpCode(NodeKind kind)
+        private OpCode UnOpCode(NodeKind kind)
         {
             switch (kind)
             {
                 case NodeKind.Negate: return OpCode.NEG;
                 case NodeKind.Not:    return OpCode.NOT;
-                default: return OpCode.NOP;
+                default:
+                    _errors.Add($"Unknown unary operator: {kind}");
+                    return OpCode.NOP;
             }
         }
     }
