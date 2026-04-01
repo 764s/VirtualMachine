@@ -630,3 +630,37 @@ skill TracerBullet
 | D2 | VMScript2.md | 历史失败教训表（XSLT/XBL/ASP.NET/Flash/AMD/GWT/WebComponents → 设计约束推导） | 建议补入 §9 选型理由 |
 | D3 | VMScript4.md | 项目级成功标准（5 类验收维度） | 建议补入 §7 或新增验收标准节 |
 | D4 | VMScript4.md | 设计验证递进轴线（曳光弹 → 编辑器 → 实战接入） | 已隐含在 §7 推进顺序中，可补充显式描述 |
+
+---
+
+## 十二、持续集成与跨语言性能对比
+
+### 12.1 GitHub Actions CI 工作流
+
+`.github/workflows/ci.yml` 包含三个自动化 Job：
+
+| Job | 触发 | 内容 |
+|-----|------|------|
+| **test** | push / PR | 构建 StandaloneRunner → 运行全部 185 个测试断言（TreeWalker 98 + Compiler 70 + Performance 17） |
+| **benchmark** | test 通过后 | 运行 B01-B05 VM vs C# 基准，生成 `benchmark_ci.md` artifact |
+| **cross-lang** | test 通过后 | 运行 Lua / Python / Node.js 同源基准，生成 `cross_lang_results.md` artifact |
+
+由于 `StandaloneRunner.csproj` 被 `.gitignore` 排除（Unity 约定），CI 中通过 inline `cat >` 自动生成。
+
+### 12.2 跨语言性能基准
+
+`benchmarks/` 目录包含与 FFVM BenchmarkRunner (B01-B05) **逻辑完全一致**的实现：
+
+| 语言 | 文件 | 运行时 |
+|------|------|--------|
+| Lua 5.4 | `benchmarks/lua/bench.lua` | 标准解释器（无 JIT） |
+| Python 3.12 | `benchmarks/python/bench.py` | CPython（无 JIT） |
+| Node.js 20 | `benchmarks/js/bench.js` | V8（多级 JIT） |
+
+所有脚本均使用整数算术，输出统一的 `[XLANG]` 格式供 `run-cross-lang.sh` 汇总。
+
+**定位说明**：跨语言对比不是为了证明 FFVM "比 X 快"，而是确定 FFVM 在解释器性能谱中的位置：
+- 预期 **快于 CPython**（FFVM 是固定类型寄存器 VM，无装拆箱）
+- 预期 **与 Lua 5.4 同量级**（均为字节码解释器）
+- 预期 **慢于 V8 JIT**（V8 有多级编译优化）
+- 预期 **5-10x 于原生 C#**（使用相同 Number 数据类型）
