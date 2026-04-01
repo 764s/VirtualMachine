@@ -1,0 +1,190 @@
+// ============================================================
+// 技能: 飞燕旋风腿 (skill_114feiyanxuanfengtui)
+// Id: 81142  |  类型: 技能  |  帧数: 56  |  循环: 否
+// 优先级: 技能|闪避 (5)
+// Tags: [技能, 空中状态]
+// ============================================================
+//
+// 攻击框时间线 (ActionAsset):
+//   Group 2001: 帧 [9, 13)   - 第一段攻击
+//   Group 2002: 帧 [14, 17)  - 第二段攻击
+//   Group 2003: 帧 [25, 30)  - 第三段攻击
+//
+// 效果互斥分组:
+//   mutex 1 → 子技能[0][3][8][6]  (第一段: 地面受击 / 防御 / 空中受击 / 自身硬直)
+//   mutex 2 → 子技能[1][4][9]     (第二段: 地面受击 / 防御 / 空中受击)
+//   mutex 3 → 子技能[2][5]        (第三段: 受击 / 防御)
+//
+// 宿主 Syscall 协议 (详见 README.md):
+//   BeginAction(actionId, totalFrames)   EndAction()
+//   CheckAttackHit(groupId) → targetId   CheckAttackBlocked(groupId) → targetId
+//   HasTargetTag(targetId, tagId) → 0/1
+//   ApplyDamage(targetId, coeff, dmgType)
+//   ApplyHitstun(targetId, startF, durF, level, shake)
+//   ApplyHorizKB_Dist(targetId, dist, durF)
+//   ApplyHorizKB_Speed(targetId, speed)
+//   ApplyVertKB(targetId, speed, durF)
+//   ApplySelfHitstun(startF, durF, level)
+//   ApplySelfHorizKB(dist, durF)
+//   ApplySelfVertKB(speed, accel)
+//   ApplyCornerKBSelf(dist, durF)
+//   SpawnEffectHit(effectId, durF)
+//   SpawnEffectSelf(effectId, durF)
+//   SetEnergyCoeff(coeff)
+// ============================================================
+
+func main() {
+    // --- 技能初始化 ---
+    BeginAction(114, 56)
+    defer {
+        EndAction()
+    }
+
+    // 子技能[10]: 音效 (无条件, 帧0立即播放)
+    SpawnEffectSelf(7001, 60)
+
+    // --- 效果互斥标记 (同组仅首次命中生效) ---
+    var mutex1: int = 0
+    var mutex2: int = 0
+    var mutex3: int = 0
+
+    // --- 逐帧主循环 ---
+    var f: int = 0
+    while f < 56 {
+
+        // ======== 子技能[7]: 自身位移 (帧 >= 9) ========
+        // 水平击退 6.5米/29帧 + 垂直匀变速(v0=12, a=9)
+        if f == 9 {
+            ApplySelfHorizKB(6.5, 29)
+            ApplySelfVertKB(12, 9)
+        }
+
+        // ======== 第一段攻击: Group 2001, 帧[9,13) ========
+        if f >= 9 && f < 13 && mutex1 == 0 {
+            var t1: int = CheckAttackHit(2001)
+            if t1 > 0 {
+                var air1: int = HasTargetTag(t1, 1)
+                if air1 == 0 {
+                    // 子技能[0]: 地面受击
+                    // 伤害系数5, 普通攻下+下盘重击, 硬直(起5帧,持12帧)
+                    ApplyDamage(t1, 5, 101)
+                    ApplyHitstun(t1, 5, 12, 0, 1)
+                    SpawnEffectHit(3001, 60)
+                    SpawnEffectSelf(3002, 30)
+                } else {
+                    // 子技能[8]: 空中受击
+                    // 击躺, 能量x2, 水平4.998(直到着地), 垂直16.998/90帧
+                    SetEnergyCoeff(2)
+                    ApplyDamage(t1, 5, 201)
+                    ApplyHorizKB_Speed(t1, 4.998)
+                    ApplyVertKB(t1, 16.998, 90)
+                    ApplyHitstun(t1, 0, 12, 0, 1)
+                    SpawnEffectHit(3001, 60)
+                    SpawnEffectSelf(3002, 30)
+                    SpawnEffectSelf(3003, 120)
+                }
+                mutex1 = 1
+                // 子技能[6]: 自身硬直 (命中时)
+                ApplySelfHitstun(0, 7, 0)
+            }
+
+            // 防御判定 (仅在受击未触发时)
+            if mutex1 == 0 {
+                var b1: int = CheckAttackBlocked(2001)
+                if b1 > 0 {
+                    // 子技能[3]: 第一段防御
+                    // 伤害系数0.3, 能量x2, 硬直(起0帧,持12帧)
+                    SetEnergyCoeff(2)
+                    ApplyDamage(b1, 0.3, 0)
+                    ApplyHitstun(b1, 0, 12, 0, 1)
+                    SpawnEffectHit(3004, 30)
+                    mutex1 = 1
+                    // 子技能[6]: 自身硬直 (被防时)
+                    ApplySelfHitstun(0, 7, 0)
+                }
+            }
+        }
+
+        // ======== 第二段攻击: Group 2002, 帧[14,17) ========
+        if f >= 14 && f < 17 && mutex2 == 0 {
+            var t2: int = CheckAttackHit(2002)
+            if t2 > 0 {
+                var air2: int = HasTargetTag(t2, 1)
+                if air2 == 0 {
+                    // 子技能[1]: 地面受击
+                    // 伤害系数7, 普通地面+上盘重击, 硬直(起0帧,持12帧)
+                    // 水平击退1米/5帧
+                    ApplyDamage(t2, 7, 102)
+                    ApplyHitstun(t2, 0, 12, 0, 1)
+                    ApplyHorizKB_Dist(t2, 1, 5)
+                    SpawnEffectHit(3005, 60)
+                    SpawnEffectSelf(3002, 30)
+                } else {
+                    // 子技能[9]: 空中受击
+                    // 击躺, 能量x2, 水平4.998(直到着地), 垂直16.998/90帧
+                    SetEnergyCoeff(2)
+                    ApplyDamage(t2, 7, 201)
+                    ApplyHorizKB_Speed(t2, 4.998)
+                    ApplyVertKB(t2, 16.998, 90)
+                    ApplyHitstun(t2, 0, 12, 0, 1)
+                    SpawnEffectHit(3001, 60)
+                    SpawnEffectSelf(3002, 30)
+                    SpawnEffectSelf(3003, 120)
+                }
+                mutex2 = 1
+            }
+
+            // 防御判定
+            if mutex2 == 0 {
+                var b2: int = CheckAttackBlocked(2002)
+                if b2 > 0 {
+                    // 子技能[4]: 第二段防御
+                    // 伤害系数0.42, 水平击退0.8米/8帧, 硬直(起0帧,持12帧)
+                    ApplyDamage(b2, 0.42, 0)
+                    ApplyHorizKB_Dist(b2, 0.8, 8)
+                    ApplyHitstun(b2, 0, 12, 0, 1)
+                    SpawnEffectHit(3004, 30)
+                    mutex2 = 1
+                }
+            }
+        }
+
+        // ======== 第三段攻击: Group 2003, 帧[25,30) ========
+        if f >= 25 && f < 30 && mutex3 == 0 {
+            var t3: int = CheckAttackHit(2003)
+            if t3 > 0 {
+                // 子技能[2]: 第三段受击 (不区分空中/地面)
+                // 击躺, 伤害系数10, 水平7.998(直到着地), 垂直18/120帧
+                // 角落击退自身0米/1帧, 硬直(起0帧,持12帧)
+                ApplyDamage(t3, 10, 201)
+                ApplyHorizKB_Speed(t3, 7.998)
+                ApplyVertKB(t3, 18, 120)
+                ApplyHitstun(t3, 0, 12, 0, 1)
+                ApplyCornerKBSelf(0, 1)
+                SpawnEffectHit(3005, 60)
+                SpawnEffectSelf(3002, 30)
+                mutex3 = 1
+            }
+
+            // 防御判定
+            if mutex3 == 0 {
+                var b3: int = CheckAttackBlocked(2003)
+                if b3 > 0 {
+                    // 子技能[5]: 第三段防御
+                    // 伤害系数0.6, 能量x3, 水平击退1米/5帧
+                    // 硬直(起0帧,持12帧), 角落击退自身1.3米/1帧
+                    SetEnergyCoeff(3)
+                    ApplyDamage(b3, 0.6, 0)
+                    ApplyHorizKB_Dist(b3, 1, 5)
+                    ApplyHitstun(b3, 0, 12, 0, 1)
+                    ApplyCornerKBSelf(1.3, 1)
+                    SpawnEffectHit(3004, 30)
+                    mutex3 = 1
+                }
+            }
+        }
+
+        f = f + 1
+        yield
+    }
+}
