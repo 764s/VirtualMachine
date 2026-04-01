@@ -170,9 +170,9 @@ Assets/ScriptVM/
 
 | # | 实现项 | 分类 | 执行时机 | 说明 |
 |---|--------|------|----------|------|
-| C1 | `using` 语法 Parser 解析 | 确定执行 | 步骤 7 | Parser 支持 `using Syscall(args)` 语句 |
-| C2 | Paired Syscall 注册协议 | 确定执行 | 步骤 7 | SyscallTable 扩展配对注册 API，为 Syscall 绑定反向操作 |
-| C3 | 编译器 emit `PUSH_CLEANUP`/`POP_CLEANUP` for `using` | 确定执行 | 步骤 7 | 修复 G2 缺口：`using` 需要显式 emit Cleanup 指令 |
+| C1 | `using` 语法 Parser 解析 | 确定执行 | ✅ 步骤 7 | Parser 支持 `using Syscall(args) { body }` 语句 |
+| C2 | Paired Syscall 注册协议 | 确定执行 | ✅ 步骤 7 | SyscallTable.RegisterPaired / GetPairedSlot / HasPair |
+| C3 | 编译器 emit `PUSH_CLEANUP`/`POP_CLEANUP` for `using` | 确定执行 | ✅ 步骤 7 | CompileUsing：acquire SYSCALL + PUSH_CLEANUP + body + POP_CLEANUP |
 | C4 | 编译器 "requires cleanup" 强制检查 | 确定执行（低优先级） | **最晚步骤 10 前** | 标记了 requires_cleanup 的 Syscall 若既未配 `using` 也未配 `defer`，编译报错 |
 | C5 | Cleanup 块执行超时保护 | 展望 | 待定 | 防止 Cleanup 块内死循环阻塞实例回收 |
 | C6 | 嵌套 `using` 作用域优化（合并相邻 PUSH_CLEANUP） | 展望 | 待定 | 性能优化，非功能阻塞 |
@@ -440,19 +440,19 @@ skill TracerBullet
 
 | 层级 | 内容 | 状态 |
 |------|------|------|
-| AST | 43 种节点 + `DeferStmt` | ✅ 完成 |
+| AST | 44 种节点 + `DeferStmt` + `UsingStmt` | ✅ 完成 |
 | 数值 | `Number`（float/Fix64 双模式，8B） | ✅ 完成 |
 | 状态 | `VMInstanceState`（blittable，含 StateFlags + CleanupStack） | ✅ 完成 |
 | 实例池 | `InstancePool`（确定性 free stack） | ✅ 完成 |
 | 快照 | `SnapshotRingBuffer`（8 帧环，零分配） | ✅ 完成 |
-| Syscall | `SyscallTable`（256 slot，热替换） | ✅ 完成 |
-| 字节码 | `OpCode`（26 条指令）+ `Instruction` + `VMProgram` + `VMModuleTable` | ✅ 完成 |
+| Syscall | `SyscallTable`（256 slot，热替换，配对注册协议） | ✅ 完成 |
+| 字节码 | `OpCode`（27 条指令，含 WAIT_FOR）+ `Instruction` + `VMProgram` + `VMModuleTable` | ✅ 完成 |
 | 调度 | `VMWorld`（Tick 字节码解释循环 + Spawn/Destroy/Save/Load） | ✅ 完成 |
 | 解释器 | `TreeWalker`（Phase 2 原型，含 defer + Kill） | ✅ 完成 |
 | 词法分析 | `Lexer`（手写，14 关键字 + 运算符 + 字面量 + 注释） | ✅ 完成 |
-| 语法分析 | `Parser`（手写递归下降，source → `ModuleNode` AST，含错误恢复） | ✅ 完成 |
-| 编译器 | `BytecodeCompiler`（AST → `VMProgram`，寄存器分配：r0-15 scratch / r16-47 locals / r48-63 temps） | ✅ 完成 |
-| 测试 | 164 项 Assert 全部通过（85 TreeWalker + 62 Compiler + 17 Performance），另有 5 项自动化性能基准 | ✅ Step 6 通过 |
+| 语法分析 | `Parser`（手写递归下降，source → `ModuleNode` AST，含 using/wait_for/错误恢复） | ✅ 完成 |
+| 编译器 | `BytecodeCompiler`（AST → `VMProgram`，寄存器分配：r0-15 scratch / r16-47 locals / r48-63 temps，支持 using 配对 Syscall） | ✅ 完成 |
+| 测试 | 237 项 Assert 全部通过（98 TreeWalker + 104 Compiler + 17 Performance + 18 SkillScript），另有 5 项自动化性能基准 | ✅ Step 7 通过 |
 | 性能基准 | `BenchmarkRunner`（5 组 VM vs C# 对比基准）+ `run-benchmarks.cmd` 自动化管线 → `benchmark_results.md` | ✅ 完成 |
 
 ### 5.2 未完成（按优先级排列）
@@ -464,11 +464,12 @@ skill TracerBullet
 | P1 | `JUMP`/`JUMP_IF` OpCode + 比较/布尔运算 | ✅ 完成（Test 30-36） |
 | P1 | Step 5 新指令零 GC + 快照正确性验证 | ✅ 通过（Test 38, 39） |
 | P1 | V3 单实例性能基准 + V4 N 实例吞吐上限 | ✅ 通过（Test 40: 3.8x, Test 41: 0.391ms/128inst） |
-| P2 | Lexer + Parser（手写递归下降） | ✅ 完成（Lexer + Parser + BytecodeCompiler，20 项端到端编译器测试 C01-C20 通过） |
+| P2 | Lexer + Parser（手写递归下降） | ✅ 完成（Lexer + Parser + BytecodeCompiler，22 项端到端编译器测试 C01-C22 通过） |
 | P2 | 自动化性能基准管线（BenchmarkRunner + run-benchmarks.cmd） | ✅ 完成（5 组 VM vs C# 对比，编译脚本 5-7x ratio） |
-| P2 | `using` 语法 Parser 解析（C1） | 确定执行 → 步骤 7 |
-| P2 | Paired Syscall 注册协议（C2） | 确定执行 → 步骤 7 |
-| P2 | 编译器 emit Cleanup 指令 for `using`（C3） | 确定执行 → 步骤 7 |
+| P2 | `using` 语法 Parser 解析（C1） | ✅ 完成 → 步骤 7（ParseUsing + UsingStmt AST 节点） |
+| P2 | Paired Syscall 注册协议（C2） | ✅ 完成 → 步骤 7（SyscallTable.RegisterPaired / GetPairedSlot / HasPair） |
+| P2 | 编译器 emit Cleanup 指令 for `using`（C3） | ✅ 完成 → 步骤 7（CompileUsing：SYSCALL + PUSH_CLEANUP + body + POP_CLEANUP） |
+| P2 | `wait_for` Parser + Compiler 接入（G1） | ✅ 完成 → 步骤 7（ParseWaitFor + CompileWaitFor + WAIT_FOR OpCode） |
 | P2（低） | 编译器 "requires cleanup" 强制检查（C4） | 确定执行 → **最晚步骤 10 前** |
 | P2 | CALL / RET_FUNC OpCode + 跨函数调用 emit（F1-F2） | 确定执行 → 步骤 8 |
 | P2 | 函数调用 GC + 快照回滚验证（F3） | 确定执行 → 步骤 8 |
@@ -488,7 +489,7 @@ skill TracerBullet
 |----------|------|-------------|
 | ~~手写 AST，无 Parser~~ | ~~先验证 VM 物理闭环~~ | ✅ 完成：Lexer + Parser + BytecodeCompiler，端到端文本 → 字节码 → 执行 |
 | ~~TreeWalker 代替字节码 VM~~ | ~~Phase 2 快速验证语义正确性~~ | ✅ 完成：字节码解释循环 + 编译器流水线均已实现 |
-| `defer` 代替 `using` | `using` 需要 Paired Syscall 注册协议 + 编译器支持 | 确定执行 → 步骤 7：C1 Parser 解析 + C2 配对协议 + C3 编译器 emit；C4 强制检查最晚步骤 10 前 |
+| ~~`defer` 代替 `using`~~ | ~~`using` 需要 Paired Syscall 注册协议 + 编译器支持~~ | ✅ 完成 → 步骤 7：C1 Parser 解析 + C2 配对协议 + C3 编译器 emit；C4 强制检查最晚步骤 10 前 |
 | 开发期 float（`Number`） | 快速迭代，Fix64 调试较痛苦 | float 模式仅用于开发迭代，正式测试和上线构建必须 `USE_FIXPOINT` |
 | 无 `MOVE`/`COPY` | 曳光弹不需要寄存器搬运 | ~~曳光弹通过后立即补充~~ ✅ Step 5 完成 |
 | 无分支/循环 OpCode | 曳光弹业务不含分支 | ~~`MOVE` 之后补 `JUMP`/`JUMP_IF`~~ ✅ Step 5 完成 |
@@ -528,15 +529,18 @@ skill TracerBullet
 6. 设计并确定脚本语法 → 实现 Lexer + Parser + BytecodeCompiler       ✅
       ↓
   ┌────────────────────────────────────────────────────────┐
-  │  编译器测试 C01-C20    ← ✅ 62 项 Assert 全部通过    │
+  │  编译器测试 C01-C22    ← ✅ 70 项 Assert 全部通过    │
   │  自动化性能基准 B01-B05 ← ✅ 编译脚本 5-7x ratio     │
   └────────────────────────────────────────────────────────┘
       ↓
-7. 实现 using 语法 + Paired Syscall → 理想 Cleanup 模式
+7. 实现 using 语法 + Paired Syscall → 理想 Cleanup 模式             ✅
       确定执行：
-        C1. using 语法 Parser 解析
-        C2. Paired Syscall 注册协议（SyscallTable 扩展）
-        C3. 编译器 emit PUSH_CLEANUP / POP_CLEANUP for using
+        C1. using 语法 Parser 解析                                   ✅
+        C2. Paired Syscall 注册协议（SyscallTable 扩展）              ✅
+        C3. 编译器 emit PUSH_CLEANUP / POP_CLEANUP for using          ✅
+      同步修复：
+        G1. wait_for Parser + Compiler 接入（新增 WAIT_FOR OpCode）   ✅
+        G2. POP_CLEANUP 首次被编译器生成（using 正常退出路径）         ✅
       确定执行（低优先级，最晚步骤 10 前）：
         C4. 编译器 "requires cleanup" 强制检查
       展望项（暂无排期）：
@@ -669,8 +673,8 @@ skill TracerBullet
 
 | # | 位置 | 问题 | 优先级 | 建议修复时机 |
 |---|------|------|--------|-------------|
-| G1 | `Parser` / `BytecodeCompiler` | `wait_for` 仅有 VM 运行时实现（`OpCode.WAIT_FOR`），Parser 和 Compiler 尚未接入；当前脚本无法使用 `wait_for` 语法 | 高 | 步骤 7 |
-| G2 | `BytecodeCompiler` | `POP_CLEANUP` 从未被编译器生成；`defer` 块 Cleanup 由 VM 运行时隐式处理，但 `using` 需要显式 emit（对应 C3） | 中 | 确定执行 → 步骤 7 |
+| G1 | `Parser` / `BytecodeCompiler` | ~~`wait_for` 仅有 VM 运行时实现，Parser 和 Compiler 尚未接入~~ → 已修复：新增 `ParseWaitFor()` + `CompileWaitFor()` + `WAIT_FOR` OpCode（步骤 7） | 高 | ✅ 已修复 |
+| G2 | `BytecodeCompiler` | ~~`POP_CLEANUP` 从未被编译器生成~~ → 已修复：`CompileUsing()` 在 using 块正常退出时 emit `POP_CLEANUP`（步骤 7） | 中 | ✅ 已修复 |
 | G3 | `BytecodeCompiler.BinOpCode()` / `UnOpCode()` | ~~遇到未知 `NodeKind` 时静默返回 `NOP`，不报错~~ → 已修复：添加 `_errors.Add(...)` 报告未知操作符 | 中 | ✅ 已修复 |
 | G4 | `VMWorld.ExecuteInstance()` | ~~步数上限耗尽时报 `PanicIllegalInstruction`~~ → 已修复：新增 `PanicStepLimitExceeded` 错误码 | 低 | ✅ 已修复 |
 | G5 | `BytecodeCompiler` | 编译器缺少 "requires cleanup" 强制检查：标记了 requires_cleanup 的 Syscall 未配 `using`/`defer` 时应编译报错（对应 C4） | 中（低） | 确定执行 → **最晚步骤 10 前** |
@@ -685,6 +689,11 @@ skill TracerBullet
 | T4 | 实例池满溢 | ✅ 已覆盖（TreeWalkerTests T4：128 实例分配成功，第 129 个返回 -1） |
 | T5 | Fix64 模式（`USE_FIXPOINT`） | 需要 `USE_FIXPOINT` 编译标志的独立构建配置，无法在单次构建中验证 |
 | T6 | `bool` / `float` 字面量解析 | ✅ 已覆盖（CompilerTests C21/C22：true/false 编译为 1/0，3.5+2.5=6） |
+| T7 | `wait_for` 编译器路径 | ✅ 已覆盖（CompilerTests C23：实例 A 通过编译脚本 `wait_for(id)` 等待实例 B 完成后恢复） |
+| T8 | `using` 正常退出 + POP_CLEANUP | ✅ 已覆盖（CompilerTests C24：using 块正常退出时 POP_CLEANUP 移除 cleanup frame，release 不执行） |
+| T9 | `using` Kill 路径 + cleanup release | ✅ 已覆盖（CompilerTests C25：Kill 触发 cleanup 块执行 release Syscall） |
+| T10 | `using` + `defer` 混合 LIFO | ✅ 已覆盖（CompilerTests C26：defer + using 混合，POP_CLEANUP 后仅 defer 在 RETURN 时执行） |
+| T11 | `using` 内嵌 wait | ✅ 已覆盖（CompilerTests C27：using 块内 wait 恢复后正常退出，release 不执行） |
 
 ### 11.3 文档缺口（来自档案交叉审查）
 
@@ -707,7 +716,7 @@ skill TracerBullet
 
 | Job | 触发 | 内容 |
 |-----|------|------|
-| **test** | push / PR | 构建 StandaloneRunner → 运行全部 185 个测试断言（TreeWalker 98 + Compiler 70 + Performance 17） |
+| **test** | push / PR | 构建 StandaloneRunner → 运行全部 237 个测试断言（TreeWalker 98 + Compiler 104 + Performance 17 + SkillScript 18） |
 | **benchmark** | test 通过后 | 运行 B01-B05 VM vs C# 基准，生成 `benchmark_ci.md` artifact |
 | **cross-lang** | test 通过后 | 运行 Lua / Python / Node.js 同源基准，生成 `cross_lang_results.md` artifact |
 

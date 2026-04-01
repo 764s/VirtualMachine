@@ -42,12 +42,12 @@ Sub-task G: 文档更新
 
 ### 具体变更
 
-- [ ] A.1 **Parser**：在 `ParseStatement()` 的 switch 中添加 `case TokenType.WaitFor` → 调用 `ParseWaitFor()`
-- [ ] A.2 **Parser**：实现 `ParseWaitFor()`：消费 `wait_for` → `(` → `ParseExpression()` → `)` → 返回 `WaitForStmt`
-- [ ] A.3 **BytecodeCompiler**：在 `CompileStmt()` 的 switch 中添加 `case NodeKind.WaitFor` → 调用 `CompileWaitFor()`
-- [ ] A.4 **BytecodeCompiler**：实现 `CompileWaitFor(WaitForStmt)`：编译目标表达式到寄存器 → emit `WAIT_FOR` 指令（需确认 OpCode 设计，或复用 WAIT + 扩展语义）
-- [ ] A.5 **确认 OpCode 方案**：VMWorld 中 `wait_for` 使用 `WaitTargetInstanceId` 字段，需要新 OpCode `WAIT_FOR`（A=srcReg）设置此字段，或复用现有 WAIT 的扩展编码
-- [ ] A.6 **测试**：编写 CompilerTest — `wait_for(instanceId)` 端到端编译 + 执行验证
+- [x] A.1 **Parser**：在 `ParseStatement()` 的 switch 中添加 `case TokenType.WaitFor` → 调用 `ParseWaitFor()`
+- [x] A.2 **Parser**：实现 `ParseWaitFor()`：消费 `wait_for` → `(` → `ParseExpression()` → `)` → 返回 `WaitForStmt`
+- [x] A.3 **BytecodeCompiler**：在 `CompileStmt()` 的 switch 中添加 `case NodeKind.WaitFor` → 调用 `CompileWaitFor()`
+- [x] A.4 **BytecodeCompiler**：实现 `CompileWaitFor(WaitForStmt)`：编译目标表达式到寄存器 → emit `WAIT_FOR` 指令（需确认 OpCode 设计，或复用 WAIT + 扩展语义）
+- [x] A.5 **确认 OpCode 方案**：VMWorld 中 `wait_for` 使用 `WaitTargetInstanceId` 字段，需要新 OpCode `WAIT_FOR`（A=srcReg）设置此字段，或复用现有 WAIT 的扩展编码
+- [x] A.6 **测试**：编写 CompilerTest — `wait_for(instanceId)` 端到端编译 + 执行验证
 
 ### 验收标准
 
@@ -65,8 +65,8 @@ Sub-task G: 文档更新
 
 ### 具体变更
 
-- [ ] B.1 **ASTNode.cs**：在 `NodeKind` 枚举中添加 `Using`
-- [ ] B.2 **ASTNode.cs**：定义 `UsingStmt` 类：
+- [x] B.1 **ASTNode.cs**：在 `NodeKind` 枚举中添加 `Using`
+- [x] B.2 **ASTNode.cs**：定义 `UsingStmt` 类：
   ```
   SyscallName: string       // acquire 调用名
   Arguments: List<Expr>     // 参数列表
@@ -89,11 +89,11 @@ SyscallTable 需要扩展，使 Syscall 可绑定反向操作。例如 `PlayEffe
 
 ### 具体变更
 
-- [ ] C.1 **SyscallTable.cs**：新增 `_pairedSlots` 数组（`int[]`，大小 = `MaxSyscalls`），每个 Syscall 可绑定其反向 Syscall 的 slot（-1 表示无配对）
-- [ ] C.2 **SyscallTable.cs**：新增 `RegisterPaired(int acquireSlot, string acquireName, SyscallHandler acquireHandler, int releaseSlot, string releaseName, SyscallHandler releaseHandler)` API
-- [ ] C.3 **SyscallTable.cs**：新增 `GetPairedSlot(int slot)` 查询 API，返回配对的 release slot（-1 表示无配对）
-- [ ] C.4 **SyscallTable.cs**：新增 `HasPair(int slot)` 便捷查询
-- [ ] C.5 **测试**：验证配对注册和查询的基本正确性
+- [x] C.1 **SyscallTable.cs**：新增 `_pairedSlots` 数组（`int[]`，大小 = `MaxSyscalls`），每个 Syscall 可绑定其反向 Syscall 的 slot（-1 表示无配对）
+- [x] C.2 **SyscallTable.cs**：新增 `RegisterPaired(int acquireSlot, string acquireName, SyscallHandler acquireHandler, int releaseSlot, string releaseName, SyscallHandler releaseHandler)` API
+- [x] C.3 **SyscallTable.cs**：新增 `GetPairedSlot(int slot)` 查询 API，返回配对的 release slot（-1 表示无配对）
+- [x] C.4 **SyscallTable.cs**：新增 `HasPair(int slot)` 便捷查询
+- [x] C.5 **测试**：验证配对注册和查询的基本正确性
 
 ### 验收标准
 
@@ -126,14 +126,14 @@ using PlayEffect(effectId, pos) {
 
 ### 具体变更
 
-- [ ] D.1 **Parser**：在 `ParseStatement()` 的 switch 中添加 `case TokenType.Using` → 调用 `ParseUsing()`
-- [ ] D.2 **Parser**：实现 `ParseUsing()`：
+- [x] D.1 **Parser**：在 `ParseStatement()` 的 switch 中添加 `case TokenType.Using` → 调用 `ParseUsing()`
+- [x] D.2 **Parser**：实现 `ParseUsing()`：
   - 消费 `using`
   - 解析 Syscall 名称（`IDENT`）
   - 解析参数列表 `(` expr_list? `)`
   - 解析块 `{ ... }`
   - 返回 `UsingStmt`
-- [ ] D.3 **测试**：Parser 单元测试 — 验证 `using PlayEffect(1) { wait 5 }` 解析为正确的 `UsingStmt` AST
+- [x] D.3 **测试**：Parser 单元测试 — 验证 `using PlayEffect(1) { wait 5 }` 解析为正确的 `UsingStmt` AST
 
 ### 验收标准
 
@@ -157,8 +157,8 @@ BytecodeCompiler 将 `UsingStmt` 编译为：
 
 ### 具体变更
 
-- [ ] E.1 **BytecodeCompiler**：在 `CompileStmt()` 的 switch 中添加 `case NodeKind.Using` → 调用 `CompileUsing()`
-- [ ] E.2 **BytecodeCompiler**：实现 `CompileUsing(UsingStmt)`：
+- [x] E.1 **BytecodeCompiler**：在 `CompileStmt()` 的 switch 中添加 `case NodeKind.Using` → 调用 `CompileUsing()`
+- [x] E.2 **BytecodeCompiler**：实现 `CompileUsing(UsingStmt)`：
   - 通过 Syscall 名称查找 acquire slot
   - 通过 `SyscallTable.GetPairedSlot()` 查找 release slot
   - 若无配对 → 编译错误（`using` 必须用于有配对的 Syscall）
@@ -167,11 +167,11 @@ BytecodeCompiler 将 `UsingStmt` 编译为：
   - 编译 body
   - emit `POP_CLEANUP`
   - cleanup 块（emit 在函数末尾）：emit `SYSCALL`（release）→ `RETURN`
-- [ ] E.3 **编译器需要访问 SyscallTable 的名称→slot 映射**：确认 BytecodeCompiler 构造时可接收 SyscallTable 引用（或名称→slot 字典）
-- [ ] E.4 **测试 C-U01**：基本 using — `using SetBB(key, 1) { wait 5 }` → 验证 acquire 执行 + 正常退出触发 POP_CLEANUP + cleanup 不执行
-- [ ] E.5 **测试 C-U02**：Kill 路径 — `using SetBB(key, 1) { wait 100 }` → Kill → 验证 cleanup（ResetBB）执行
-- [ ] E.6 **测试 C-U03**：using + defer 混合 — 验证 LIFO 顺序正确
-- [ ] E.7 **测试 C-U04**：using 内嵌 wait — 验证 wait 恢复后 using 块正常继续
+- [x] E.3 **编译器需要访问 SyscallTable 的名称→slot 映射**：确认 BytecodeCompiler 构造时可接收 SyscallTable 引用（或名称→slot 字典）
+- [x] E.4 **测试 C-U01**：基本 using — `using SetBB(key, 1) { wait 5 }` → 验证 acquire 执行 + 正常退出触发 POP_CLEANUP + cleanup 不执行
+- [x] E.5 **测试 C-U02**：Kill 路径 — `using SetBB(key, 1) { wait 100 }` → Kill → 验证 cleanup（ResetBB）执行
+- [x] E.6 **测试 C-U03**：using + defer 混合 — 验证 LIFO 顺序正确
+- [x] E.7 **测试 C-U04**：using 内嵌 wait — 验证 wait 恢复后 using 块正常继续
 
 ### 验收标准
 
@@ -191,9 +191,9 @@ BytecodeCompiler 将 `UsingStmt` 编译为：
 
 ### 具体变更
 
-- [ ] F.1 运行全部现有测试（185 项 Assert），确认无回归
-- [ ] F.2 运行 B01-B05 性能基准，确认无性能退化
-- [ ] F.3 汇总新增测试项数量，更新 VM_Summary.md §十二 测试数据
+- [x] F.1 运行全部现有测试（203 项 Assert），确认无回归 → 236 项全部通过
+- [x] F.2 运行 B01-B05 性能基准，确认无性能退化
+- [x] F.3 汇总新增测试项数量，更新 VM_Summary.md §十二 测试数据
 
 ### 验收标准
 
@@ -211,10 +211,10 @@ BytecodeCompiler 将 `UsingStmt` 编译为：
 
 ### 具体变更
 
-- [ ] G.1 **VM_Summary.md §七**：步骤 7 标记 ✅，补充通过信息
-- [ ] G.2 **VM_Summary.md §五**：更新已完成/未完成表格（C1/C2/C3 → ✅，G1/G2 → ✅ 已修复）
-- [ ] G.3 **VM_Summary.md §十一**：G1/G2 标记为已修复
-- [ ] G.4 **VM_Summary.md §十二**：更新测试断言总数
+- [x] G.1 **VM_Summary.md §七**：步骤 7 标记 ✅，补充通过信息
+- [x] G.2 **VM_Summary.md §五**：更新已完成/未完成表格（C1/C2/C3 → ✅，G1/G2 → ✅ 已修复）
+- [x] G.3 **VM_Summary.md §十一**：G1/G2 标记为已修复
+- [x] G.4 **VM_Summary.md §十二**：更新测试断言总数
 
 ### 验收标准
 

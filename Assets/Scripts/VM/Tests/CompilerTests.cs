@@ -716,9 +716,10 @@ func main() {
             world.Syscalls.Register(2, "Work", (ref VMInstanceState s) => { log.Add("Work"); });
             world.Syscalls.Register(3, "Done", (ref VMInstanceState s) => { log.Add("Done"); });
 
-            int idB = world.SpawnInstance(1, 0); // instance B starts first (id=0)
-            int idA = world.SpawnInstance(0, 0); // instance A waits for B (wait_for(0))
+            int idB = world.SpawnInstance(1, 0); // instance B starts first → gets id=0 (pool allocates sequentially)
+            int idA = world.SpawnInstance(0, 0); // instance A waits for B via wait_for(0) — hardcoded to match idB
 
+            Assert(idB == 0, "C23: B must be instance 0 (script hardcodes wait_for(0))");
             world.Tick(); // tick 1: B→Work+WAIT3, A→Before+WAIT_FOR(0)
             Assert(log.Contains("Before") && log.Contains("Work"), "C23: tick 1 → Before + Work");
 

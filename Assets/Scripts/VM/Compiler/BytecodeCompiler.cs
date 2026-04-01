@@ -33,11 +33,12 @@ namespace FFVM.Compiler
         private List<string> _errors;
 
         // Deferred cleanup blocks (emitted after main body)
+        private const int NoReleaseSyscall = -1;
         private struct DeferredCleanup
         {
             public int PushCleanupIP;
-            public BlockStmt Body;          // for defer: cleanup block body
-            public int ReleaseSyscallSlot;  // for using: release syscall slot (-1 = use Body)
+            public BlockStmt Body;              // for defer: cleanup block body (null when using)
+            public int ReleaseSyscallSlot;      // for using: release syscall slot (NoReleaseSyscall = use Body instead)
         }
         private List<DeferredCleanup> _deferredCleanups;
 
@@ -351,7 +352,7 @@ namespace FFVM.Compiler
         {
             int pushIP = CurrentIP();
             Emit(OpCode.PUSH_CLEANUP, 0); // placeholder for cleanup entry IP
-            _deferredCleanups.Add(new DeferredCleanup { PushCleanupIP = pushIP, Body = stmt.Body, ReleaseSyscallSlot = -1 });
+            _deferredCleanups.Add(new DeferredCleanup { PushCleanupIP = pushIP, Body = stmt.Body, ReleaseSyscallSlot = NoReleaseSyscall });
         }
 
         private void CompileWaitFor(WaitForStmt stmt)
