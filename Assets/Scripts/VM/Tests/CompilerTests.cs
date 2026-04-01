@@ -686,6 +686,236 @@ func main() {
             Assert(reports.Count > 1 && reports[1] == 1, $"C22: 3.5-2.5 = 1, got {(reports.Count > 1 ? reports[1].ToString() : "?")}");
         }
 
+        // ===== Test C23: wait_for — instance A waits for instance B to complete =====
+        {
+            string sourceA = @"
+func main() {
+    Before()
+    wait_for(0)
+    After()
+}";
+            string sourceB = @"
+func main() {
+    Work()
+    wait 3
+    Done()
+}";
+            var syscallsA = new Dictionary<string, int> { { "Before", 0 }, { "After", 1 } };
+            var syscallsB = new Dictionary<string, int> { { "Work", 2 }, { "Done", 3 } };
+            var resultA = compiler.Compile(sourceA, "main", syscallsA);
+            var resultB = compiler.Compile(sourceB, "main", syscallsB);
+            Assert(resultA.Success, "C23: script A compiles");
+            Assert(resultB.Success, "C23: script B compiles");
+
+            var log = new List<string>();
+            var world = new VMWorld();
+            world.Modules.Load(0, resultA.Program);
+            world.Modules.Load(1, resultB.Program);
+            world.Syscalls.Register(0, "Before", (ref VMInstanceState s) => { log.Add("Before"); });
+            world.Syscalls.Register(1, "After", (ref VMInstanceState s) => { log.Add("After"); });
+            world.Syscalls.Register(2, "Work", (ref VMInstanceState s) => { log.Add("Work"); });
+            world.Syscalls.Register(3, "Done", (ref VMInstanceState s) => { log.Add("Done"); });
+
+            int idB = world.SpawnInstance(1, 0); // instance B starts first (id=0)
+            int idA = world.SpawnInstance(0, 0); // instance A waits for B (wait_for(0))
+
+            world.Tick(); // tick 1: B→Work+WAIT3, A→Before+WAIT_FOR(0)
+            Assert(log.Contains("Before") && log.Contains("Work"), "C23: tick 1 → Before + Work");
+
+            world.Tick(); // tick 2: B waiting (counter 3→2)
+            world.Tick(); // tick 3: B waiting (counter 2→1)
+            world.Tick(); // tick 4: B waiting (counter 1→0)
+            world.Tick(); // tick 5: B resumes → Done → Completed
+            Assert(log.Contains("Done"), "C23: B completes → Done");
+
+            world.Tick(); // tick 6: A detects B completed → After → Completed
+            Assert(log.Contains("After"), "C23: A resumes after B → After");
+            Assert((world.Pool.Instances[idA].StateFlags & VMStateFlags.Completed) != 0, "C23: A Completed");
+            Assert((world.Pool.Instances[idB].StateFlags & VMStateFlags.Completed) != 0, "C23: B Completed");
+        }
+
+        // ===== Test C24: using — normal exit (POP_CLEANUP, no cleanup execution) =====
+        {
+            string source = @"
+func main() {
+    using SetBB(1) {
+        Report(10)
+    }
+    Report(20)
+}";
+            var syscalls = new Dictionary<string, int> { { "SetBB", 0 }, { "ResetBB", 1 }, { "Report", 2 } };
+
+            var world = new VMWorld();
+            world.Syscalls.RegisterPaired(
+                0, "SetBB", (ref VMInstanceState s) => { /* acquire: set bb */ },
+                1, "ResetBB", (ref VMInstanceState s) => { /* release: reset bb */ });
+            world.Syscalls.Register(2, "Report", (ref VMInstanceState s) => { });
+
+            var result = compiler.Compile(source, "main", syscalls, world.Syscalls);
+            Assert(result.Success, "C24 compile success");
+
+            var log = new List<string>();
+            // Re-register with logging
+            world.Syscalls.RegisterPaired(
+                0, "SetBB", (ref VMInstanceState s) => { log.Add("SetBB"); },
+                1, "ResetBB", (ref VMInstanceState s) => { log.Add("ResetBB"); });
+            world.Syscalls.Register(2, "Report", (ref VMInstanceState s) => { log.Add($"Report({s.Registers.Get(0).ToInt()})"); });
+
+            world.Modules.Load(0, result.Program);
+            int id = world.SpawnInstance(0, 0);
+            world.Tick();
+
+            Assert(log.Count >= 3, $"C24: expected 3 calls, got {log.Count}");
+            Assert(log.Count > 0 && log[0] == "SetBB", $"C24: acquire SetBB first, got {(log.Count > 0 ? log[0] : "?")}");
+            Assert(log.Count > 1 && log[1] == "Report(10)", $"C24: body Report(10), got {(log.Count > 1 ? log[1] : "?")}");
+            Assert(log.Count > 2 && log[2] == "Report(20)", $"C24: after using Report(20), got {(log.Count > 2 ? log[2] : "?")}");
+            // ResetBB should NOT be called on normal exit — POP_CLEANUP removes the frame
+            Assert(!log.Contains("ResetBB"), "C24: ResetBB NOT called on normal exit");
+            Assert((world.Pool.Instances[id].StateFlags & VMStateFlags.Completed) != 0, "C24: Completed");
+        }
+
+        // ===== Test C25: using — Kill path (cleanup executes release syscall) =====
+        {
+            string source = @"
+func main() {
+    using SetBB(1) {
+        wait 100
+    }
+}";
+            var syscalls = new Dictionary<string, int> { { "SetBB", 0 }, { "ResetBB", 1 } };
+
+            var world = new VMWorld();
+            world.Syscalls.RegisterPaired(
+                0, "SetBB", (ref VMInstanceState s) => { },
+                1, "ResetBB", (ref VMInstanceState s) => { });
+
+            var result = compiler.Compile(source, "main", syscalls, world.Syscalls);
+            Assert(result.Success, "C25 compile success");
+
+            var log = new List<string>();
+            world.Syscalls.RegisterPaired(
+                0, "SetBB", (ref VMInstanceState s) => { log.Add("SetBB"); },
+                1, "ResetBB", (ref VMInstanceState s) => { log.Add("ResetBB"); });
+
+            world.Modules.Load(0, result.Program);
+            int id = world.SpawnInstance(0, 0);
+            world.Tick(); // tick 1: SetBB, PUSH_CLEANUP, WAIT 100
+            Assert(log.Count == 1 && log[0] == "SetBB", "C25: tick 1 → SetBB (acquire)");
+
+            // Kill during wait
+            world.Pool.Instances[id].StateFlags |= VMStateFlags.Killed;
+            world.Tick(); // tick 2: kill → cleanup → ResetBB → Completed
+            Assert(log.Count == 2 && log[1] == "ResetBB", "C25: kill → cleanup ResetBB (release)");
+            Assert((world.Pool.Instances[id].StateFlags & VMStateFlags.Completed) != 0, "C25: Completed");
+        }
+
+        // ===== Test C26: using + defer mixed — LIFO order =====
+        {
+            string source = @"
+func main() {
+    defer {
+        Report(1)
+    }
+    using SetBB(99) {
+        Report(2)
+    }
+    Report(3)
+}";
+            var syscalls = new Dictionary<string, int> { { "SetBB", 0 }, { "ResetBB", 1 }, { "Report", 2 } };
+
+            var world = new VMWorld();
+            world.Syscalls.RegisterPaired(
+                0, "SetBB", (ref VMInstanceState s) => { },
+                1, "ResetBB", (ref VMInstanceState s) => { });
+            world.Syscalls.Register(2, "Report", (ref VMInstanceState s) => { });
+
+            var result = compiler.Compile(source, "main", syscalls, world.Syscalls);
+            Assert(result.Success, "C26 compile success");
+
+            var log = new List<string>();
+            world.Syscalls.RegisterPaired(
+                0, "SetBB", (ref VMInstanceState s) => { log.Add("SetBB"); },
+                1, "ResetBB", (ref VMInstanceState s) => { log.Add("ResetBB"); });
+            world.Syscalls.Register(2, "Report", (ref VMInstanceState s) => { log.Add($"Report({s.Registers.Get(0).ToInt()})"); });
+
+            world.Modules.Load(0, result.Program);
+            int id = world.SpawnInstance(0, 0);
+            world.Tick();
+
+            // Expected flow:
+            // PUSH_CLEANUP(defer Report(1)), SetBB(99), PUSH_CLEANUP(ResetBB), Report(2), POP_CLEANUP, Report(3), RETURN → cleanup → Report(1) → Completed
+            // After POP_CLEANUP: using's cleanup frame removed, only defer remains
+            // RETURN → cleanup → defer block Report(1) → Completed
+            Assert(log.Count >= 1 && log[0] == "SetBB", $"C26: SetBB first, got {(log.Count > 0 ? log[0] : "?")}");
+            Assert(log.Contains("Report(2)"), "C26: body Report(2)");
+            Assert(log.Contains("Report(3)"), "C26: after using Report(3)");
+            Assert(log.Contains("Report(1)"), "C26: defer cleanup Report(1)");
+            // ResetBB should NOT be called (POP_CLEANUP removed it on normal exit)
+            Assert(!log.Contains("ResetBB"), "C26: ResetBB NOT called (POP_CLEANUP)");
+            Assert((world.Pool.Instances[id].StateFlags & VMStateFlags.Completed) != 0, "C26: Completed");
+        }
+
+        // ===== Test C27: using with wait inside — resume after wait, then normal exit =====
+        {
+            string source = @"
+func main() {
+    using SetBB(1) {
+        Before()
+        wait 3
+        After()
+    }
+}";
+            var syscalls = new Dictionary<string, int> { { "SetBB", 0 }, { "ResetBB", 1 }, { "Before", 2 }, { "After", 3 } };
+
+            var world = new VMWorld();
+            world.Syscalls.RegisterPaired(
+                0, "SetBB", (ref VMInstanceState s) => { },
+                1, "ResetBB", (ref VMInstanceState s) => { });
+            world.Syscalls.Register(2, "Before", (ref VMInstanceState s) => { });
+            world.Syscalls.Register(3, "After", (ref VMInstanceState s) => { });
+
+            var result = compiler.Compile(source, "main", syscalls, world.Syscalls);
+            Assert(result.Success, "C27 compile success");
+
+            var log = new List<string>();
+            world.Syscalls.RegisterPaired(
+                0, "SetBB", (ref VMInstanceState s) => { log.Add("SetBB"); },
+                1, "ResetBB", (ref VMInstanceState s) => { log.Add("ResetBB"); });
+            world.Syscalls.Register(2, "Before", (ref VMInstanceState s) => { log.Add("Before"); });
+            world.Syscalls.Register(3, "After", (ref VMInstanceState s) => { log.Add("After"); });
+
+            world.Modules.Load(0, result.Program);
+            int id = world.SpawnInstance(0, 0);
+
+            world.Tick(); // tick 1: SetBB, PUSH_CLEANUP, Before, WAIT 3
+            Assert(log.Count == 2, $"C27: tick 1 → SetBB + Before, got {log.Count}");
+            Assert(log[0] == "SetBB", "C27: acquire SetBB");
+            Assert(log[1] == "Before", "C27: Before inside using");
+
+            world.Tick(); world.Tick(); world.Tick(); // tick 2-4: wait countdown
+
+            world.Tick(); // tick 5: resume → After, POP_CLEANUP, RETURN → Completed
+            Assert(log.Count == 3 && log[2] == "After", "C27: After after wait");
+            Assert(!log.Contains("ResetBB"), "C27: ResetBB NOT called (normal exit)");
+            Assert((world.Pool.Instances[id].StateFlags & VMStateFlags.Completed) != 0, "C27: Completed");
+        }
+
+        // ===== Test C28: using compile error — no paired syscall =====
+        {
+            string source = @"
+func main() {
+    using NoPair(1) {
+        wait 5
+    }
+}";
+            var syscalls = new Dictionary<string, int> { { "NoPair", 0 } };
+            var world = new VMWorld();
+            world.Syscalls.Register(0, "NoPair", (ref VMInstanceState s) => { });
+
+            var result = compiler.Compile(source, "main", syscalls, world.Syscalls);
+            Assert(!result.Success, "C28: compile error for unpaired syscall in using");
+        }
+
         // ===== Summary =====
         Debug.Log($"========================================");
         Debug.Log($"Compiler Tests: {passed} passed, {failed} failed");

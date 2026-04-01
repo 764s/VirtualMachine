@@ -166,6 +166,11 @@ namespace FFVM
                         inst.IP++;
                         return; // Yield to next tick
 
+                    case OpCode.WAIT_FOR:
+                        inst.WaitTargetInstanceId = inst.Registers.Get(op.A).ToInt();
+                        inst.IP++;
+                        return; // Yield to next tick — Tick() checks WaitTargetInstanceId
+
                     case OpCode.PUSH_CLEANUP:
                         if (inst.CleanupDepth >= VMConstants.MaxCleanupDepth)
                         {

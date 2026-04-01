@@ -29,13 +29,15 @@ namespace FFVM.Compiler
         private int _nextVarReg;
         private int _tempTop;
         private Dictionary<string, int> _syscalls;    // name → slot
+        private SyscallTable _syscallTable;            // paired slot lookup (optional, for using)
         private List<string> _errors;
 
         // Deferred cleanup blocks (emitted after main body)
         private struct DeferredCleanup
         {
             public int PushCleanupIP;
-            public BlockStmt Body;
+            public BlockStmt Body;          // for defer: cleanup block body
+            public int ReleaseSyscallSlot;  // for using: release syscall slot (-1 = use Body)
         }
         private List<DeferredCleanup> _deferredCleanups;
 
@@ -45,7 +47,8 @@ namespace FFVM.Compiler
         /// <param name="source">Script source code</param>
         /// <param name="entryFunc">Entry function name (typically "main")</param>
         /// <param name="syscalls">Syscall name → slot mapping</param>
-        public CompileResult Compile(string source, string entryFunc, Dictionary<string, int> syscalls)
+        /// <param name="syscallTable">Optional SyscallTable for paired syscall lookup (required for 'using')</param>
+        public CompileResult Compile(string source, string entryFunc, Dictionary<string, int> syscalls, SyscallTable syscallTable = null)
         {
             var parser = new Parser();
             var module = parser.Parse(source, out var parseErrors);
@@ -53,13 +56,13 @@ namespace FFVM.Compiler
             if (parseErrors != null && parseErrors.Count > 0)
                 return new CompileResult { Errors = parseErrors };
 
-            return CompileModule(module, entryFunc, syscalls);
+            return CompileModule(module, entryFunc, syscalls, syscallTable);
         }
 
         /// <summary>
         /// Compile a pre-parsed module into a VMProgram.
         /// </summary>
-        public CompileResult CompileModule(ModuleNode module, string entryFunc, Dictionary<string, int> syscalls)
+        public CompileResult CompileModule(ModuleNode module, string entryFunc, Dictionary<string, int> syscalls, SyscallTable syscallTable = null)
         {
             FuncDecl func = null;
             for (int i = 0; i < module.Functions.Count; i++)
@@ -80,6 +83,7 @@ namespace FFVM.Compiler
             _nextVarReg = VarRegBase;
             _tempTop = TempRegBase;
             _syscalls = syscalls ?? new Dictionary<string, int>();
+            _syscallTable = syscallTable;
             _errors = new List<string>();
             _deferredCleanups = new List<DeferredCleanup>();
 
@@ -101,7 +105,17 @@ namespace FFVM.Compiler
             {
                 int cleanupIP = _instructions.Count;
                 Backpatch(_deferredCleanups[i].PushCleanupIP, cleanupIP);
-                CompileBlock(_deferredCleanups[i].Body);
+
+                if (_deferredCleanups[i].ReleaseSyscallSlot >= 0)
+                {
+                    // using cleanup: emit release SYSCALL
+                    Emit(OpCode.SYSCALL, _deferredCleanups[i].ReleaseSyscallSlot, 0, 0);
+                }
+                else
+                {
+                    // defer cleanup: emit body block
+                    CompileBlock(_deferredCleanups[i].Body);
+                }
                 Emit(OpCode.RETURN);
             }
 
@@ -213,8 +227,10 @@ namespace FFVM.Compiler
             if (stmt is ForStmt forStmt)     { CompileFor(forStmt); return; }
             if (stmt is ReturnStmt retStmt)  { CompileReturn(retStmt); return; }
             if (stmt is WaitStmt waitStmt)   { CompileWait(waitStmt); return; }
+            if (stmt is WaitForStmt waitForStmt) { CompileWaitFor(waitForStmt); return; }
             if (stmt is YieldStmt)           { Emit(OpCode.WAIT, 1); return; }
             if (stmt is DeferStmt deferStmt) { CompileDefer(deferStmt); return; }
+            if (stmt is UsingStmt usingStmt) { CompileUsing(usingStmt); return; }
             if (stmt is BlockStmt block)     { CompileBlock(block); return; }
             if (stmt is ExprStmt exprStmt)   { CompileExprStmt(exprStmt); return; }
             _errors.Add($"Unknown statement type: {stmt.GetType().Name}");
@@ -335,7 +351,60 @@ namespace FFVM.Compiler
         {
             int pushIP = CurrentIP();
             Emit(OpCode.PUSH_CLEANUP, 0); // placeholder for cleanup entry IP
-            _deferredCleanups.Add(new DeferredCleanup { PushCleanupIP = pushIP, Body = stmt.Body });
+            _deferredCleanups.Add(new DeferredCleanup { PushCleanupIP = pushIP, Body = stmt.Body, ReleaseSyscallSlot = -1 });
+        }
+
+        private void CompileWaitFor(WaitForStmt stmt)
+        {
+            int targetReg = CompileExpr(stmt.TargetInstanceId);
+            Emit(OpCode.WAIT_FOR, targetReg);
+        }
+
+        private void CompileUsing(UsingStmt stmt)
+        {
+            // 1. Resolve acquire syscall slot
+            if (!_syscalls.TryGetValue(stmt.SyscallName, out int acquireSlot))
+            {
+                _errors.Add($"Unknown syscall '{stmt.SyscallName}' in using statement (line {stmt.Line})");
+                return;
+            }
+
+            // 2. Resolve release (paired) syscall slot
+            int releaseSlot = _syscallTable != null ? _syscallTable.GetPairedSlot(acquireSlot) : -1;
+            if (releaseSlot < 0)
+            {
+                _errors.Add($"Syscall '{stmt.SyscallName}' has no paired release syscall — cannot use in 'using' (line {stmt.Line})");
+                return;
+            }
+
+            // 3. Compile arguments → emit acquire SYSCALL
+            int[] argRegs = new int[stmt.Arguments.Count];
+            for (int i = 0; i < stmt.Arguments.Count; i++)
+                argRegs[i] = CompileExpr(stmt.Arguments[i]);
+
+            for (int i = 0; i < stmt.Arguments.Count; i++)
+            {
+                if (argRegs[i] != i)
+                    Emit(OpCode.MOVE, i, argRegs[i]);
+            }
+
+            Emit(OpCode.SYSCALL, acquireSlot, 0, stmt.Arguments.Count);
+
+            // 4. PUSH_CLEANUP (placeholder → release block emitted at function tail)
+            int pushIP = CurrentIP();
+            Emit(OpCode.PUSH_CLEANUP, 0);
+            _deferredCleanups.Add(new DeferredCleanup
+            {
+                PushCleanupIP = pushIP,
+                Body = null,
+                ReleaseSyscallSlot = releaseSlot
+            });
+
+            // 5. Compile body
+            CompileBlock(stmt.Body);
+
+            // 6. POP_CLEANUP — normal exit pops the cleanup frame (G2 fix: first time POP_CLEANUP is emitted)
+            Emit(OpCode.POP_CLEANUP);
         }
 
         private void CompileExprStmt(ExprStmt stmt)

@@ -149,8 +149,10 @@ namespace FFVM.Compiler
                 case TokenType.For:    return ParseFor();
                 case TokenType.Return: return ParseReturn();
                 case TokenType.Wait:   return ParseWait();
+                case TokenType.WaitFor: return ParseWaitFor();
                 case TokenType.Yield:  return ParseYield();
                 case TokenType.Defer:  return ParseDefer();
+                case TokenType.Using:  return ParseUsing();
                 case TokenType.LBrace: return ParseBlock();
                 default:               return ParseExprStatement();
             }
@@ -253,7 +255,8 @@ namespace FFVM.Compiler
             // Return has a value unless followed by },  a statement keyword, or EOF
             if (!Check(TokenType.RBrace, TokenType.Func, TokenType.Var, TokenType.If,
                        TokenType.While, TokenType.For, TokenType.Return, TokenType.Wait,
-                       TokenType.Yield, TokenType.Defer, TokenType.EOF))
+                       TokenType.WaitFor, TokenType.Yield, TokenType.Defer, TokenType.Using,
+                       TokenType.EOF))
             {
                 value = ParseExpression();
             }
@@ -285,12 +288,47 @@ namespace FFVM.Compiler
             return stmt;
         }
 
+        private WaitForStmt ParseWaitFor()
+        {
+            int line = Current().Line, col = Current().Column;
+            Advance(); // consume 'wait_for'
+            Expect(TokenType.LParen, "after 'wait_for'");
+            Expr targetId = ParseExpression();
+            Expect(TokenType.RParen, "after wait_for expression");
+            var stmt = new WaitForStmt(targetId);
+            stmt.Line = line;
+            stmt.Column = col;
+            return stmt;
+        }
+
         private DeferStmt ParseDefer()
         {
             int line = Current().Line, col = Current().Column;
             Advance(); // consume 'defer'
             var body = ParseBlock();
             var stmt = new DeferStmt(body);
+            stmt.Line = line;
+            stmt.Column = col;
+            return stmt;
+        }
+
+        private UsingStmt ParseUsing()
+        {
+            int line = Current().Line, col = Current().Column;
+            Advance(); // consume 'using'
+            string syscallName = Expect(TokenType.Identifier, "after 'using'").Text ?? "?";
+            Expect(TokenType.LParen, "after syscall name in 'using'");
+            var args = new List<Expr>();
+            if (!Check(TokenType.RParen))
+            {
+                do
+                {
+                    args.Add(ParseExpression());
+                } while (Match(TokenType.Comma));
+            }
+            Expect(TokenType.RParen, "after arguments in 'using'");
+            var body = ParseBlock();
+            var stmt = new UsingStmt(syscallName, args, body);
             stmt.Line = line;
             stmt.Column = col;
             return stmt;
