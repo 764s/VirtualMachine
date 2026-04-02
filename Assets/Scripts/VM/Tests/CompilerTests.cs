@@ -1504,6 +1504,128 @@ func main() {
             Assert(log.Count == 1 && log[0] == "14", $"CS11: 3*2 + 4*2 = 14, got {(log.Count > 0 ? log[0] : "?")}");
         }
 
+        // ===== Test C4-01: Direct call to requires_cleanup syscall → compile error =====
+        {
+            string source = @"
+func main() {
+    Acquire(1)
+}";
+            var syscalls = new Dictionary<string, int> { { "Acquire", 0 }, { "Release", 1 } };
+            var table = new SyscallTable();
+            table.RegisterPaired(0, "Acquire", (ref VMInstanceState s) => { },
+                                 1, "Release", (ref VMInstanceState s) => { });
+
+            var result = compiler.Compile(source, "main", syscalls, table);
+            Assert(!result.Success, "C4-01: compile error for direct call to requires_cleanup syscall");
+            Assert(result.Errors != null && result.Errors.Count > 0 && result.Errors[0].Contains("requires cleanup"),
+                   "C4-01: error message mentions 'requires cleanup'");
+        }
+
+        // ===== Test C4-02: using-wrapped call to requires_cleanup syscall → compile success =====
+        {
+            string source = @"
+func main() {
+    using Acquire(1) {
+        wait 5
+    }
+}";
+            var syscalls = new Dictionary<string, int> { { "Acquire", 0 }, { "Release", 1 } };
+            var table = new SyscallTable();
+            table.RegisterPaired(0, "Acquire", (ref VMInstanceState s) => { },
+                                 1, "Release", (ref VMInstanceState s) => { });
+
+            var result = compiler.Compile(source, "main", syscalls, table);
+            Assert(result.Success, "C4-02: using-wrapped requires_cleanup syscall compiles OK");
+        }
+
+        // ===== Test C4-03: Normal (non requires_cleanup) syscall → compile success =====
+        {
+            string source = @"
+func main() {
+    Report(42)
+}";
+            var syscalls = new Dictionary<string, int> { { "Report", 0 } };
+            var table = new SyscallTable();
+            table.Register(0, "Report", (ref VMInstanceState s) => { });
+
+            var result = compiler.Compile(source, "main", syscalls, table);
+            Assert(result.Success, "C4-03: normal syscall compiles OK (not affected by requires_cleanup)");
+        }
+
+        // ===== Test C4-04: No SyscallTable (null) → skip check, compile success =====
+        {
+            string source = @"
+func main() {
+    Acquire(1)
+}";
+            var syscalls = new Dictionary<string, int> { { "Acquire", 0 } };
+
+            // No syscallTable passed → backward compatible, no requires_cleanup check
+            var result = compiler.Compile(source, "main", syscalls, null);
+            Assert(result.Success, "C4-04: no SyscallTable → skip requires_cleanup check");
+        }
+
+        // ===== Test G6-01: wait inside defer → compile error =====
+        {
+            string source = @"
+func main() {
+    defer {
+        wait 10
+    }
+    wait 5
+}";
+            var syscalls = new Dictionary<string, int>();
+            var result = compiler.Compile(source, "main", syscalls);
+            Assert(!result.Success, "G6-01: compile error for wait inside defer");
+            Assert(result.Errors != null && result.Errors.Count > 0 && result.Errors[0].Contains("cleanup block"),
+                   "G6-01: error message mentions 'cleanup block'");
+        }
+
+        // ===== Test G6-02: wait_for inside defer → compile error =====
+        {
+            string source = @"
+func main() {
+    var id: int = 0
+    defer {
+        wait_for(id)
+    }
+    wait 5
+}";
+            var syscalls = new Dictionary<string, int>();
+            var result = compiler.Compile(source, "main", syscalls);
+            Assert(!result.Success, "G6-02: compile error for wait_for inside defer");
+            Assert(result.Errors != null && result.Errors.Count > 0 && result.Errors[0].Contains("cleanup block"),
+                   "G6-02: error message mentions 'cleanup block'");
+        }
+
+        // ===== Test G6-03: wait in normal function body → compile success (not affected) =====
+        {
+            string source = @"
+func main() {
+    wait 10
+}";
+            var syscalls = new Dictionary<string, int>();
+            var result = compiler.Compile(source, "main", syscalls);
+            Assert(result.Success, "G6-03: wait in normal body compiles OK");
+        }
+
+        // ===== Test G6-04: wait inside using body → compile success (using body is NOT a cleanup block) =====
+        {
+            string source = @"
+func main() {
+    using Acquire(1) {
+        wait 10
+    }
+}";
+            var syscalls = new Dictionary<string, int> { { "Acquire", 0 }, { "Release", 1 } };
+            var table = new SyscallTable();
+            table.RegisterPaired(0, "Acquire", (ref VMInstanceState s) => { },
+                                 1, "Release", (ref VMInstanceState s) => { });
+
+            var result = compiler.Compile(source, "main", syscalls, table);
+            Assert(result.Success, "G6-04: wait inside using body compiles OK (body != cleanup block)");
+        }
+
         // ===== Summary =====
         Debug.Log($"========================================");
         Debug.Log($"Compiler Tests: {passed} passed, {failed} failed");

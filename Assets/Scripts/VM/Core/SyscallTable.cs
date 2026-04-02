@@ -20,12 +20,14 @@ namespace FFVM
         private readonly SyscallHandler[] _handlers;
         private readonly string[] _names; // Debug only
         private readonly int[] _pairedSlots; // Paired (release) slot for each syscall, -1 = no pair
+        private readonly bool[] _requiresCleanup; // True if syscall must be wrapped in using/defer
 
         public SyscallTable()
         {
             _handlers = new SyscallHandler[VMConstants.MaxSyscalls];
             _names = new string[VMConstants.MaxSyscalls];
             _pairedSlots = new int[VMConstants.MaxSyscalls];
+            _requiresCleanup = new bool[VMConstants.MaxSyscalls];
             for (int i = 0; i < VMConstants.MaxSyscalls; i++)
                 _pairedSlots[i] = -1;
         }
@@ -82,6 +84,7 @@ namespace FFVM
             Register(acquireSlot, acquireName, acquireHandler);
             Register(releaseSlot, releaseName, releaseHandler);
             _pairedSlots[acquireSlot] = releaseSlot;
+            _requiresCleanup[acquireSlot] = true; // Acquire end always requires cleanup
         }
 
         /// <summary>
@@ -100,6 +103,27 @@ namespace FFVM
         public bool HasPair(int slot)
         {
             return GetPairedSlot(slot) >= 0;
+        }
+
+        /// <summary>
+        /// Mark a syscall as requiring cleanup (must be used inside 'using' block).
+        /// Called automatically for acquire slots in RegisterPaired().
+        /// Can also be called manually for non-paired syscalls that need cleanup.
+        /// </summary>
+        public void MarkRequiresCleanup(int slot)
+        {
+            if (slot >= 0 && slot < VMConstants.MaxSyscalls)
+                _requiresCleanup[slot] = true;
+        }
+
+        /// <summary>
+        /// Check if a syscall requires cleanup wrapping (using/defer).
+        /// </summary>
+        public bool RequiresCleanup(int slot)
+        {
+            if (slot < 0 || slot >= VMConstants.MaxSyscalls)
+                return false;
+            return _requiresCleanup[slot];
         }
     }
 }

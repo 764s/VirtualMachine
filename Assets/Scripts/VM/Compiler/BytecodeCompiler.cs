@@ -60,6 +60,9 @@ namespace FFVM.Compiler
         }
         private List<DeferredCleanup> _deferredCleanups;
 
+        // Cleanup block compilation state (G6: prohibit wait/wait_for inside cleanup blocks)
+        private bool _inCleanupBlock;
+
         /// <summary>
         /// Compile source text into a VMProgram.
         /// </summary>
@@ -187,6 +190,7 @@ namespace FFVM.Compiler
             _tempTop = TempRegBase;
             _deferredCleanups = new List<DeferredCleanup>();
             _isEntryFunction = isEntry;
+            _inCleanupBlock = false;
 
             // Bind parameters: copy from scratch zone r0..rN into local registers r16+
             for (int i = 0; i < func.Parameters.Count; i++)
@@ -218,7 +222,11 @@ namespace FFVM.Compiler
                 }
                 else
                 {
+                    // G6: mark as inside cleanup block so wait/wait_for are rejected
+                    bool prevInCleanup = _inCleanupBlock;
+                    _inCleanupBlock = true;
                     CompileBlock(_deferredCleanups[i].Body);
+                    _inCleanupBlock = prevInCleanup;
                 }
                 Emit(OpCode.RETURN);
             }
@@ -499,6 +507,13 @@ namespace FFVM.Compiler
 
         private void CompileWait(WaitStmt stmt)
         {
+            // G6: prohibit wait inside cleanup blocks (defer/using release)
+            if (_inCleanupBlock)
+            {
+                _errors.Add($"Cannot use 'wait' inside a cleanup block (defer/using) (line {stmt.Line})");
+                return;
+            }
+
             if (stmt.FrameCount is IntLiteralExpr intLit)
             {
                 Emit(OpCode.WAIT, intLit.Value);
@@ -522,6 +537,13 @@ namespace FFVM.Compiler
 
         private void CompileWaitFor(WaitForStmt stmt)
         {
+            // G6: prohibit wait_for inside cleanup blocks (defer/using release)
+            if (_inCleanupBlock)
+            {
+                _errors.Add($"Cannot use 'wait_for' inside a cleanup block (defer/using) (line {stmt.Line})");
+                return;
+            }
+
             int targetReg = CompileExpr(stmt.TargetInstanceId);
             Emit(OpCode.WAIT_FOR, targetReg);
         }
@@ -720,6 +742,13 @@ namespace FFVM.Compiler
                 return TempRegBase;
             }
 
+            // C4: requires_cleanup check — only 'using' wrapped calls are exempt (they don't go through this path)
+            if (_syscallTable != null && _syscallTable.RequiresCleanup(slot))
+            {
+                _errors.Add($"Syscall '{call.FunctionName}' requires cleanup. Use 'using {call.FunctionName}(args) {{ ... }}' or wrap with 'defer'. (line {call.Line})");
+                return TempRegBase;
+            }
+
             // Phase 1: compile all args into temp registers
             int[] argRegs = new int[call.Arguments.Count];
             for (int i = 0; i < call.Arguments.Count; i++)
@@ -746,6 +775,13 @@ namespace FFVM.Compiler
         private void CompileSyscallVoid(CallExpr call)
         {
             int slot = _syscalls[call.FunctionName];
+
+            // C4: requires_cleanup check — only 'using' wrapped calls are exempt (they don't go through this path)
+            if (_syscallTable != null && _syscallTable.RequiresCleanup(slot))
+            {
+                _errors.Add($"Syscall '{call.FunctionName}' requires cleanup. Use 'using {call.FunctionName}(args) {{ ... }}' or wrap with 'defer'. (line {call.Line})");
+                return;
+            }
 
             // Phase 1: compile all args into temp registers
             int[] argRegs = new int[call.Arguments.Count];
