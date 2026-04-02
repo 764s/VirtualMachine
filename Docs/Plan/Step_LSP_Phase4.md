@@ -1,7 +1,7 @@
 # 语言服务 Phase 4：LSP Server + TextMate Grammar（B2）
 
 > **在整体计划中的位置**：本文档对应 VM_Summary.md §七 推进顺序中 Phase 3B ✅ 之后的 **B2 语言服务 Phase 4**。
-> **状态**：⏳ 进行中
+> **状态**：✅ LSP2+LSP1+LSP3 完成。546 项 Assert（112 TW + 214 Compiler + 17 Perf + 18 SkillScript + 51 Debug + 93 DAP + 41 LSP），float + Fix64 双模式通过。
 > **前置**：
 > - Debug Phase 3B（Gate 2）✅ — DAP Server 完整单步调试，505 项 Assert
 > - ContentLengthStream.cs ✅ — Content-Length 分帧 I/O（与 LSP 共享）
@@ -53,11 +53,11 @@ LSP 使用与 DAP 完全相同的 Content-Length 分帧协议和 JSON-RPC 消息
 
 ### 修改清单
 
-- [ ] **LSP2-01** 移除 `break`/`continue`：Lexer 中不存在这两个关键字，从 grammar 中删除
-- [ ] **LSP2-02** 添加 `float` 类型：types 模式中补充 `float`（Lexer 支持 FloatLiteral，类型标注中使用 `float`）
-- [ ] **LSP2-03** 支持 `.vm` 扩展名：在 package.json 的 `extensions` 中同时注册 `[".ffvm", ".vm"]`
-- [ ] **LSP2-04** 移除 string 高亮规则：语言无字符串字面量类型，移除 `strings` 模式避免误导
-- [ ] **LSP2-05** 优化关键字匹配顺序：将 `wait_for` 放在 `wait` 之前确保正确匹配
+- [x] **LSP2-01** 移除 `break`/`continue`：Lexer 中不存在这两个关键字，从 grammar 中删除
+- [x] **LSP2-02** 添加 `float` 类型：types 模式中补充 `float`（Lexer 支持 FloatLiteral，类型标注中使用 `float`）
+- [x] **LSP2-03** 支持 `.vm` 扩展名：在 package.json 的 `extensions` 中同时注册 `[".ffvm", ".vm"]`
+- [x] **LSP2-04** 移除 string 高亮规则：语言无字符串字面量类型，移除 `strings` 模式避免误导
+- [x] **LSP2-05** 优化关键字匹配顺序：将 `wait_for` 放在 `wait` 之前确保正确匹配
 - [ ] **LSP2-06** 添加 `entry` 注释高亮（可选）：`entry` 不是关键字，但脚本中的 `func entry()` 是入口函数
 
 ### 验收标准
@@ -86,13 +86,13 @@ LSP 使用与 DAP 完全相同的 Content-Length 分帧协议和 JSON-RPC 消息
 
 ### 实现清单
 
-- [ ] **LSP1-01** LspServer 类框架：`Run()` 主循环 + 消息分发（参照 DapServer 模式）
-- [ ] **LSP1-02** `initialize` handler：返回 server capabilities（textDocumentSync = Full, diagnosticProvider = true）
-- [ ] **LSP1-03** `initialized` 通知处理：确认客户端就绪
-- [ ] **LSP1-04** `shutdown` + `exit`：清理资源 + 退出进程
-- [ ] **LSP1-05** `textDocument/didOpen`：存储文件 URI→内容映射
-- [ ] **LSP1-06** `textDocument/didChange`：更新文件内容（全量同步）
-- [ ] **LSP1-07** StandaloneRunner `--lsp` 入口
+- [x] **LSP1-01** LspServer 类框架：`Run()` 主循环 + 消息分发（参照 DapServer 模式）
+- [x] **LSP1-02** `initialize` handler：返回 server capabilities（textDocumentSync = Full, diagnosticProvider = true）
+- [x] **LSP1-03** `initialized` 通知处理：确认客户端就绪
+- [x] **LSP1-04** `shutdown` + `exit`：清理资源 + 退出进程
+- [x] **LSP1-05** `textDocument/didOpen`：存储文件 URI→内容映射
+- [x] **LSP1-06** `textDocument/didChange`：更新文件内容（全量同步）
+- [x] **LSP1-07** StandaloneRunner `--lsp` 入口
 
 ### 验收标准
 
@@ -108,10 +108,10 @@ LSP 使用与 DAP 完全相同的 Content-Length 分帧协议和 JSON-RPC 消息
 
 ### 实现清单
 
-- [ ] **LSP3-01** 编译触发：didOpen/didChange 时调用 BytecodeCompiler 编译文件内容
-- [ ] **LSP3-02** 错误映射：将 `_errors` 列表转换为 LSP Diagnostic 对象（行号→0-based，severity = Error）
-- [ ] **LSP3-03** publishDiagnostics 推送：发送 `textDocument/publishDiagnostics` 通知
-- [ ] **LSP3-04** 空诊断清除：编译成功时推送空 diagnostics 数组清除旧错误
+- [x] **LSP3-01** 编译触发：didOpen/didChange 时调用 BytecodeCompiler 编译文件内容
+- [x] **LSP3-02** 错误映射：将 `_errors` 列表转换为 LSP Diagnostic 对象（行号→0-based，severity = Error）
+- [x] **LSP3-03** publishDiagnostics 推送：发送 `textDocument/publishDiagnostics` 通知
+- [x] **LSP3-04** 空诊断清除：编译成功时推送空 diagnostics 数组清除旧错误
 
 ### 验收标准
 
@@ -145,9 +145,9 @@ LSP 使用与 DAP 完全相同的 Content-Length 分帧协议和 JSON-RPC 消息
 
 ### 实现清单
 
-- [ ] **EXT-01** 在 package.json 中添加 `main` 字段指向扩展入口
-- [ ] **EXT-02** 添加 `activationEvents`：`onLanguage:ffvm`
-- [ ] **EXT-03** 创建 `extension.js`：启动 LspServer 子进程，连接 vscode-languageclient
+- [x] **EXT-01** 在 package.json 中添加 `main` 字段指向扩展入口
+- [x] **EXT-02** 添加 `activationEvents`：`onLanguage:ffvm`
+- [x] **EXT-03** 创建 `extension.js`：启动 LspServer 子进程，连接 vscode-languageclient
 
 > **注意**：VS Code LSP 客户端需要 `vscode-languageclient` npm 包。如依赖管理复杂度过高，可延后至独立子步骤。
 

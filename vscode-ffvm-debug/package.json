@@ -1,15 +1,23 @@
 {
     "name": "ffvm-debug",
     "displayName": "FFVM Script Debugger",
-    "description": "Debug adapter for FFVM bytecode scripts",
-    "version": "0.1.0",
+    "description": "Debug adapter and language server for FFVM bytecode scripts",
+    "version": "0.2.0",
     "publisher": "ffvm",
     "engines": {
         "vscode": "^1.80.0"
     },
     "categories": [
-        "Debuggers"
+        "Debuggers",
+        "Programming Languages"
     ],
+    "main": "./extension.js",
+    "activationEvents": [
+        "onLanguage:ffvm"
+    ],
+    "dependencies": {
+        "vscode-languageclient": "^9.0.1"
+    },
     "contributes": {
         "debuggers": [
             {
