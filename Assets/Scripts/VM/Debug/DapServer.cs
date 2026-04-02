@@ -43,7 +43,11 @@ namespace FFVM.Debug
         // variablesReference 1000+ = struct expansion (1000 + index in _structExpansions)
         private List<(string[] fieldNames, Number[] fieldValues)> _structExpansions;
 
-        /// <summary>Max ticks before timeout during continue (safety guard).</summary>
+        /// <summary>
+        /// Maximum number of ticks to execute during a single "continue" request before timing out.
+        /// If the VM does not hit a breakpoint or complete within this many ticks, a "terminated"
+        /// event is sent. Default: 100000. Increase for scripts with long-running loops or waits.
+        /// </summary>
         public int MaxContinueTicks = 100000;
 
         public DapServer(Stream input, Stream output)
