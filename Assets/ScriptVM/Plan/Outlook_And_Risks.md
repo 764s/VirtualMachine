@@ -69,12 +69,23 @@
 | **FIX1** | Fix64 模式 (`USE_FIXPOINT`) 独立构建验证 | 正式测试前 | [§11.2 T5](../VM_Summary.md#112-测试缺口) |
 | **DM1** | VM 编排表现脚本（双轨模式：部分实例不参与快照） | 需要复杂镜头/特效序列时 | [§3.4](../VM_Summary.md#34-全程-fix64表现走-syscall) |
 
-### 2.5 脚本调试（DBG 系列 — 预计大块工作量）
+### 2.5 脚本调试（DBG 系列）
 
 > 来源：[§六 决策妥协表](../VM_Summary.md#六决策妥协表为什么当前这样将来如何补全) "无调试符号 / 源码映射"
 >
-> 脚本调试是编辑器阶段的核心开发体验能力，涉及编译器、运行时、编辑器三层改动，
-> 工作量预计为一个独立的大步骤（与步骤 8/9 同级）。
+> 脚本调试是编辑器阶段的核心开发体验能力，涉及编译器、运行时、外部工具三层改动。
+
+#### 设计方向确认
+
+经讨论确定以下方向：
+
+1. **真实宿主断点**：脚本断点触发宿主（C#）的真实断点（`System.Diagnostics.Debugger.Break()` 或条件断点），
+   调试体验与 C# 原生调试一致，只是通过 Source Map / Symbol Table 将视角包装为脚本级别。
+   由于是真实断点，整个进程冻结，**不存在多实例调度问题**。
+2. **禁止调试时修改**：调试暂停期间禁止修改脚本源码（防止 Source Map 失效），可通过编辑器标志控制。
+3. **外部工具支持（DAP + LSP）**：
+   - 调试通过 **DAP（Debug Adapter Protocol）** 接入外部 IDE（VS Code 等），无需自研调试 UI。
+   - 语言智能通过 **LSP（Language Server Protocol）** 实现（语法高亮、补全、实时报错、符号分析），见 §2.6。
 
 #### 子项
 
@@ -82,12 +93,14 @@
 |----|------|------|--------|------|
 | **DBG1** | 源码映射表（Source Map） | 编译器 | 中 | 编译器追踪每条 emit 指令对应的源码行列号，生成 `IP → (line, col)` 映射表，存入 `VMProgram` |
 | **DBG2** | 符号表（Symbol Table） | 编译器 | 中 | 记录每个作用域中变量名 → 寄存器槽位的映射（含生命周期范围），struct 字段名也需映射 |
-| **DBG3** | 断点机制（Breakpoint） | 运行时 | 中 | 在指定源码行设置断点 → 通过 Source Map 转换为 IP → 运行时 `Tick` 循环检测命中并暂停 |
-| **DBG4** | 单步执行（Step Over / Into / Out） | 运行时 | 高 | 基于 Source Map 的行级单步；Step Into 需感知 CALL 指令；Step Out 需感知 RET_FUNC / RETURN |
-| **DBG5** | 变量查看（Variable Inspection） | 运行时 | 低 | 根据 Symbol Table 读取当前帧的寄存器值，映射为变量名 + 可读值（含 struct 字段展开） |
+| **DBG3** | 宿主断点桥接（Host Breakpoint Bridge） | 运行时 | 低 | Source Map 查表：当前 IP 命中断点行时调用 `Debugger.Break()`，触发宿主真实断点 |
+| **DBG4** | 单步映射（Step Mapping） | 运行时 | 中 | 基于 Source Map 的行级单步标记：Step Over = 下一行 IP 设临时断点；Step Into/Out 感知 CALL / RET_FUNC |
+| **DBG5** | 变量查看适配器（Variable Display Adapter） | 运行时 | 低 | 根据 Symbol Table 读取当前帧的寄存器值，映射为变量名 + 可读值（含 struct 字段展开） |
 | **DBG6** | 调用栈查看（Call Stack Inspection） | 运行时 | 低 | 读取 CallStack 各帧的函数名 + 当前 IP → 通过 Source Map 映射为源码位置 |
-| **DBG7** | 编辑器调试 UI | 编辑器 | 高 | 断点面板、变量面板、调用栈面板、源码行高亮、调试工具栏（Continue/Step/Stop） |
-| **DBG8** | 调试协议（Debug Protocol） | 接口 | 中 | 编辑器 ↔ VM 运行时之间的命令/事件协议（SetBreakpoint, Continue, StepOver, Paused, VariableList 等） |
+| **DBG7** | DAP 适配器（Debug Adapter Protocol） | 接口 | 中 | 实现 DAP 协议，将 DBG3-DBG6 能力暴露给外部 IDE（VS Code 等），无需自研调试 UI |
+
+> **注**：原 DBG7（编辑器调试 UI）和 DBG8（自研调试协议）合并为新 DBG7（DAP 适配器），
+> 调试 UI 由外部 IDE 提供，不再自研。编号从 8 项缩减为 7 项。
 
 #### 前置任务与依赖关系
 
@@ -99,26 +112,75 @@ DBG1（源码映射表）                ← 基础设施，所有调试功能�
   │
   ├→ DBG2（符号表）               ← DBG5 变量查看的前提
   │
-  ├→ DBG3（断点机制）             ← 核心调试能力
+  ├→ DBG3（宿主断点桥接）         ← 核心调试能力（实现极简：IP 命中 → Debugger.Break()）
   │    │
-  │    └→ DBG4（单步执行）        ← 依赖断点机制 + Source Map
+  │    └→ DBG4（单步映射）        ← 依赖断点桥接 + Source Map
   │
-  ├→ DBG5（变量查看）             ← 依赖 DBG2
+  ├→ DBG5（变量查看适配器）       ← 依赖 DBG2
   │
   └→ DBG6（调用栈查看）           ← 依赖函数表 + Source Map
         │
         ↓
-DBG8（调试协议）                  ← DBG3-DBG6 的统一接口封装
-  │
-  ↓
-DBG7（编辑器调试 UI）             ← 最终用户界面，依赖 Step 10 编辑器基础
+DBG7（DAP 适配器）                ← DBG3-DBG6 的 DAP 协议封装 → 接入外部 IDE
 ```
 
 #### 建议实施策略
 
 1. **第一阶段（编译器侧，可与 F4 合并）**：DBG1 + DBG2。在 F4 实施寄存器生命周期分析时，顺带让编译器 emit 源码映射表和符号表。边际排期极低。
-2. **第二阶段（运行时侧）**：DBG3 + DBG5 + DBG6。断点 + 变量查看 + 调用栈查看。这是核心调试能力，可在 Step 10 编辑器之前先以测试/命令行方式验证。
-3. **第三阶段（完整调试）**：DBG4 + DBG8 + DBG7。单步执行 + 调试协议 + 编辑器 UI。依赖 Step 10 编辑器至少有基础框架。
+2. **第二阶段（运行时侧）**：DBG3 + DBG5 + DBG6。宿主断点桥接 + 变量查看 + 调用栈查看。由于采用真实断点方案，DBG3 实现极简（几行代码），可在 Step 10 前先以测试方式验证。
+3. **第三阶段（DAP 接入）**：DBG4 + DBG7。单步映射 + DAP 适配器。DAP 适配器将 DBG3-DBG6 封装为标准协议，外部 IDE（VS Code 等）直接使用。
+
+#### 补充说明：与自研调试的对比
+
+| 维度 | 自研调试（原方案） | 真实宿主断点 + DAP（新方案） |
+|------|-------------------|---------------------------|
+| 断点机制 | VM Tick 循环检测命中 | `Debugger.Break()` 真实断点 |
+| 单步执行 | VM 层行级模拟 | 宿主断点 + Source Map 行映射 |
+| 调试 UI | 自研编辑器面板（DBG7, 高复杂度） | 外部 IDE 提供（VS Code 等） |
+| 多实例冻结 | 需自行设计冻结策略 | 真实断点冻结整个进程，天然解决 |
+| 调试时修改 | 需自行检测 | 编辑器标志禁止即可 |
+| 协议标准 | 自研（DBG8） | DAP 标准协议 |
+| 编辑器外调试 | 不支持 | 支持（任何 DAP 客户端均可） |
+
+### 2.6 语言服务（LSP 系列 — 外部 IDE 智能支持）
+
+> 来源：脚本调试讨论确认需要外部工具支持，包括语法高亮、补全、实时报错、符号分析等。
+>
+> 语言服务通过 **LSP（Language Server Protocol）** 实现，与 DAP 调试互补，
+> 共同构成外部 IDE 对脚本语言的完整支持。
+
+#### 子项
+
+| ID | 内容 | 层级 | 复杂度 | 说明 |
+|----|------|------|--------|------|
+| **LSP1** | LSP Server 核心框架 | 基础设施 | 中 | 实现 LSP 协议的 JSON-RPC 通信、生命周期管理（initialize/shutdown）、文档同步（didOpen/didChange） |
+| **LSP2** | 语法高亮（Semantic Tokens / TextMate Grammar） | 编辑器 | 低 | 为 16 个关键字 + 运算符 + 字面量 + 注释定义 token 类型；TextMate grammar（.tmLanguage）提供基础着色，Semantic Tokens 提供上下文感知着色 |
+| **LSP3** | 实时诊断（Diagnostics） | 编译器 | 中 | 增量编译 → 错误/警告实时推送（`textDocument/publishDiagnostics`）；复用 `BytecodeCompiler._errors` 列表 + Source Map 定位 |
+| **LSP4** | 符号分析（Go-to-Definition / References / Hover） | 编译器 | 中 | 基于 Symbol Table（DBG2）实现 `textDocument/definition`、`textDocument/references`、`textDocument/hover`（类型信息 + 文档） |
+| **LSP5** | 代码补全（Completion） | 编译器 | 中 | 关键字 + 作用域内变量 + 函数名 + Syscall 名 + struct 字段补全（`textDocument/completion`） |
+
+#### 前置任务与依赖关系
+
+```
+DBG1（源码映射表） + DBG2（符号表）  ← LSP3/LSP4/LSP5 的数据基础
+  │
+  ↓
+LSP1（LSP Server 核心框架）           ← 所有 LSP 功能的通信基础
+  │
+  ├→ LSP2（语法高亮）                ← 独立，仅需 token 定义
+  │
+  ├→ LSP3（实时诊断）                ← 依赖编译器增量化
+  │
+  ├→ LSP4（符号分析）                ← 依赖 DBG2 符号表
+  │
+  └→ LSP5（代码补全）                ← 依赖符号表 + SyscallTable
+```
+
+#### 建议实施策略
+
+1. **LSP2（语法高亮）** 可独立最早实施：仅需编写 TextMate grammar 文件，无需 LSP Server。
+2. **LSP1 + LSP3（核心 + 诊断）** 在 DBG1/DBG2 完成后实施：复用编译器错误列表，最快实现"实时报错"。
+3. **LSP4 + LSP5（符号 + 补全）** 随编译器数据丰富后逐步完善。
 
 ---
 
@@ -274,16 +336,17 @@ DBG7（编辑器调试 UI）             ← 最终用户界面，依赖 Step 10
 | **业务驱动** | FF1-FF5, H1, BB1, PR1, FIX1, DM1 |
 | **自然优化（随功能实现）** | O3, O4, O5, O7, FO4, FO5, FO7 |
 | **调整型优化（Benchmark 驱动）** | O1, O2, O6, O8, O9, O10, O11, O12, O13, O14, FO1, FO2, FO3, FO6, SO1 |
-| **脚本调试（大步骤）** | DBG1-DBG8 |
+| **脚本调试** | DBG1-DBG7（真实宿主断点 + DAP） |
+| **语言服务** | LSP1-LSP5（语法高亮、诊断、符号、补全） |
 | **无需消除（设计决策）** | 不支持闭包/高阶函数, 不支持结构体方法 |
 
 ### 按实施复杂度
 
 | 复杂度 | 条目 |
 |--------|------|
-| 低 | C4, G6, O1, O2, O3, O5, O7, O9, FO4, FO5, FF3, SN2, DBG5, DBG6 |
-| 中 | F4, S4, O4, O6, O10, O11, O14, FO1, FO6, FO7, FO2, FF1, FF2, FF4, FF5, SO1, SN1, H1, DBG1, DBG2, DBG3, DBG8 |
-| 高 | O8, O13, FO3, DBG4, DBG7 |
+| 低 | C4, G6, O1, O2, O3, O5, O7, O9, FO4, FO5, FF3, SN2, DBG3, DBG5, DBG6, LSP2 |
+| 中 | F4, S4, O4, O6, O10, O11, O14, FO1, FO6, FO7, FO2, FF1, FF2, FF4, FF5, SO1, SN1, H1, DBG1, DBG2, DBG4, DBG7, LSP1, LSP3, LSP4, LSP5 |
+| 高 | O8, O13, FO3 |
 
 ### 按优化类别
 
