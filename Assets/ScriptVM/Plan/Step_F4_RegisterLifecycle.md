@@ -1,7 +1,7 @@
 # F4：编译器寄存器生命周期分析 + 自然优化 + 调试 Phase 1 + 风险理想方案
 
 > **在整体计划中的位置**：本文档对应 VM_Summary.md §七 推进顺序中 Step 10 Pre 之后、Step 10（编辑器流程图投影）之前的**核心编译器升级阶段**。
-> **状态**：⏳ 待执行。
+> **状态**：✅ 已完成。361 项 Assert（112 TW + 214 Compiler + 17 Perf + 18 SkillScript）。
 > **前置**：Step 10 Pre（C4 + G6）✅ 已完成（315 项 Assert 通过）。
 > **来源**：
 > - F4：VM_Tracer_Bullet.md §十二 第 2 项"寄存器复用"
@@ -144,16 +144,16 @@ F4 的目标是引入**变量活跃范围追踪**和**寄存器复用**，使编
 
 ### 具体变更
 
-- [ ] A.1 **新增 `LiveRange` 结构**：`struct LiveRange { string Name; int Register; int DefOrder; int LastUseOrder; bool CrossesAwait; int FieldCount; }` — 记录每个变量的活跃范围
-- [ ] A.2 **新增 `AnalyzeVariableLifetimes(FuncDecl)` 方法**：遍历函数 AST 的所有语句和表达式，为每个变量记录定义点和所有使用点，标记是否跨越 `wait` / `wait_for`
-- [ ] A.3 **新增 `RegisterAllocator` 辅助类**（或内嵌逻辑）：基于活跃范围的线性扫描分配器。释放的寄存器进入 free list，后续 DeclareVar 优先从 free list 分配
-- [ ] A.4 **修改 `DeclareVar()` 方法**：从 free list 中查找合适的空闲寄存器（struct 需连续槽位），如无空闲则线性递增（保持向后兼容行为）
-- [ ] A.5 **修改 `CompileFunction()` 入口**：在编译函数体前先调用 `AnalyzeVariableLifetimes()`，生成活跃范围信息
-- [ ] A.6 **记录 `_callerWindowSize` 精确值**：追踪函数实际使用的最大寄存器编号（用于 FO6 未来使用和 FunctionEntry.LocalRegCount 精确化）
-- [ ] A.7 **测试 F4-01**：两个非重叠生命周期的变量 → 复用同一个寄存器
-- [ ] A.8 **测试 F4-02**：跨 await 变量 → 使用 local 区寄存器（不被回收）
-- [ ] A.9 **测试 F4-03**：struct 变量回收 → 连续寄存器整块释放
-- [ ] A.10 **测试 F4-04**：寄存器复用不改变执行结果（端到端正确性）
+- [x] A.1 **新增 `LiveRange` 结构**：`struct LiveRange { string Name; int Register; int DefOrder; int LastUseOrder; bool CrossesAwait; int FieldCount; }` — 记录每个变量的活跃范围
+- [x] A.2 **新增 `AnalyzeVariableLifetimes(FuncDecl)` 方法**：遍历函数 AST 的所有语句和表达式，为每个变量记录定义点和所有使用点，标记是否跨越 `wait` / `wait_for`
+- [x] A.3 **新增 `RegisterAllocator` 辅助类**（或内嵌逻辑）：基于活跃范围的线性扫描分配器。释放的寄存器进入 free list，后续 DeclareVar 优先从 free list 分配
+- [x] A.4 **修改 `DeclareVar()` 方法**：从 free list 中查找合适的空闲寄存器（struct 需连续槽位），如无空闲则线性递增（保持向后兼容行为）
+- [x] A.5 **修改 `CompileFunction()` 入口**：在编译函数体前先调用 `AnalyzeVariableLifetimes()`，生成活跃范围信息
+- [x] A.6 **记录 `_callerWindowSize` 精确值**：追踪函数实际使用的最大寄存器编号（用于 FO6 未来使用和 FunctionEntry.LocalRegCount 精确化）
+- [x] A.7 **测试 F4-01**：两个非重叠生命周期的变量 → 复用同一个寄存器
+- [x] A.8 **测试 F4-02**：跨 await 变量 → 使用 local 区寄存器（不被回收）
+- [x] A.9 **测试 F4-03**：struct 变量回收 → 连续寄存器整块释放
+- [x] A.10 **测试 F4-04**：寄存器复用不改变执行结果（端到端正确性）
 
 ### 验收标准
 
@@ -173,11 +173,11 @@ F4 的目标是引入**变量活跃范围追踪**和**寄存器复用**，使编
 
 ### 具体变更
 
-- [ ] B.1 **新增 `TryFoldConstant(ASTNode expr, out Number value)` 方法**：递归检测纯常量表达式（整数/浮点字面量 + 四则运算 + 比较 + 布尔运算），返回折叠后的值
-- [ ] B.2 **修改 `CompileExpr()` 入口**：在处理二元/一元表达式前，先调用 `TryFoldConstant()`。如成功折叠，直接 `LOAD_CONST` 到 temp 寄存器（或 dest-reg）
-- [ ] B.3 **测试 O5-01**：`var x = 2 + 3` → 只生成 1 条 LOAD_CONST（值 = 5），无 ADD 指令
-- [ ] B.4 **测试 O5-02**：`var x = 10 > 5` → 只生成 1 条 LOAD_CONST（值 = 1）
-- [ ] B.5 **测试 O5-03**：`var x = a + 3`（含变量引用）→ 不折叠，正常 emit
+- [x] B.1 **新增 `TryFoldConstant(ASTNode expr, out Number value)` 方法**：递归检测纯常量表达式（整数/浮点字面量 + 四则运算 + 比较 + 布尔运算），返回折叠后的值
+- [x] B.2 **修改 `CompileExpr()` 入口**：在处理二元/一元表达式前，先调用 `TryFoldConstant()`。如成功折叠，直接 `LOAD_CONST` 到 temp 寄存器（或 dest-reg）
+- [x] B.3 **测试 O5-01**：`var x = 2 + 3` → 只生成 1 条 LOAD_CONST（值 = 5），无 ADD 指令
+- [x] B.4 **测试 O5-02**：`var x = 10 > 5` → 只生成 1 条 LOAD_CONST（值 = 1）
+- [x] B.5 **测试 O5-03**：`var x = a + 3`（含变量引用）→ 不折叠，正常 emit
 
 ### 验收标准
 
@@ -213,16 +213,16 @@ O7 是 O4 的延伸：`var x = SomeSyscall(args)` 当前生成 `SYSCALL` → `MO
 
 ### 具体变更
 
-- [ ] C.1 **修改 `CompileExpr()` 签名**：增加 `int destReg = -1` 参数
-- [ ] C.2 **修改 `BinaryExpr` 分支**：如 `destReg >= 0`，用 destReg 替代 `AllocTemp()` 作为 emit 目标
-- [ ] C.3 **修改 `UnaryExpr` 分支**：同上
-- [ ] C.4 **修改 `CompileVarDecl()`**：`CompileExpr(init, destReg: varReg)`，省去后续 MOVE
-- [ ] C.5 **修改 `CompileAssign()`**：传入 `destReg = targetReg`
-- [ ] C.6 **O7 — 修改 Syscall 返回值处理**：SYSCALL 后直接 `MOVE r0 → destReg`（如 destReg 有效），而非 `MOVE r0 → temp` → `MOVE temp → target`
-- [ ] C.7 **测试 O4-01**：`var x = a + b` → 生成 `ADD varX, regA, regB`（无额外 MOVE）
-- [ ] C.8 **测试 O4-02**：`x = a * b` → 结果直接写入 x 的寄存器
-- [ ] C.9 **测试 O7-01**：`var x = SomeSyscall(args)` → SYSCALL 后只有 1 条 MOVE（r0 → varX）
-- [ ] C.10 **正确性回归**：所有 315 项现有测试无回归
+- [x] C.1 **修改 `CompileExpr()` 签名**：增加 `int destReg = -1` 参数
+- [x] C.2 **修改 `BinaryExpr` 分支**：如 `destReg >= 0`，用 destReg 替代 `AllocTemp()` 作为 emit 目标
+- [x] C.3 **修改 `UnaryExpr` 分支**：同上
+- [x] C.4 **修改 `CompileVarDecl()`**：`CompileExpr(init, destReg: varReg)`，省去后续 MOVE
+- [x] C.5 **修改 `CompileAssign()`**：传入 `destReg = targetReg`
+- [x] C.6 **O7 — 修改 Syscall 返回值处理**：SYSCALL 后直接 `MOVE r0 → destReg`（如 destReg 有效），而非 `MOVE r0 → temp` → `MOVE temp → target`
+- [x] C.7 **测试 O4-01**：`var x = a + b` → 生成 `ADD varX, regA, regB`（无额外 MOVE）
+- [x] C.8 **测试 O4-02**：`x = a * b` → 结果直接写入 x 的寄存器
+- [x] C.9 **测试 O7-01**：`var x = SomeSyscall(args)` → SYSCALL 后只有 1 条 MOVE（r0 → varX）
+- [x] C.10 **正确性回归**：所有 315 项现有测试无回归
 
 ### 验收标准
 
@@ -248,13 +248,13 @@ O7 是 O4 的延伸：`var x = SomeSyscall(args)` 当前生成 `SYSCALL` → `MO
 
 ### 具体变更
 
-- [ ] D.1 **BytecodeCompiler — 新增 `_sourceLines` 列表**：`List<int>`，与 `_instructions` 平行，每次 `Emit()` 时追加当前行号
-- [ ] D.2 **BytecodeCompiler — 追踪当前行号**：新增 `_currentLine` 字段，在编译每条语句时从 AST 节点的 `Line` 属性更新
-- [ ] D.3 **VMProgram — 新增 `SourceMap` 字段**：`int[] SourceMap`（可选，调试构建时填充）
-- [ ] D.4 **VMProgram — 构造函数扩展**：增加可选 `int[] sourceMap` 参数
-- [ ] D.5 **BytecodeCompiler.Compile() — 输出 Source Map**：在构造 VMProgram 时传入 `_sourceLines.ToArray()`
-- [ ] D.6 **测试 DBG1_T01**：编译已知脚本（多行 var + syscall + wait + if）→ 断言每个关键 IP（LOAD_CONST / SYSCALL / WAIT）的 lineNumber 与源码一致
-- [ ] D.7 **测试 DBG1_T02**：Source Map 长度 == Instructions 长度
+- [x] D.1 **BytecodeCompiler — 新增 `_sourceLines` 列表**：`List<int>`，与 `_instructions` 平行，每次 `Emit()` 时追加当前行号
+- [x] D.2 **BytecodeCompiler — 追踪当前行号**：新增 `_currentLine` 字段，在编译每条语句时从 AST 节点的 `Line` 属性更新
+- [x] D.3 **VMProgram — 新增 `SourceMap` 字段**：`int[] SourceMap`（可选，调试构建时填充）
+- [x] D.4 **VMProgram — 构造函数扩展**：增加可选 `int[] sourceMap` 参数
+- [x] D.5 **BytecodeCompiler.Compile() — 输出 Source Map**：在构造 VMProgram 时传入 `_sourceLines.ToArray()`
+- [x] D.6 **测试 DBG1_T01**：编译已知脚本（多行 var + syscall + wait + if）→ 断言每个关键 IP（LOAD_CONST / SYSCALL / WAIT）的 lineNumber 与源码一致
+- [x] D.7 **测试 DBG1_T02**：Source Map 长度 == Instructions 长度
 
 ### 验收标准
 
@@ -279,13 +279,13 @@ Phase 1 不含生命周期范围（D-06 决策：与 F4 解耦，分两阶段）
 
 ### 具体变更
 
-- [ ] E.1 **新增 `SymbolEntry` 结构**：在 VMProgram.cs 或独立文件中定义
-- [ ] E.2 **BytecodeCompiler — 收集符号信息**：每次 `DeclareVar()` 时记录 `SymbolEntry`（名称、寄存器、struct 字段信息）
-- [ ] E.3 **VMProgram — 新增 `SymbolTable` 字段**：`SymbolEntry[] SymbolTable`（可选）
-- [ ] E.4 **VMProgram — 构造函数扩展**：增加可选 `SymbolEntry[] symbolTable` 参数
-- [ ] E.5 **BytecodeCompiler.Compile() — 输出符号表**：在构造 VMProgram 时传入收集的符号列表
-- [ ] E.6 **测试 DBG2_T01**：编译含 `var a = 1; var b = 2;` 的脚本 → 符号表有 2 项，名称和寄存器正确
-- [ ] E.7 **测试 DBG2_T02**：编译含 struct 变量的脚本 → 符号表记录 struct 字段名和起始寄存器
+- [x] E.1 **新增 `SymbolEntry` 结构**：在 VMProgram.cs 或独立文件中定义
+- [x] E.2 **BytecodeCompiler — 收集符号信息**：每次 `DeclareVar()` 时记录 `SymbolEntry`（名称、寄存器、struct 字段信息）
+- [x] E.3 **VMProgram — 新增 `SymbolTable` 字段**：`SymbolEntry[] SymbolTable`（可选）
+- [x] E.4 **VMProgram — 构造函数扩展**：增加可选 `SymbolEntry[] symbolTable` 参数
+- [x] E.5 **BytecodeCompiler.Compile() — 输出符号表**：在构造 VMProgram 时传入收集的符号列表
+- [x] E.6 **测试 DBG2_T01**：编译含 `var a = 1; var b = 2;` 的脚本 → 符号表有 2 项，名称和寄存器正确
+- [x] E.7 **测试 DBG2_T02**：编译含 struct 变量的脚本 → 符号表记录 struct 字段名和起始寄存器
 
 ### 验收标准
 
@@ -304,9 +304,9 @@ Phase 1 不含生命周期范围（D-06 决策：与 F4 解耦，分两阶段）
 
 ### 具体变更
 
-- [ ] F.1 **修改回填逻辑**：当 `_pendingCalls.Count > 50` 时，先构建 `Dictionary<string, List<int>>` 索引（functionName → instructionIPs），然后按 `_functionTable` 逐函数回填，避免线性扫描
-- [ ] F.2 **测试 R7-01**：100 个函数（含大量前向引用）→ 编译成功，回填正确
-- [ ] F.3 **测试 R7-02**：<50 个函数 → 走原有 List 路径，行为不变
+- [x] F.1 **修改回填逻辑**：当 `_pendingCalls.Count > 50` 时，先构建 `Dictionary<string, List<int>>` 索引（functionName → instructionIPs），然后按 `_functionTable` 逐函数回填，避免线性扫描
+- [x] F.2 **测试 R7-01**：100 个函数（含大量前向引用）→ 编译成功，回填正确
+- [x] F.3 **测试 R7-02**：<50 个函数 → 走原有 List 路径，行为不变
 
 ### 验收标准
 
@@ -325,10 +325,10 @@ G6 已禁止 Cleanup 块内 `wait`/`wait_for`。R8 进一步禁止 Cleanup 块�
 
 ### 具体变更
 
-- [ ] G.1 **修改 `CompileCallExpr()` / 函数调用编译路径**：在 emit `CALL` 前检查 `_inCleanupBlock`，若 `true` 则 `_errors.Add("Cannot call functions inside a cleanup block (defer/using)")` 并跳过 emit
-- [ ] G.2 **测试 R8-01**：`defer { someFunc() }` → 编译报错
-- [ ] G.3 **测试 R8-02**：正常函数体内的 `someFunc()` → 编译成功
-- [ ] G.4 **测试 R8-03**：`using SomeSyscall(args) { someFunc() }` → 编译成功（using body 不是 cleanup 块）
+- [x] G.1 **修改 `CompileCallExpr()` / 函数调用编译路径**：在 emit `CALL` 前检查 `_inCleanupBlock`，若 `true` 则 `_errors.Add("Cannot call functions inside a cleanup block (defer/using)")` 并跳过 emit
+- [x] G.2 **测试 R8-01**：`defer { someFunc() }` → 编译报错
+- [x] G.3 **测试 R8-02**：正常函数体内的 `someFunc()` → 编译成功
+- [x] G.4 **测试 R8-03**：`using SomeSyscall(args) { someFunc() }` → 编译成功（using body 不是 cleanup 块）
 
 ### 验收标准
 
@@ -348,10 +348,10 @@ G6 已禁止 Cleanup 块内 `wait`/`wait_for`。R8 进一步禁止 Cleanup 块�
 
 ### 具体变更
 
-- [ ] H.1 **FO4 — 修改函数调用参数准备逻辑**：emit CALL 前，检查第 i 个参数值是否已在 `r[i]`（考虑 RegisterBase 偏移）。如已就位，跳过该 MOVE
-- [ ] H.2 **FO5 — 修改函数调用返回值处理**：如 `destReg >= 0` 且 destReg != r0，emit 单条 `MOVE destReg, r0`。如 destReg == r0，零指令
-- [ ] H.3 **测试 FO4-01**：`func f(a) { ... } f(x)` 当 x 已在 r0 → 无参数 MOVE
-- [ ] H.4 **测试 FO5-01**：`var result = f(x)` → 返回值从 r0 直接 MOVE 到 result 寄存器（1 条 MOVE，非 2 条）
+- [x] H.1 **FO4 — 修改函数调用参数准备逻辑**：emit CALL 前，检查第 i 个参数值是否已在 `r[i]`（考虑 RegisterBase 偏移）。如已就位，跳过该 MOVE
+- [x] H.2 **FO5 — 修改函数调用返回值处理**：如 `destReg >= 0` 且 destReg != r0，emit 单条 `MOVE destReg, r0`。如 destReg == r0，零指令
+- [x] H.3 **测试 FO4-01**：`func f(a) { ... } f(x)` 当 x 已在 r0 → 无参数 MOVE
+- [x] H.4 **测试 FO5-01**：`var result = f(x)` → 返回值从 r0 直接 MOVE 到 result 寄存器（1 条 MOVE，非 2 条）
 
 ### 验收标准
 
@@ -370,12 +370,12 @@ G6 已禁止 Cleanup 块内 `wait`/`wait_for`。R8 进一步禁止 Cleanup 块�
 
 ### 具体变更
 
-- [ ] I.1 **新增 `AnalyzeCallDepth()` 方法**：遍历 `_functionTable` 和 `_funcDecls`，构建调用图，计算从 entry 函数出发的最大深度
-- [ ] I.2 **在 `Compile()` 末尾调用 `AnalyzeCallDepth()`**：若 max_depth > MaxCallDepth → `_errors.Add(...)`
-- [ ] I.3 **在 `FunctionEntry` 中记录最大深度**：或在 VMProgram 中记录全局 `MaxObservedCallDepth`
-- [ ] I.4 **测试 FO7-01**：调用深度 = 3（a→b→c）→ 编译成功，记录 depth = 3
-- [ ] I.5 **测试 FO7-02**：调用深度 > MaxCallDepth（构造深链）→ 编译报错
-- [ ] I.6 **测试 FO7-03**：递归调用 → 编译器检测环路，报告潜在无限递归（或标记为动态检测）
+- [x] I.1 **新增 `AnalyzeCallDepth()` 方法**：遍历 `_functionTable` 和 `_funcDecls`，构建调用图，计算从 entry 函数出发的最大深度
+- [x] I.2 **在 `Compile()` 末尾调用 `AnalyzeCallDepth()`**：若 max_depth > MaxCallDepth → `_errors.Add(...)`
+- [x] I.3 **在 `FunctionEntry` 中记录最大深度**：或在 VMProgram 中记录全局 `MaxObservedCallDepth`
+- [x] I.4 **测试 FO7-01**：调用深度 = 3（a→b→c）→ 编译成功，记录 depth = 3
+- [x] I.5 **测试 FO7-02**：调用深度 > MaxCallDepth（构造深链）→ 编译报错
+- [x] I.6 **测试 FO7-03**：递归调用 → 编译器检测环路，报告潜在无限递归（或标记为动态检测）
 
 ### 验收标准
 
@@ -394,9 +394,9 @@ G6 已禁止 Cleanup 块内 `wait`/`wait_for`。R8 进一步禁止 Cleanup 块�
 
 ### 具体变更
 
-- [ ] J.1 **审查 `VMWorld.ExecuteInstance()` 热路径**：识别可安全移除的 IP 边界检查
-- [ ] J.2 **移除或合并冗余检查**：保留必要的安全检查（如非法跳转保护），消除每条指令执行前的冗余检查
-- [ ] J.3 **测试**：性能基准 B01-B05 仍然通过，所有行为正确
+- [x] J.1 **审查 `VMWorld.ExecuteInstance()` 热路径**：识别可安全移除的 IP 边界检查
+- [x] J.2 **移除或合并冗余检查**：保留必要的安全检查（如非法跳转保护），消除每条指令执行前的冗余检查
+- [x] J.3 **测试**：性能基准 B01-B05 仍然通过，所有行为正确
 
 ### 验收标准
 
@@ -414,10 +414,10 @@ G6 已禁止 Cleanup 块内 `wait`/`wait_for`。R8 进一步禁止 Cleanup 块�
 
 ### 具体变更
 
-- [ ] K.1 **运行全部测试**：确认所有现有 315+ 项 Assert 无回归
-- [ ] K.2 **运行 B01-B05 性能基准**：记录优化前后的 ratio 变化
-- [ ] K.3 **新增测试统计**：记录本步骤新增的测试数量（F4 / O5 / O4 / DBG1 / DBG2 / R7 / R8 / FO4 / FO5 / FO7 / O3 各自的测试）
-- [ ] K.4 **生成 benchmark diff**：与 Step 10 Pre 的基准数据对比
+- [x] K.1 **运行全部测试**：确认所有现有 315+ 项 Assert 无回归
+- [x] K.2 **运行 B01-B05 性能基准**：记录优化前后的 ratio 变化
+- [x] K.3 **新增测试统计**：记录本步骤新增的测试数量（F4 / O5 / O4 / DBG1 / DBG2 / R7 / R8 / FO4 / FO5 / FO7 / O3 各自的测试）
+- [x] K.4 **生成 benchmark diff**：与 Step 10 Pre 的基准数据对比
 
 ### 验收标准
 
@@ -431,13 +431,13 @@ G6 已禁止 Cleanup 块内 `wait`/`wait_for`。R8 进一步禁止 Cleanup 块�
 
 ### 具体变更
 
-- [ ] L.1 **VM_Summary.md §七 推进顺序**：标记 F4 + 自然优化 + 调试 Phase 1 ✅，更新 Assert 总数
-- [ ] L.2 **VM_Summary.md §5.1 已完成**：更新编译器描述（寄存器生命周期分析 + dest-reg hint + 常量折叠 + Source Map + 符号表）
-- [ ] L.3 **VM_Summary.md §5.2 未完成**：标记 F4 ✅
-- [ ] L.4 **Outlook_And_Risks.md §一 确定执行**：更新 F4 状态为 ✅
-- [ ] L.5 **Outlook_And_Risks.md §三.1 自然优化**：标记 O3/O4/O5/O7/FO4/FO5/FO7 ✅
-- [ ] L.6 **Outlook_And_Risks.md §四 风险**：标记 R7 ✅ 理想方案已实施、R8 ✅ 理想方案已实施
-- [ ] L.7 **本文件**：更新各子任务状态为 ✅，记录最终测试数量和性能基准结果
+- [x] L.1 **VM_Summary.md §七 推进顺序**：标记 F4 + 自然优化 + 调试 Phase 1 ✅，更新 Assert 总数
+- [x] L.2 **VM_Summary.md §5.1 已完成**：更新编译器描述（寄存器生命周期分析 + dest-reg hint + 常量折叠 + Source Map + 符号表）
+- [x] L.3 **VM_Summary.md §5.2 未完成**：标记 F4 ✅
+- [x] L.4 **Outlook_And_Risks.md §一 确定执行**：更新 F4 状态为 ✅
+- [x] L.5 **Outlook_And_Risks.md §三.1 自然优化**：标记 O3/O4/O5/O7/FO4/FO5/FO7 ✅
+- [x] L.6 **Outlook_And_Risks.md §四 风险**：标记 R7 ✅ 理想方案已实施、R8 ✅ 理想方案已实施
+- [x] L.7 **本文件**：更新各子任务状态为 ✅，记录最终测试数量和性能基准结果
 
 ---
 
