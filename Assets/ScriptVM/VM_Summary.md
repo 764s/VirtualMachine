@@ -596,8 +596,15 @@ skill TracerBullet
         S1. Parser struct 声明 + 字段类型解析                              ✅
         S2. 编译器 struct → 连续寄存器槽位映射                            ✅
         S3. 结构体赋值 = 寄存器区块 COPY 验证                            ✅
-      展望项（最晚步骤 10 前，如需编辑器展示结构体节点）：
-        S4. 结构体作为函数参数 / 返回值的寄存器传递                       ⏳ 展望
+      功能展望（3 项 S4/SN1/SN2，暂无排期）：
+        结构体函数参数/返回值传递（S4，最晚步骤 10 前如需编辑器展示）、
+        嵌套结构体递归拍平（SN1）、结构体字面量构造语法（SN2）。
+      性能优化展望（1 项 SO1，暂无排期，benchmark 驱动）：
+        COPY_BLOCK OpCode 替代 N 条 MOVE 的结构体赋值。
+      已识别风险（4 项 SR1-SR4）：
+        寄存器快速耗尽（SR1, local 区 32 槽限制）、大 struct 赋值性能退化（SR2, N 条 MOVE）、
+        struct 与函数调用窗口交互（SR3, S4 展望时评估）、字段/方法语法歧义（SR4, 设计上不支持方法调用）。
+        详见 → [Step9_StructFlatten.md §四 风险分析](Plan/Step9_StructFlatten.md#四风险分析)
       ↓
   ┌────────────────────────────────────────────────────────┐
   │  Handle64 批处理协议（展望项）                       │
@@ -676,9 +683,10 @@ skill TracerBullet
 
 > 通用 VM 优化详见 [VM_Optimization_Outlook.md](Refs/VM_Optimization_Outlook.md)
 > 函数调用路径专项优化详见 [Step8_FunctionCall.md §七](Plan/Step8_FunctionCall.md#七性能优化展望)
+> 结构体路径潜在优化详见 [Step9_StructFlatten.md §七](Plan/Step9_StructFlatten.md#七性能优化展望)
 > 全部展望与风险的统一索引详见 [Plan/Outlook_And_Risks.md](Plan/Outlook_And_Risks.md)
 
-当前编译脚本性能基准为 5-7x（vs 等价 C#），手写字节码基准为 1.7x。在不改变功能语义的前提下，已识别 14 项通用优化方向 + 7 项函数调用专项优化方向：
+当前编译脚本性能基准为 5-7x（vs 等价 C#），手写字节码基准为 1.7x。在不改变功能语义的前提下，已识别 14 项通用优化方向 + 7 项函数调用专项优化方向 + 1 项结构体专项优化方向：
 
 **通用优化（O1-O14）**：
 
@@ -697,6 +705,12 @@ skill TracerBullet
 | 🟢 高 | FO4 参数就位检测、FO5 返回值直达 | 每次调用减少 1-2 条 MOVE | 低 |
 | 🟡 中 | FO1 叶函数优化、FO6 自适应窗口、FO7 静态深度分析 | 叶函数开销 -40-60%；嵌套深度从 ~3 扩展到 ~6 | 低-中 |
 | 🔵 低 | FO2 尾调用消除、FO3 小函数内联 | 尾调用不增长调用深度；小函数 -80% 指令 | 中-高 |
+
+**结构体专项优化（SO1）**：
+
+| 优先级 | 优化 | 预期收益 | 复杂度 |
+|--------|------|---------|--------|
+| 🟡 中 | SO1 COPY_BLOCK OpCode | 大 struct 赋值指令数从 N 降至 1 | 中 |
 
 **预估目标**：Tier 1 + Tier 2 完成后，编译脚本基准从 5-7x 降至 **2-3x**，手写字节码从 1.7x 降至 **~1.2x**。
 
