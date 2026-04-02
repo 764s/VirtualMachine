@@ -93,10 +93,10 @@
 |----|------|------|--------|------|
 | **DBG1** | 源码映射表（Source Map） | 编译器 | 中 | 编译器追踪每条 emit 指令对应的源码行号，生成 `IP → line` 映射表，存入 `VMProgram.SourceMap` | ✅ 已完成 |
 | **DBG2** | 符号表（Symbol Table） | 编译器 | 中 | 记录每个变量名 → 寄存器槽位 + struct 字段信息，存入 `VMProgram.SymbolTable` | ✅ Phase 1 完成 |
-| **DBG3** | 宿主断点桥接（Host Breakpoint Bridge） | 运行时 | 低 | Source Map 查表：当前 IP 命中断点行时调用 `Debugger.Break()`，触发宿主真实断点 |
+| **DBG3** | 宿主断点桥接（Host Breakpoint Bridge） | 运行时 | 低 | ScriptDebugger：行号断点集合 + 回调触发，VMWorld.ExecuteInstance 中 null-check 防御式集成 | ✅ 已完成 |
 | **DBG4** | 单步映射（Step Mapping） | 运行时 | 中 | 基于 Source Map 的行级单步标记：Step Over = 下一行 IP 设临时断点；Step Into/Out 感知 CALL / RET_FUNC |
-| **DBG5** | 变量查看适配器（Variable Display Adapter） | 运行时 | 低 | 根据 Symbol Table 读取当前帧的寄存器值，映射为变量名 + 可读值（含 struct 字段展开） |
-| **DBG6** | 调用栈查看（Call Stack Inspection） | 运行时 | 低 | 读取 CallStack 各帧的函数名 + 当前 IP → 通过 Source Map 映射为源码位置 |
+| **DBG5** | 变量查看适配器（Variable Display Adapter） | 运行时 | 低 | ScriptDebugger.GetVariables()：根据 SymbolTable + RegisterBase + ScopeFunctionName 返回当前作用域变量 | ✅ 已完成 |
+| **DBG6** | 调用栈查看（Call Stack Inspection） | 运行时 | 低 | ScriptDebugger.GetCallStack()：遍历 CallStack 帧 + SourceMap 映射 → 函数名+行号列表 | ✅ 已完成 |
 | **DBG7** | DAP 适配器（Debug Adapter Protocol） | 接口 | 中 | 实现 DAP 协议，将 DBG3-DBG6 能力暴露给外部 IDE（VS Code 等），无需自研调试 UI |
 
 > **注**：原 DBG7（编辑器调试 UI）和 DBG8（自研调试协议）合并为新 DBG7（DAP 适配器），
@@ -657,11 +657,12 @@ Gate 3: Unity Editor 内嵌 DAP（可选）             ← DBG7 Phase C
         风险应对（R5 理想方案）：≤4 字段直传，>4 编译报错
     FF5. 非 entry 函数 defer 完整支持
                                     ↓
-─────────────── 调试 Phase 2（Gate 0 命令行调试）──────────────
-    DBG3. 宿主断点桥接（5 行代码）
-    DBG5. 变量查看适配器
-    DBG6. 调用栈查看
-    → Gate 0 验收：StandaloneRunner 命令行断点 + 变量 + 调用栈
+─────────────── 调试 Phase 2（Gate 0 命令行调试）✅ ─────────────
+    DBG3. 宿主断点桥接（ScriptDebugger 回调模式）        ✅
+    DBG5. 变量查看适配器                                  ✅
+    DBG6. 调用栈查看                                      ✅
+    → Gate 0 验收：51 项 Assert 通过（断点 + 变量 + 调用栈）
+    详见 → Step_Debug_Phase2.md
                                     ↓
 ─────────────── GR1 理想方案：CI 构建矩阵 ────────────────────
     FIX1. USE_FIXPOINT 独立构建验证

@@ -1,7 +1,7 @@
 # 调试 Phase 2：运行时调试基础能力（DBG3 + DBG5 + DBG6）
 
 > **在整体计划中的位置**：本文档对应 VM_Summary.md §七 推进顺序中 F4 之后的**脚本调试 · Phase 2**。
-> **状态**：🔧 进行中
+> **状态**：✅ 已完成。412 项 Assert（112 TW + 214 Compiler + 17 Perf + 18 SkillScript + 51 Debug）。
 > **前置**：F4 ✅ 已完成（361 项 Assert 通过）。DBG1（SourceMap）✅、DBG2 Phase 1（SymbolTable）✅ 已就位。
 > **来源**：
 > - [Outlook_And_Risks.md §二.5](Outlook_And_Risks.md#25-脚本调试dbg-系列) — DBG3/DBG5/DBG6 定义
@@ -56,57 +56,56 @@
 
 ### A. DBG3 — 宿主断点桥接（Host Breakpoint Bridge）
 
-- [ ] **A1**. 创建 `Assets/Scripts/VM/Core/ScriptDebugger.cs`
-  - 整体用 `#if FFVM_SCRIPT_DEBUG` 包裹（或提供 stub）
+- [x] **A1**. 创建 `Assets/Scripts/VM/Core/ScriptDebugger.cs`
   - `HashSet<int> BreakpointLines` — 行号断点集合
   - `Action<int, int, int> OnBreakpointHit` — 回调 `(instanceId, ip, line)`
   - `void AddBreakpoint(int line)` / `void RemoveBreakpoint(int line)` / `void ClearBreakpoints()`
-  - `bool IsBreakpointLine(int line)` — 快速查询
-- [ ] **A2**. `VMWorld` 增加 `public ScriptDebugger Debugger` 字段（可选，null = 不调试）
-- [ ] **A3**. `VMWorld.ExecuteInstance` 中指令执行前插入断点检查
-  - 仅在 `Debugger != null` 时检查
+  - `bool CheckBreakpoint(int instanceId, int ip, int[] sourceMap)` — 查询+触发
+- [x] **A2**. `VMWorld` 增加 `public ScriptDebugger Debugger` 字段（可选，null = 不调试）
+- [x] **A3**. `VMWorld.ExecuteInstance` 中指令执行前插入断点检查
+  - 仅在 `Debugger != null` 时检查（null-check + srcMap cache 优化）
   - 通过 `SourceMap[inst.IP]` 获取当前行号
   - 行号命中 → 调用 `Debugger.OnBreakpointHit(inst.InstanceId, inst.IP, line)`
-  - 避免同一行连续重复触发（记录 `_lastBreakLine`）
-- [ ] **A4**. 测试：编译脚本 → 设断点行 → 执行 → 验证回调触发（行号、IP 正确）
-- [ ] **A5**. 测试：多断点 → 验证每个断点均触发
-- [ ] **A6**. 测试：无断点 → 验证执行不受影响，正常完成
-- [ ] **A7**. 测试：Debugger == null → 验证零开销，行为与未修改前一致
+  - 同一行去重（`_lastHitLine`），每 Tick 重置
+- [x] **A4**. 测试：编译脚本 → 设断点行 → 执行 → 验证回调触发（行号、IP 正确）— DBG3-01
+- [x] **A5**. 测试：多断点 → 验证每个断点均触发 — DBG3-02
+- [x] **A6**. 测试：无断点 → 验证执行不受影响，正常完成 — DBG3-03
+- [x] **A7**. 测试：Debugger == null → 验证零开销，行为与未修改前一致 — DBG3-04
+- [x] **A8**. 测试：循环中断点 → 每次迭代（不同 Tick）均触发 — DBG3-05
 
 ### B. DBG5 — 变量查看适配器（Variable Display Adapter）
 
-- [ ] **B1**. `ScriptDebugger.GetVariables(VMProgram, ref VMInstanceState)` 方法
-  - 返回 `List<VariableInfo>` 或简易结构
+- [x] **B1**. `ScriptDebugger.GetVariables(VMProgram, ref VMInstanceState)` 方法
+  - 返回 `List<VariableInfo>`
   - 结构：`{ Name, Value (Number), IsStruct, FieldNames[], FieldValues[] }`
   - 根据当前 `RegisterBase` 正确读取寄存器值
   - 通过 `ScopeFunctionName` 过滤当前函数作用域内的变量
-- [ ] **B2**. 确定当前函数名的方法
-  - 从 `Functions[]` 数组中根据当前 `IP` 查找所在函数
-  - 需遍历 FunctionEntry[] 找到 `EntryIP ≤ IP < 下一个函数 EntryIP` 的项
-- [ ] **B3**. 测试：断点命中时获取标量变量值 → 正确
-- [ ] **B4**. 测试：断点命中时获取 struct 变量 → 字段名 + 字段值正确
-- [ ] **B5**. 测试：函数调用内部断点 → 仅显示当前函数作用域变量
+- [x] **B2**. `FindFunctionByIP(VMProgram, int ip)` — 确定当前函数名
+  - 遍历 FunctionEntry[] 找到 `EntryIP ≤ IP` 的最后一个
+- [x] **B3**. 测试：断点命中时获取标量变量值 → 正确 — DBG5-01
+- [x] **B4**. 测试：断点命中时获取 struct 变量 → 字段名 + 字段值正确 — DBG5-02
+- [x] **B5**. 测试：函数调用内部断点 → 仅显示当前函数作用域变量 — DBG5-03
 
 ### C. DBG6 — 调用栈查看（Call Stack Inspection）
 
-- [ ] **C1**. `ScriptDebugger.GetCallStack(VMProgram, ref VMInstanceState)` 方法
+- [x] **C1**. `ScriptDebugger.GetCallStack(VMProgram, ref VMInstanceState)` 方法
   - 返回 `List<CallStackEntry>` 
   - 结构：`{ FunctionName, SourceLine, IP }`
-  - 从 CallStack 各帧读取 ReturnIP → SourceMap 映射 → 行号
+  - 从 CallStack 各帧读取 ReturnIP-1 → SourceMap 映射 → 行号
   - 当前帧 = 当前 IP → SourceMap 映射
   - 顺序：栈顶（当前函数）在前，caller 在后
-- [ ] **C2**. 函数名解析：根据 IP 在 `Functions[]` 中查找对应函数名
-- [ ] **C3**. 测试：单函数 → 调用栈只有 1 帧（main），行号正确
-- [ ] **C4**. 测试：func a() 调用 func b()，断点在 b 内 → 调用栈 2 帧，函数名和行号均正确
-- [ ] **C5**. 测试：3 层调用 a→b→c → 调用栈 3 帧
+- [x] **C2**. 函数名解析：复用 `FindFunctionByIP()`
+- [x] **C3**. 测试：单函数 → 调用栈只有 1 帧（main），行号正确 — DBG6-01
+- [x] **C4**. 测试：func a() 调用 func b()，断点在 b 内 → 调用栈 2 帧，函数名和行号均正确 — DBG6-02
+- [x] **C5**. 测试：3 层调用 a→b→c → 调用栈 3 帧 — DBG6-03
 
 ### D. 集成 + 回归
 
-- [ ] **D1**. 创建 `Assets/Scripts/VM/Tests/DebugTests.cs`，包含 A4-A7, B3-B5, C3-C5 全部测试
-- [ ] **D2**. `StandaloneRunner/Program.cs` 注册 `DebugTests.RunAll()`
-- [ ] **D3**. 运行全量测试 — 361 项原有测试零回归 + 新增调试测试全部通过
-- [ ] **D4**. 更新 VM_Summary.md §七 — 标记 Phase 2 状态
-- [ ] **D5**. 更新 Outlook_And_Risks.md §二.5 — 标记 DBG3/DBG5/DBG6 状态
+- [x] **D1**. 创建 `Assets/Scripts/VM/Tests/DebugTests.cs`，51 项 Assert
+- [x] **D2**. `StandaloneRunner/Program.cs` 注册 `DebugTests.RunAll()`
+- [x] **D3**. 运行全量测试 — 361 项原有测试零回归 + 51 项调试测试 = 412 项全部通过
+- [x] **D4**. 更新 VM_Summary.md §七 — 标记 Phase 2 ✅
+- [x] **D5**. 更新 Outlook_And_Risks.md §二.5 — 标记 DBG3/DBG5/DBG6 ✅
 
 ---
 
@@ -114,14 +113,18 @@
 
 Gate 0 代表**命令行调试能力**——零外部依赖，仅通过 StandaloneRunner 即可验证。
 
-| Gate 0 验收项 | 对应测试 | 说明 |
+| Gate 0 验收项 | 对应测试 | 结果 |
 |--------------|---------|------|
-| 断点命中行号正确 | A4 | 设断点行 N → 执行 → 回调中 `line == N` |
-| 断点命中时变量值正确 | B3 | 回调中查询变量 → 值与执行状态一致 |
-| 断点命中时 struct 字段展开 | B4 | struct 变量各字段名、值均可读 |
-| 断点命中时调用栈正确 | C4 | 多层调用 → 每帧函数名 + 行号正确 |
-| Debugger == null 零开销 | A7 | 不设置 Debugger 时执行行为与现有代码完全一致 |
-| 原有 361 项测试零回归 | D3 | 所有现有测试不受影响 |
+| 断点命中行号正确 | DBG3-01 | ✅ 通过 |
+| 多断点均触发 | DBG3-02 | ✅ 通过 |
+| 无断点不回调 | DBG3-03 | ✅ 通过 |
+| 循环中多次触发 | DBG3-05 | ✅ 通过 |
+| 断点命中时变量值正确 | DBG5-01 | ✅ 通过 |
+| 断点命中时 struct 字段展开 | DBG5-02 | ✅ 通过 |
+| 变量仅当前作用域 | DBG5-03 | ✅ 通过 |
+| 断点命中时调用栈正确 | DBG6-01/02/03 | ✅ 通过 |
+| Debugger == null 零开销 | DBG3-04 | ✅ 通过 |
+| 原有 361 项测试零回归 | D3 | ✅ 通过 |
 
 ---
 
