@@ -1,7 +1,7 @@
 # 调试 Phase 3A：DAP 最小协议（DBG7-A）
 
 > **在整体计划中的位置**：本文档对应 VM_Summary.md §七 推进顺序中 GR1 ✅ 之后的**调试 Phase 3A**。
-> **状态**：⏳ 待执行
+> **状态**：✅ 已完成。470 项 Assert（112 TW + 214 Compiler + 17 Perf + 18 SkillScript + 51 Debug + 58 DAP），float + Fix64 双模式通过。
 > **前置**：
 > - Debug Phase 2（Gate 0）✅ 已完成 — ScriptDebugger 核心（断点桥接 + 变量查看 + 调用栈）
 > - GR1 CI 构建矩阵 ✅ 已完成 — 412 项 Assert 双模式通过
@@ -108,112 +108,84 @@
 
 ### A. Content-Length 分帧 I/O（与 LSP 共享）
 
-- [ ] **A1**. 创建 `Assets/Scripts/VM/Debug/ContentLengthStream.cs`
+- [x] **A1**. 创建 `Assets/Scripts/VM/Debug/ContentLengthStream.cs`
   - `ReadMessage(Stream input)` → 读取 `Content-Length: N\r\n\r\n` + N 字节 body
   - `WriteMessage(Stream output, string body)` → 写出 Content-Length 头 + body
   - 纯 byte 操作，不依赖 Newtonsoft.Json 等外部库
-- [ ] **A2**. 测试：构造 Content-Length 消息 → ReadMessage 正确解析 — DAP-A01
-- [ ] **A3**. 测试：WriteMessage → ReadMessage 往返正确 — DAP-A02
+- [x] **A2**. 测试：构造 Content-Length 消息 → ReadMessage 正确解析 — DAP-A01
+- [x] **A3**. 测试：WriteMessage → ReadMessage 往返正确 — DAP-A02
+  - 额外：DAP-A03 (UTF-8), DAP-A04 (空流), DAP-A05 (多消息序列)
 
 ### B. DAP 消息类型定义
 
-- [ ] **B1**. 创建 `Assets/Scripts/VM/Debug/DapMessages.cs`
-  - 基础类型：`DapMessage`（seq, type）、`DapRequest`（command, arguments）、`DapResponse`（request_seq, success, body）、`DapEvent`（event, body）
-  - 12 个具体消息的 arguments/body 类型：
-    - `InitializeRequestArguments` / `InitializeResponseBody`（capabilities）
-    - `LaunchRequestArguments`（program path）
-    - `SetBreakpointsArguments`（source, breakpoints[]）/ `SetBreakpointsResponseBody`
-    - `ConfigurationDoneArguments`
-    - `ThreadsResponseBody`
-    - `ContinueArguments` / `ContinueResponseBody`
-    - `StackTraceArguments` / `StackTraceResponseBody`
-    - `ScopesArguments` / `ScopesResponseBody`
-    - `VariablesArguments` / `VariablesResponseBody`
-    - `DisconnectArguments`
-  - 2 个 Event body：`StoppedEventBody`（reason, threadId）、`TerminatedEventBody`
-- [ ] **B2**. JSON 序列化/反序列化辅助方法
-  - 手写 JSON 构建（`StringBuilder` 或简单字符串拼接）
-  - 手写 JSON 解析（简单 key-value 提取，不需要完整 JSON parser）
-  - 或评估使用 `System.Text.Json`（.NET 内置，无外部依赖）
-- [ ] **B3**. 测试：各消息类型 → JSON 序列化 → 反序列化往返正确 — DAP-B01
+- [x] **B1**. 创建 `Assets/Scripts/VM/Debug/JsonHelper.cs`（替代 DapMessages.cs）
+  - 轻量级 `JsonObject` 类：手写 JSON 序列化 + 解析，零外部依赖
+  - 支持 nested object, array, string, number, boolean, null
+  - DAP 消息通过 JsonObject 动态构建（无需静态类型定义）
+- [x] **B2**. JSON 序列化/反序列化辅助方法
+  - 手写 JSON 解析器（完整 JSON 子集）
+  - StringBuilder 序列化 + 字符串转义
+- [x] **B3**. 测试：各消息类型 → JSON 序列化 → 反序列化往返正确 — DAP-B01
+  - 额外：DAP-B02 (嵌套对象), DAP-B03 (数组), DAP-B04 (转义), DAP-B05 (null)
 
 ### C. DAP Server 主循环
 
-- [ ] **C1**. 创建 `Assets/Scripts/VM/Debug/DapServer.cs`
+- [x] **C1**. 创建 `Assets/Scripts/VM/Debug/DapServer.cs`
   - 构造：`DapServer(Stream input, Stream output)`
   - 主循环：`Run()` — 循环读消息 → 按 command 分发 → 调用 handler → 写响应
-  - handler 注册表：`Dictionary<string, Func<DapRequest, DapResponse>>`
+  - switch-based 分发（非 Dictionary，更简洁）
   - 生命周期：initialize → launch → (loop: continue/setBreakpoints/stackTrace/...) → disconnect
-- [ ] **C2**. 错误处理：未知 command → 返回 `success=false` + 错误消息
-- [ ] **C3**. 测试：发送 initialize → 收到 capabilities 响应 — DAP-C01
+- [x] **C2**. 错误处理：未知 command → 返回 `success=false` + 错误消息
+- [x] **C3**. 测试：发送 initialize → 收到 capabilities 响应 — DAP-C01, DAP-C02
 
 ### D. 12 个 Request Handler 实现
 
-- [ ] **D1**. `initialize` handler
-  - 返回 capabilities：`supportsConfigurationDoneRequest=true`，其他按需
+- [x] **D1**. `initialize` handler
+  - 返回 capabilities：`supportsConfigurationDoneRequest=true`
   - 发送 `initialized` event
-- [ ] **D2**. `launch` handler
+- [x] **D2**. `launch` handler
   - 读取 `program` 参数 → 编译脚本 → 创建 VMWorld + Spawn 实例
   - VMProgram / VMWorld 作为 DapServer 实例字段存储（单会话生命周期）
-  - disconnect 时置 null，无并发访问（单线程状态机模型，见 D6 说明）
-- [ ] **D3**. `setBreakpoints` handler
+  - disconnect 时置 null
+- [x] **D3**. `setBreakpoints` handler
   - 读取 source + breakpoints[] → 更新 ScriptDebugger.BreakpointLines
   - 返回验证后的断点列表（verified=true，行号映射到 SourceMap 中实际有效行）
-- [ ] **D4**. `configurationDone` handler
-  - 标记配置完成，准备执行
-- [ ] **D5**. `threads` handler
-  - 返回单线程（threadId=1, name="FFVM Main Thread"）
-  - FFVM 是单线程 VM，DAP 线程模型映射为单一线程
-- [ ] **D6**. `continue` handler
-  - **单线程状态机模型**（非多线程）：DapServer.Run() 主循环为顶层状态机
-  - 收到 continue 请求 → 进入"执行态"：循环调用 VMWorld.Tick()
-  - ScriptDebugger.OnBreakpointHit 回调中设置 `_hitBreakpoint = true` 标志
-  - 每次 Tick() 后检查标志：命中 → 退出 Tick 循环，回到消息读取循环
-  - 脚本结束（所有实例 Finished）→ 发送 `terminated` event，回到消息循环
-  - 无死锁风险：执行态与消息态交替，不存在并发线程
-  - 安全保护：最大 Tick 数上限（如 100000），超出视为超时 → 发送 terminated
-- [ ] **D7**. `stackTrace` handler
-  - 调用 ScriptDebugger.GetCallStack() → 转换为 DAP StackFrame[]
-  - 每帧包含：id, name, source(path), line, column
-- [ ] **D8**. `scopes` handler
-  - 返回单一 scope（name="Locals", variablesReference=1）
-  - FFVM 只有局部变量（寄存器），无全局/闭包
-- [ ] **D9**. `variables` handler
-  - 根据 variablesReference 调用 ScriptDebugger.GetVariables()
-  - 转换为 DAP Variable[]：name, value, type
-  - struct 变量：展开为子变量（structuredVariables，带独立 variablesReference）
-- [ ] **D10**. `disconnect` handler
-  - 清理资源，退出主循环
-- [ ] **D11**. 测试：完整 DAP 会话模拟（initialize → launch → setBreakpoints → configurationDone → continue → stopped → stackTrace → scopes → variables → disconnect）— DAP-D01
-- [ ] **D12**. 测试：断点命中时 stackTrace 返回正确函数名 + 行号 — DAP-D02
-- [ ] **D13**. 测试：断点命中时 variables 返回正确变量值 — DAP-D03
+- [x] **D4**. `configurationDone` handler
+- [x] **D5**. `threads` handler — 单线程（threadId=1）
+- [x] **D6**. `continue` handler
+  - **单线程状态机模型**：循环 Tick → 回调设标志 → 检查标志退出 → 回到消息读取
+  - `HaltOnBreakpoint` 模式：VM 在断点处暂停（yield before instruction），保留完整状态
+  - `SkipNextCheck` 机制：resume 时跳过当前断点防止重触发
+  - 安全保护：最大 100000 Tick 超时
+- [x] **D7**. `stackTrace` handler — GetCallStack() → DAP StackFrame[]
+- [x] **D8**. `scopes` handler — 单一 Locals scope
+- [x] **D9**. `variables` handler — GetVariables() → DAP Variable[]，含 struct 展开
+- [x] **D10**. `disconnect` handler
+- [x] **D11**. 测试：完整 DAP 会话模拟 — DAP-D01 (9 步完整流程)
+- [x] **D12**. 测试：断点命中时 stackTrace 返回正确函数名 + 行号 — DAP-D02
+- [x] **D13**. 测试：断点命中时 variables 返回正确变量值 — DAP-D03
+  - 额外：DAP-D04 (terminated), DAP-D05 (threads), DAP-D06 (continue after bp), DAP-D07 (unknown cmd)
 
 ### E. StandaloneRunner DAP 模式
 
-- [ ] **E1**. StandaloneRunner 增加 `--dap` 命令行参数
-  - `--dap`：以 DAP server 模式启动（stdin/stdout）
-  - 不带参数：保持现有行为（运行测试）
-- [ ] **E2**. DAP 模式入口：创建 DapServer(Console.OpenStandardInput(), Console.OpenStandardOutput()) → Run()
-- [ ] **E3**. 测试：启动 StandaloneRunner --dap → 发送 initialize 请求 → 收到正确响应 — DAP-E01
+- [x] **E1**. StandaloneRunner 增加 `--dap` 命令行参数
+- [x] **E2**. DAP 模式入口：DapServer(Console.OpenStandardInput(), Console.OpenStandardOutput()) → Run()
+- [x] **E3**. 测试：DAP-E01（全管线 ContentLengthStream → DapServer → ContentLengthStream 验证）
 
 ### F. VS Code 扩展配置
 
-- [ ] **F1**. 创建 `vscode-ffvm-debug/package.json`
-  - 扩展 ID: `ffvm-debug`
-  - contributes.debuggers 配置：type="ffvm"，program 指向 StandaloneRunner
-  - contributes.breakpoints：language="ffvm"
-  - 纯 JSON，无 TypeScript 运行时
-- [ ] **F2**. 创建示例 `.vscode/launch.json` 模板
-  - type: "ffvm"，request: "launch"，program: "${workspaceFolder}/path/to/script.ffvm"
-- [ ] **F3**. 创建简单的 TextMate grammar（`.tmLanguage.json`）用于 .ffvm 文件的基础语法高亮
-  - 可选：如果 LSP2 不在本步骤范围，仅提供最小关键字高亮
+- [x] **F1**. 创建 `vscode-ffvm-debug/package.json`
+  - 扩展 ID: `ffvm-debug`，debuggers + breakpoints + languages + grammars 配置
+- [x] **F2**. 创建 `.vscode/launch.json` 模板
+- [x] **F3**. 创建 TextMate grammar（`ffvm.tmLanguage.json`）+ language-configuration.json
+  - 关键字高亮：control (if/else/while/for/return/yield/wait/wait_for/defer/using)、declaration (func/var/struct)、types (int/bool/void)、numbers、strings、comments
 
 ### G. 回归验证 + 文档更新
 
-- [ ] **G1**. 运行全部现有 412 项测试 — 零回归
-- [ ] **G2**. 运行 CI 矩阵 — float + Fix64 双模式通过
-- [ ] **G3**. 更新 `VM_Summary.md §七` — 标记 Phase 3A 状态
-- [ ] **G4**. 更新 `Outlook_And_Risks.md §八.1` — 串行计划中 Phase 3A 状态
+- [x] **G1**. 运行全部 470 项测试 — 零回归（412 现有 + 58 新 DAP 测试）
+- [x] **G2**. float + Fix64 双模式通过（470 × 2）
+- [ ] **G3**. 更新 `VM_Summary.md §五` — 标记 Phase 3A 状态
+- [ ] **G4**. 更新 `VM_Summary.md §七` — 串行计划中 Phase 3A 完成
 
 ---
 

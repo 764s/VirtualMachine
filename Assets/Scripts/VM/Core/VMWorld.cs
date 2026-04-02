@@ -164,7 +164,6 @@ namespace FFVM
                 }
 
                 // --- Breakpoint check (zero overhead when Debugger is null) ---
-                bool shouldHaltAtBreakpoint = false;
                 if (srcMap != null)
                 {
                     if (dbg.CheckBreakpoint(inst.InstanceId, inst.IP, srcMap) && dbg.HaltOnBreakpoint)

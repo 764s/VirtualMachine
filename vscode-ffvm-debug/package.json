@@ -1,0 +1,65 @@
+{
+    "name": "ffvm-debug",
+    "displayName": "FFVM Script Debugger",
+    "description": "Debug adapter for FFVM bytecode scripts",
+    "version": "0.1.0",
+    "publisher": "ffvm",
+    "engines": {
+        "vscode": "^1.80.0"
+    },
+    "categories": [
+        "Debuggers"
+    ],
+    "contributes": {
+        "debuggers": [
+            {
+                "type": "ffvm",
+                "label": "FFVM Script",
+                "program": "${workspaceFolder}/StandaloneRunner/bin/Release/net8.0/StandaloneRunner",
+                "args": ["--dap"],
+                "runtime": "",
+                "languages": ["ffvm"],
+                "configurationAttributes": {
+                    "launch": {
+                        "required": ["program"],
+                        "properties": {
+                            "program": {
+                                "type": "string",
+                                "description": "Absolute path to the .ffvm script file to debug",
+                                "default": "${workspaceFolder}/script.ffvm"
+                            }
+                        }
+                    }
+                },
+                "initialConfigurations": [
+                    {
+                        "type": "ffvm",
+                        "request": "launch",
+                        "name": "Debug FFVM Script",
+                        "program": "${workspaceFolder}/script.ffvm"
+                    }
+                ]
+            }
+        ],
+        "breakpoints": [
+            {
+                "language": "ffvm"
+            }
+        ],
+        "languages": [
+            {
+                "id": "ffvm",
+                "aliases": ["FFVM Script", "ffvm"],
+                "extensions": [".ffvm"],
+                "configuration": "./language-configuration.json"
+            }
+        ],
+        "grammars": [
+            {
+                "language": "ffvm",
+                "scopeName": "source.ffvm",
+                "path": "./syntaxes/ffvm.tmLanguage.json"
+            }
+        ]
+    }
+}

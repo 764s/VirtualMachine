@@ -24,7 +24,6 @@ namespace FFVM.Debug
         // --- Session state ---
         private bool _running;
         private int _seq; // outgoing message sequence number
-        private bool _configurationDone;
 
         // --- VM state (single-session lifecycle) ---
         private VMWorld _world;
@@ -246,7 +245,8 @@ namespace FFVM.Debug
 
         private void HandleConfigurationDone(JsonObject arguments)
         {
-            _configurationDone = true;
+            // Configuration phase complete. No state change needed —
+            // the server processes requests sequentially.
         }
 
         private JsonObject HandleThreads()
