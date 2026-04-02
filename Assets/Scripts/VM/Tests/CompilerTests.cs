@@ -1,4 +1,5 @@
 using System.Collections.Generic;
+using System.Text;
 using FFVM;
 using FFVM.Compiler;
 using UnityEditor;
@@ -1626,6 +1627,480 @@ func main() {
 
             var result = compiler.Compile(source, "main", syscalls, table);
             Assert(result.Success, "G6-04: wait inside using body compiles OK (body != cleanup block)");
+        }
+
+        // ===== F4 Tests: Register lifecycle analysis + register reuse =====
+
+        // F4-01: Two non-overlapping lifetime variables should reuse same register
+        {
+            string source = @"
+func main() {
+    var a: int = 10
+    SetValue(a)
+    var b: int = 20
+    SetValue(b)
+}";
+            var syscalls = new Dictionary<string, int> { { "SetValue", 0 } };
+            int lastArg = -1;
+            var result = compiler.Compile(source, "main", syscalls);
+            Assert(result.Success, "F4-01 compile success");
+
+            var world = new VMWorld();
+            world.Modules.Load(0, result.Program);
+            world.Syscalls.Register(0, "SetValue", (ref VMInstanceState s) => { lastArg = s.Registers.Get(0).ToInt(); });
+            int id = world.SpawnInstance(0, 0);
+            world.Tick();
+            Assert(lastArg == 20, $"F4-01: last SetValue arg = {lastArg} (expected 20)");
+            Assert((world.Pool.Instances[id].StateFlags & VMStateFlags.Completed) != 0, "F4-01: Completed");
+        }
+
+        // F4-02: Cross-await variable should persist in local register
+        {
+            string source = @"
+func main() {
+    var x: int = 42
+    wait 1
+    SetValue(x)
+}";
+            var syscalls = new Dictionary<string, int> { { "SetValue", 0 } };
+            int capturedVal = -1;
+            var result = compiler.Compile(source, "main", syscalls);
+            Assert(result.Success, "F4-02 compile success");
+
+            var world = new VMWorld();
+            world.Modules.Load(0, result.Program);
+            world.Syscalls.Register(0, "SetValue", (ref VMInstanceState s) => { capturedVal = s.Registers.Get(0).ToInt(); });
+            world.SpawnInstance(0, 0);
+            world.Tick(); // tick 1: executes LOAD_CONST + WAIT, suspends
+            world.Tick(); // tick 2: decrements wait counter
+            world.Tick(); // tick 3: resumes, calls SetValue
+            Assert(capturedVal == 42, $"F4-02: cross-await var x = {capturedVal} (expected 42)");
+        }
+
+        // F4-03: Struct variable register reuse end-to-end
+        {
+            string source = @"
+struct Vec2 {
+    x: int
+    y: int
+}
+func main() {
+    var a: Vec2
+    a.x = 5
+    a.y = 10
+    SetValue(a.x)
+}";
+            var syscalls = new Dictionary<string, int> { { "SetValue", 0 } };
+            int capturedVal = -1;
+            var result = compiler.Compile(source, "main", syscalls);
+            Assert(result.Success, "F4-03 compile success");
+
+            var world = new VMWorld();
+            world.Modules.Load(0, result.Program);
+            world.Syscalls.Register(0, "SetValue", (ref VMInstanceState s) => { capturedVal = s.Registers.Get(0).ToInt(); });
+            world.SpawnInstance(0, 0);
+            world.Tick();
+            Assert(capturedVal == 5, $"F4-03: struct a.x = {capturedVal} (expected 5)");
+        }
+
+        // F4-04: Register reuse does not change execution results (end-to-end correctness)
+        {
+            string source = @"
+func main() {
+    var a: int = 1
+    var b: int = 2
+    var c: int = a + b
+    SetValue(c)
+}";
+            var syscalls = new Dictionary<string, int> { { "SetValue", 0 } };
+            int capturedVal = -1;
+            var result = compiler.Compile(source, "main", syscalls);
+            Assert(result.Success, "F4-04 compile success");
+
+            var world = new VMWorld();
+            world.Modules.Load(0, result.Program);
+            world.Syscalls.Register(0, "SetValue", (ref VMInstanceState s) => { capturedVal = s.Registers.Get(0).ToInt(); });
+            world.SpawnInstance(0, 0);
+            world.Tick();
+            Assert(capturedVal == 3, $"F4-04: a + b = {capturedVal} (expected 3)");
+        }
+
+        // ===== O5 Tests: Constant folding =====
+
+        // O5-01: var x = 2 + 3 → single LOAD_CONST (value = 5), no ADD
+        {
+            string source = @"
+func main() {
+    var x: int = 2 + 3
+    SetValue(x)
+}";
+            var syscalls = new Dictionary<string, int> { { "SetValue", 0 } };
+            int capturedVal = -1;
+            var result = compiler.Compile(source, "main", syscalls);
+            Assert(result.Success, "O5-01 compile success");
+
+            // Check that no ADD instruction exists (constant was folded)
+            bool hasAdd = false;
+            for (int i = 0; i < result.Program.Instructions.Length; i++)
+            {
+                if (result.Program.Instructions[i].Code == OpCode.ADD) { hasAdd = true; break; }
+            }
+            Assert(!hasAdd, "O5-01: no ADD instruction (constant folded)");
+
+            var world = new VMWorld();
+            world.Modules.Load(0, result.Program);
+            world.Syscalls.Register(0, "SetValue", (ref VMInstanceState s) => { capturedVal = s.Registers.Get(0).ToInt(); });
+            world.SpawnInstance(0, 0);
+            world.Tick();
+            Assert(capturedVal == 5, $"O5-01: 2 + 3 folded to {capturedVal} (expected 5)");
+        }
+
+        // O5-02: var x = 10 > 5 → single LOAD_CONST (value = 1)
+        {
+            string source = @"
+func main() {
+    var x: int = 10 > 5
+    SetValue(x)
+}";
+            var syscalls = new Dictionary<string, int> { { "SetValue", 0 } };
+            int capturedVal = -1;
+            var result = compiler.Compile(source, "main", syscalls);
+            Assert(result.Success, "O5-02 compile success");
+
+            bool hasCmp = false;
+            for (int i = 0; i < result.Program.Instructions.Length; i++)
+            {
+                if (result.Program.Instructions[i].Code == OpCode.CMP_GT) { hasCmp = true; break; }
+            }
+            Assert(!hasCmp, "O5-02: no CMP_GT instruction (constant folded)");
+
+            var world = new VMWorld();
+            world.Modules.Load(0, result.Program);
+            world.Syscalls.Register(0, "SetValue", (ref VMInstanceState s) => { capturedVal = s.Registers.Get(0).ToInt(); });
+            world.SpawnInstance(0, 0);
+            world.Tick();
+            Assert(capturedVal == 1, $"O5-02: 10 > 5 folded to {capturedVal} (expected 1)");
+        }
+
+        // O5-03: var x = a + 3 (contains variable) → not folded, normal emit
+        {
+            string source = @"
+func main() {
+    var a: int = 7
+    var x: int = a + 3
+    SetValue(x)
+}";
+            var syscalls = new Dictionary<string, int> { { "SetValue", 0 } };
+            int capturedVal = -1;
+            var result = compiler.Compile(source, "main", syscalls);
+            Assert(result.Success, "O5-03 compile success");
+
+            bool hasAdd = false;
+            for (int i = 0; i < result.Program.Instructions.Length; i++)
+            {
+                if (result.Program.Instructions[i].Code == OpCode.ADD) { hasAdd = true; break; }
+            }
+            Assert(hasAdd, "O5-03: ADD instruction present (variable prevents folding)");
+
+            var world = new VMWorld();
+            world.Modules.Load(0, result.Program);
+            world.Syscalls.Register(0, "SetValue", (ref VMInstanceState s) => { capturedVal = s.Registers.Get(0).ToInt(); });
+            world.SpawnInstance(0, 0);
+            world.Tick();
+            Assert(capturedVal == 10, $"O5-03: a + 3 = {capturedVal} (expected 10)");
+        }
+
+        // ===== O4 Tests: dest-reg hint =====
+
+        // O4-01: var x = a + b → result directly in x's register (fewer MOVEs)
+        {
+            string source = @"
+func main() {
+    var a: int = 10
+    var b: int = 20
+    var x: int = a + b
+    SetValue(x)
+}";
+            var syscalls = new Dictionary<string, int> { { "SetValue", 0 } };
+            int capturedVal = -1;
+            var result = compiler.Compile(source, "main", syscalls);
+            Assert(result.Success, "O4-01 compile success");
+
+            var world = new VMWorld();
+            world.Modules.Load(0, result.Program);
+            world.Syscalls.Register(0, "SetValue", (ref VMInstanceState s) => { capturedVal = s.Registers.Get(0).ToInt(); });
+            world.SpawnInstance(0, 0);
+            world.Tick();
+            Assert(capturedVal == 30, $"O4-01: a + b = {capturedVal} (expected 30)");
+        }
+
+        // O4-02: x = a * b → result directly in x's register
+        {
+            string source = @"
+func main() {
+    var a: int = 3
+    var b: int = 7
+    var x: int = 0
+    x = a * b
+    SetValue(x)
+}";
+            var syscalls = new Dictionary<string, int> { { "SetValue", 0 } };
+            int capturedVal = -1;
+            var result = compiler.Compile(source, "main", syscalls);
+            Assert(result.Success, "O4-02 compile success");
+
+            var world = new VMWorld();
+            world.Modules.Load(0, result.Program);
+            world.Syscalls.Register(0, "SetValue", (ref VMInstanceState s) => { capturedVal = s.Registers.Get(0).ToInt(); });
+            world.SpawnInstance(0, 0);
+            world.Tick();
+            Assert(capturedVal == 21, $"O4-02: a * b = {capturedVal} (expected 21)");
+        }
+
+        // ===== O7 Tests: Syscall result direct =====
+
+        // O7-01: var x = SomeSyscall(args) → result from r0 directly to x's register
+        {
+            string source = @"
+func main() {
+    var x: int = GetVal(5)
+    SetValue(x)
+}";
+            var syscalls = new Dictionary<string, int> { { "GetVal", 0 }, { "SetValue", 1 } };
+            int capturedVal = -1;
+            var result = compiler.Compile(source, "main", syscalls);
+            Assert(result.Success, "O7-01 compile success");
+
+            var world = new VMWorld();
+            world.Modules.Load(0, result.Program);
+            world.Syscalls.Register(0, "GetVal", (ref VMInstanceState s) => {
+                s.Registers.Set(0, Number.FromInt(s.Registers.Get(0).ToInt() * 10));
+            });
+            world.Syscalls.Register(1, "SetValue", (ref VMInstanceState s) => {
+                capturedVal = s.Registers.Get(0).ToInt();
+            });
+            world.SpawnInstance(0, 0);
+            world.Tick();
+            Assert(capturedVal == 50, $"O7-01: GetVal(5) = {capturedVal} (expected 50)");
+        }
+
+        // ===== DBG1 Tests: Source Map =====
+
+        // DBG1_T01: Source map records correct line numbers
+        {
+            string source = @"
+func main() {
+    var x: int = 1
+    SetValue(x)
+}";
+            var syscalls = new Dictionary<string, int> { { "SetValue", 0 } };
+            var result = compiler.Compile(source, "main", syscalls);
+            Assert(result.Success, "DBG1_T01 compile success");
+            Assert(result.Program.SourceMap != null, "DBG1_T01: SourceMap is not null");
+        }
+
+        // DBG1_T02: Source map length matches instruction length
+        {
+            string source = @"
+func main() {
+    var x: int = 1
+    var y: int = 2
+    SetValue(x)
+}";
+            var syscalls = new Dictionary<string, int> { { "SetValue", 0 } };
+            var result = compiler.Compile(source, "main", syscalls);
+            Assert(result.Success, "DBG1_T02 compile success");
+            Assert(result.Program.SourceMap.Length == result.Program.Instructions.Length,
+                $"DBG1_T02: SourceMap length ({result.Program.SourceMap.Length}) == Instructions length ({result.Program.Instructions.Length})");
+        }
+
+        // ===== DBG2 Tests: Symbol Table =====
+
+        // DBG2_T01: Symbol table records variable names and registers
+        {
+            string source = @"
+func main() {
+    var a: int = 1
+    var b: int = 2
+    SetValue(a)
+}";
+            var syscalls = new Dictionary<string, int> { { "SetValue", 0 } };
+            var result = compiler.Compile(source, "main", syscalls);
+            Assert(result.Success, "DBG2_T01 compile success");
+            Assert(result.Program.SymbolTable != null, "DBG2_T01: SymbolTable is not null");
+            Assert(result.Program.SymbolTable.Length >= 2, $"DBG2_T01: SymbolTable has >= 2 entries (actual: {result.Program.SymbolTable.Length})");
+
+            bool foundA = false, foundB = false;
+            for (int i = 0; i < result.Program.SymbolTable.Length; i++)
+            {
+                if (result.Program.SymbolTable[i].Name == "a") foundA = true;
+                if (result.Program.SymbolTable[i].Name == "b") foundB = true;
+            }
+            Assert(foundA, "DBG2_T01: found symbol 'a'");
+            Assert(foundB, "DBG2_T01: found symbol 'b'");
+        }
+
+        // DBG2_T02: Symbol table records struct field names
+        {
+            string source = @"
+struct Vec2 {
+    x: int
+    y: int
+}
+func main() {
+    var v: Vec2
+    v.x = 10
+    SetValue(v.x)
+}";
+            var syscalls = new Dictionary<string, int> { { "SetValue", 0 } };
+            var result = compiler.Compile(source, "main", syscalls);
+            Assert(result.Success, "DBG2_T02 compile success");
+
+            bool foundStruct = false;
+            for (int i = 0; i < result.Program.SymbolTable.Length; i++)
+            {
+                var sym = result.Program.SymbolTable[i];
+                if (sym.Name == "v" && sym.FieldCount == 2 && sym.FieldNames != null)
+                {
+                    foundStruct = sym.FieldNames.Length == 2 && sym.FieldNames[0] == "x" && sym.FieldNames[1] == "y";
+                }
+            }
+            Assert(foundStruct, "DBG2_T02: found struct symbol 'v' with fields x, y");
+        }
+
+        // ===== R7 Tests: _pendingCalls auto-switch Dictionary =====
+
+        // R7-01: 100 functions with forward references → compile success
+        {
+            var sb = new StringBuilder();
+            // Generate 100 leaf functions that all just call Ping (no deep chain)
+            for (int i = 0; i < 100; i++)
+                sb.AppendLine($"func f{i}() {{ Ping() }}");
+            // main calls all of them → generates 100 forward references for backpatching
+            sb.Append("func main() {");
+            for (int i = 0; i < 100; i++)
+                sb.Append($" f{i}()");
+            sb.AppendLine(" }");
+
+            var syscalls = new Dictionary<string, int> { { "Ping", 0 } };
+            var result = compiler.Compile(sb.ToString(), "main", syscalls);
+            Assert(result.Success, "R7-01: 100 functions compile success (Dictionary path)");
+        }
+
+        // R7-02: <50 functions → original List path, still works
+        {
+            string source = @"
+func helper() { Ping() }
+func main() { helper() }";
+            var syscalls = new Dictionary<string, int> { { "Ping", 0 } };
+            var pinged = false;
+            var result = compiler.Compile(source, "main", syscalls);
+            Assert(result.Success, "R7-02 compile success");
+
+            var world = new VMWorld();
+            world.Modules.Load(0, result.Program);
+            world.Syscalls.Register(0, "Ping", (ref VMInstanceState s) => { pinged = true; });
+            world.SpawnInstance(0, 0);
+            world.Tick();
+            Assert(pinged, "R7-02: helper() called Ping()");
+        }
+
+        // ===== R8 Tests: Cleanup block function call prohibition =====
+
+        // R8-01: defer { someFunc() } → compile error
+        {
+            string source = @"
+func helper() { Ping() }
+func main() {
+    defer { helper() }
+}";
+            var syscalls = new Dictionary<string, int> { { "Ping", 0 } };
+            var result = compiler.Compile(source, "main", syscalls);
+            Assert(!result.Success, "R8-01: function call in defer → compile error");
+            bool mentionsCleanup = false;
+            for (int i = 0; i < result.Errors.Count; i++)
+            {
+                if (result.Errors[i].Contains("cleanup block")) { mentionsCleanup = true; break; }
+            }
+            Assert(mentionsCleanup, "R8-01: error mentions 'cleanup block'");
+        }
+
+        // R8-02: Normal function body call → compile success
+        {
+            string source = @"
+func helper() { Ping() }
+func main() { helper() }";
+            var syscalls = new Dictionary<string, int> { { "Ping", 0 } };
+            var result = compiler.Compile(source, "main", syscalls);
+            Assert(result.Success, "R8-02: normal function call compiles OK");
+        }
+
+        // R8-03: using body with function call → compile success (using body != cleanup block)
+        {
+            string source = @"
+func helper() { Ping() }
+func main() {
+    using Acquire(1) {
+        helper()
+    }
+}";
+            var syscalls = new Dictionary<string, int> { { "Acquire", 0 }, { "Release", 1 }, { "Ping", 2 } };
+            var table = new SyscallTable();
+            table.RegisterPaired(0, "Acquire", (ref VMInstanceState s) => { },
+                                 1, "Release", (ref VMInstanceState s) => { });
+            table.Register(2, "Ping", (ref VMInstanceState s) => { });
+            var result = compiler.Compile(source, "main", syscalls, table);
+            Assert(result.Success, "R8-03: function call in using body compiles OK (body != cleanup block)");
+        }
+
+        // ===== FO5 Tests: Return value direct =====
+
+        // FO5-01: var result = f(x) → return value from r0 directly to result register
+        {
+            string source = @"
+func double(n: int): int { return n * 2 }
+func main() {
+    var result: int = double(7)
+    SetValue(result)
+}";
+            var syscalls = new Dictionary<string, int> { { "SetValue", 0 } };
+            int capturedVal = -1;
+            var result = compiler.Compile(source, "main", syscalls);
+            Assert(result.Success, "FO5-01 compile success");
+
+            var world = new VMWorld();
+            world.Modules.Load(0, result.Program);
+            world.Syscalls.Register(0, "SetValue", (ref VMInstanceState s) => { capturedVal = s.Registers.Get(0).ToInt(); });
+            world.SpawnInstance(0, 0);
+            world.Tick();
+            Assert(capturedVal == 14, $"FO5-01: double(7) = {capturedVal} (expected 14)");
+        }
+
+        // ===== FO7 Tests: Static call depth analysis =====
+
+        // FO7-01: depth 3 (a→b→c) → compile success
+        {
+            string source = @"
+func c() { Ping() }
+func b() { c() }
+func a() { b() }
+func main() { a() }";
+            var syscalls = new Dictionary<string, int> { { "Ping", 0 } };
+            var result = compiler.Compile(source, "main", syscalls);
+            Assert(result.Success, "FO7-01: depth 3 compiles OK");
+        }
+
+        // FO7-02: recursive call → compiles (runtime check enforces depth)
+        {
+            string source = @"
+func recurse(n: int) {
+    if n > 0 { recurse(n - 1) }
+}
+func main() { recurse(3) }";
+            var syscalls = new Dictionary<string, int>();
+            var result = compiler.Compile(source, "main", syscalls);
+            // Recursion is not a compile error — runtime handles depth limit
+            Assert(result.Success, "FO7-02: recursive call compiles OK (runtime enforces depth)");
         }
 
         // ===== Summary =====

@@ -465,8 +465,9 @@ skill TracerBullet
 | 解释器 | `TreeWalker`（Phase 2 原型，含 defer + Kill） | ✅ 完成 |
 | 词法分析 | `Lexer`（手写，16 关键字 + 运算符 + 字面量 + 注释，含 `struct` 关键字 + `.` 分隔符） | ✅ 完成 |
 | 语法分析 | `Parser`（手写递归下降，source → `ModuleNode` AST，含 using/wait_for/struct 声明/字段访问/错误恢复） | ✅ 完成 |
-| 编译器 | `BytecodeCompiler`（AST → `VMProgram`，寄存器分配：r0-15 scratch / r16-47 locals / r48-63 temps，支持 using 配对 Syscall，支持多函数编译 + CALL emit，支持 struct 编译期拍平 → 连续寄存器槽位映射） | ✅ 完成 |
-| 测试 | 315 项 Assert 全部通过（112 TreeWalker + 168 Compiler + 17 Performance + 18 SkillScript），另有 5 项自动化性能基准 | ✅ Step 10 前置通过 |
+| 编译器 | `BytecodeCompiler`（AST → `VMProgram`，寄存器分配：r0-15 scratch / r16-47 locals / r48-63 temps，支持 using 配对 Syscall，支持多函数编译 + CALL emit，支持 struct 编译期拍平 → 连续寄存器槽位映射，F4 寄存器生命周期分析 + 复用，O4 dest-reg hint，O5 常量折叠，O7 Syscall 结果直达，FO5 返回值直达，FO7 调用栈深度静态分析，R7 >50 函数回填 Dictionary 切换，R8 Cleanup 块禁止函数调用） | ✅ 完成 |
+| 调试信息 | `VMProgram.SourceMap`（DBG1：IP→行号平行数组）+ `VMProgram.SymbolTable`（DBG2：变量名→寄存器+struct字段信息） | ✅ 完成 |
+| 测试 | 361 项 Assert 全部通过（112 TreeWalker + 214 Compiler + 17 Performance + 18 SkillScript），另有 5 项自动化性能基准 | ✅ F4 阶段通过 |
 | 性能基准 | `BenchmarkRunner`（5 组 VM vs C# 对比基准）+ `run-benchmarks.cmd` 自动化管线 → `benchmark_results.md` | ✅ 完成 |
 
 ### 5.2 未完成（按优先级排列）
@@ -487,7 +488,7 @@ skill TracerBullet
 | P2（低） | 编译器 "requires cleanup" 强制检查（C4） | ✅ 完成 → 步骤 10 前置（SyscallTable.RequiresCleanup + CompileSyscall 检查） |
 | P2 | CALL / RET_FUNC OpCode + 跨函数调用 emit（F1-F2） | ✅ 完成 → 步骤 8（CALL=60, RET_FUNC=61, 两遍编译+前向引用回填） |
 | P2 | 函数调用 GC + 快照回滚验证（F3） | ✅ 完成 → 步骤 8（F05: 0 GC 验证通过） |
-| P2（低） | 编译器寄存器生命周期分析 + 跨 await 变量提升（F4） | 确定执行 → **最晚步骤 10 前** |
+| P2（低） | 编译器寄存器生命周期分析 + 跨 await 变量提升（F4） | ✅ 完成 → F4 阶段（LiveRange + AnalyzeVariableLifetimes + free list + DeclareStructVar） |
 | P2 | Parser struct 声明 + 编译器 struct → 寄存器拍平（S1-S3） | ✅ 完成 → 步骤 9（Lexer struct/Dot + Parser struct 声明 + 字段访问 + 编译器拍平，CS01-CS11 通过） |
 | P3 | V5 帧内 Profiler 验证（真实 Syscall 接入后） | 阻塞编辑器 UI |
 | P3 | 编辑器流程图投影 | 不阻塞 VM 核心 |
@@ -517,7 +518,7 @@ skill TracerBullet
 | Paired Syscall 仅支持"无参反向调用" | 覆盖 80%+ 场景（SetBB/ResetBB, PlayEffect/StopEffect） | 如需带参反向调用，后续扩展 SyscallTable 配对协议 |
 | 不支持跨模块函数调用 | 步骤 8 聚焦同模块内函数调用 | 后续步骤按需扩展 ModuleTable 跨模块解析 |
 | 函数参数上限 = 16（r0-r15 Scratch Zone） | 与 Syscall 参数传递一致，覆盖绝大多数场景 | 如需更多参数，后续扩展寄存器布局 |
-| 无调试符号 / 源码映射 | 先保证 VM 正确性与性能 | ~~编辑器阶段按需添加~~ → 方向已确定：DBG1 源码映射 + DBG2 符号表（随 F4 合并），调试走真实宿主断点 + DAP 协议接入外部 IDE，语言智能走 LSP |
+| 无调试符号 / 源码映射 | 先保证 VM 正确性与性能 | ✅ DBG1 源码映射 + DBG2 符号表已随 F4 合并完成；下一步：调试走真实宿主断点 + DAP 协议接入外部 IDE，语言智能走 LSP |
 
 ---
 
@@ -621,20 +622,25 @@ skill TracerBullet
       ↓
   ─── 优化 ＋ 功能补全 ＋ 脚本调试 ── 插入区间 ───────────
       ↓
-  F4 + 自然优化 + 调试 Phase 1 + 风险理想方案            ⏳
+  F4 + 自然优化 + 调试 Phase 1 + 风险理想方案            ✅
       详见 → [Step_F4_RegisterLifecycle.md](Plan/Step_F4_RegisterLifecycle.md)
+      361 项 Assert（112 TW + 214 Compiler + 17 Perf + 18 SkillScript）
       确定执行：
-        F4. 编译器寄存器生命周期分析 + 跨 await 变量提升
+        F4. 编译器寄存器生命周期分析 + 跨 await 变量提升    ✅
       自然优化（随 F4 实施，零额外排期，7 项）：
-        O4 目标寄存器传递 → O5 常量折叠 →
-        O7 Syscall 结果直达 → O3 消除冗余 IP 边界检查
-        FO4 参数就位检测 / FO5 返回值直达 / FO7 调用栈深度静态分析
+        O4 目标寄存器传递（dest-reg hint）                   ✅
+        O5 常量折叠                                         ✅
+        O7 Syscall 结果直达                                 ✅
+        O3 消除冗余 IP 边界检查（审查后确认仅 1 处必要检查） ✅
+        FO4 参数就位检测（已有）                             ✅
+        FO5 返回值直达                                       ✅
+        FO7 调用栈深度静态分析                               ✅
       脚本调试 · Phase 1（编译器侧，随 F4 合并，边际排期极低）：
-        DBG1. 源码映射表（int[] 平行数组，仅行号）
-        DBG2. 符号表 Phase 1（varName → register，不含生命周期）
+        DBG1. 源码映射表（int[] 平行数组，仅行号）           ✅
+        DBG2. 符号表 Phase 1（varName → register，不含生命周期） ✅
       风险理想方案（随 F4 一并实施）：
-        R7. _pendingCalls >50 函数自动切换 Dictionary
-        R8. 编译器禁止 Cleanup 块内函数调用（一行检查）
+        R7. _pendingCalls >50 函数自动切换 Dictionary         ✅
+        R8. 编译器禁止 Cleanup 块内函数调用                   ✅
       调试决策详情 → [Step_Debug_Decisions.md](Plan/Step_Debug_Decisions.md)
       ↓
   ┌────────────────────────────────────────────────────────┐

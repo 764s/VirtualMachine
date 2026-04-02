@@ -32,6 +32,14 @@ namespace FFVM.Compiler
         private SyscallTable _syscallTable;            // paired slot lookup (optional, for using)
         private List<string> _errors;
 
+        // DBG1: Source Map — parallel to _instructions, records line number for each emitted instruction
+        private List<int> _sourceLines;
+        private int _currentLine;  // updated from AST nodes during compilation
+
+        // DBG2: Symbol Table — collected during compilation
+        private List<SymbolEntry> _symbolEntries;
+        private string _currentFunctionName;  // current function being compiled
+
         // Struct support: compile-time type table
         private Dictionary<string, StructDecl> _structTypes;    // typeName → struct declaration
         private Dictionary<string, string> _structVarTypes;     // varName → struct typeName
@@ -62,6 +70,20 @@ namespace FFVM.Compiler
 
         // Cleanup block compilation state (G6: prohibit wait/wait_for inside cleanup blocks)
         private bool _inCleanupBlock;
+
+        // F4: Register lifecycle analysis
+        private struct LiveRange
+        {
+            public string Name;
+            public int DefOrder;      // declaration order within function
+            public int LastUseOrder;  // last reference order
+            public bool CrossesAwait; // variable is live across wait/wait_for
+            public int FieldCount;    // >0 for struct variables (consecutive registers)
+        }
+        private Dictionary<string, LiveRange> _liveRanges;  // per-function analysis result
+        private List<int> _freeVarRegs;                     // free list for register reuse
+        private int _maxVarRegUsed;                         // track max register for precise LocalRegCount
+        private int _stmtOrder;                             // current statement order counter for release tracking
 
         /// <summary>
         /// Compile source text into a VMProgram.
@@ -94,6 +116,9 @@ namespace FFVM.Compiler
             _syscallTable = syscallTable;
             _errors = new List<string>();
             _pendingCalls = new List<PendingCall>();
+            _sourceLines = new List<int>();
+            _currentLine = 0;
+            _symbolEntries = new List<SymbolEntry>();
 
             // --- Build struct type table ---
             _structTypes = new Dictionary<string, StructDecl>();
@@ -142,19 +167,55 @@ namespace FFVM.Compiler
             }
 
             // --- Backpatch forward references: CALL instructions whose target was -1 at emit time ---
-            for (int i = 0; i < _pendingCalls.Count; i++)
+            // R7: when >50 pending calls, build Dictionary index for O(1) lookup per function
+            if (_pendingCalls.Count > 50)
             {
-                var pending = _pendingCalls[i];
-                if (_functionTable.TryGetValue(pending.FunctionName, out int targetIP) && targetIP >= 0)
+                var pendingByName = new Dictionary<string, List<int>>();
+                for (int i = 0; i < _pendingCalls.Count; i++)
                 {
-                    var instr = _instructions[pending.InstructionIP];
-                    _instructions[pending.InstructionIP] = new Instruction(instr.Code, targetIP, instr.B, instr.C);
+                    var pending = _pendingCalls[i];
+                    if (!pendingByName.TryGetValue(pending.FunctionName, out var list))
+                    {
+                        list = new List<int>();
+                        pendingByName[pending.FunctionName] = list;
+                    }
+                    list.Add(pending.InstructionIP);
                 }
-                else
+                foreach (var kv in pendingByName)
                 {
-                    _errors.Add($"Unresolved function '{pending.FunctionName}'");
+                    if (_functionTable.TryGetValue(kv.Key, out int targetIP) && targetIP >= 0)
+                    {
+                        for (int j = 0; j < kv.Value.Count; j++)
+                        {
+                            var instr = _instructions[kv.Value[j]];
+                            _instructions[kv.Value[j]] = new Instruction(instr.Code, targetIP, instr.B, instr.C);
+                        }
+                    }
+                    else
+                    {
+                        _errors.Add($"Unresolved function '{kv.Key}'");
+                    }
                 }
             }
+            else
+            {
+                for (int i = 0; i < _pendingCalls.Count; i++)
+                {
+                    var pending = _pendingCalls[i];
+                    if (_functionTable.TryGetValue(pending.FunctionName, out int targetIP) && targetIP >= 0)
+                    {
+                        var instr = _instructions[pending.InstructionIP];
+                        _instructions[pending.InstructionIP] = new Instruction(instr.Code, targetIP, instr.B, instr.C);
+                    }
+                    else
+                    {
+                        _errors.Add($"Unresolved function '{pending.FunctionName}'");
+                    }
+                }
+            }
+
+            // FO7: Static call depth analysis — check for excessive call depth or recursion
+            AnalyzeCallDepth(module, entryFunc);
 
             if (_errors.Count > 0)
                 return new CompileResult { Errors = _errors };
@@ -172,7 +233,9 @@ namespace FFVM.Compiler
                     _instructions.ToArray(),
                     _constants.ToArray(),
                     maxRegs,
-                    functionEntries.ToArray()
+                    functionEntries.ToArray(),
+                    _sourceLines.ToArray(),
+                    _symbolEntries.ToArray()
                 ),
                 Errors = _errors
             };
@@ -191,6 +254,13 @@ namespace FFVM.Compiler
             _deferredCleanups = new List<DeferredCleanup>();
             _isEntryFunction = isEntry;
             _inCleanupBlock = false;
+            _freeVarRegs = new List<int>();
+            _maxVarRegUsed = VarRegBase - 1;
+            _stmtOrder = 0;
+            _currentFunctionName = func.Name;
+
+            // F4: analyze variable lifetimes before compilation
+            _liveRanges = AnalyzeVariableLifetimes(func);
 
             // Bind parameters: copy from scratch zone r0..rN into local registers r16+
             for (int i = 0; i < func.Parameters.Count; i++)
@@ -231,22 +301,272 @@ namespace FFVM.Compiler
                 Emit(OpCode.RETURN);
             }
 
-            // Record window size: number of local variable registers used (above r16)
-            _callerWindowSize = _nextVarReg - VarRegBase;
+            // A.6: Record precise window size using max register actually allocated
+            _callerWindowSize = (_maxVarRegUsed >= VarRegBase) ? (_maxVarRegUsed - VarRegBase + 1) : 0;
+        }
+
+        // ===== F4: Variable lifetime analysis =====
+
+        /// <summary>
+        /// Analyze variable lifetimes in a function AST.
+        /// Returns a dictionary of variable name → LiveRange with declaration order, last use order, and await crossing info.
+        /// </summary>
+        private Dictionary<string, LiveRange> AnalyzeVariableLifetimes(FuncDecl func)
+        {
+            var ranges = new Dictionary<string, LiveRange>();
+            int order = 0;
+            bool seenAwait = false;
+            var awaitOrder = -1; // order at which first await is seen
+            var declaredBeforeAwait = new HashSet<string>();
+            var usedAfterAwait = new HashSet<string>();
+
+            // Track all variable declarations and usages through AST walk
+            void WalkExpr(Expr expr)
+            {
+                if (expr == null) return;
+                order++;
+
+                if (expr is IdentifierExpr ident)
+                {
+                    if (ranges.ContainsKey(ident.Name))
+                    {
+                        var r = ranges[ident.Name];
+                        r.LastUseOrder = order;
+                        ranges[ident.Name] = r;
+                    }
+                    if (seenAwait && declaredBeforeAwait.Contains(ident.Name))
+                        usedAfterAwait.Add(ident.Name);
+                }
+                else if (expr is FieldAccessExpr fa)
+                {
+                    if (fa.Target is IdentifierExpr faIdent)
+                    {
+                        if (ranges.ContainsKey(faIdent.Name))
+                        {
+                            var r = ranges[faIdent.Name];
+                            r.LastUseOrder = order;
+                            ranges[faIdent.Name] = r;
+                        }
+                        if (seenAwait && declaredBeforeAwait.Contains(faIdent.Name))
+                            usedAfterAwait.Add(faIdent.Name);
+                    }
+                }
+                else if (expr is BinaryExpr bin)
+                {
+                    WalkExpr(bin.Left);
+                    WalkExpr(bin.Right);
+                }
+                else if (expr is UnaryExpr un)
+                {
+                    WalkExpr(un.Operand);
+                }
+                else if (expr is AssignExpr assign)
+                {
+                    WalkExpr(assign.Target);
+                    WalkExpr(assign.Value);
+                }
+                else if (expr is CallExpr call)
+                {
+                    for (int i = 0; i < call.Arguments.Count; i++)
+                        WalkExpr(call.Arguments[i]);
+                }
+            }
+
+            void WalkStmt(Stmt stmt)
+            {
+                if (stmt == null) return;
+
+                if (stmt is VarDeclStmt varDecl)
+                {
+                    order++;
+                    int fieldCount = 0;
+                    if (_structTypes.TryGetValue(varDecl.TypeName, out var sd))
+                        fieldCount = sd.Fields.Count;
+
+                    ranges[varDecl.Name] = new LiveRange
+                    {
+                        Name = varDecl.Name,
+                        DefOrder = order,
+                        LastUseOrder = order,
+                        CrossesAwait = false,
+                        FieldCount = fieldCount
+                    };
+                    if (!seenAwait) declaredBeforeAwait.Add(varDecl.Name);
+                    if (varDecl.Initializer != null)
+                        WalkExpr(varDecl.Initializer);
+                }
+                else if (stmt is ExprStmt exprStmt)
+                {
+                    WalkExpr(exprStmt.Expression);
+                }
+                else if (stmt is IfStmt ifStmt)
+                {
+                    WalkExpr(ifStmt.Condition);
+                    WalkStmt(ifStmt.ThenBranch);
+                    if (ifStmt.ElseBranch != null) WalkStmt(ifStmt.ElseBranch);
+                }
+                else if (stmt is WhileStmt whileStmt)
+                {
+                    WalkExpr(whileStmt.Condition);
+                    WalkStmt(whileStmt.Body);
+                }
+                else if (stmt is ForStmt forStmt)
+                {
+                    if (forStmt.Initializer != null) WalkStmt(forStmt.Initializer);
+                    if (forStmt.Condition != null) WalkExpr(forStmt.Condition);
+                    if (forStmt.Increment != null) WalkExpr(forStmt.Increment);
+                    WalkStmt(forStmt.Body);
+                }
+                else if (stmt is BlockStmt block)
+                {
+                    for (int i = 0; i < block.Statements.Count; i++)
+                        WalkStmt(block.Statements[i]);
+                }
+                else if (stmt is ReturnStmt retStmt)
+                {
+                    if (retStmt.Value != null) WalkExpr(retStmt.Value);
+                }
+                else if (stmt is WaitStmt || stmt is WaitForStmt || stmt is YieldStmt)
+                {
+                    seenAwait = true;
+                    if (awaitOrder < 0) awaitOrder = order;
+                    if (stmt is WaitForStmt wf) WalkExpr(wf.TargetInstanceId);
+                }
+                else if (stmt is DeferStmt deferStmt)
+                {
+                    WalkStmt(deferStmt.Body);
+                }
+                else if (stmt is UsingStmt usingStmt)
+                {
+                    for (int i = 0; i < usingStmt.Arguments.Count; i++)
+                        WalkExpr(usingStmt.Arguments[i]);
+                    WalkStmt(usingStmt.Body);
+                }
+            }
+
+            // Walk parameters first (they are always defined at start)
+            for (int i = 0; i < func.Parameters.Count; i++)
+            {
+                order++;
+                ranges[func.Parameters[i].Name] = new LiveRange
+                {
+                    Name = func.Parameters[i].Name,
+                    DefOrder = order,
+                    LastUseOrder = order,
+                    CrossesAwait = false,
+                    FieldCount = 0
+                };
+                declaredBeforeAwait.Add(func.Parameters[i].Name);
+            }
+
+            // Walk function body
+            for (int i = 0; i < func.Body.Statements.Count; i++)
+                WalkStmt(func.Body.Statements[i]);
+
+            // Mark variables that cross awaits
+            foreach (var name in usedAfterAwait)
+            {
+                if (ranges.ContainsKey(name))
+                {
+                    var r = ranges[name];
+                    r.CrossesAwait = true;
+                    ranges[name] = r;
+                }
+            }
+
+            return ranges;
         }
 
         // ===== Variable management =====
 
         private int DeclareVar(string name)
         {
+            // F4: try to reuse a freed register from the free list
+            if (_freeVarRegs != null && _freeVarRegs.Count > 0)
+            {
+                int reg = _freeVarRegs[_freeVarRegs.Count - 1];
+                _freeVarRegs.RemoveAt(_freeVarRegs.Count - 1);
+                _variables[name] = reg;
+                // DBG2: record symbol entry for scalar variable
+                _symbolEntries.Add(new SymbolEntry(name, reg, 0, null, _currentFunctionName));
+                return reg;
+            }
+
             if (_nextVarReg >= TempRegBase)
             {
                 _errors.Add($"Too many local variables (max {TempRegBase - VarRegBase})");
                 return VarRegBase;
             }
-            int reg = _nextVarReg++;
-            _variables[name] = reg;
-            return reg;
+            int newReg = _nextVarReg++;
+            _variables[name] = newReg;
+            if (newReg > _maxVarRegUsed) _maxVarRegUsed = newReg;
+            // DBG2: record symbol entry for scalar variable
+            _symbolEntries.Add(new SymbolEntry(name, newReg, 0, null, _currentFunctionName));
+            return newReg;
+        }
+
+        /// <summary>
+        /// Declare a struct variable, allocating consecutive registers.
+        /// F4: tries to find a consecutive free block in the free list.
+        /// </summary>
+        private int DeclareStructVar(string name, int fieldCount)
+        {
+            // F4: try to find consecutive free registers in free list
+            if (_freeVarRegs != null && _freeVarRegs.Count >= fieldCount)
+            {
+                _freeVarRegs.Sort();
+                // Look for a consecutive run
+                for (int i = 0; i <= _freeVarRegs.Count - fieldCount; i++)
+                {
+                    bool consecutive = true;
+                    for (int j = 1; j < fieldCount; j++)
+                    {
+                        if (_freeVarRegs[i + j] != _freeVarRegs[i] + j)
+                        {
+                            consecutive = false;
+                            break;
+                        }
+                    }
+                    if (consecutive)
+                    {
+                        int baseReg = _freeVarRegs[i];
+                        // Remove these registers from free list (reverse order to keep indices valid)
+                        for (int j = fieldCount - 1; j >= 0; j--)
+                            _freeVarRegs.RemoveAt(i + j);
+                        _variables[name] = baseReg;
+                        return baseReg;
+                    }
+                }
+            }
+
+            // Fall back to linear allocation
+            if (_nextVarReg + fieldCount > TempRegBase)
+            {
+                _errors.Add($"Too many local variables — struct '{name}' needs {fieldCount} registers (max {TempRegBase - VarRegBase})");
+                return VarRegBase;
+            }
+            int newBaseReg = _nextVarReg;
+            _nextVarReg += fieldCount;
+            _variables[name] = newBaseReg;
+            if (_nextVarReg - 1 > _maxVarRegUsed) _maxVarRegUsed = _nextVarReg - 1;
+            return newBaseReg;
+        }
+
+        /// <summary>
+        /// F4: Release a variable's register(s) back to the free list for reuse.
+        /// Only releases if the variable is not live across an await.
+        /// </summary>
+        private void TryReleaseVar(string name)
+        {
+            if (_liveRanges == null) return;
+            if (!_liveRanges.TryGetValue(name, out var range)) return;
+            // Don't release variables that cross awaits — they must persist
+            if (range.CrossesAwait) return;
+            if (!_variables.TryGetValue(name, out int reg)) return;
+
+            int count = range.FieldCount > 0 ? range.FieldCount : 1;
+            for (int i = 0; i < count; i++)
+                _freeVarRegs.Add(reg + i);
         }
 
         private int ResolveVar(string name)
@@ -325,6 +645,8 @@ namespace FFVM.Compiler
         private void Emit(OpCode code, int a = 0, int b = 0, int c = 0)
         {
             _instructions.Add(new Instruction(code, a, b, c));
+            // DBG1: record source line for this instruction
+            _sourceLines.Add(_currentLine);
         }
 
         private int EmitJump(OpCode code, int testReg = 0)
@@ -346,13 +668,43 @@ namespace FFVM.Compiler
         {
             for (int i = 0; i < block.Statements.Count; i++)
             {
+                _stmtOrder++;
                 CompileStmt(block.Statements[i]);
                 ResetTemps();
+
+                // F4: release variables whose lifetime has ended after this statement
+                if (_liveRanges != null)
+                {
+                    // Check each live range: if lastUseOrder <= current stmtOrder, release it
+                    // (We use a snapshot approach: collect candidates then release)
+                    var toRelease = new List<string>();
+                    foreach (var kv in _liveRanges)
+                    {
+                        if (kv.Value.LastUseOrder <= _stmtOrder && kv.Value.DefOrder < _stmtOrder
+                            && _variables.ContainsKey(kv.Key) && !kv.Value.CrossesAwait)
+                        {
+                            // Check if already freed
+                            int reg = _variables[kv.Key];
+                            bool alreadyFreed = false;
+                            for (int f = 0; f < _freeVarRegs.Count; f++)
+                            {
+                                if (_freeVarRegs[f] == reg) { alreadyFreed = true; break; }
+                            }
+                            if (!alreadyFreed)
+                                toRelease.Add(kv.Key);
+                        }
+                    }
+                    for (int r = 0; r < toRelease.Count; r++)
+                        TryReleaseVar(toRelease[r]);
+                }
             }
         }
 
         private void CompileStmt(Stmt stmt)
         {
+            // DBG1: update current line from AST node
+            if (stmt.Line > 0) _currentLine = stmt.Line;
+
             if (stmt is VarDeclStmt varDecl) { CompileVarDecl(varDecl); return; }
             if (stmt is IfStmt ifStmt)       { CompileIf(ifStmt); return; }
             if (stmt is WhileStmt whileStmt) { CompileWhile(whileStmt); return; }
@@ -373,15 +725,15 @@ namespace FFVM.Compiler
             // Check if this is a struct variable
             if (_structTypes.TryGetValue(stmt.TypeName, out var structDecl))
             {
-                int baseReg = _nextVarReg;
-                if (_nextVarReg + structDecl.Fields.Count > TempRegBase)
-                {
-                    _errors.Add($"Too many local variables — struct '{stmt.Name}' needs {structDecl.Fields.Count} registers (max {TempRegBase - VarRegBase})");
-                    return;
-                }
-                _variables[stmt.Name] = baseReg;
+                // F4: use DeclareStructVar for register reuse of consecutive slots
+                int baseReg = DeclareStructVar(stmt.Name, structDecl.Fields.Count);
                 _structVarTypes[stmt.Name] = stmt.TypeName;
-                _nextVarReg += structDecl.Fields.Count;
+
+                // DBG2: record symbol entry for struct variable with field names
+                var fieldNames = new string[structDecl.Fields.Count];
+                for (int fi = 0; fi < structDecl.Fields.Count; fi++)
+                    fieldNames[fi] = structDecl.Fields[fi].Name;
+                _symbolEntries.Add(new SymbolEntry(stmt.Name, baseReg, structDecl.Fields.Count, fieldNames, _currentFunctionName));
 
                 // Initialize: if initializer is another struct var of same type, emit N × MOVE
                 if (stmt.Initializer != null)
@@ -413,7 +765,8 @@ namespace FFVM.Compiler
             int reg = DeclareVar(stmt.Name);
             if (stmt.Initializer != null)
             {
-                int valueReg = CompileExpr(stmt.Initializer);
+                // O4: pass dest-reg hint so expression writes directly into var register
+                int valueReg = CompileExpr(stmt.Initializer, destReg: reg);
                 if (valueReg != reg)
                     Emit(OpCode.MOVE, reg, valueReg);
             }
@@ -617,28 +970,103 @@ namespace FFVM.Compiler
             CompileExpr(stmt.Expression);
         }
 
+        // ===== Constant folding (O5) =====
+
+        /// <summary>
+        /// Try to evaluate a constant expression at compile time.
+        /// Returns true if the expression is a pure constant (literals + arithmetic/comparison/boolean).
+        /// </summary>
+        private bool TryFoldConstant(Expr expr, out Number value)
+        {
+            value = Number.Zero;
+
+            if (expr is IntLiteralExpr intLit)
+            {
+                value = Number.FromInt(intLit.Value);
+                return true;
+            }
+            if (expr is NumberLiteralExpr numLit)
+            {
+                value = Number.FromFloat(numLit.Value);
+                return true;
+            }
+            if (expr is BoolLiteralExpr boolLit)
+            {
+                value = boolLit.Value ? Number.One : Number.Zero;
+                return true;
+            }
+            if (expr is UnaryExpr un)
+            {
+                if (!TryFoldConstant(un.Operand, out Number operand))
+                    return false;
+                switch (un.Kind)
+                {
+                    case NodeKind.Negate: value = -operand; return true;
+                    case NodeKind.Not:    value = operand == Number.Zero ? Number.One : Number.Zero; return true;
+                    default: return false;
+                }
+            }
+            if (expr is BinaryExpr bin)
+            {
+                if (!TryFoldConstant(bin.Left, out Number left) || !TryFoldConstant(bin.Right, out Number right))
+                    return false;
+                switch (bin.Kind)
+                {
+                    case NodeKind.Add: value = left + right; return true;
+                    case NodeKind.Sub: value = left - right; return true;
+                    case NodeKind.Mul: value = left * right; return true;
+                    case NodeKind.Div: value = left / right; return true;
+                    case NodeKind.Mod: value = left % right; return true;
+                    case NodeKind.Eq:  value = left == right ? Number.One : Number.Zero; return true;
+                    case NodeKind.Neq: value = left != right ? Number.One : Number.Zero; return true;
+                    case NodeKind.Lt:  value = left < right ? Number.One : Number.Zero; return true;
+                    case NodeKind.Lte: value = left <= right ? Number.One : Number.Zero; return true;
+                    case NodeKind.Gt:  value = left > right ? Number.One : Number.Zero; return true;
+                    case NodeKind.Gte: value = left >= right ? Number.One : Number.Zero; return true;
+                    case NodeKind.And: value = (left != Number.Zero && right != Number.Zero) ? Number.One : Number.Zero; return true;
+                    case NodeKind.Or:  value = (left != Number.Zero || right != Number.Zero) ? Number.One : Number.Zero; return true;
+                    default: return false;
+                }
+            }
+            return false;
+        }
+
         // ===== Expression compilation =====
         // Returns the register holding the result
 
-        private int CompileExpr(Expr expr)
+        private int CompileExpr(Expr expr, int destReg = -1)
         {
+            // DBG1: update current line from expression AST node
+            if (expr.Line > 0) _currentLine = expr.Line;
+
+            // O5: constant folding — evaluate pure constant expressions at compile time
+            if (expr is BinaryExpr || expr is UnaryExpr)
+            {
+                if (TryFoldConstant(expr, out Number foldedValue))
+                {
+                    int reg = destReg >= 0 ? destReg : AllocTemp();
+                    Emit(OpCode.LOAD_CONST, reg, AddConst(foldedValue));
+                    return reg;
+                }
+            }
+
             if (expr is IntLiteralExpr intLit)
             {
-                int reg = AllocTemp();
+                int reg = destReg >= 0 ? destReg : AllocTemp();
                 Emit(OpCode.LOAD_CONST, reg, AddConst(Number.FromInt(intLit.Value)));
                 return reg;
             }
 
             if (expr is NumberLiteralExpr numLit)
             {
-                int reg = AllocTemp();
+                int reg = destReg >= 0 ? destReg : AllocTemp();
                 Emit(OpCode.LOAD_CONST, reg, AddConst(Number.FromFloat(numLit.Value)));
                 return reg;
             }
 
             if (expr is BoolLiteralExpr boolLit)
             {
-                int reg = AllocTemp();
+                int reg = destReg >= 0 ? destReg : AllocTemp();
                 Emit(OpCode.LOAD_CONST, reg, AddConst(boolLit.Value ? Number.One : Number.Zero));
                 return reg;
             }
@@ -657,7 +1085,7 @@ namespace FFVM.Compiler
             {
                 int left = CompileExpr(bin.Left);
                 int right = CompileExpr(bin.Right);
-                int dest = AllocTemp();
+                int dest = destReg >= 0 ? destReg : AllocTemp();
                 Emit(BinOpCode(bin.Kind), dest, left, right);
                 return dest;
             }
@@ -665,7 +1093,7 @@ namespace FFVM.Compiler
             if (expr is UnaryExpr un)
             {
                 int operand = CompileExpr(un.Operand);
-                int dest = AllocTemp();
+                int dest = destReg >= 0 ? destReg : AllocTemp();
                 Emit(UnOpCode(un.Kind), dest, operand);
                 return dest;
             }
@@ -695,33 +1123,38 @@ namespace FFVM.Compiler
                 if (assign.Target is FieldAccessExpr fieldTarget)
                 {
                     int fieldReg = ResolveFieldAccess(fieldTarget);
-                    int valueReg = CompileExpr(assign.Value);
+                    // O4: pass dest-reg hint for field assignment
+                    int valueReg = CompileExpr(assign.Value, destReg: fieldReg);
                     if (valueReg != fieldReg)
                         Emit(OpCode.MOVE, fieldReg, valueReg);
                     return fieldReg;
                 }
 
                 // Scalar assignment (original path)
-                int scalarValueReg = CompileExpr(assign.Value);
                 if (assign.Target is IdentifierExpr scalarTarget)
                 {
                     int scalarTargetReg = ResolveVar(scalarTarget.Name);
+                    // O4: pass dest-reg hint so expression writes directly into target register
+                    int scalarValueReg = CompileExpr(assign.Value, destReg: scalarTargetReg);
                     if (scalarValueReg != scalarTargetReg)
                         Emit(OpCode.MOVE, scalarTargetReg, scalarValueReg);
                     return scalarTargetReg;
                 }
-                _errors.Add($"Invalid assignment target (line {assign.Line})");
-                return scalarValueReg;
+                {
+                    int scalarValueReg = CompileExpr(assign.Value);
+                    _errors.Add($"Invalid assignment target (line {assign.Line})");
+                    return scalarValueReg;
+                }
             }
 
             if (expr is CallExpr call)
             {
                 // User function call (returns value in r0)
                 if (_functionTable != null && _functionTable.ContainsKey(call.FunctionName))
-                    return CompileUserCallExpr(call);
+                    return CompileUserCallExpr(call, destReg);
 
                 // Syscall call
-                return CompileSyscallExpr(call);
+                return CompileSyscallExpr(call, destReg);
             }
 
             _errors.Add($"Unknown expression type: {expr.GetType().Name}");
@@ -734,7 +1167,7 @@ namespace FFVM.Compiler
         /// Compile a syscall call as an expression (saves result to temp).
         /// Two-phase arg compilation to avoid register conflicts with nested calls.
         /// </summary>
-        private int CompileSyscallExpr(CallExpr call)
+        private int CompileSyscallExpr(CallExpr call, int destReg = -1)
         {
             if (!_syscalls.TryGetValue(call.FunctionName, out int slot))
             {
@@ -763,10 +1196,11 @@ namespace FFVM.Compiler
 
             Emit(OpCode.SYSCALL, slot, 0, call.Arguments.Count);
 
-            // Save result from r0 to temp (protect from future overwrites)
-            int resultTemp = AllocTemp();
-            Emit(OpCode.MOVE, resultTemp, 0);
-            return resultTemp;
+            // O7/FO5: save result from r0 directly to destReg if available
+            int resultReg = destReg >= 0 ? destReg : AllocTemp();
+            if (resultReg != 0)
+                Emit(OpCode.MOVE, resultReg, 0);
+            return resultReg;
         }
 
         /// <summary>
@@ -804,14 +1238,15 @@ namespace FFVM.Compiler
         /// Emit arguments to scratch zone, then CALL user function.
         /// Returns temp register holding the return value (from r0).
         /// </summary>
-        private int CompileUserCallExpr(CallExpr call)
+        private int CompileUserCallExpr(CallExpr call, int destReg = -1)
         {
             EmitUserCall(call);
 
-            // Save result from r0 to temp (protect from future overwrites)
-            int resultTemp = AllocTemp();
-            Emit(OpCode.MOVE, resultTemp, 0);
-            return resultTemp;
+            // FO5: save result from r0 directly to destReg if available
+            int resultReg = destReg >= 0 ? destReg : AllocTemp();
+            if (resultReg != 0)
+                Emit(OpCode.MOVE, resultReg, 0);
+            return resultReg;
         }
 
         /// <summary>
@@ -828,6 +1263,13 @@ namespace FFVM.Compiler
         /// </summary>
         private void EmitUserCall(CallExpr call)
         {
+            // R8: prohibit function calls inside cleanup blocks (defer/using release)
+            if (_inCleanupBlock)
+            {
+                _errors.Add($"Cannot call functions inside a cleanup block (defer/using) (line {call.Line})");
+                return;
+            }
+
             int entryIP = _functionTable[call.FunctionName];
 
             // Validate parameter count
@@ -864,6 +1306,168 @@ namespace FFVM.Compiler
             if (entryIP < 0)
             {
                 _pendingCalls.Add(new PendingCall { InstructionIP = callIP, FunctionName = call.FunctionName });
+            }
+        }
+
+        // ===== FO7: Static call depth analysis =====
+
+        /// <summary>
+        /// Build a call graph from the AST and compute max call depth.
+        /// If max depth exceeds MaxCallDepth, report a compile error.
+        /// Detects recursion (cycles) and marks as "dynamic depth — requires runtime check".
+        /// </summary>
+        private void AnalyzeCallDepth(ModuleNode module, string entryFunc)
+        {
+            // Build call graph: funcName → set of called function names
+            var callGraph = new Dictionary<string, HashSet<string>>();
+            for (int i = 0; i < module.Functions.Count; i++)
+            {
+                var func = module.Functions[i];
+                var callees = new HashSet<string>();
+                CollectCallees(func.Body, callees);
+                callGraph[func.Name] = callees;
+            }
+
+            // DFS to compute max depth from each function
+            var visited = new Dictionary<string, int>(); // funcName → max depth from this node (-1 = in progress)
+
+            int ComputeDepth(string funcName)
+            {
+                if (visited.TryGetValue(funcName, out int cached))
+                {
+                    if (cached == -1) return -1; // cycle detected (recursion)
+                    return cached;
+                }
+                visited[funcName] = -1; // mark in progress
+
+                if (!callGraph.TryGetValue(funcName, out var callees) || callees.Count == 0)
+                {
+                    visited[funcName] = 0; // leaf function
+                    return 0;
+                }
+
+                int maxChildDepth = 0;
+                bool hasRecursion = false;
+                foreach (var callee in callees)
+                {
+                    // Only analyze known user functions (skip syscalls)
+                    if (!callGraph.ContainsKey(callee)) continue;
+
+                    int childDepth = ComputeDepth(callee);
+                    if (childDepth == -1)
+                    {
+                        hasRecursion = true;
+                        continue; // skip recursive edges for depth calculation
+                    }
+                    if (childDepth + 1 > maxChildDepth)
+                        maxChildDepth = childDepth + 1;
+                }
+
+                if (hasRecursion)
+                {
+                    // Don't error — recursion is valid but requires runtime check
+                    // Mark with non-overflowing depth so callers don't trigger static errors
+                    visited[funcName] = maxChildDepth;
+                    return maxChildDepth;
+                }
+
+                visited[funcName] = maxChildDepth;
+                return maxChildDepth;
+            }
+
+            int entryDepth = callGraph.ContainsKey(entryFunc) ? ComputeDepth(entryFunc) : 0;
+            // Note: recursive functions return their non-recursive child depth (ignoring back-edges).
+            // This means recursion doesn't inflate the static depth — runtime MaxCallDepth check handles it.
+            if (entryDepth > VMConstants.MaxCallDepth)
+            {
+                _errors.Add($"Static call depth from '{entryFunc}' is {entryDepth}, exceeding MaxCallDepth ({VMConstants.MaxCallDepth}). Reduce function nesting or increase limit.");
+            }
+        }
+
+        /// <summary>
+        /// Recursively collect all user function names called within a block statement.
+        /// </summary>
+        private void CollectCallees(Stmt stmt, HashSet<string> callees)
+        {
+            if (stmt == null) return;
+
+            if (stmt is BlockStmt block)
+            {
+                for (int i = 0; i < block.Statements.Count; i++)
+                    CollectCallees(block.Statements[i], callees);
+            }
+            else if (stmt is ExprStmt exprStmt)
+            {
+                CollectCalleesExpr(exprStmt.Expression, callees);
+            }
+            else if (stmt is VarDeclStmt varDecl)
+            {
+                if (varDecl.Initializer != null)
+                    CollectCalleesExpr(varDecl.Initializer, callees);
+            }
+            else if (stmt is IfStmt ifStmt)
+            {
+                CollectCalleesExpr(ifStmt.Condition, callees);
+                CollectCallees(ifStmt.ThenBranch, callees);
+                if (ifStmt.ElseBranch != null) CollectCallees(ifStmt.ElseBranch, callees);
+            }
+            else if (stmt is WhileStmt whileStmt)
+            {
+                CollectCalleesExpr(whileStmt.Condition, callees);
+                CollectCallees(whileStmt.Body, callees);
+            }
+            else if (stmt is ForStmt forStmt)
+            {
+                if (forStmt.Initializer != null) CollectCallees(forStmt.Initializer, callees);
+                if (forStmt.Condition != null) CollectCalleesExpr(forStmt.Condition, callees);
+                if (forStmt.Increment != null) CollectCalleesExpr(forStmt.Increment, callees);
+                CollectCallees(forStmt.Body, callees);
+            }
+            else if (stmt is ReturnStmt retStmt)
+            {
+                if (retStmt.Value != null) CollectCalleesExpr(retStmt.Value, callees);
+            }
+            else if (stmt is DeferStmt deferStmt)
+            {
+                CollectCallees(deferStmt.Body, callees);
+            }
+            else if (stmt is UsingStmt usingStmt)
+            {
+                for (int i = 0; i < usingStmt.Arguments.Count; i++)
+                    CollectCalleesExpr(usingStmt.Arguments[i], callees);
+                CollectCallees(usingStmt.Body, callees);
+            }
+            else if (stmt is WaitForStmt wf)
+            {
+                CollectCalleesExpr(wf.TargetInstanceId, callees);
+            }
+        }
+
+        private void CollectCalleesExpr(Expr expr, HashSet<string> callees)
+        {
+            if (expr == null) return;
+
+            if (expr is CallExpr call)
+            {
+                // Only record user function calls (those in _funcDecls)
+                if (_funcDecls.ContainsKey(call.FunctionName))
+                    callees.Add(call.FunctionName);
+                for (int i = 0; i < call.Arguments.Count; i++)
+                    CollectCalleesExpr(call.Arguments[i], callees);
+            }
+            else if (expr is BinaryExpr bin)
+            {
+                CollectCalleesExpr(bin.Left, callees);
+                CollectCalleesExpr(bin.Right, callees);
+            }
+            else if (expr is UnaryExpr un)
+            {
+                CollectCalleesExpr(un.Operand, callees);
+            }
+            else if (expr is AssignExpr assign)
+            {
+                CollectCalleesExpr(assign.Target, callees);
+                CollectCalleesExpr(assign.Value, callees);
             }
         }
 

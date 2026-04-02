@@ -19,7 +19,7 @@
 | ID | 来源 | 内容 | 说明 | 状态 |
 |----|------|------|------|------|
 | **C4** | [§3.3 C4](../VM_Summary.md#33-cleanup-机制using理想defer逃生舱) | 编译器 "requires cleanup" 强制检查 | 标记了 `requires_cleanup` 的 Syscall 若既未配 `using` 也未配 `defer`，编译报错 | ✅ 已完成 |
-| **F4** | [Step8 §八](Step8_FunctionCall.md#八依赖关系总览) | 编译器寄存器生命周期分析 + 跨 await 变量提升 | 来源：VM_Tracer_Bullet.md §十二 第 2 项"寄存器复用" | ⏳ 最晚步骤 10 前 |
+| **F4** | [Step8 §八](Step8_FunctionCall.md#八依赖关系总览) | 编译器寄存器生命周期分析 + 跨 await 变量提升 | 来源：VM_Tracer_Bullet.md §十二 第 2 项"寄存器复用" | ✅ 已完成 |
 | **G5** | [§11.1 G5](../VM_Summary.md#111-代码缺口) | C4 对应的代码缺口（同上） | — | ✅ 已完成（同 C4） |
 | **G6** | [§11.1 G6](../VM_Summary.md#111-代码缺口) | `defer`/`using` Cleanup 块内禁止 `wait`/`wait_for` 编译检查 | 语义上 Cleanup 块不应挂起 | ✅ 已完成 |
 | **V5** | [§4.6 V5](../VM_Summary.md#v5-帧内-profiler-验证真实-syscall-接入后--待前置) | 帧内 Profiler 验证（真实 Syscall 接入后） | 必须在步骤 10 前通过 | ⚪ 待前置条件 |
@@ -91,8 +91,8 @@
 
 | ID | 内容 | 层级 | 复杂度 | 说明 |
 |----|------|------|--------|------|
-| **DBG1** | 源码映射表（Source Map） | 编译器 | 中 | 编译器追踪每条 emit 指令对应的源码行列号，生成 `IP → (line, col)` 映射表，存入 `VMProgram` |
-| **DBG2** | 符号表（Symbol Table） | 编译器 | 中 | 记录每个作用域中变量名 → 寄存器槽位的映射（含生命周期范围），struct 字段名也需映射 |
+| **DBG1** | 源码映射表（Source Map） | 编译器 | 中 | 编译器追踪每条 emit 指令对应的源码行号，生成 `IP → line` 映射表，存入 `VMProgram.SourceMap` | ✅ 已完成 |
+| **DBG2** | 符号表（Symbol Table） | 编译器 | 中 | 记录每个变量名 → 寄存器槽位 + struct 字段信息，存入 `VMProgram.SymbolTable` | ✅ Phase 1 完成 |
 | **DBG3** | 宿主断点桥接（Host Breakpoint Bridge） | 运行时 | 低 | Source Map 查表：当前 IP 命中断点行时调用 `Debugger.Break()`，触发宿主真实断点 |
 | **DBG4** | 单步映射（Step Mapping） | 运行时 | 中 | 基于 Source Map 的行级单步标记：Step Over = 下一行 IP 设临时断点；Step Into/Out 感知 CALL / RET_FUNC |
 | **DBG5** | 变量查看适配器（Variable Display Adapter） | 运行时 | 低 | 根据 Symbol Table 读取当前帧的寄存器值，映射为变量名 + 可读值（含 struct 字段展开） |
@@ -126,7 +126,7 @@ DBG7（DAP 适配器）                ← DBG3-DBG6 的 DAP 协议封装 → �
 
 #### 建议实施策略
 
-1. **第一阶段（编译器侧，可与 F4 合并）**：DBG1 + DBG2。在 F4 实施寄存器生命周期分析时，顺带让编译器 emit 源码映射表和符号表。边际排期极低。
+1. **第一阶段（编译器侧，已与 F4 合并完成）**：DBG1 + DBG2。✅ 编译器 emit 源码映射表和符号表已实现。
 2. **第二阶段（运行时侧）**：DBG3 + DBG5 + DBG6。宿主断点桥接 + 变量查看 + 调用栈查看。由于采用真实断点方案，DBG3 实现极简（几行代码），可在 Step 10 前先以测试方式验证。
 3. **第三阶段（DAP 接入）**：DBG4 + DBG7。单步映射 + DAP 适配器。DAP 适配器将 DBG3-DBG6 封装为标准协议，外部 IDE（VS Code 等）直接使用。
 
@@ -203,17 +203,17 @@ LSP1（LSP Server 核心框架）           ← 所有 LSP 功能的通信基础
 
 > 详细方案：通用优化见 [VM_Optimization_Outlook.md](../Refs/VM_Optimization_Outlook.md)；函数调用优化见 [Step8_FunctionCall.md §七](Step8_FunctionCall.md#七性能优化展望)
 
-| ID | 内容 | 预期收益 | 复杂度 | 自然来源 |
-|----|------|---------|--------|----------|
-| **O4** | 目标寄存器传递（dest-reg hint） | 指令数 ~15-20% 减少 | 中 | F4 寄存器分析的直接产出 |
-| **O5** | 常量折叠 | 常量表达式 3→1 条 | 低 | 编译器 `CompileExpr` 入口一行检测 |
-| **O7** | Syscall 结果直达 | 每次 Syscall -1~2 条 MOVE | 低 | O4 dest-reg hint 的延伸 |
-| **O3** | 消除冗余 IP 边界检查 | 热路径 ~5-10% | 极低 | 代码清理即可，一行删除 |
-| **FO4** | 参数就位检测（skip MOVE if arg already in place） | 每已就位参数 -1 MOVE | 低 | 调用约定优化，编译器自然判断 |
-| **FO5** | 返回值直达 | 每次带返回值调用 -1~2 MOVE | 低 | 同 FO4，调用约定自然改进 |
-| **FO7** | 调用栈深度静态分析 | 编译期捕获溢出 + 浅调用省分支 | 中 | 编译器已有函数表，自然扩展分析 |
+| ID | 内容 | 预期收益 | 复杂度 | 自然来源 | 状态 |
+|----|------|---------|--------|----------|------|
+| **O4** | 目标寄存器传递（dest-reg hint） | 指令数 ~15-20% 减少 | 中 | F4 寄存器分析的直接产出 | ✅ |
+| **O5** | 常量折叠 | 常量表达式 3→1 条 | 低 | 编译器 `CompileExpr` 入口一行检测 | ✅ |
+| **O7** | Syscall 结果直达 | 每次 Syscall -1~2 条 MOVE | 低 | O4 dest-reg hint 的延伸 | ✅ |
+| **O3** | 消除冗余 IP 边界检查 | 热路径 ~5-10% | 极低 | 审查后确认仅 1 处必要检查 | ✅ |
+| **FO4** | 参数就位检测（skip MOVE if arg already in place） | 每已就位参数 -1 MOVE | 低 | 调用约定优化，编译器自然判断 | ✅ |
+| **FO5** | 返回值直达 | 每次带返回值调用 -1~2 MOVE | 低 | 同 FO4，调用约定自然改进 | ✅ |
+| **FO7** | 调用栈深度静态分析 | 编译期捕获溢出 + 浅调用省分支 | 中 | 编译器已有函数表，自然扩展分析 | ✅ |
 
-**时机**：F4 实施时一并完成 O4 → O5 → O7 → O3；FO4 / FO5 / FO7 在调用路径优化时自然纳入。
+**时机**：已随 F4 全部完成。
 
 ### 3.2 调整型优化 — 解释器热路径（Benchmark 驱动）
 
@@ -301,8 +301,8 @@ LSP1（LSP Server 核心框架）           ← 所有 LSP 功能的通信基础
 |----|------|------|---------|
 | **R5** | 结构体作为函数参数时寄存器窗口空间不足 | struct 字段拍平加剧窗口压力 | S4 实施时需与 FO6 联合评估 |
 | **R6** | 跨模块函数调用引入 ModuleSlot 切换 | CALL 只支持同模块跳转 | 后续扩展 CALL 操作数或新增 CALL_EXT |
-| **R7** | 前向引用回填在大模块中的性能 | _pendingCalls 线性扫描 | 百函数级模块时考虑改用 Dictionary |
-| **R8** | Cleanup 块内调用函数时 CleanupBase 语义 | 返回后 CleanupDepth 不一致 | 编译器禁止 Cleanup 块内函数调用（需增加检查） |
+| **R7** | 前向引用回填在大模块中的性能 | _pendingCalls 线性扫描 | ✅ 理想方案已实施：>50 自动切换 Dictionary |
+| **R8** | Cleanup 块内调用函数时 CleanupBase 语义 | 返回后 CleanupDepth 不一致 | ✅ 理想方案已实施：编译器禁止 Cleanup 块内函数调用 |
 
 ### 4.2 步骤 9 风险（结构体拍平）
 
