@@ -622,3 +622,123 @@ Gate 3: Unity Editor 内嵌 DAP（可选）             ← DBG7 Phase C
 | D2 | VMScript2.md | 历史失败教训表 → 设计约束推导 | 补入 §9 选型理由 |
 | D3 | VMScript4.md | 项目级成功标准（5 类验收维度） | 补入 §7 或新增验收节 |
 | D4 | VMScript4.md | 设计验证递进轴线 | 已隐含于 §7，可显式化 |
+
+---
+
+## 八、扩展串行计划（理想方案）
+
+> **原则**：每个风险点选择**最终 / 理想方案**而非保守妥协。
+> 扩展后的串行计划在 [VM_Summary.md §七](../VM_Summary.md#七推进顺序严格串行) 的基础上，
+> 将所有风险应对措施、调试子项、语言服务子项展开为具体的执行步骤。
+>
+> **调试决策详情**：见专用文档 → [Step_Debug_Decisions.md](Step_Debug_Decisions.md)
+
+### 8.1 总览时间线
+
+```
+当前位置：Step 10 Pre（C4 + G6）✅ 已完成 → F4 前
+                                    ↓
+─────────────── F4 + 自然优化 + 调试 Phase 1 ────────────────
+    F4. 寄存器生命周期分析 + 跨 await 变量提升
+    ├─ 自然优化（7 项，零额外排期）
+    │   O4 → O5 → O7 → O3, FO4/FO5/FO7
+    ├─ DBG1. 源码映射表（int[] 平行数组，仅行号）
+    ├─ DBG2. 符号表 Phase 1（varName → register，不含生命周期）
+    └─ 风险应对：
+        R7 理想方案：_pendingCalls >50 函数自动切换 Dictionary
+        R8 理想方案：编译器禁止 Cleanup 块内函数调用（一行检查）
+                                    ↓
+─────────────── V5 帧内 Profiler 验证 ────────────────────────
+    前置条件：真实 Syscall 接入 ECS 后
+    C4 强制检查 ✅ 已就位
+                                    ↓
+─────────────── 功能补全（步骤 10 前如需）───────────────────
+    S4. 结构体函数参数 / 返回值传递
+        风险应对（R5 理想方案）：≤4 字段直传，>4 编译报错
+    FF5. 非 entry 函数 defer 完整支持
+                                    ↓
+─────────────── 调试 Phase 2（Gate 0 命令行调试）──────────────
+    DBG3. 宿主断点桥接（5 行代码）
+    DBG5. 变量查看适配器
+    DBG6. 调用栈查看
+    → Gate 0 验收：StandaloneRunner 命令行断点 + 变量 + 调用栈
+                                    ↓
+─────────────── GR1 理想方案：CI 构建矩阵 ────────────────────
+    FIX1. USE_FIXPOINT 独立构建验证
+    → CI 矩阵中增加 USE_FIXPOINT 配置，每次提交自动验证
+                                    ↓
+─────────────── Handle64 批处理协议（展望项）──────────────────
+    H1. 最晚于真实多目标业务接入前实现
+                                    ↓
+10. 编辑器流程图投影
+                                    ↓
+─────────────── 调整型优化（Benchmark 驱动）──────────────────
+    Tier 1: O1 → O2（dispatch 加速 ~40-60%）
+    Tier 2: O6（Peephole，指令数 -5~10%）
+    Tier 3+: O8, O9-O14, FO1-FO3, SO1
+    R1 理想方案：FO6 自适应寄存器窗口（嵌套 ~3→~6 层）
+    SR1 理想方案：FO6 扩大 local 区 + 编译器超限报错
+    SR2 理想方案：SO1 COPY_BLOCK OpCode
+                                    ↓
+─────────────── 调试 Phase 3A（DAP 最小协议）──────────────────
+    DBG7-A. DAP Server 核心（stdin/stdout）
+        12 个必需消息 handler
+        VS Code 极简扩展（~60 行 JSON）
+        独立程序集 FFVM.Debug，#if FFVM_SCRIPT_DEBUG
+    → Gate 1 验收：VS Code 断点命中 + 变量显示
+                                    ↓
+─────────────── 调试 Phase 3B（DAP 单步 + 完整体验）──────────
+    DBG4. 单步映射（归约为临时断点，复用 DBG3）
+    DBG7-B. next/stepIn/stepOut handler
+    → Gate 2 验收：VS Code 三种单步行为正确
+                                    ↓
+─────────────── 调试 Phase 3C（Unity Editor DAP，可选）────────
+    DBG7-C. EditorApplication.update 轮询模式
+    DR5 理想方案：主线程永不阻塞
+    → Gate 3 验收：Editor 模式下断点命中 + 变量查看
+                                    ↓
+─────────────── 语言服务 Phase 4 ─────────────────────────────
+    LSP2. 语法高亮（TextMate Grammar，可最早独立实施）
+    LSP1. LSP Server 核心框架（复用 DAP 通信层）
+    LSP3. 实时诊断（全量重编译，不做增量）
+    LSP4. 符号分析（基于 DBG2 符号表）
+    LSP5. 代码补全
+    DBG2 Phase 2. 符号表补充生命周期信息（F4 完成后）
+                                    ↓
+─────────────── 功能补全（业务驱动，按需）────────────────────
+    FF1-FF4: 跨模块调用、回调、可选参数、多返回值
+    C5/C6: Cleanup 超时保护 / 嵌套 using 优化
+    SN1/SN2: 嵌套结构体 / 字面量构造
+    BB1/PR1/DM1: 黑板/配对扩展/编排
+    GR3 理想方案：D1-D4 文档缺口批量补全
+```
+
+### 8.2 风险理想方案速查
+
+| 风险 ID | 理想方案 | 插入位置 | 决策依据 |
+|---------|---------|---------|---------|
+| **R1** | FO6 自适应寄存器窗口（嵌套 ~3→~6 层） | 调整型优化阶段 | 编译器已有函数表，分析实际使用寄存器数自然扩展 |
+| **R5** | ≤4 字段直传 + 编译报错 → FO6 后解除 | S4 实施时 | 与 FO6 联合评估，先设安全限制 |
+| **R7** | _pendingCalls >50 自动切 Dictionary | F4 阶段 | 阈值控制对用户透明，消除理论上的线性扫描瓶颈 |
+| **R8** | 编译器禁止 Cleanup 块内函数调用 | F4 阶段 | 与 G6（禁止 wait）一致，一行检查 |
+| **SR1** | 编译器超限报错 + FO6 扩大 local 区 | FO6 实施时 | 明确错误信息 + 根本解决方案 |
+| **SR2** | SO1 COPY_BLOCK OpCode | 调整型优化阶段 | `Buffer.MemoryCopy` 批量拷贝替代 N×MOVE |
+| **GR1** | CI 构建矩阵 USE_FIXPOINT 自动验证 | Step 10 前 | 每次提交自动验证，不依赖手动 |
+| **GR3** | D1-D4 文档缺口批量补全 | 功能补全阶段 | 不阻塞功能，但必须补全 |
+| **DR5** | EditorApplication.update 轮询模式 | Phase 3C | 主线程永不阻塞 |
+
+### 8.3 门控测试清单
+
+| Gate | 测试 ID | 内容 | 前置 |
+|------|---------|------|------|
+| — | DBG1_T01 | 编译已知脚本 → 断言 IP→行号映射正确 | F4 |
+| — | DBG2_T01 | 编译含 var+struct → 断言符号表正确 | F4 |
+| **0** | DBG3_T01 | 设断点行 → Debugger.Break() 被调用 | DBG1 |
+| **0** | DBG5_T01 | 断点命中时变量值显示正确 | DBG2+DBG3 |
+| **0** | DBG6_T01 | 断点命中时调用栈显示正确 | DBG3 |
+| **1** | Gate1_Manual | VS Code 连接 → 断点命中 → stackTrace + variables | DBG7-A |
+| **2** | DBG4_T01 | Step Over → 下一行 IP 正确 | DBG4 |
+| **2** | DBG4_T02 | Step Into → CALL 目标 IP 正确 | DBG4 |
+| **2** | DBG4_T03 | Step Out → ReturnIP 正确 | DBG4 |
+| **2** | Gate2_Manual | VS Code 三种单步行为正确 | DBG7-B |
+| **3** | Gate3_Manual | Editor 模式下断点 + 变量查看 | DBG7-C |
