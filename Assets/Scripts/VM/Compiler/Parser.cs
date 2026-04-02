@@ -24,9 +24,13 @@ namespace FFVM.Compiler
                 {
                     module.Functions.Add(ParseFuncDecl());
                 }
+                else if (Check(TokenType.Struct))
+                {
+                    module.Structs.Add(ParseStructDecl());
+                }
                 else
                 {
-                    Error($"Expected 'func', got '{Current().Text}'");
+                    Error($"Expected 'func' or 'struct', got '{Current().Text}'");
                     Advance();
                 }
             }
@@ -114,6 +118,30 @@ namespace FFVM.Compiler
 
             var body = ParseBlock();
             var decl = new FuncDecl(name, parameters, returnType, body, false);
+            decl.Line = line;
+            decl.Column = col;
+            return decl;
+        }
+
+        private StructDecl ParseStructDecl()
+        {
+            int line = Current().Line, col = Current().Column;
+            Advance(); // consume 'struct'
+            string name = Expect(TokenType.Identifier, "after 'struct'").Text ?? "?";
+            Expect(TokenType.LBrace, "after struct name");
+
+            var fields = new List<StructField>();
+            while (!Check(TokenType.RBrace) && !IsAtEnd())
+            {
+                string fieldName = Expect(TokenType.Identifier, "for struct field name").Text ?? "?";
+                Expect(TokenType.Colon, "after field name");
+                string fieldType = Expect(TokenType.Identifier, "for field type").Text ?? "int";
+                fields.Add(new StructField(fieldName, fieldType));
+                Match(TokenType.Semicolon); // optional semicolons
+            }
+            Expect(TokenType.RBrace, "to close struct");
+
+            var decl = new StructDecl(name, fields);
             decl.Line = line;
             decl.Column = col;
             return decl;
@@ -256,7 +284,7 @@ namespace FFVM.Compiler
             if (!Check(TokenType.RBrace, TokenType.Func, TokenType.Var, TokenType.If,
                        TokenType.While, TokenType.For, TokenType.Return, TokenType.Wait,
                        TokenType.WaitFor, TokenType.Yield, TokenType.Defer, TokenType.Using,
-                       TokenType.EOF))
+                       TokenType.Struct, TokenType.EOF))
             {
                 value = ParseExpression();
             }
@@ -468,7 +496,22 @@ namespace FFVM.Compiler
                 Expr operand = ParseUnary();
                 return new UnaryExpr(NodeKind.Not, operand);
             }
-            return ParsePrimary();
+            return ParsePostfix();
+        }
+
+        private Expr ParsePostfix()
+        {
+            Expr expr = ParsePrimary();
+            while (Check(TokenType.Dot))
+            {
+                Advance(); // consume '.'
+                string fieldName = Expect(TokenType.Identifier, "after '.'").Text ?? "?";
+                var fa = new FieldAccessExpr(expr, fieldName);
+                fa.Line = expr.Line;
+                fa.Column = expr.Column;
+                expr = fa;
+            }
+            return expr;
         }
 
         private Expr ParsePrimary()

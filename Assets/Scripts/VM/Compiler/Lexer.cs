@@ -15,7 +15,7 @@ namespace FFVM.Compiler
         // Keywords
         Func, Var, If, Else, While, For, Return,
         Wait, WaitFor, Yield, Defer, Using,
-        True, False,
+        True, False, Struct,
 
         // Operators
         Plus, Minus, Star, Slash, Percent,
@@ -24,7 +24,7 @@ namespace FFVM.Compiler
 
         // Delimiters
         LParen, RParen, LBrace, RBrace,
-        Comma, Colon, Semicolon,
+        Comma, Colon, Semicolon, Dot,
 
         // Special
         EOF,
@@ -76,6 +76,7 @@ namespace FFVM.Compiler
             { "using",    TokenType.Using },
             { "true",     TokenType.True },
             { "false",    TokenType.False },
+            { "struct",   TokenType.Struct },
         };
 
         public Lexer(string source)
@@ -165,6 +166,7 @@ namespace FFVM.Compiler
                 case ',': return new Token(TokenType.Comma, ",", startLine, startCol);
                 case ':': return new Token(TokenType.Colon, ":", startLine, startCol);
                 case ';': return new Token(TokenType.Semicolon, ";", startLine, startCol);
+                case '.': return new Token(TokenType.Dot, ".", startLine, startCol);
                 case '=':
                     if (Peek() == '=') { Advance(); return new Token(TokenType.Eq, "==", startLine, startCol); }
                     return new Token(TokenType.Assign, "=", startLine, startCol);

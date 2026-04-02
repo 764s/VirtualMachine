@@ -32,6 +32,10 @@ namespace FFVM.Compiler
         private SyscallTable _syscallTable;            // paired slot lookup (optional, for using)
         private List<string> _errors;
 
+        // Struct support: compile-time type table
+        private Dictionary<string, StructDecl> _structTypes;    // typeName → struct declaration
+        private Dictionary<string, string> _structVarTypes;     // varName → struct typeName
+
         // Multi-function support
         private Dictionary<string, int> _functionTable;  // funcName → entryIP (-1 = not yet compiled)
         private Dictionary<string, FuncDecl> _funcDecls; // funcName → AST for param count lookup
@@ -87,6 +91,17 @@ namespace FFVM.Compiler
             _syscallTable = syscallTable;
             _errors = new List<string>();
             _pendingCalls = new List<PendingCall>();
+
+            // --- Build struct type table ---
+            _structTypes = new Dictionary<string, StructDecl>();
+            for (int i = 0; i < module.Structs.Count; i++)
+            {
+                var s = module.Structs[i];
+                if (_structTypes.ContainsKey(s.Name))
+                    _errors.Add($"Duplicate struct type '{s.Name}'");
+                else
+                    _structTypes[s.Name] = s;
+            }
 
             // --- Pass 1: build function table (name → placeholder IP) ---
             _functionTable = new Dictionary<string, int>();
@@ -167,6 +182,7 @@ namespace FFVM.Compiler
         private void CompileFunction(FuncDecl func, bool isEntry)
         {
             _variables = new Dictionary<string, int>();
+            _structVarTypes = new Dictionary<string, string>();
             _nextVarReg = VarRegBase;
             _tempTop = TempRegBase;
             _deferredCleanups = new List<DeferredCleanup>();
@@ -230,6 +246,36 @@ namespace FFVM.Compiler
             if (_variables.TryGetValue(name, out int reg))
                 return reg;
             _errors.Add($"Undefined variable '{name}'");
+            return VarRegBase;
+        }
+
+        /// <summary>
+        /// Resolve a field access (e.g., d.level) to a register number: baseReg + fieldIndex.
+        /// </summary>
+        private int ResolveFieldAccess(FieldAccessExpr fa)
+        {
+            if (fa.Target is IdentifierExpr ident)
+            {
+                if (!_structVarTypes.TryGetValue(ident.Name, out var typeName))
+                {
+                    _errors.Add($"Variable '{ident.Name}' is not a struct (line {fa.Line})");
+                    return VarRegBase;
+                }
+                if (!_structTypes.TryGetValue(typeName, out var sd))
+                {
+                    _errors.Add($"Unknown struct type '{typeName}' (line {fa.Line})");
+                    return VarRegBase;
+                }
+                int baseReg = _variables[ident.Name];
+                for (int i = 0; i < sd.Fields.Count; i++)
+                {
+                    if (sd.Fields[i].Name == fa.FieldName)
+                        return baseReg + i;
+                }
+                _errors.Add($"Struct '{typeName}' has no field '{fa.FieldName}' (line {fa.Line})");
+                return baseReg;
+            }
+            _errors.Add($"Unsupported field access target (line {fa.Line})");
             return VarRegBase;
         }
 
@@ -316,6 +362,46 @@ namespace FFVM.Compiler
 
         private void CompileVarDecl(VarDeclStmt stmt)
         {
+            // Check if this is a struct variable
+            if (_structTypes.TryGetValue(stmt.TypeName, out var structDecl))
+            {
+                int baseReg = _nextVarReg;
+                if (_nextVarReg + structDecl.Fields.Count > TempRegBase)
+                {
+                    _errors.Add($"Too many local variables — struct '{stmt.Name}' needs {structDecl.Fields.Count} registers (max {TempRegBase - VarRegBase})");
+                    return;
+                }
+                _variables[stmt.Name] = baseReg;
+                _structVarTypes[stmt.Name] = stmt.TypeName;
+                _nextVarReg += structDecl.Fields.Count;
+
+                // Initialize: if initializer is another struct var of same type, emit N × MOVE
+                if (stmt.Initializer != null)
+                {
+                    if (stmt.Initializer is IdentifierExpr srcIdent &&
+                        _structVarTypes.TryGetValue(srcIdent.Name, out var srcType) &&
+                        srcType == stmt.TypeName)
+                    {
+                        int srcBase = _variables[srcIdent.Name];
+                        for (int i = 0; i < structDecl.Fields.Count; i++)
+                            Emit(OpCode.MOVE, baseReg + i, srcBase + i);
+                    }
+                    else
+                    {
+                        _errors.Add($"Struct variable '{stmt.Name}' can only be initialized from another struct of same type (line {stmt.Line})");
+                    }
+                }
+                else
+                {
+                    // Default initialize all fields to 0
+                    int ci = AddConst(Number.Zero);
+                    for (int i = 0; i < structDecl.Fields.Count; i++)
+                        Emit(OpCode.LOAD_CONST, baseReg + i, ci);
+                }
+                return;
+            }
+
+            // Scalar variable (original path)
             int reg = DeclareVar(stmt.Name);
             if (stmt.Initializer != null)
             {
@@ -540,6 +626,11 @@ namespace FFVM.Compiler
                 return ResolveVar(ident.Name);
             }
 
+            if (expr is FieldAccessExpr fieldAccess)
+            {
+                return ResolveFieldAccess(fieldAccess);
+            }
+
             if (expr is BinaryExpr bin)
             {
                 int left = CompileExpr(bin.Left);
@@ -559,16 +650,46 @@ namespace FFVM.Compiler
 
             if (expr is AssignExpr assign)
             {
-                int valueReg = CompileExpr(assign.Value);
-                if (assign.Target is IdentifierExpr target)
+                // Struct whole assignment: a = b (both are struct variables of same type)
+                if (assign.Target is IdentifierExpr targetIdent &&
+                    _structVarTypes.TryGetValue(targetIdent.Name, out var targetStructType))
                 {
-                    int targetReg = ResolveVar(target.Name);
-                    if (valueReg != targetReg)
-                        Emit(OpCode.MOVE, targetReg, valueReg);
-                    return targetReg;
+                    if (assign.Value is IdentifierExpr srcIdent &&
+                        _structVarTypes.TryGetValue(srcIdent.Name, out var srcStructType) &&
+                        srcStructType == targetStructType)
+                    {
+                        var sd = _structTypes[targetStructType];
+                        int destBase = _variables[targetIdent.Name];
+                        int srcBase = _variables[srcIdent.Name];
+                        for (int i = 0; i < sd.Fields.Count; i++)
+                            Emit(OpCode.MOVE, destBase + i, srcBase + i);
+                        return destBase;
+                    }
+                    _errors.Add($"Cannot assign non-struct value to struct variable '{targetIdent.Name}' (line {assign.Line})");
+                    return ResolveVar(targetIdent.Name);
+                }
+
+                // Field assignment: d.field = expr
+                if (assign.Target is FieldAccessExpr fieldTarget)
+                {
+                    int fieldReg = ResolveFieldAccess(fieldTarget);
+                    int valueReg = CompileExpr(assign.Value);
+                    if (valueReg != fieldReg)
+                        Emit(OpCode.MOVE, fieldReg, valueReg);
+                    return fieldReg;
+                }
+
+                // Scalar assignment (original path)
+                int scalarValueReg = CompileExpr(assign.Value);
+                if (assign.Target is IdentifierExpr scalarTarget)
+                {
+                    int scalarTargetReg = ResolveVar(scalarTarget.Name);
+                    if (scalarValueReg != scalarTargetReg)
+                        Emit(OpCode.MOVE, scalarTargetReg, scalarValueReg);
+                    return scalarTargetReg;
                 }
                 _errors.Add($"Invalid assignment target (line {assign.Line})");
-                return valueReg;
+                return scalarValueReg;
             }
 
             if (expr is CallExpr call)
