@@ -322,6 +322,13 @@ skill TracerBullet
 | `NOT` | 逻辑取反 |
 | `NEG` | 算术取负 |
 
+#### Phase 3：Step 8 函数调用（2 条）
+
+| OpCode | 职责 |
+|--------|------|
+| `CALL` | A=目标函数入口 IP, B=callerWindowSize → 压入 CallFrame + 寄存器窗口偏移 + jump |
+| `RET_FUNC` | 弹出 CallFrame → 恢复 IP + RegisterBase → 返回 caller |
+
 ### 4.5 示意字节码
 
 ```
@@ -451,8 +458,8 @@ skill TracerBullet
 | 解释器 | `TreeWalker`（Phase 2 原型，含 defer + Kill） | ✅ 完成 |
 | 词法分析 | `Lexer`（手写，14 关键字 + 运算符 + 字面量 + 注释） | ✅ 完成 |
 | 语法分析 | `Parser`（手写递归下降，source → `ModuleNode` AST，含 using/wait_for/错误恢复） | ✅ 完成 |
-| 编译器 | `BytecodeCompiler`（AST → `VMProgram`，寄存器分配：r0-15 scratch / r16-47 locals / r48-63 temps，支持 using 配对 Syscall） | ✅ 完成 |
-| 测试 | 237 项 Assert 全部通过（98 TreeWalker + 104 Compiler + 17 Performance + 18 SkillScript），另有 5 项自动化性能基准 | ✅ Step 7 通过 |
+| 编译器 | `BytecodeCompiler`（AST → `VMProgram`，寄存器分配：r0-15 scratch / r16-47 locals / r48-63 temps，支持 using 配对 Syscall，支持多函数编译 + CALL emit） | ✅ 完成 |
+| 测试 | 279 项 Assert 全部通过（112 TreeWalker + 132 Compiler + 17 Performance + 18 SkillScript），另有 5 项自动化性能基准 | ✅ Step 8 通过 |
 | 性能基准 | `BenchmarkRunner`（5 组 VM vs C# 对比基准）+ `run-benchmarks.cmd` 自动化管线 → `benchmark_results.md` | ✅ 完成 |
 
 ### 5.2 未完成（按优先级排列）
@@ -471,8 +478,8 @@ skill TracerBullet
 | P2 | 编译器 emit Cleanup 指令 for `using`（C3） | ✅ 完成 → 步骤 7（CompileUsing：SYSCALL + PUSH_CLEANUP + body + POP_CLEANUP） |
 | P2 | `wait_for` Parser + Compiler 接入（G1） | ✅ 完成 → 步骤 7（ParseWaitFor + CompileWaitFor + WAIT_FOR OpCode） |
 | P2（低） | 编译器 "requires cleanup" 强制检查（C4） | 确定执行 → **最晚步骤 10 前** |
-| P2 | CALL / RET_FUNC OpCode + 跨函数调用 emit（F1-F2） | 确定执行 → 步骤 8 |
-| P2 | 函数调用 GC + 快照回滚验证（F3） | 确定执行 → 步骤 8 |
+| P2 | CALL / RET_FUNC OpCode + 跨函数调用 emit（F1-F2） | ✅ 完成 → 步骤 8（CALL=60, RET_FUNC=61, 两遍编译+前向引用回填） |
+| P2 | 函数调用 GC + 快照回滚验证（F3） | ✅ 完成 → 步骤 8（F05: 0 GC 验证通过） |
 | P2（低） | 编译器寄存器生命周期分析 + 跨 await 变量提升（F4） | 确定执行 → **最晚步骤 10 前** |
 | P2 | Parser struct 声明 + 编译器 struct → 寄存器拍平（S1-S3） | 确定执行 → 步骤 9 |
 | P3 | V5 帧内 Profiler 验证（真实 Syscall 接入后） | 阻塞编辑器 UI |
@@ -557,12 +564,12 @@ skill TracerBullet
   │  C4 强制检查必须在进入步骤 10 前就位                 │
   └────────────────────────────────────────────────────────┘
       ↓
-8. 函数调用 + 固定深度调用栈验证
+8. 函数调用 + 固定深度调用栈验证  ✅ 279 项 Assert 通过
       （来源：VM_Tracer_Bullet.md §十二 第 3 项；CallFrame 基础设施已就位）
       确定执行：
-        F1. CALL / RET_FUNC OpCode（VMWorld.Tick 扩展）
-        F2. 编译器跨函数调用 emit（CallExpr → CALL，区别于 SYSCALL）
-        F3. GC + 快照回滚验证（CallStack 不破坏 blittable / memcpy）
+        F1. CALL / RET_FUNC OpCode（VMWorld.Tick 扩展）                ✅
+        F2. 编译器跨函数调用 emit（CallExpr → CALL，区别于 SYSCALL）   ✅
+        F3. GC + 快照回滚验证（CallStack 不破坏 blittable / memcpy）   ✅
       确定执行（低优先级，最晚步骤 10 前）：
         F4. 编译器寄存器生命周期分析 + 跨 await 变量提升
             （来源：VM_Tracer_Bullet.md §十二 第 2 项"寄存器复用"）
