@@ -12,5 +12,6 @@ public static class Program
         CompilerTests.RunAll();
         PerformanceTests.RunAll();
         SkillScriptTests.RunAll();
+        DebugTests.RunAll();
     }
 }
