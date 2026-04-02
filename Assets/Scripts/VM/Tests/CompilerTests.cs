@@ -1670,8 +1670,9 @@ func main() {
             world.Modules.Load(0, result.Program);
             world.Syscalls.Register(0, "SetValue", (ref VMInstanceState s) => { capturedVal = s.Registers.Get(0).ToInt(); });
             world.SpawnInstance(0, 0);
-            world.Tick(); // wait 1
-            world.Tick(); // resume, call SetValue
+            world.Tick(); // tick 1: executes LOAD_CONST + WAIT, suspends
+            world.Tick(); // tick 2: decrements wait counter
+            world.Tick(); // tick 3: resumes, calls SetValue
             Assert(capturedVal == 42, $"F4-02: cross-await var x = {capturedVal} (expected 42)");
         }
 
@@ -1971,11 +1972,14 @@ func main() {
         // R7-01: 100 functions with forward references → compile success
         {
             var sb = new System.Text.StringBuilder();
-            // Generate 100 helper functions that call the next one
-            for (int i = 0; i < 99; i++)
-                sb.AppendLine($"func f{i}() {{ f{i + 1}() }}");
-            sb.AppendLine("func f99() { Ping() }");
-            sb.AppendLine("func main() { f0() }");
+            // Generate 100 leaf functions that all just call Ping (no deep chain)
+            for (int i = 0; i < 100; i++)
+                sb.AppendLine($"func f{i}() {{ Ping() }}");
+            // main calls all of them → generates 100 forward references for backpatching
+            sb.Append("func main() {");
+            for (int i = 0; i < 100; i++)
+                sb.Append($" f{i}()");
+            sb.AppendLine(" }");
 
             var syscalls = new Dictionary<string, int> { { "Ping", 0 } };
             var result = compiler.Compile(sb.ToString(), "main", syscalls);

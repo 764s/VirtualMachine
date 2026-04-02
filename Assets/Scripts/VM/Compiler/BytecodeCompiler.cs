@@ -1366,9 +1366,9 @@ namespace FFVM.Compiler
                 if (hasRecursion)
                 {
                     // Don't error — recursion is valid but requires runtime check
-                    // Mark as max depth (runtime will enforce MaxCallDepth)
-                    visited[funcName] = VMConstants.MaxCallDepth;
-                    return VMConstants.MaxCallDepth;
+                    // Mark with non-overflowing depth so callers don't trigger static errors
+                    visited[funcName] = maxChildDepth;
+                    return maxChildDepth;
                 }
 
                 visited[funcName] = maxChildDepth;
