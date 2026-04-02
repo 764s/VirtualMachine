@@ -282,10 +282,7 @@ namespace FFVM.Debug
             // Only skip the first breakpoint check when resuming from a breakpoint hit.
             // On initial continue (after launch), do not skip — we want to catch breakpoints
             // even at the very first instruction (IP=0).
-            if (_debugger != null && _hitBreakpoint)
-                _debugger.SkipNextCheck = true;
-
-            return RunUntilBreakpoint("breakpoint");
+            return RunUntilBreakpoint("breakpoint", skipFirstCheck: _hitBreakpoint);
         }
 
         private JsonObject HandleNext(JsonObject arguments)
@@ -295,13 +292,10 @@ namespace FFVM.Debug
 
             ref VMInstanceState inst = ref _world.Pool.Instances[_instanceId];
             int targetIP = ScriptDebugger.FindNextLineIP(_program, inst.IP);
-
-            _debugger.SkipNextCheck = true;
-
             if (targetIP >= 0)
                 _debugger.SetTempBreakpoint(targetIP);
 
-            return RunUntilBreakpoint("step");
+            return RunUntilBreakpoint("step", skipFirstCheck: true);
         }
 
         private JsonObject HandleStepIn(JsonObject arguments)
@@ -311,13 +305,10 @@ namespace FFVM.Debug
 
             ref VMInstanceState inst = ref _world.Pool.Instances[_instanceId];
             int targetIP = ScriptDebugger.FindStepIntoIP(_program, inst.IP);
-
-            _debugger.SkipNextCheck = true;
-
             if (targetIP >= 0)
                 _debugger.SetTempBreakpoint(targetIP);
 
-            return RunUntilBreakpoint("step");
+            return RunUntilBreakpoint("step", skipFirstCheck: true);
         }
 
         private JsonObject HandleStepOut(JsonObject arguments)
@@ -327,13 +318,10 @@ namespace FFVM.Debug
 
             ref VMInstanceState inst = ref _world.Pool.Instances[_instanceId];
             int targetIP = ScriptDebugger.FindStepOutIP(ref inst);
-
-            _debugger.SkipNextCheck = true;
-
             if (targetIP >= 0)
                 _debugger.SetTempBreakpoint(targetIP);
 
-            return RunUntilBreakpoint("step");
+            return RunUntilBreakpoint("step", skipFirstCheck: true);
         }
 
         /// <summary>
@@ -341,9 +329,13 @@ namespace FFVM.Debug
         /// Used by continue, next, stepIn, and stepOut handlers.
         /// </summary>
         /// <param name="stoppedReason">The reason string for the stopped event ("breakpoint" or "step").</param>
-        private JsonObject RunUntilBreakpoint(string stoppedReason)
+        /// <param name="skipFirstCheck">If true, sets SkipNextCheck to avoid re-triggering the current breakpoint.</param>
+        private JsonObject RunUntilBreakpoint(string stoppedReason, bool skipFirstCheck)
         {
             _hitBreakpoint = false;
+
+            if (skipFirstCheck && _debugger != null)
+                _debugger.SkipNextCheck = true;
 
             // Execute ticks until breakpoint or completion
             for (int t = 0; t < MaxContinueTicks; t++)

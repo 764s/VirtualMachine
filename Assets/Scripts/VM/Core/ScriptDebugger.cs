@@ -167,15 +167,16 @@ namespace FFVM
         public static int FindStepIntoIP(VMProgram program, int currentIP)
         {
             if (program.Instructions == null || program.SourceMap == null ||
-                currentIP < 0 || currentIP >= program.Instructions.Length)
+                currentIP < 0 || currentIP >= program.Instructions.Length ||
+                currentIP >= program.SourceMap.Length)
                 return FindNextLineIP(program, currentIP);
 
             int currentLine = program.SourceMap[currentIP];
 
             // Scan forward within the same source line to find a CALL instruction
-            for (int ip = currentIP; ip < program.Instructions.Length; ip++)
+            for (int ip = currentIP; ip < program.Instructions.Length && ip < program.SourceMap.Length; ip++)
             {
-                int line = (ip < program.SourceMap.Length) ? program.SourceMap[ip] : 0;
+                int line = program.SourceMap[ip];
                 if (line > 0 && line != currentLine)
                     break; // Past current line, no CALL found
 
