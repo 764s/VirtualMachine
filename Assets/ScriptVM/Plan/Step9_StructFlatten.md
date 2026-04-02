@@ -1,7 +1,7 @@
 # 步骤 9：结构体编译期拍平验证
 
 > **在整体计划中的位置**：本文档对应 VM_Summary.md §七 推进顺序的步骤 9。
-> **状态**：⬜ 待开始。
+> **状态**：✅ 全部完成（303 项 Assert 通过，其中 24 项为新增 struct 测试 CS01-CS11）。
 > **前置**：步骤 8 已全部完成（279 项 Assert 通过）。
 > **来源**：VM_Tracer_Bullet.md §十二 第 5 项；设计见 VM_Runtime_Layout.md §5.2。
 >
@@ -76,9 +76,9 @@ Sub-task G: 文档更新
 
 ### 具体变更
 
-- [ ] A.1 **Lexer.cs — TokenType 枚举**：添加 `Struct`（关键字区）和 `Dot`（分隔符区）
-- [ ] A.2 **Lexer.cs — _keywords 字典**：添加 `{ "struct", TokenType.Struct }`
-- [ ] A.3 **Lexer.cs — ScanToken()**：在分隔符处理中添加 `'.'` → `TokenType.Dot`
+- [x] A.1 **Lexer.cs — TokenType 枚举**：添加 `Struct`（关键字区）和 `Dot`（分隔符区）
+- [x] A.2 **Lexer.cs — _keywords 字典**：添加 `{ "struct", TokenType.Struct }`
+- [x] A.3 **Lexer.cs — ScanToken()**：在分隔符处理中添加 `'.'` → `TokenType.Dot`
 
 ### 验收标准
 
@@ -103,12 +103,12 @@ struct TypeName {
 
 ### 具体变更
 
-- [ ] B.1 **Parser.Parse()**：在顶层循环中添加 `case TokenType.Struct` → 调用 `ParseStructDecl()`，结果加入 `module.Structs`
-- [ ] B.2 **Parser**：实现 `ParseStructDecl()`：
+- [x] B.1 **Parser.Parse()**：在顶层循环中添加 `case TokenType.Struct` → 调用 `ParseStructDecl()`，结果加入 `module.Structs`
+- [x] B.2 **Parser**：实现 `ParseStructDecl()`：
   - 消费 `struct` → 读取 Identifier（类型名）→ 消费 `{`
   - 循环解析字段：Identifier（字段名）→ `:` → Identifier（类型名）→ 可选 `;` 或换行
   - 消费 `}` → 返回 `StructDecl`
-- [ ] B.3 **测试**：struct 声明解析为正确的 `StructDecl` AST 节点（字段名、字段类型）
+- [x] B.3 **测试**：struct 声明解析为正确的 `StructDecl` AST 节点（字段名、字段类型）
 
 ### 验收标准
 
@@ -125,10 +125,10 @@ struct TypeName {
 
 ### 具体变更
 
-- [ ] C.1 **Parser**：在表达式解析中（`ParsePrimary()` 返回后或新增 `ParsePostfix()` 层），处理 `.` Token：
+- [x] C.1 **Parser**：在表达式解析中（`ParsePrimary()` 返回后或新增 `ParsePostfix()` 层），处理 `.` Token：
   - 若当前 Token 为 `Dot`，消费 → 读取 Identifier → 返回 `FieldAccessExpr(left, fieldName)`
   - 支持链式访问（`a.b.c`，尽管本步骤只验证单层）
-- [ ] C.2 **测试**：`x.level` 解析为 `FieldAccessExpr(IdentifierExpr("x"), "level")`
+- [x] C.2 **测试**：`x.level` 解析为 `FieldAccessExpr(IdentifierExpr("x"), "level")`
 
 ### 验收标准
 
@@ -161,13 +161,13 @@ struct TypeName {
 
 ### 具体变更
 
-- [ ] D.1 **BytecodeCompiler**：新增 `Dictionary<string, StructDecl> _structTypes` 类型表
-- [ ] D.2 **BytecodeCompiler**：新增 `Dictionary<string, string> _structVarTypes` 记录每个变量的 struct 类型名（非 struct 变量不在此表中）
-- [ ] D.3 **BytecodeCompiler.CompileModule()**：在 Pass 1（函数扫描）前，遍历 `module.Structs` 填充 `_structTypes`
-- [ ] D.4 **BytecodeCompiler.CompileVarDecl()**：当 `TypeName` 在 `_structTypes` 中时，分配连续 N 个寄存器，记录到 `_structVarTypes`
-- [ ] D.5 **BytecodeCompiler**：新增辅助方法 `int GetStructFieldReg(string varName, string fieldName)` → 返回 `base_reg + fieldIndex`
-- [ ] D.6 **编译器 callerWindowSize 计算**：struct 变量占 N 个寄存器，`_callerWindowSize` 需正确反映实际局部寄存器占用
-- [ ] D.7 **测试**：struct 变量声明后，编译器内部状态正确（可通过端到端 emit 指令序列间接验证）
+- [x] D.1 **BytecodeCompiler**：新增 `Dictionary<string, StructDecl> _structTypes` 类型表
+- [x] D.2 **BytecodeCompiler**：新增 `Dictionary<string, string> _structVarTypes` 记录每个变量的 struct 类型名（非 struct 变量不在此表中）
+- [x] D.3 **BytecodeCompiler.CompileModule()**：在 Pass 1（函数扫描）前，遍历 `module.Structs` 填充 `_structTypes`
+- [x] D.4 **BytecodeCompiler.CompileVarDecl()**：当 `TypeName` 在 `_structTypes` 中时，分配连续 N 个寄存器，记录到 `_structVarTypes`
+- [x] D.5 **BytecodeCompiler**：新增辅助方法 `int GetStructFieldReg(string varName, string fieldName)` → 返回 `base_reg + fieldIndex`
+- [x] D.6 **编译器 callerWindowSize 计算**：struct 变量占 N 个寄存器，`_callerWindowSize` 需正确反映实际局部寄存器占用
+- [x] D.7 **测试**：struct 变量声明后，编译器内部状态正确（可通过端到端 emit 指令序列间接验证）
 
 ### 验收标准
 
@@ -186,13 +186,13 @@ struct TypeName {
 
 ### 具体变更
 
-- [ ] E.1 **BytecodeCompiler.CompileExpr()**：处理 `NodeKind.FieldAccess` — 查找变量基址 + 字段偏移，返回对应寄存器号
-- [ ] E.2 **BytecodeCompiler.CompileAssign()**：当赋值目标为 `FieldAccessExpr` 时，将表达式结果写入字段对应的寄存器
-- [ ] E.3 **BytecodeCompiler.CompileAssign()**：当赋值两端都是 struct 变量时，emit N 条 `MOVE`（逐字段复制）
-- [ ] E.4 **BytecodeCompiler.CompileVarDecl()**：struct 变量若有初始化器且初始化器为另一个 struct 变量，emit N 条 `MOVE`
-- [ ] E.5 **测试 S3a**：端到端 — struct 声明 + 字段逐个赋值 + 字段读取用于算术运算，验证结果正确
-- [ ] E.6 **测试 S3b**：端到端 — 两个同类型 struct 变量，`a = b` 整体赋值后字段值相等
-- [ ] E.7 **测试 S3c**：端到端 — struct 字段在 if/while/for 中正确读写
+- [x] E.1 **BytecodeCompiler.CompileExpr()**：处理 `NodeKind.FieldAccess` — 查找变量基址 + 字段偏移，返回对应寄存器号
+- [x] E.2 **BytecodeCompiler.CompileAssign()**：当赋值目标为 `FieldAccessExpr` 时，将表达式结果写入字段对应的寄存器
+- [x] E.3 **BytecodeCompiler.CompileAssign()**：当赋值两端都是 struct 变量时，emit N 条 `MOVE`（逐字段复制）
+- [x] E.4 **BytecodeCompiler.CompileVarDecl()**：struct 变量若有初始化器且初始化器为另一个 struct 变量，emit N 条 `MOVE`
+- [x] E.5 **测试 S3a**：端到端 — struct 声明 + 字段逐个赋值 + 字段读取用于算术运算，验证结果正确
+- [x] E.6 **测试 S3b**：端到端 — 两个同类型 struct 变量，`a = b` 整体赋值后字段值相等
+- [x] E.7 **测试 S3c**：端到端 — struct 字段在 if/while/for 中正确读写
 
 ### 验收标准
 
@@ -211,15 +211,15 @@ struct TypeName {
 
 ### 具体变更
 
-- [ ] F.1 **CompilerTests**：新增测试 — struct 声明 + 字段赋值 + 字段读取 + 算术（最小端到端）
-- [ ] F.2 **CompilerTests**：新增测试 — struct 变量整体赋值（a = b），验证 N 条 MOVE
-- [ ] F.3 **CompilerTests**：新增测试 — struct 字段用于 Syscall 参数
-- [ ] F.4 **CompilerTests**：新增测试 — struct 字段用于条件分支（if d.level > 0）
-- [ ] F.5 **CompilerTests**：新增测试 — 多个 struct 变量共存，寄存器不冲突
-- [ ] F.6 **CompilerTests**：新增测试 — 编译错误：使用未声明的 struct 类型 → 编译报错
-- [ ] F.7 **CompilerTests**：新增测试 — 编译错误：访问不存在的字段名 → 编译报错
-- [ ] F.8 **GC 验证**：struct 操作不引入堆分配（复用现有 V1 GC 验证框架）
-- [ ] F.9 **回归**：全部现有 279 项 Assert 仍通过
+- [x] F.1 **CompilerTests**：新增测试 — struct 声明 + 字段赋值 + 字段读取 + 算术（最小端到端）
+- [x] F.2 **CompilerTests**：新增测试 — struct 变量整体赋值（a = b），验证 N 条 MOVE
+- [x] F.3 **CompilerTests**：新增测试 — struct 字段用于 Syscall 参数
+- [x] F.4 **CompilerTests**：新增测试 — struct 字段用于条件分支（if d.level > 0）
+- [x] F.5 **CompilerTests**：新增测试 — 多个 struct 变量共存，寄存器不冲突
+- [x] F.6 **CompilerTests**：新增测试 — 编译错误：使用未声明的 struct 类型 → 编译报错
+- [x] F.7 **CompilerTests**：新增测试 — 编译错误：访问不存在的字段名 → 编译报错
+- [x] F.8 **GC 验证**：struct 操作不引入堆分配（复用现有 V1 GC 验证框架）
+- [x] F.9 **回归**：全部现有 279 项 Assert 仍通过
 
 ### 验收标准
 
@@ -233,10 +233,10 @@ struct TypeName {
 
 ### 具体变更
 
-- [ ] G.1 **VM_Summary.md §五 当前实现状态**：更新 AST、编译器、测试数量
-- [ ] G.2 **VM_Summary.md §七 推进顺序**：标记步骤 9 S1-S3 为 ✅
-- [ ] G.3 **VM_Summary.md §4.4 OpCode 集**：如有新增 OpCode 则更新（预计无新增，struct 操作复用 MOVE）
-- [ ] G.4 **本文件**：更新状态为 ✅，记录最终测试数量
+- [x] G.1 **VM_Summary.md §五 当前实现状态**：更新 AST、编译器、测试数量
+- [x] G.2 **VM_Summary.md §七 推进顺序**：标记步骤 9 S1-S3 为 ✅
+- [x] G.3 **VM_Summary.md §4.4 OpCode 集**：如有新增 OpCode 则更新（预计无新增，struct 操作复用 MOVE）
+- [x] G.4 **本文件**：更新状态为 ✅，记录最终测试数量
 
 ---
 

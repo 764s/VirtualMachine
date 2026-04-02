@@ -450,7 +450,7 @@ skill TracerBullet
 
 | 层级 | 内容 | 状态 |
 |------|------|------|
-| AST | 44 种节点 + `DeferStmt` + `UsingStmt` | ✅ 完成 |
+| AST | 44 种节点 + `DeferStmt` + `UsingStmt` + `StructDecl` + `FieldAccessExpr` | ✅ 完成 |
 | 数值 | `Number`（float/Fix64 双模式，8B） | ✅ 完成 |
 | 状态 | `VMInstanceState`（blittable，含 StateFlags + CleanupStack） | ✅ 完成 |
 | 实例池 | `InstancePool`（确定性 free stack） | ✅ 完成 |
@@ -459,10 +459,10 @@ skill TracerBullet
 | 字节码 | `OpCode`（27 条指令，含 WAIT_FOR）+ `Instruction` + `VMProgram` + `VMModuleTable` | ✅ 完成 |
 | 调度 | `VMWorld`（Tick 字节码解释循环 + Spawn/Destroy/Save/Load） | ✅ 完成 |
 | 解释器 | `TreeWalker`（Phase 2 原型，含 defer + Kill） | ✅ 完成 |
-| 词法分析 | `Lexer`（手写，14 关键字 + 运算符 + 字面量 + 注释） | ✅ 完成 |
-| 语法分析 | `Parser`（手写递归下降，source → `ModuleNode` AST，含 using/wait_for/错误恢复） | ✅ 完成 |
-| 编译器 | `BytecodeCompiler`（AST → `VMProgram`，寄存器分配：r0-15 scratch / r16-47 locals / r48-63 temps，支持 using 配对 Syscall，支持多函数编译 + CALL emit） | ✅ 完成 |
-| 测试 | 279 项 Assert 全部通过（112 TreeWalker + 132 Compiler + 17 Performance + 18 SkillScript），另有 5 项自动化性能基准 | ✅ Step 8 通过 |
+| 词法分析 | `Lexer`（手写，16 关键字 + 运算符 + 字面量 + 注释，含 `struct` 关键字 + `.` 分隔符） | ✅ 完成 |
+| 语法分析 | `Parser`（手写递归下降，source → `ModuleNode` AST，含 using/wait_for/struct 声明/字段访问/错误恢复） | ✅ 完成 |
+| 编译器 | `BytecodeCompiler`（AST → `VMProgram`，寄存器分配：r0-15 scratch / r16-47 locals / r48-63 temps，支持 using 配对 Syscall，支持多函数编译 + CALL emit，支持 struct 编译期拍平 → 连续寄存器槽位映射） | ✅ 完成 |
+| 测试 | 303 项 Assert 全部通过（112 TreeWalker + 156 Compiler + 17 Performance + 18 SkillScript），另有 5 项自动化性能基准 | ✅ Step 9 通过 |
 | 性能基准 | `BenchmarkRunner`（5 组 VM vs C# 对比基准）+ `run-benchmarks.cmd` 自动化管线 → `benchmark_results.md` | ✅ 完成 |
 
 ### 5.2 未完成（按优先级排列）
@@ -484,7 +484,7 @@ skill TracerBullet
 | P2 | CALL / RET_FUNC OpCode + 跨函数调用 emit（F1-F2） | ✅ 完成 → 步骤 8（CALL=60, RET_FUNC=61, 两遍编译+前向引用回填） |
 | P2 | 函数调用 GC + 快照回滚验证（F3） | ✅ 完成 → 步骤 8（F05: 0 GC 验证通过） |
 | P2（低） | 编译器寄存器生命周期分析 + 跨 await 变量提升（F4） | 确定执行 → **最晚步骤 10 前** |
-| P2 | Parser struct 声明 + 编译器 struct → 寄存器拍平（S1-S3） | 确定执行 → 步骤 9 |
+| P2 | Parser struct 声明 + 编译器 struct → 寄存器拍平（S1-S3） | ✅ 完成 → 步骤 9（Lexer struct/Dot + Parser struct 声明 + 字段访问 + 编译器拍平，CS01-CS11 通过） |
 | P3 | V5 帧内 Profiler 验证（真实 Syscall 接入后） | 阻塞编辑器 UI |
 | P3 | 编辑器流程图投影 | 不阻塞 VM 核心 |
 | — | Cleanup 超时保护（C5）/ 嵌套 using 优化（C6） | 展望项，暂无排期 |
@@ -503,10 +503,10 @@ skill TracerBullet
 | 开发期 float（`Number`） | 快速迭代，Fix64 调试较痛苦 | float 模式仅用于开发迭代，正式测试和上线构建必须 `USE_FIXPOINT` |
 | 无 `MOVE`/`COPY` | 曳光弹不需要寄存器搬运 | ~~曳光弹通过后立即补充~~ ✅ Step 5 完成 |
 | 无分支/循环 OpCode | 曳光弹业务不含分支 | ~~`MOVE` 之后补 `JUMP`/`JUMP_IF`~~ ✅ Step 5 完成 |
-| 无编辑器 UI | 编辑器依赖稳定 AST 和编译器 | 步骤 8-9 完成后开始流程图主视图（步骤 10） |
+| 无编辑器 UI | 编辑器依赖稳定 AST 和编译器 | 步骤 9 完成后开始流程图主视图（步骤 10） |
 | 无 Handle64 批处理 | 曳光弹业务不涉及多目标 | 展望项，最晚于真实多目标业务接入前；依赖 Syscall 协议扩展 |
 | 无跨函数 CALL | 曳光弹只需单函数 | 确定执行 → 步骤 8（F1-F3），CallFrame 基础设施已就位 |
-| 无结构体语法 | 曳光弹不需要结构体 | 确定执行 → 步骤 9（S1-S3），设计见 VM_Runtime_Layout.md §5.2 |
+| ~~无结构体语法~~ | ~~曳光弹不需要结构体~~ | ✅ 完成 → 步骤 9（S1-S3），struct 编译期拍平为连续寄存器 |
 | ~~CleanupFrames 尚未加入 VMInstanceState~~ | ✅ 已完成 | 曳光弹 Step 1 |
 | 黑板 Key 手工映射常量 | 曳光弹只需 1-2 个 Key | 编译器实现后自动分配 ID 并生成静态映射表 |
 | AST 节点已超出曳光弹范围 | 过早扩展（if/while/for/struct 等已实现） | 不删除，但冻结新增功能直到字节码曳光弹通过 |
@@ -588,14 +588,15 @@ skill TracerBullet
         结构体参数窗口压力（R5, 步骤 9 评估）、Cleanup 块内函数调用语义（R8, 待编译器检查）。
         详见 → [Step8_FunctionCall.md §五 风险分析](Plan/Step8_FunctionCall.md#五风险分析)
       ↓
-9. 结构体编译期拍平验证
+9. 结构体编译期拍平验证  ✅ 303 项 Assert 通过
       （来源：VM_Tracer_Bullet.md §十二 第 5 项；设计见 VM_Runtime_Layout.md §5.2）
+      详见 → [Step9_StructFlatten.md](Plan/Step9_StructFlatten.md)
       确定执行：
-        S1. Parser struct 声明 + 字段类型解析
-        S2. 编译器 struct → 连续寄存器槽位映射
-        S3. 结构体赋值 = 寄存器区块 COPY 验证
+        S1. Parser struct 声明 + 字段类型解析                              ✅
+        S2. 编译器 struct → 连续寄存器槽位映射                            ✅
+        S3. 结构体赋值 = 寄存器区块 COPY 验证                            ✅
       展望项（最晚步骤 10 前，如需编辑器展示结构体节点）：
-        S4. 结构体作为函数参数 / 返回值的寄存器传递
+        S4. 结构体作为函数参数 / 返回值的寄存器传递                       ⏳ 展望
       ↓
   ┌────────────────────────────────────────────────────────┐
   │  Handle64 批处理协议（展望项）                       │
@@ -616,7 +617,7 @@ skill TracerBullet
 > ② 局部变量与寄存器复用 → ✅ var 声明已在步骤 6 完成；寄存器复用 → F4（步骤 8）。
 > ③ 函数调用与调用栈验证 → 步骤 8（F1-F3）。
 > ④ Handle64 批处理 → 展望项，最晚于真实多目标业务接入前。
-> ⑤ 结构体拍平验证 → 步骤 9（S1-S3）。
+> ⑤ 结构体拍平验证 → ✅ 步骤 9（S1-S3）完成。
 > ⑥ DSL 文本语法 → ✅ 已在步骤 6（Lexer + Parser + BytecodeCompiler）完成。
 
 ---
@@ -731,6 +732,11 @@ skill TracerBullet
 | T9 | `using` Kill 路径 + cleanup release | ✅ 已覆盖（CompilerTests C25：Kill 触发 cleanup 块执行 release Syscall） |
 | T10 | `using` + `defer` 混合 LIFO | ✅ 已覆盖（CompilerTests C26：defer + using 混合，POP_CLEANUP 后仅 defer 在 RETURN 时执行） |
 | T11 | `using` 内嵌 wait | ✅ 已覆盖（CompilerTests C27：using 块内 wait 恢复后正常退出，release 不执行） |
+| T12 | struct 声明 + 字段读写 | ✅ 已覆盖（CompilerTests CS01：struct 声明 + 字段赋值 + 字段读取算术） |
+| T13 | struct 整体赋值 | ✅ 已覆盖（CompilerTests CS02：a = b 逐字段 MOVE） |
+| T14 | struct 字段作为 Syscall 参数 | ✅ 已覆盖（CompilerTests CS03：Apply(d.target, d.level, d.ratio)） |
+| T15 | struct 字段条件分支 | ✅ 已覆盖（CompilerTests CS04：if s.hp > 0） |
+| T16 | struct 未知字段编译错误 | ✅ 已覆盖（CompilerTests CS07：v.z → 编译报错） |
 
 ### 11.3 文档缺口（来自档案交叉审查）
 
@@ -753,7 +759,7 @@ skill TracerBullet
 
 | Job | 触发 | 内容 |
 |-----|------|------|
-| **test** | push / PR | 构建 StandaloneRunner → 运行全部 237 个测试断言（TreeWalker 98 + Compiler 104 + Performance 17 + SkillScript 18） |
+| **test** | push / PR | 构建 StandaloneRunner → 运行全部 303 个测试断言（TreeWalker 112 + Compiler 156 + Performance 17 + SkillScript 18） |
 | **benchmark** | test 通过后 | 运行 B01-B05 VM vs C# 基准，生成 `benchmark_ci.md` artifact |
 | **cross-lang** | test 通过后 | 运行 Lua / Python / Node.js 同源基准，生成 `cross_lang_results.md` artifact |
 

@@ -1175,7 +1175,7 @@ func main() {
         }
 
         // ============================================================
-        // Step 9: Struct compile-time flattening tests (CS01 - CS07)
+        // Step 9: Struct compile-time flattening tests (CS01 - CS11)
         // ============================================================
 
         // ===== Test CS01: Struct declaration + field assignment + field read =====
