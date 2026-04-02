@@ -467,10 +467,10 @@ skill TracerBullet
 | 语法分析 | `Parser`（手写递归下降，source → `ModuleNode` AST，含 using/wait_for/struct 声明/字段访问/错误恢复） | ✅ 完成 |
 | 编译器 | `BytecodeCompiler`（AST → `VMProgram`，寄存器分配：r0-15 scratch / r16-47 locals / r48-63 temps，支持 using 配对 Syscall，支持多函数编译 + CALL emit，支持 struct 编译期拍平 → 连续寄存器槽位映射，F4 寄存器生命周期分析 + 复用，O4 dest-reg hint，O5 常量折叠，O7 Syscall 结果直达，FO5 返回值直达，FO7 调用栈深度静态分析，R7 >50 函数回填 Dictionary 切换，R8 Cleanup 块禁止函数调用） | ✅ 完成 |
 | 调试信息 | `VMProgram.SourceMap`（DBG1：IP→行号平行数组）+ `VMProgram.SymbolTable`（DBG2：变量名→寄存器+struct字段信息） | ✅ 完成 |
-| 运行时调试 | `ScriptDebugger`（DBG3 断点桥接 + DBG5 变量查看适配器 + DBG6 调用栈查看，Gate 0 命令行调试能力，HaltOnBreakpoint + SkipNextCheck DAP 暂停支持） | ✅ 完成 |
-| DAP 适配器 | `DapServer`（DBG7-A：12 消息 DAP 最小协议，stdin/stdout JSON-RPC + ContentLengthStream 分帧 + JsonHelper 手写 JSON），`StandaloneRunner --dap` 模式，Gate 1 自动化验证通过 | ✅ Phase 3A 完成 |
+| 运行时调试 | `ScriptDebugger`（DBG3 断点桥接 + DBG5 变量查看适配器 + DBG6 调用栈查看，Gate 0 命令行调试能力，HaltOnBreakpoint + SkipNextCheck DAP 暂停支持，DBG4 单步映射：临时断点 + FindNextLineIP/FindStepIntoIP/FindStepOutIP） | ✅ 完成 |
+| DAP 适配器 | `DapServer`（DBG7-A：12 消息 DAP 最小协议 + DBG7-B：next/stepIn/stepOut handler，stdin/stdout JSON-RPC + ContentLengthStream 分帧 + JsonHelper 手写 JSON），`StandaloneRunner --dap` 模式，Gate 1 + Gate 2 自动化验证通过 | ✅ Phase 3B 完成 |
 | VS Code 扩展 | `vscode-ffvm-debug/`（package.json + TextMate grammar + language-configuration.json + launch.json 模板） | ✅ 完成 |
-| 测试 | 470 项 Assert 全部通过（112 TreeWalker + 214 Compiler + 17 Performance + 18 SkillScript + 51 Debug + 58 DAP），另有 5 项自动化性能基准 | ✅ Phase 3A DAP 通过 |
+| 测试 | 505 项 Assert 全部通过（112 TreeWalker + 214 Compiler + 17 Performance + 18 SkillScript + 51 Debug + 93 DAP），另有 5 项自动化性能基准 | ✅ Phase 3B 通过 |
 | 性能基准 | `BenchmarkRunner`（5 组 VM vs C# 对比基准）+ `run-benchmarks.cmd` 自动化管线 → `benchmark_results.md` | ✅ 完成 |
 
 ### 5.2 未完成（按优先级排列）
@@ -647,18 +647,6 @@ skill TracerBullet
       调试决策详情 → [Step_Debug_Decisions.md](Plan/Step_Debug_Decisions.md)
       ↓
   ┌────────────────────────────────────────────────────────┐
-  │  V5: 帧内 Profiler 验证  ← 真实 Syscall 接入 ECS 后   │
-  │  C4 强制检查 ✅ 已就位                                │
-  │  通过条件见 §4.6，必须在进入步骤 10 前通过            │
-  └────────────────────────────────────────────────────────┘
-      ↓
-  ┌────────────────────────────────────────────────────────┐
-  │  功能补全（步骤 10 前如需）                   ⏳      │
-  │    S4. 结构体函数参数 / 返回值传递                    │
-  │    FF5. 非 entry 函数 defer 完整支持                  │
-  └────────────────────────────────────────────────────────┘
-      ↓
-  ┌────────────────────────────────────────────────────────┐
   │  脚本调试 · Phase 2（运行时，Gate 0 命令行调试）✅   │
   │    DBG3. 宿主断点桥接（ScriptDebugger 回调模式）     ✅
   │    DBG5. 变量查看适配器（Symbol Table → 可读值）     ✅
@@ -680,26 +668,6 @@ skill TracerBullet
   └────────────────────────────────────────────────────────┘
       ↓
   ┌────────────────────────────────────────────────────────┐
-  │  Handle64 批处理协议（展望项）                        │
-  │  来源：VM_Tracer_Bullet.md §十二 第 4 项              │
-  │  不阻塞编辑器，最晚于真实多目标业务接入前实现         │
-  │  依赖 Syscall 协议扩展，独立于函数调用与结构体        │
-  └────────────────────────────────────────────────────────┘
-      ↓
-10. 编辑器流程图投影
-      ↓
-  ┌────────────────────────────────────────────────────────┐
-  │  调整型优化（Benchmark 驱动）                 ⏳      │
-  │  Tier 1: O1 → O2（dispatch 加速 ~40-60%）             │
-  │  Tier 2: O6（Peephole，指令数 -5~10%）                │
-  │  Tier 3+: O8, O9-O14, FO1-FO3, SO1                   │
-  │  R1 理想方案：FO6 自适应寄存器窗口（~3→~6 层）       │
-  │  SR1 理想方案：FO6 扩大 local 区 + 编译器报错         │
-  │  SR2 理想方案：SO1 COPY_BLOCK OpCode                  │
-  │  按 benchmark 数据排序，逐项验证收益后推进             │
-  └────────────────────────────────────────────────────────┘
-      ↓
-  ┌────────────────────────────────────────────────────────┐
   │  脚本调试 · Phase 3A（DAP 最小协议）          ✅      │
   │    DBG7-A. DAP Server 核心（stdin/stdout JSON-RPC）   │
   │    ContentLengthStream + JsonHelper + DapServer       │
@@ -712,10 +680,13 @@ skill TracerBullet
   └────────────────────────────────────────────────────────┘
       ↓
   ┌────────────────────────────────────────────────────────┐
-  │  脚本调试 · Phase 3B（DAP 单步 + 完整体验）   ⏳      │
-  │    DBG4. 单步映射（归约为临时断点，复用 DBG3）        │
-  │    DBG7-B. next/stepIn/stepOut handler                │
+  │  脚本调试 · Phase 3B（DAP 单步 + 完整体验）   ✅      │
+  │    DBG4. 单步映射（归约为临时断点，复用 DBG3） ✅     │
+  │    DBG7-B. next/stepIn/stepOut handler          ✅     │
   │  Gate 2 验收：VS Code 三种单步行为正确                │
+  │  505 项 Assert（112 TW + 214 Compiler + 17 Perf      │
+  │  + 18 SkillScript + 51 Debug + 93 DAP）              │
+  │  详见 → [Step_Debug_Phase3B_DAP_SingleStep.md](Plan/Step_Debug_Phase3B_DAP_SingleStep.md) │
   └────────────────────────────────────────────────────────┘
       ↓
   ┌────────────────────────────────────────────────────────┐
@@ -736,12 +707,48 @@ skill TracerBullet
   └────────────────────────────────────────────────────────┘
       ↓
   ┌────────────────────────────────────────────────────────┐
+  │  调整型优化（Benchmark 驱动）                 ⏳      │
+  │  Tier 1: O1 → O2（dispatch 加速 ~40-60%）             │
+  │  Tier 2: O6（Peephole，指令数 -5~10%）                │
+  │  Tier 3+: O8, O9-O14, FO1-FO3, SO1                   │
+  │  R1 理想方案：FO6 自适应寄存器窗口（~3→~6 层）       │
+  │  SR1 理想方案：FO6 扩大 local 区 + 编译器报错         │
+  │  SR2 理想方案：SO1 COPY_BLOCK OpCode                  │
+  │  按 benchmark 数据排序，逐项验证收益后推进             │
+  └────────────────────────────────────────────────────────┘
+      ↓
+  ┌────────────────────────────────────────────────────────┐
   │  功能补全（业务驱动，按需）                   ⏳      │
+  │    S4. 结构体函数参数 / 返回值传递                    │
+  │    FF5. 非 entry 函数 defer 完整支持                  │
   │    FF1-FF4: 跨模块调用、回调、可选参数、多返回值      │
   │    C5/C6: Cleanup 超时保护 / 嵌套 using 优化          │
   │    SN1/SN2: 嵌套结构体 / 字面量构造                   │
   │    BB1/PR1/FIX1/DM1: 黑板/配对扩展/Fix64 验证/编排    │
   │    GR3 理想方案：D1-D4 文档缺口批量补全               │
+  └────────────────────────────────────────────────────────┘
+      ↓
+  ═══════════════════════════════════════════════════════════
+  ║  以下为编辑器 UI 类任务（脚本优先策略下延后执行）     ║
+  ║  前置条件：V5 帧内 Profiler + 真实 Syscall 接入 ECS   ║
+  ═══════════════════════════════════════════════════════════
+      ↓
+  ┌────────────────────────────────────────────────────────┐
+  │  V5: 帧内 Profiler 验证  ← 真实 Syscall 接入 ECS 后   │
+  │  C4 强制检查 ✅ 已就位                                │
+  │  通过条件见 §4.6，必须在进入编辑器 UI 前通过          │
+  └────────────────────────────────────────────────────────┘
+      ↓
+  ┌────────────────────────────────────────────────────────┐
+  │  Handle64 批处理协议（展望项）                        │
+  │  来源：VM_Tracer_Bullet.md §十二 第 4 项              │
+  │  最晚于真实多目标业务接入前实现                       │
+  │  依赖 Syscall 协议扩展，独立于函数调用与结构体        │
+  └────────────────────────────────────────────────────────┘
+      ↓
+  ┌────────────────────────────────────────────────────────┐
+  │  10. 编辑器流程图投影                         ⏳      │
+  │  依赖 V5 通过 + 真实 Syscall/ECS 接入                 │
   └────────────────────────────────────────────────────────┘
 ```
 
@@ -954,7 +961,7 @@ skill TracerBullet
 | 函数调用相关 | FF1-FF5 | 5 |
 | 结构体相关 | S4, SN1, SN2 | 3 |
 | 全局 / 跨步骤 | H1, BB1, PR1, FIX1, DM1 | 5 |
-| 脚本调试（真实宿主断点 + DAP） | DBG1-DBG7 | 7 | DBG1-DBG3,DBG5-DBG6 ✅，DBG7-A ✅ (Phase 3A)，DBG4/DBG7-B 待 Phase 3B |
+| 脚本调试（真实宿主断点 + DAP） | DBG1-DBG7 | 7 | DBG1-DBG7 全部 ✅（Phase 1-3B 完成），DBG7-C 待 Phase 3C |
 | 语言服务（LSP） | LSP1-LSP5 | 5 |
 
 ### 优化展望（22 项 = 自然 7 + 调整型 15）

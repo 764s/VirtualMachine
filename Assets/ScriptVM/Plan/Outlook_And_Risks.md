@@ -648,15 +648,6 @@ Gate 3: Unity Editor 内嵌 DAP（可选）             ← DBG7 Phase C
         R7 理想方案：_pendingCalls >50 函数自动切换 Dictionary
         R8 理想方案：编译器禁止 Cleanup 块内函数调用（一行检查）
                                     ↓
-─────────────── V5 帧内 Profiler 验证 ────────────────────────
-    前置条件：真实 Syscall 接入 ECS 后
-    C4 强制检查 ✅ 已就位
-                                    ↓
-─────────────── 功能补全（步骤 10 前如需）───────────────────
-    S4. 结构体函数参数 / 返回值传递
-        风险应对（R5 理想方案）：≤4 字段直传，>4 编译报错
-    FF5. 非 entry 函数 defer 完整支持
-                                    ↓
 ─────────────── 调试 Phase 2（Gate 0 命令行调试）✅ ─────────────
     DBG3. 宿主断点桥接（ScriptDebugger 回调模式）        ✅
     DBG5. 变量查看适配器                                  ✅
@@ -671,30 +662,20 @@ Gate 3: Unity Editor 内嵌 DAP（可选）             ← DBG7 Phase C
     → 412 项 Assert 双模式全通过
     详见 → Step_GR1_CI_BuildMatrix.md
                                     ↓
-─────────────── Handle64 批处理协议（展望项）──────────────────
-    H1. 最晚于真实多目标业务接入前实现
-                                    ↓
-10. 编辑器流程图投影
-                                    ↓
-─────────────── 调整型优化（Benchmark 驱动）──────────────────
-    Tier 1: O1 → O2（dispatch 加速 ~40-60%）
-    Tier 2: O6（Peephole，指令数 -5~10%）
-    Tier 3+: O8, O9-O14, FO1-FO3, SO1
-    R1 理想方案：FO6 自适应寄存器窗口（嵌套 ~3→~6 层）
-    SR1 理想方案：FO6 扩大 local 区 + 编译器超限报错
-    SR2 理想方案：SO1 COPY_BLOCK OpCode
-                                    ↓
-─────────────── 调试 Phase 3A（DAP 最小协议）──────────────────
+─────────────── 调试 Phase 3A（DAP 最小协议）✅ ──────────────
     DBG7-A. DAP Server 核心（stdin/stdout）
         12 个必需消息 handler
         VS Code 极简扩展（~60 行 JSON）
         独立程序集 FFVM.Debug，#if FFVM_SCRIPT_DEBUG
     → Gate 1 验收：VS Code 断点命中 + 变量显示
+    详见 → Step_Debug_Phase3A_DAP.md
                                     ↓
-─────────────── 调试 Phase 3B（DAP 单步 + 完整体验）──────────
-    DBG4. 单步映射（归约为临时断点，复用 DBG3）
-    DBG7-B. next/stepIn/stepOut handler
+─────────────── 调试 Phase 3B（DAP 单步 + 完整体验）✅ ── ←
+    DBG4. 单步映射（归约为临时断点，复用 DBG3）     ✅
+    DBG7-B. next/stepIn/stepOut handler              ✅
     → Gate 2 验收：VS Code 三种单步行为正确
+    → 505 项 Assert（93 DAP 测试含单步验证）
+    详见 → Step_Debug_Phase3B_DAP_SingleStep.md
                                     ↓
 ─────────────── 调试 Phase 3C（Unity Editor DAP，可选）────────
     DBG7-C. EditorApplication.update 轮询模式
@@ -709,12 +690,36 @@ Gate 3: Unity Editor 内嵌 DAP（可选）             ← DBG7 Phase C
     LSP5. 代码补全
     DBG2 Phase 2. 符号表补充生命周期信息（F4 完成后）
                                     ↓
+─────────────── 调整型优化（Benchmark 驱动）──────────────────
+    Tier 1: O1 → O2（dispatch 加速 ~40-60%）
+    Tier 2: O6（Peephole，指令数 -5~10%）
+    Tier 3+: O8, O9-O14, FO1-FO3, SO1
+    R1 理想方案：FO6 自适应寄存器窗口（嵌套 ~3→~6 层）
+    SR1 理想方案：FO6 扩大 local 区 + 编译器超限报错
+    SR2 理想方案：SO1 COPY_BLOCK OpCode
+                                    ↓
 ─────────────── 功能补全（业务驱动，按需）────────────────────
+    S4. 结构体函数参数 / 返回值传递
+    FF5. 非 entry 函数 defer 完整支持
     FF1-FF4: 跨模块调用、回调、可选参数、多返回值
     C5/C6: Cleanup 超时保护 / 嵌套 using 优化
     SN1/SN2: 嵌套结构体 / 字面量构造
     BB1/PR1/DM1: 黑板/配对扩展/编排
     GR3 理想方案：D1-D4 文档缺口批量补全
+                                    ↓
+═══════════════════════════════════════════════════════════════
+  编辑器 UI 类任务（脚本优先策略下延后执行）
+  前置条件：V5 帧内 Profiler + 真实 Syscall 接入 ECS
+═══════════════════════════════════════════════════════════════
+                                    ↓
+─────────────── V5 帧内 Profiler 验证 ────────────────────────
+    前置条件：真实 Syscall 接入 ECS 后
+    C4 强制检查 ✅ 已就位
+                                    ↓
+─────────────── Handle64 批处理协议（展望项）──────────────────
+    H1. 最晚于真实多目标业务接入前实现
+                                    ↓
+10. 编辑器流程图投影
 ```
 
 ### 8.2 风险理想方案速查

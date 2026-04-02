@@ -8,8 +8,10 @@ using FFVM.Debug;
 using UnityEngine;
 
 /// <summary>
-/// DAP Phase 3A tests: Content-Length framing, JSON helper, and DAP protocol interaction.
+/// DAP Phase 3A + 3B tests: Content-Length framing, JSON helper, DAP protocol interaction,
+/// and single-step debugging (next/stepIn/stepOut).
 /// Gate 1: verify DAP server can handle a complete debug session programmatically.
+/// Gate 2: verify three single-step behaviors work correctly via DAP.
 /// </summary>
 public static class DapTests
 {
@@ -565,6 +567,292 @@ func main() {
         }
 
         // ================================================================
+        // S. Phase 3B — Single-Step Tests (DAP-S01 ~ DAP-S08)
+        // ================================================================
+
+        // ===== Test DAP-S01: FindNextLineIP (Step Over helper) =====
+        {
+            // Script:
+            // line 2: var a: int = 1
+            // line 3: var b: int = 2
+            // line 4: var c: int = a + b
+            string source = "func main() {\n    var a: int = 1\n    var b: int = 2\n    var c: int = a + b\n}\n";
+            var compiler = new BytecodeCompiler();
+            var result = compiler.Compile(source, "main", new Dictionary<string, int>());
+            Assert(result.Success, "DAP-S01: compile success");
+
+            // Find the IP for line 2
+            int ipLine2 = -1;
+            for (int i = 0; i < result.Program.SourceMap.Length; i++)
+            {
+                if (result.Program.SourceMap[i] == 2) { ipLine2 = i; break; }
+            }
+            Assert(ipLine2 >= 0, "DAP-S01: found IP for line 2");
+
+            int nextIP = ScriptDebugger.FindNextLineIP(result.Program, ipLine2);
+            Assert(nextIP > ipLine2, "DAP-S01: next IP > current IP");
+            int nextLine = result.Program.SourceMap[nextIP];
+            Assert(nextLine == 3, $"DAP-S01: next line = 3, got {nextLine}");
+        }
+
+        // ===== Test DAP-S02: FindStepIntoIP enters CALL =====
+        {
+            string source = "func helper(): int {\n    return 42\n}\n\nfunc main() {\n    var x: int = helper()\n}\n";
+            var compiler = new BytecodeCompiler();
+            var result = compiler.Compile(source, "main", new Dictionary<string, int>());
+            Assert(result.Success, "DAP-S02: compile success");
+
+            // Find a CALL instruction
+            int callIP = -1;
+            for (int i = 0; i < result.Program.Instructions.Length; i++)
+            {
+                if (result.Program.Instructions[i].Code == OpCode.CALL)
+                {
+                    callIP = i;
+                    break;
+                }
+            }
+            Assert(callIP >= 0, "DAP-S02: found CALL instruction");
+
+            int stepIntoIP = ScriptDebugger.FindStepIntoIP(result.Program, callIP);
+            Assert(stepIntoIP == result.Program.Instructions[callIP].A,
+                $"DAP-S02: stepInto target = CALL.A = {result.Program.Instructions[callIP].A}, got {stepIntoIP}");
+        }
+
+        // ===== Test DAP-S03: FindStepIntoIP degrades to Step Over on non-CALL =====
+        {
+            string source = "func main() {\n    var a: int = 1\n    var b: int = 2\n}\n";
+            var compiler = new BytecodeCompiler();
+            var result = compiler.Compile(source, "main", new Dictionary<string, int>());
+            Assert(result.Success, "DAP-S03: compile success");
+
+            int ipLine2 = -1;
+            for (int i = 0; i < result.Program.SourceMap.Length; i++)
+            {
+                if (result.Program.SourceMap[i] == 2) { ipLine2 = i; break; }
+            }
+            Assert(ipLine2 >= 0, "DAP-S03: found IP for line 2");
+
+            int stepIntoIP = ScriptDebugger.FindStepIntoIP(result.Program, ipLine2);
+            int nextLineIP = ScriptDebugger.FindNextLineIP(result.Program, ipLine2);
+            Assert(stepIntoIP == nextLineIP, $"DAP-S03: stepInto == nextLine = {nextLineIP}, got {stepIntoIP}");
+        }
+
+        // ===== Test DAP-S04: FindStepOutIP returns ReturnIP =====
+        {
+            // We need to check that FindStepOutIP returns the correct ReturnIP
+            // Set up a VMInstanceState with a CallStack entry
+            var inst = new VMInstanceState();
+            inst.CallStackDepth = 1;
+            inst.CallStack.Set(0, new CallFrame { ReturnIP = 42, RegisterBase = 0, CleanupBase = 0 });
+
+            int stepOutIP = ScriptDebugger.FindStepOutIP(ref inst);
+            Assert(stepOutIP == 42, $"DAP-S04: stepOut IP = 42, got {stepOutIP}");
+        }
+
+        // ===== Test DAP-S05: Temp breakpoint auto-clears after one hit =====
+        {
+            var debugger = new ScriptDebugger();
+            int hitCount = 0;
+            debugger.OnBreakpointHit = (id, ip, line) => hitCount++;
+            debugger.SetTempBreakpoint(5);
+
+            int[] sourceMap = { 0, 1, 2, 3, 4, 5, 6 };
+
+            // First check at IP=5 should hit
+            bool hit1 = debugger.CheckBreakpoint(0, 5, sourceMap);
+            Assert(hit1, "DAP-S05: temp breakpoint hit at IP=5");
+            Assert(hitCount == 1, "DAP-S05: hit count = 1");
+
+            debugger.ResetTickState();
+
+            // Second check at IP=5 should NOT hit (auto-cleared)
+            bool hit2 = debugger.CheckBreakpoint(0, 5, sourceMap);
+            Assert(!hit2, "DAP-S05: temp breakpoint auto-cleared");
+            Assert(hitCount == 1, "DAP-S05: hit count still 1");
+        }
+
+        // ===== Test DAP-S06: Full DAP session — next (Step Over) =====
+        {
+            string scriptPath = Path.Combine(Path.GetTempPath(), "dap_test_s06.ffvm");
+            File.WriteAllText(scriptPath, @"
+func main() {
+    var a: int = 10
+    var b: int = 20
+    var c: int = a + b
+}");
+
+            try
+            {
+                var session = new DapBatchSession();
+                session.AddRequest("initialize", new JsonObject());
+                session.AddLaunch(scriptPath);
+                session.AddRequest("setBreakpoints", MakeSetBreakpointsArgs(scriptPath, 3));
+                session.AddRequest("configurationDone", new JsonObject());
+                session.AddContinue();              // run to breakpoint at line 3
+                session.AddStackTrace();             // check we're at line 3
+                session.AddNext();                   // step over to line 4
+                session.AddStackTrace();             // check we're at line 4
+                session.AddRequest("disconnect", new JsonObject());
+                session.Run();
+
+                session.SkipUntilResponse("configurationDone");
+                var stopped1 = session.ExpectEvent("stopped");
+                Assert(stopped1 != null, "DAP-S06: stopped at breakpoint");
+                if (stopped1 != null)
+                    Assert(stopped1.GetObject("body")?.GetString("reason") == "breakpoint", "DAP-S06: reason = breakpoint");
+
+                session.ExpectResponse("continue");
+
+                var st1 = session.ExpectResponse("stackTrace");
+                var frames1 = st1?.GetObject("body")?.GetArray("stackFrames");
+                int line1 = (frames1 != null && frames1.Count > 0) ? ((frames1[0] as JsonObject)?.GetInt("line") ?? 0) : 0;
+                Assert(line1 == 3, $"DAP-S06: first stop at line 3, got {line1}");
+
+                // Step over → next line
+                var stopped2 = session.ExpectEvent("stopped");
+                Assert(stopped2 != null, "DAP-S06: stopped after next");
+                if (stopped2 != null)
+                    Assert(stopped2.GetObject("body")?.GetString("reason") == "step", "DAP-S06: reason = step");
+
+                session.ExpectResponse("next");
+
+                var st2 = session.ExpectResponse("stackTrace");
+                var frames2 = st2?.GetObject("body")?.GetArray("stackFrames");
+                int line2 = (frames2 != null && frames2.Count > 0) ? ((frames2[0] as JsonObject)?.GetInt("line") ?? 0) : 0;
+                Assert(line2 == 4, $"DAP-S06: after next at line 4, got {line2}");
+            }
+            finally
+            {
+                if (File.Exists(scriptPath)) File.Delete(scriptPath);
+            }
+        }
+
+        // ===== Test DAP-S07: Full DAP session — stepIn enters function =====
+        {
+            string scriptPath = Path.Combine(Path.GetTempPath(), "dap_test_s07.ffvm");
+            File.WriteAllText(scriptPath, @"
+func helper(): int {
+    var val: int = 42
+    return val
+}
+
+func main() {
+    var x: int = helper()
+    var y: int = x + 1
+}");
+
+            try
+            {
+                var session = new DapBatchSession();
+                session.AddRequest("initialize", new JsonObject());
+                session.AddLaunch(scriptPath);
+                // Set breakpoint at line 8 (var x: int = helper())
+                session.AddRequest("setBreakpoints", MakeSetBreakpointsArgs(scriptPath, 8));
+                session.AddRequest("configurationDone", new JsonObject());
+                session.AddContinue();              // run to breakpoint at line 8
+                session.AddStackTrace();             // verify at line 8
+                session.AddStepIn();                 // step into helper()
+                session.AddStackTrace();             // should be inside helper
+                session.AddRequest("disconnect", new JsonObject());
+                session.Run();
+
+                session.SkipUntilResponse("configurationDone");
+
+                // Stop at breakpoint
+                var stopped1 = session.ExpectEvent("stopped");
+                Assert(stopped1 != null, "DAP-S07: stopped at breakpoint");
+
+                session.ExpectResponse("continue");
+
+                var st1 = session.ExpectResponse("stackTrace");
+                var frames1 = st1?.GetObject("body")?.GetArray("stackFrames");
+                Assert(frames1 != null && frames1.Count == 1, $"DAP-S07: 1 frame at breakpoint, got {frames1?.Count}");
+                string fn1 = (frames1?[0] as JsonObject)?.GetString("name");
+                Assert(fn1 == "main", $"DAP-S07: at main, got {fn1}");
+
+                // Step into helper()
+                var stopped2 = session.ExpectEvent("stopped");
+                Assert(stopped2 != null, "DAP-S07: stopped after stepIn");
+                Assert(stopped2.GetObject("body")?.GetString("reason") == "step", "DAP-S07: reason = step");
+
+                session.ExpectResponse("stepIn");
+
+                var st2 = session.ExpectResponse("stackTrace");
+                var frames2 = st2?.GetObject("body")?.GetArray("stackFrames");
+                Assert(frames2 != null && frames2.Count == 2, $"DAP-S07: 2 frames after stepIn, got {frames2?.Count}");
+                string fn2 = (frames2?[0] as JsonObject)?.GetString("name");
+                Assert(fn2 == "helper", $"DAP-S07: inside helper, got {fn2}");
+            }
+            finally
+            {
+                if (File.Exists(scriptPath)) File.Delete(scriptPath);
+            }
+        }
+
+        // ===== Test DAP-S08: Full DAP session — stepOut returns to caller =====
+        {
+            string scriptPath = Path.Combine(Path.GetTempPath(), "dap_test_s08.ffvm");
+            File.WriteAllText(scriptPath, @"
+func helper(): int {
+    var val: int = 42
+    return val
+}
+
+func main() {
+    var x: int = helper()
+    var y: int = x + 1
+}");
+
+            try
+            {
+                var session = new DapBatchSession();
+                session.AddRequest("initialize", new JsonObject());
+                session.AddLaunch(scriptPath);
+                // Set breakpoint at line 3 (inside helper: var val: int = 42)
+                session.AddRequest("setBreakpoints", MakeSetBreakpointsArgs(scriptPath, 3));
+                session.AddRequest("configurationDone", new JsonObject());
+                session.AddContinue();              // run to breakpoint inside helper at line 3
+                session.AddStackTrace();             // verify inside helper
+                session.AddStepOut();                // step out of helper back to main
+                session.AddStackTrace();             // should be back in main
+                session.AddRequest("disconnect", new JsonObject());
+                session.Run();
+
+                session.SkipUntilResponse("configurationDone");
+
+                // Stop at breakpoint inside helper
+                var stopped1 = session.ExpectEvent("stopped");
+                Assert(stopped1 != null, "DAP-S08: stopped at breakpoint in helper");
+
+                session.ExpectResponse("continue");
+
+                var st1 = session.ExpectResponse("stackTrace");
+                var frames1 = st1?.GetObject("body")?.GetArray("stackFrames");
+                Assert(frames1 != null && frames1.Count == 2, $"DAP-S08: 2 frames at breakpoint, got {frames1?.Count}");
+                string fn1 = (frames1?[0] as JsonObject)?.GetString("name");
+                Assert(fn1 == "helper", $"DAP-S08: inside helper, got {fn1}");
+
+                // Step out → back to main
+                var stopped2 = session.ExpectEvent("stopped");
+                Assert(stopped2 != null, "DAP-S08: stopped after stepOut");
+                Assert(stopped2.GetObject("body")?.GetString("reason") == "step", "DAP-S08: reason = step");
+
+                session.ExpectResponse("stepOut");
+
+                var st2 = session.ExpectResponse("stackTrace");
+                var frames2 = st2?.GetObject("body")?.GetArray("stackFrames");
+                Assert(frames2 != null && frames2.Count == 1, $"DAP-S08: 1 frame after stepOut, got {frames2?.Count}");
+                string fn2 = (frames2?[0] as JsonObject)?.GetString("name");
+                Assert(fn2 == "main", $"DAP-S08: back in main, got {fn2}");
+            }
+            finally
+            {
+                if (File.Exists(scriptPath)) File.Delete(scriptPath);
+            }
+        }
+
+        // ================================================================
         // Summary
         // ================================================================
         Debug.Log($"\n===== DapTests: {passed} passed, {failed} failed =====");
@@ -679,6 +967,30 @@ func main() {
             _readIndex = 0;
         }
 
+        /// <summary>Number of captured messages.</summary>
+        public int MessageCount => _messages?.Count ?? 0;
+
+        /// <summary>Dump all messages for debugging (does not move readIndex).</summary>
+        public void DumpAll()
+        {
+            if (_messages == null) { Debug.Log("  (no messages)"); return; }
+            for (int i = 0; i < _messages.Count; i++)
+            {
+                var m = _messages[i];
+                string type = m.GetString("type") ?? "?";
+                string detail = "";
+                if (type == "event") detail = m.GetString("event") ?? "?";
+                else if (type == "response") detail = m.GetString("command") ?? "?";
+                string extra = "";
+                if (type == "event" && detail == "stopped")
+                {
+                    var body = m.GetObject("body");
+                    extra = " reason=" + (body != null ? body.GetString("reason") ?? "?" : "null");
+                }
+                Debug.Log("  MSG[" + i + "] " + type + ": " + detail + extra);
+            }
+        }
+
         public JsonObject ReadNext()
         {
             if (_messages != null && _readIndex < _messages.Count)
@@ -706,6 +1018,27 @@ func main() {
                     return msg;
             }
             return null;
+        }
+
+        public void AddNext()
+        {
+            var args = new JsonObject();
+            args.Set("threadId", 1);
+            AddRequest("next", args);
+        }
+
+        public void AddStepIn()
+        {
+            var args = new JsonObject();
+            args.Set("threadId", 1);
+            AddRequest("stepIn", args);
+        }
+
+        public void AddStepOut()
+        {
+            var args = new JsonObject();
+            args.Set("threadId", 1);
+            AddRequest("stepOut", args);
         }
 
         public void SkipUntilResponse(string command)
