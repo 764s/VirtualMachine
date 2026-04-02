@@ -33,10 +33,18 @@ namespace FFVM.Compiler
         private List<string> _errors;
 
         // Multi-function support
-        private Dictionary<string, int> _functionTable;  // funcName → entryIP
+        private Dictionary<string, int> _functionTable;  // funcName → entryIP (-1 = not yet compiled)
         private Dictionary<string, FuncDecl> _funcDecls; // funcName → AST for param count lookup
         private bool _isEntryFunction;                   // true when compiling the entry func
-        private int _callerWindowSize;                   // scratch(16) + localVarCount for current function
+        private int _callerWindowSize;                   // localVarCount for current function
+
+        // Forward-reference backpatch: CALL instructions that reference not-yet-compiled functions
+        private struct PendingCall
+        {
+            public int InstructionIP;   // IP of the CALL instruction to backpatch
+            public string FunctionName; // target function name
+        }
+        private List<PendingCall> _pendingCalls;
 
         // Deferred cleanup blocks (emitted after main body)
         private const int NoReleaseSyscall = -1;
@@ -69,6 +77,7 @@ namespace FFVM.Compiler
         /// <summary>
         /// Compile a pre-parsed module into a VMProgram.
         /// Two-pass: (1) scan all functions → build function table; (2) compile entry, then others.
+        /// Forward-reference CALL instructions are backpatched after all functions are compiled.
         /// </summary>
         public CompileResult CompileModule(ModuleNode module, string entryFunc, Dictionary<string, int> syscalls, SyscallTable syscallTable = null)
         {
@@ -77,6 +86,7 @@ namespace FFVM.Compiler
             _syscalls = syscalls ?? new Dictionary<string, int>();
             _syscallTable = syscallTable;
             _errors = new List<string>();
+            _pendingCalls = new List<PendingCall>();
 
             // --- Pass 1: build function table (name → placeholder IP) ---
             _functionTable = new Dictionary<string, int>();
@@ -98,6 +108,7 @@ namespace FFVM.Compiler
             // --- Pass 2: compile entry function first, then all other functions ---
             var functionEntries = new List<FunctionEntry>();
 
+            _functionTable[entryDecl.Name] = 0;
             CompileFunction(entryDecl, isEntry: true);
             functionEntries.Add(new FunctionEntry(entryDecl.Name, 0, entryDecl.Parameters.Count, _callerWindowSize));
 
@@ -110,6 +121,21 @@ namespace FFVM.Compiler
                 _functionTable[f.Name] = ip;
                 CompileFunction(f, isEntry: false);
                 functionEntries.Add(new FunctionEntry(f.Name, ip, f.Parameters.Count, _callerWindowSize));
+            }
+
+            // --- Backpatch forward references: CALL instructions whose target was -1 at emit time ---
+            for (int i = 0; i < _pendingCalls.Count; i++)
+            {
+                var pending = _pendingCalls[i];
+                if (_functionTable.TryGetValue(pending.FunctionName, out int targetIP) && targetIP >= 0)
+                {
+                    var instr = _instructions[pending.InstructionIP];
+                    _instructions[pending.InstructionIP] = new Instruction(instr.Code, targetIP, instr.B, instr.C);
+                }
+                else
+                {
+                    _errors.Add($"Unresolved function '{pending.FunctionName}'");
+                }
             }
 
             if (_errors.Count > 0)
@@ -674,7 +700,14 @@ namespace FFVM.Compiler
             int windowSize = _nextVarReg - VarRegBase;
             if (windowSize < 1) windowSize = 1; // minimum 1 to prevent zero-offset stacking
 
+            int callIP = CurrentIP();
             Emit(OpCode.CALL, entryIP, windowSize);
+
+            // If target IP is still placeholder (-1), record for backpatch
+            if (entryIP < 0)
+            {
+                _pendingCalls.Add(new PendingCall { InstructionIP = callIP, FunctionName = call.FunctionName });
+            }
         }
 
         // ===== OpCode mapping =====
