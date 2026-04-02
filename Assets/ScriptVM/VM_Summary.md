@@ -12,10 +12,12 @@ Assets/ScriptVM/
     VM_Runtime_Layout.md             运行时内存布局
     VM_OpCodes_Draft.md              OpCode 设计草案
     VM_Tracer_Bullet.md              曳光弹验证方案
-    VM_Optimization_Outlook.md       性能优化展望（14 项方向）
+    VM_Optimization_Outlook.md       性能优化展望（14 项通用优化方向）
     VM_Script_Language_Decision.md   脚本语言选型决策（候选对比 + AI 友好性分析）
   Plan/                      ← 计划文件
-    TracerBullet_Checklist.md    曳光弹检查清单
+    TracerBullet_Checklist.md        曳光弹检查清单
+    Step7_Using_PairedSyscall_Checklist.md   步骤 7 检查清单
+    Step8_FunctionCall.md            步骤 8 完整文档（设计 + 实施 + 展望 + 风险）
   Archive/                   ← 归档：早期讨论稿（已被本文压缩替代）
     VMScript.md ~ VMScript4.md   初期需求与设计讨论
 ```
@@ -322,6 +324,13 @@ skill TracerBullet
 | `NOT` | 逻辑取反 |
 | `NEG` | 算术取负 |
 
+#### Phase 3：Step 8 函数调用（2 条）
+
+| OpCode | 职责 |
+|--------|------|
+| `CALL` | A=目标函数入口 IP, B=callerWindowSize → 压入 CallFrame + 寄存器窗口偏移 + jump |
+| `RET_FUNC` | 弹出 CallFrame → 恢复 IP + RegisterBase → 返回 caller |
+
 ### 4.5 示意字节码
 
 ```
@@ -451,8 +460,8 @@ skill TracerBullet
 | 解释器 | `TreeWalker`（Phase 2 原型，含 defer + Kill） | ✅ 完成 |
 | 词法分析 | `Lexer`（手写，14 关键字 + 运算符 + 字面量 + 注释） | ✅ 完成 |
 | 语法分析 | `Parser`（手写递归下降，source → `ModuleNode` AST，含 using/wait_for/错误恢复） | ✅ 完成 |
-| 编译器 | `BytecodeCompiler`（AST → `VMProgram`，寄存器分配：r0-15 scratch / r16-47 locals / r48-63 temps，支持 using 配对 Syscall） | ✅ 完成 |
-| 测试 | 237 项 Assert 全部通过（98 TreeWalker + 104 Compiler + 17 Performance + 18 SkillScript），另有 5 项自动化性能基准 | ✅ Step 7 通过 |
+| 编译器 | `BytecodeCompiler`（AST → `VMProgram`，寄存器分配：r0-15 scratch / r16-47 locals / r48-63 temps，支持 using 配对 Syscall，支持多函数编译 + CALL emit） | ✅ 完成 |
+| 测试 | 279 项 Assert 全部通过（112 TreeWalker + 132 Compiler + 17 Performance + 18 SkillScript），另有 5 项自动化性能基准 | ✅ Step 8 通过 |
 | 性能基准 | `BenchmarkRunner`（5 组 VM vs C# 对比基准）+ `run-benchmarks.cmd` 自动化管线 → `benchmark_results.md` | ✅ 完成 |
 
 ### 5.2 未完成（按优先级排列）
@@ -471,8 +480,8 @@ skill TracerBullet
 | P2 | 编译器 emit Cleanup 指令 for `using`（C3） | ✅ 完成 → 步骤 7（CompileUsing：SYSCALL + PUSH_CLEANUP + body + POP_CLEANUP） |
 | P2 | `wait_for` Parser + Compiler 接入（G1） | ✅ 完成 → 步骤 7（ParseWaitFor + CompileWaitFor + WAIT_FOR OpCode） |
 | P2（低） | 编译器 "requires cleanup" 强制检查（C4） | 确定执行 → **最晚步骤 10 前** |
-| P2 | CALL / RET_FUNC OpCode + 跨函数调用 emit（F1-F2） | 确定执行 → 步骤 8 |
-| P2 | 函数调用 GC + 快照回滚验证（F3） | 确定执行 → 步骤 8 |
+| P2 | CALL / RET_FUNC OpCode + 跨函数调用 emit（F1-F2） | ✅ 完成 → 步骤 8（CALL=60, RET_FUNC=61, 两遍编译+前向引用回填） |
+| P2 | 函数调用 GC + 快照回滚验证（F3） | ✅ 完成 → 步骤 8（F05: 0 GC 验证通过） |
 | P2（低） | 编译器寄存器生命周期分析 + 跨 await 变量提升（F4） | 确定执行 → **最晚步骤 10 前** |
 | P2 | Parser struct 声明 + 编译器 struct → 寄存器拍平（S1-S3） | 确定执行 → 步骤 9 |
 | P3 | V5 帧内 Profiler 验证（真实 Syscall 接入后） | 阻塞编辑器 UI |
@@ -557,20 +566,26 @@ skill TracerBullet
   │  C4 强制检查必须在进入步骤 10 前就位                 │
   └────────────────────────────────────────────────────────┘
       ↓
-8. 函数调用 + 固定深度调用栈验证
+8. 函数调用 + 固定深度调用栈验证  ✅ 279 项 Assert 通过
       （来源：VM_Tracer_Bullet.md §十二 第 3 项；CallFrame 基础设施已就位）
+      详见 → [Step8_FunctionCall.md](Plan/Step8_FunctionCall.md)
       确定执行：
-        F1. CALL / RET_FUNC OpCode（VMWorld.Tick 扩展）
-        F2. 编译器跨函数调用 emit（CallExpr → CALL，区别于 SYSCALL）
-        F3. GC + 快照回滚验证（CallStack 不破坏 blittable / memcpy）
+        F1. CALL / RET_FUNC OpCode（VMWorld.Tick 扩展）                ✅
+        F2. 编译器跨函数调用 emit（CallExpr → CALL，区别于 SYSCALL）   ✅
+        F3. GC + 快照回滚验证（CallStack 不破坏 blittable / memcpy）   ✅
       确定执行（低优先级，最晚步骤 10 前）：
         F4. 编译器寄存器生命周期分析 + 跨 await 变量提升
             （来源：VM_Tracer_Bullet.md §十二 第 2 项"寄存器复用"）
-      展望项（暂无排期，待 F1-F3 完成 + benchmark 数据后评估）：
-        函数调用路径专项优化 7 项（FO1-FO7）：叶函数跳过压栈、尾调用消除、
-        小函数内联、参数就位检测、返回值直达、自适应寄存器窗口、
-        调用栈深度静态分析。
-        详见 → [Step8_FunctionCall_Checklist.md §展望](Plan/Step8_FunctionCall_Checklist.md#展望函数调用优化方向)
+      功能展望（5 项 FF1-FF5，暂无排期）：
+        跨模块函数调用、函数作为 Syscall 参数（回调模式）、可选参数与默认值、
+        多返回值、非 entry 函数 defer 完整支持。
+      性能优化展望（7 项 FO1-FO7，暂无排期，benchmark 驱动）：
+        叶函数跳过压栈、尾调用消除、小函数内联、参数就位检测、返回值直达、
+        自适应寄存器窗口、调用栈深度静态分析。
+      已识别风险（4 项已缓解 + 4 项前瞻）：
+        寄存器窗口嵌套层数限制（R1, 已知可接受）、CleanupBase 跨函数交互（R4, 已验证）、
+        结构体参数窗口压力（R5, 步骤 9 评估）、Cleanup 块内函数调用语义（R8, 待编译器检查）。
+        详见 → [Step8_FunctionCall.md §五 风险分析](Plan/Step8_FunctionCall.md#五风险分析)
       ↓
 9. 结构体编译期拍平验证
       （来源：VM_Tracer_Bullet.md §十二 第 5 项；设计见 VM_Runtime_Layout.md §5.2）
@@ -656,9 +671,12 @@ skill TracerBullet
 
 ## 十、性能优化展望
 
-> 详见 [VM_Optimization_Outlook.md](Refs/VM_Optimization_Outlook.md)
+> 通用 VM 优化详见 [VM_Optimization_Outlook.md](Refs/VM_Optimization_Outlook.md)
+> 函数调用路径专项优化详见 [Step8_FunctionCall.md §七](Plan/Step8_FunctionCall.md#七性能优化展望)
 
-当前编译脚本性能基准为 5-7x（vs 等价 C#），手写字节码基准为 1.7x。在不改变功能语义的前提下，已识别 14 项优化方向，按 5 个层级排列：
+当前编译脚本性能基准为 5-7x（vs 等价 C#），手写字节码基准为 1.7x。在不改变功能语义的前提下，已识别 14 项通用优化方向 + 7 项函数调用专项优化方向：
+
+**通用优化（O1-O14）**：
 
 | Tier | 核心优化 | 预期收益 | 复杂度 |
 |------|---------|---------|--------|
@@ -667,6 +685,14 @@ skill TracerBullet
 | **3. 指令编码** | 16B → 4B 紧凑指令（O8） | L1 缓存 **10-20%** | 高 |
 | **4. 调度层** | 活跃实例链表（O9）、稀疏快照（O10） | 调度/快照开销按稀疏度大幅降低 | 低-中 |
 | **5. 长期** | 函数指针 Syscall（O11）、SIMD Fix64（O14）等 | 特定路径加速 | 中-高 |
+
+**函数调用专项优化（FO1-FO7）**：
+
+| 优先级 | 优化 | 预期收益 | 复杂度 |
+|--------|------|---------|--------|
+| 🟢 高 | FO4 参数就位检测、FO5 返回值直达 | 每次调用减少 1-2 条 MOVE | 低 |
+| 🟡 中 | FO1 叶函数优化、FO6 自适应窗口、FO7 静态深度分析 | 叶函数开销 -40-60%；嵌套深度从 ~3 扩展到 ~6 | 低-中 |
+| 🔵 低 | FO2 尾调用消除、FO3 小函数内联 | 尾调用不增长调用深度；小函数 -80% 指令 | 中-高 |
 
 **预估目标**：Tier 1 + Tier 2 完成后，编译脚本基准从 5-7x 降至 **2-3x**，手写字节码从 1.7x 降至 **~1.2x**。
 

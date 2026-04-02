@@ -917,6 +917,263 @@ func main() {
             Assert(!result.Success, "C28: compile error for unpaired syscall in using");
         }
 
+        // ===== Test CF01: Basic function call — add(3, 4) → 7 =====
+        {
+            string source = @"
+func add(a: int, b: int) {
+    return a + b
+}
+func main() {
+    var result: int = add(3, 4)
+    Report(result)
+}";
+            var syscalls = new Dictionary<string, int> { { "Report", 0 } };
+            var result = compiler.Compile(source, "main", syscalls);
+            Assert(result.Success, "CF01 compile success");
+
+            var log = new List<string>();
+            var world = new VMWorld();
+            world.Modules.Load(0, result.Program);
+            world.Syscalls.Register(0, "Report", (ref VMInstanceState s) =>
+            {
+                log.Add($"Report({s.Registers.Get(0).ToInt()})");
+            });
+
+            int id = world.SpawnInstance(0, 0);
+            world.Tick();
+
+            Assert(log.Count == 1 && log[0] == "Report(7)", $"CF01: add(3,4) = 7, got {(log.Count > 0 ? log[0] : "?")}");
+            Assert((world.Pool.Instances[id].StateFlags & VMStateFlags.Completed) != 0, "CF01: Completed");
+        }
+
+        // ===== Test CF02: Multi-function call chain — a() calls b() =====
+        {
+            string source = @"
+func b() {
+    return 42
+}
+func a() {
+    return b() + 1
+}
+func main() {
+    var result: int = a()
+    Report(result)
+}";
+            var syscalls = new Dictionary<string, int> { { "Report", 0 } };
+            var result = compiler.Compile(source, "main", syscalls);
+            Assert(result.Success, "CF02 compile success");
+
+            var log = new List<string>();
+            var world = new VMWorld();
+            world.Modules.Load(0, result.Program);
+            world.Syscalls.Register(0, "Report", (ref VMInstanceState s) =>
+            {
+                log.Add($"Report({s.Registers.Get(0).ToInt()})");
+            });
+
+            int id = world.SpawnInstance(0, 0);
+            world.Tick();
+
+            Assert(log.Count == 1 && log[0] == "Report(43)", $"CF02: a() = b()+1 = 43, got {(log.Count > 0 ? log[0] : "?")}");
+            Assert((world.Pool.Instances[id].StateFlags & VMStateFlags.Completed) != 0, "CF02: Completed");
+        }
+
+        // ===== Test CF03: Register window isolation — caller/callee locals don't interfere =====
+        {
+            string source = @"
+func inner() {
+    var x: int = 999
+    return x
+}
+func main() {
+    var x: int = 100
+    var y: int = inner()
+    Report(x)
+    Report(y)
+}";
+            var syscalls = new Dictionary<string, int> { { "Report", 0 } };
+            var result = compiler.Compile(source, "main", syscalls);
+            Assert(result.Success, "CF03 compile success");
+
+            var log = new List<string>();
+            var world = new VMWorld();
+            world.Modules.Load(0, result.Program);
+            world.Syscalls.Register(0, "Report", (ref VMInstanceState s) =>
+            {
+                log.Add($"{s.Registers.Get(0).ToInt()}");
+            });
+
+            int id = world.SpawnInstance(0, 0);
+            world.Tick();
+
+            Assert(log.Count >= 1 && log[0] == "100", $"CF03: caller x = 100, got {(log.Count > 0 ? log[0] : "?")}");
+            Assert(log.Count >= 2 && log[1] == "999", $"CF03: callee returned 999, got {(log.Count > 1 ? log[1] : "?")}");
+            Assert((world.Pool.Instances[id].StateFlags & VMStateFlags.Completed) != 0, "CF03: Completed");
+        }
+
+        // ===== Test CF04: Function + Syscall mixed in same module =====
+        {
+            string source = @"
+func double(n: int) {
+    return n + n
+}
+func main() {
+    Ping()
+    var result: int = double(21)
+    Report(result)
+}";
+            var syscalls = new Dictionary<string, int> { { "Ping", 0 }, { "Report", 1 } };
+            var result = compiler.Compile(source, "main", syscalls);
+            Assert(result.Success, "CF04 compile success");
+
+            var log = new List<string>();
+            var world = new VMWorld();
+            world.Modules.Load(0, result.Program);
+            world.Syscalls.Register(0, "Ping", (ref VMInstanceState s) => { log.Add("Ping"); });
+            world.Syscalls.Register(1, "Report", (ref VMInstanceState s) =>
+            {
+                log.Add($"Report({s.Registers.Get(0).ToInt()})");
+            });
+
+            int id = world.SpawnInstance(0, 0);
+            world.Tick();
+
+            Assert(log.Count >= 1 && log[0] == "Ping", "CF04: Ping first");
+            Assert(log.Count >= 2 && log[1] == "Report(42)", $"CF04: double(21)=42, got {(log.Count > 1 ? log[1] : "?")}");
+            Assert((world.Pool.Instances[id].StateFlags & VMStateFlags.Completed) != 0, "CF04: Completed");
+        }
+
+        // ===== Test CF05: Function with void call (no return value used) =====
+        {
+            string source = @"
+func sideEffect() {
+    Report(99)
+}
+func main() {
+    sideEffect()
+    Report(0)
+}";
+            var syscalls = new Dictionary<string, int> { { "Report", 0 } };
+            var result = compiler.Compile(source, "main", syscalls);
+            Assert(result.Success, "CF05 compile success");
+
+            var log = new List<string>();
+            var world = new VMWorld();
+            world.Modules.Load(0, result.Program);
+            world.Syscalls.Register(0, "Report", (ref VMInstanceState s) =>
+            {
+                log.Add($"{s.Registers.Get(0).ToInt()}");
+            });
+
+            int id = world.SpawnInstance(0, 0);
+            world.Tick();
+
+            Assert(log.Count >= 1 && log[0] == "99", $"CF05: sideEffect reports 99, got {(log.Count > 0 ? log[0] : "?")}");
+            Assert(log.Count >= 2 && log[1] == "0", $"CF05: main reports 0, got {(log.Count > 1 ? log[1] : "?")}");
+            Assert((world.Pool.Instances[id].StateFlags & VMStateFlags.Completed) != 0, "CF05: Completed");
+        }
+
+        // ===== Test CF06: Function calling function with parameters =====
+        {
+            string source = @"
+func mul(a: int, b: int) {
+    return a * b
+}
+func square(n: int) {
+    return mul(n, n)
+}
+func main() {
+    Report(square(7))
+}";
+            var syscalls = new Dictionary<string, int> { { "Report", 0 } };
+            var result = compiler.Compile(source, "main", syscalls);
+            Assert(result.Success, "CF06 compile success");
+
+            var log = new List<string>();
+            var world = new VMWorld();
+            world.Modules.Load(0, result.Program);
+            world.Syscalls.Register(0, "Report", (ref VMInstanceState s) =>
+            {
+                log.Add($"{s.Registers.Get(0).ToInt()}");
+            });
+
+            int id = world.SpawnInstance(0, 0);
+            world.Tick();
+
+            Assert(log.Count == 1 && log[0] == "49", $"CF06: square(7) = 49, got {(log.Count > 0 ? log[0] : "?")}");
+            Assert((world.Pool.Instances[id].StateFlags & VMStateFlags.Completed) != 0, "CF06: Completed");
+        }
+
+        // ===== Test CF07: Function with defer — cleanup on entry function return =====
+        {
+            string source = @"
+func main() {
+    defer {
+        Report(1)
+    }
+    Report(2)
+}";
+            var syscalls = new Dictionary<string, int> { { "Report", 0 } };
+            var result = compiler.Compile(source, "main", syscalls);
+            Assert(result.Success, "CF07 compile success");
+
+            var log = new List<string>();
+            var world = new VMWorld();
+            world.Modules.Load(0, result.Program);
+            world.Syscalls.Register(0, "Report", (ref VMInstanceState s) =>
+            {
+                log.Add($"{s.Registers.Get(0).ToInt()}");
+            });
+
+            int id = world.SpawnInstance(0, 0);
+            world.Tick();
+
+            Assert(log.Count >= 1 && log[0] == "2", "CF07: body first");
+            Assert(log.Count >= 2 && log[1] == "1", "CF07: defer cleanup after return");
+            Assert((world.Pool.Instances[id].StateFlags & VMStateFlags.Completed) != 0, "CF07: Completed");
+        }
+
+        // ===== Test CF08: Function arg count mismatch → compile error =====
+        {
+            string source = @"
+func add(a: int, b: int) {
+    return a + b
+}
+func main() {
+    add(1)
+}";
+            var syscalls = new Dictionary<string, int>();
+            var result = compiler.Compile(source, "main", syscalls);
+            Assert(!result.Success, "CF08: compile error on arg count mismatch");
+        }
+
+        // ===== Test CF09: Regression — existing single-function paths unchanged =====
+        {
+            // This tests that single-function modules still work (no regression from multi-function)
+            string source = @"
+func main() {
+    var x: int = 10
+    var y: int = 20
+    Report(x + y)
+}";
+            var syscalls = new Dictionary<string, int> { { "Report", 0 } };
+            var result = compiler.Compile(source, "main", syscalls);
+            Assert(result.Success, "CF09 compile success");
+
+            var log = new List<string>();
+            var world = new VMWorld();
+            world.Modules.Load(0, result.Program);
+            world.Syscalls.Register(0, "Report", (ref VMInstanceState s) =>
+            {
+                log.Add($"{s.Registers.Get(0).ToInt()}");
+            });
+
+            int id = world.SpawnInstance(0, 0);
+            world.Tick();
+
+            Assert(log.Count == 1 && log[0] == "30", $"CF09: 10+20 = 30, got {(log.Count > 0 ? log[0] : "?")}");
+        }
+
         // ===== Summary =====
         Debug.Log($"========================================");
         Debug.Log($"Compiler Tests: {passed} passed, {failed} failed");
