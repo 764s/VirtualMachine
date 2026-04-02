@@ -32,6 +32,12 @@ namespace FFVM.Compiler
         private SyscallTable _syscallTable;            // paired slot lookup (optional, for using)
         private List<string> _errors;
 
+        // Multi-function support
+        private Dictionary<string, int> _functionTable;  // funcName → entryIP
+        private Dictionary<string, FuncDecl> _funcDecls; // funcName → AST for param count lookup
+        private bool _isEntryFunction;                   // true when compiling the entry func
+        private int _callerWindowSize;                   // scratch(16) + localVarCount for current function
+
         // Deferred cleanup blocks (emitted after main body)
         private const int NoReleaseSyscall = -1;
         private struct DeferredCleanup
@@ -62,46 +68,103 @@ namespace FFVM.Compiler
 
         /// <summary>
         /// Compile a pre-parsed module into a VMProgram.
+        /// Two-pass: (1) scan all functions → build function table; (2) compile entry, then others.
         /// </summary>
         public CompileResult CompileModule(ModuleNode module, string entryFunc, Dictionary<string, int> syscalls, SyscallTable syscallTable = null)
         {
-            FuncDecl func = null;
-            for (int i = 0; i < module.Functions.Count; i++)
-            {
-                if (module.Functions[i].Name == entryFunc)
-                {
-                    func = module.Functions[i];
-                    break;
-                }
-            }
-
-            if (func == null)
-                return new CompileResult { Errors = new List<string> { $"Entry function '{entryFunc}' not found" } };
-
             _instructions = new List<Instruction>();
             _constants = new List<Number>();
-            _variables = new Dictionary<string, int>();
-            _nextVarReg = VarRegBase;
-            _tempTop = TempRegBase;
             _syscalls = syscalls ?? new Dictionary<string, int>();
             _syscallTable = syscallTable;
             _errors = new List<string>();
-            _deferredCleanups = new List<DeferredCleanup>();
 
-            // Declare parameters as variables
+            // --- Pass 1: build function table (name → placeholder IP) ---
+            _functionTable = new Dictionary<string, int>();
+            _funcDecls = new Dictionary<string, FuncDecl>();
+            FuncDecl entryDecl = null;
+
+            for (int i = 0; i < module.Functions.Count; i++)
+            {
+                var f = module.Functions[i];
+                _functionTable[f.Name] = -1; // placeholder
+                _funcDecls[f.Name] = f;
+                if (f.Name == entryFunc)
+                    entryDecl = f;
+            }
+
+            if (entryDecl == null)
+                return new CompileResult { Errors = new List<string> { $"Entry function '{entryFunc}' not found" } };
+
+            // --- Pass 2: compile entry function first, then all other functions ---
+            var functionEntries = new List<FunctionEntry>();
+
+            CompileFunction(entryDecl, isEntry: true);
+            functionEntries.Add(new FunctionEntry(entryDecl.Name, 0, entryDecl.Parameters.Count, _callerWindowSize));
+
+            for (int i = 0; i < module.Functions.Count; i++)
+            {
+                var f = module.Functions[i];
+                if (f.Name == entryFunc) continue;
+
+                int ip = CurrentIP();
+                _functionTable[f.Name] = ip;
+                CompileFunction(f, isEntry: false);
+                functionEntries.Add(new FunctionEntry(f.Name, ip, f.Parameters.Count, _callerWindowSize));
+            }
+
+            if (_errors.Count > 0)
+                return new CompileResult { Errors = _errors };
+
+            int maxRegs = VarRegBase; // minimum
+            for (int i = 0; i < functionEntries.Count; i++)
+            {
+                int need = functionEntries[i].LocalRegCount + VarRegBase;
+                if (need > maxRegs) maxRegs = need;
+            }
+
+            return new CompileResult
+            {
+                Program = new VMProgram(
+                    _instructions.ToArray(),
+                    _constants.ToArray(),
+                    maxRegs,
+                    functionEntries.ToArray()
+                ),
+                Errors = _errors
+            };
+        }
+
+        /// <summary>
+        /// Compile a single function body into the instruction stream.
+        /// Resets per-function state (variables, temps, deferred cleanups).
+        /// </summary>
+        private void CompileFunction(FuncDecl func, bool isEntry)
+        {
+            _variables = new Dictionary<string, int>();
+            _nextVarReg = VarRegBase;
+            _tempTop = TempRegBase;
+            _deferredCleanups = new List<DeferredCleanup>();
+            _isEntryFunction = isEntry;
+
+            // Bind parameters: copy from scratch zone r0..rN into local registers r16+
             for (int i = 0; i < func.Parameters.Count; i++)
             {
-                DeclareVar(func.Parameters[i].Name);
+                int localReg = DeclareVar(func.Parameters[i].Name);
+                // Emit MOVE to copy param from scratch r[i] to local r[localReg]
+                if (localReg != i)
+                    Emit(OpCode.MOVE, localReg, i);
             }
 
             // Compile function body
             CompileBlock(func.Body);
 
-            // Emit RETURN for main body
-            Emit(OpCode.RETURN);
+            // Emit terminator
+            if (isEntry)
+                Emit(OpCode.RETURN);
+            else
+                Emit(OpCode.RET_FUNC);
 
-            // Emit deferred cleanup blocks
-            // Order in bytecode doesn't matter — the cleanup stack (LIFO) determines execution order
+            // Emit deferred cleanup blocks for this function
             for (int i = 0; i < _deferredCleanups.Count; i++)
             {
                 int cleanupIP = _instructions.Count;
@@ -109,29 +172,17 @@ namespace FFVM.Compiler
 
                 if (_deferredCleanups[i].ReleaseSyscallSlot >= 0)
                 {
-                    // using cleanup: emit release SYSCALL
                     Emit(OpCode.SYSCALL, _deferredCleanups[i].ReleaseSyscallSlot, 0, 0);
                 }
                 else
                 {
-                    // defer cleanup: emit body block
                     CompileBlock(_deferredCleanups[i].Body);
                 }
                 Emit(OpCode.RETURN);
             }
 
-            if (_errors.Count > 0)
-                return new CompileResult { Errors = _errors };
-
-            return new CompileResult
-            {
-                Program = new VMProgram(
-                    _instructions.ToArray(),
-                    _constants.ToArray(),
-                    _nextVarReg
-                ),
-                Errors = _errors
-            };
+            // Record window size: number of local variable registers used (above r16)
+            _callerWindowSize = _nextVarReg - VarRegBase;
         }
 
         // ===== Variable management =====
@@ -329,7 +380,9 @@ namespace FFVM.Compiler
                 if (valueReg != 0)
                     Emit(OpCode.MOVE, 0, valueReg);
             }
-            Emit(OpCode.RETURN);
+            // Entry function: RETURN (triggers cleanup chain / Completed)
+            // Non-entry function: RET_FUNC (pop CallFrame, resume caller)
+            Emit(_isEntryFunction ? OpCode.RETURN : OpCode.RET_FUNC);
         }
 
         private void CompileWait(WaitStmt stmt)
@@ -410,11 +463,21 @@ namespace FFVM.Compiler
 
         private void CompileExprStmt(ExprStmt stmt)
         {
-            // Optimized path: void syscall call (skip result save)
-            if (stmt.Expression is CallExpr call && _syscalls.ContainsKey(call.FunctionName))
+            // Optimized path: void call (skip result save)
+            if (stmt.Expression is CallExpr call)
             {
-                CompileSyscallVoid(call);
-                return;
+                // User function — void call
+                if (_functionTable != null && _functionTable.ContainsKey(call.FunctionName))
+                {
+                    CompileUserCallVoid(call);
+                    return;
+                }
+                // Syscall — void call
+                if (_syscalls.ContainsKey(call.FunctionName))
+                {
+                    CompileSyscallVoid(call);
+                    return;
+                }
             }
             // Generic path: compile expression, discard result
             CompileExpr(stmt.Expression);
@@ -484,6 +547,11 @@ namespace FFVM.Compiler
 
             if (expr is CallExpr call)
             {
+                // User function call (returns value in r0)
+                if (_functionTable != null && _functionTable.ContainsKey(call.FunctionName))
+                    return CompileUserCallExpr(call);
+
+                // Syscall call
                 return CompileSyscallExpr(call);
             }
 
@@ -545,6 +613,68 @@ namespace FFVM.Compiler
             }
 
             Emit(OpCode.SYSCALL, slot, 0, call.Arguments.Count);
+        }
+
+        // ===== User function call compilation =====
+
+        /// <summary>
+        /// Emit arguments to scratch zone, then CALL user function.
+        /// Returns temp register holding the return value (from r0).
+        /// </summary>
+        private int CompileUserCallExpr(CallExpr call)
+        {
+            EmitUserCall(call);
+
+            // Save result from r0 to temp (protect from future overwrites)
+            int resultTemp = AllocTemp();
+            Emit(OpCode.MOVE, resultTemp, 0);
+            return resultTemp;
+        }
+
+        /// <summary>
+        /// Void user function call (no result save).
+        /// </summary>
+        private void CompileUserCallVoid(CallExpr call)
+        {
+            EmitUserCall(call);
+        }
+
+        /// <summary>
+        /// Core: compile args → scratch zone, emit CALL instruction.
+        /// callerWindowSize = VarRegBase(16) + localVarCount for register window offset.
+        /// </summary>
+        private void EmitUserCall(CallExpr call)
+        {
+            int entryIP = _functionTable[call.FunctionName];
+
+            // Validate parameter count
+            if (_funcDecls.TryGetValue(call.FunctionName, out var funcDecl))
+            {
+                if (call.Arguments.Count != funcDecl.Parameters.Count)
+                {
+                    _errors.Add($"Function '{call.FunctionName}' expects {funcDecl.Parameters.Count} arguments but got {call.Arguments.Count} (line {call.Line})");
+                    return;
+                }
+            }
+
+            // Phase 1: compile all args into temp registers
+            int[] argRegs = new int[call.Arguments.Count];
+            for (int i = 0; i < call.Arguments.Count; i++)
+                argRegs[i] = CompileExpr(call.Arguments[i]);
+
+            // Phase 2: move args to r0, r1, ... (scratch zone — shared, not windowed)
+            for (int i = 0; i < call.Arguments.Count; i++)
+            {
+                if (argRegs[i] != i)
+                    Emit(OpCode.MOVE, i, argRegs[i]);
+            }
+
+            // callerWindowSize = number of local var registers currently in use
+            // CALL will offset RegisterBase by this amount so callee's r16+ doesn't overlap caller's
+            int windowSize = _nextVarReg - VarRegBase;
+            if (windowSize < 1) windowSize = 1; // minimum 1 to prevent zero-offset stacking
+
+            Emit(OpCode.CALL, entryIP, windowSize);
         }
 
         // ===== OpCode mapping =====
