@@ -383,7 +383,7 @@ LSP1（LSP Server 核心框架）           ← 所有 LSP 功能的通信基础
 ├──────────────┼──────────────────┼─────────────────┤
 │ Dev/Editor   │ ✅ 定义          │ ❌ 不定义       │
 │ Release      │ ❌ 不定义        │ ✅ 定义         │
-│ Release-Debug│ ✅ 定义          │ ✅ 定义         │ ← 仅内部 QA
+│ QA-Debug     │ ✅ 定义          │ ✅ 定义         │ ← 仅内部 QA，不部署
 └──────────────┴──────────────────┴─────────────────┘
 ```
 
@@ -492,7 +492,13 @@ if (_breakpointLines != null && program.SourceMap != null)
 | `scopes` / `variables` | Request | 低 | DBG5 变量查看 |
 | `disconnect` | Request | 极低 | 清理 |
 
-> **总代码量预估**：~600-800 行 C#（含 JSON 序列化辅助）。独立程序集，`#if FFVM_SCRIPT_DEBUG`。
+> **总代码量预估**：~600-800 行 C#，分解如下：
+> - ~150 行：Content-Length 分帧 + JSON-RPC 解析（与 LSP1 共享）
+> - ~200 行：12 个 request handler（每个 ~15 行平均）
+> - ~150 行：DAP 消息类型定义（Request/Response/Event 结构体）
+> - ~100-300 行：JSON 序列化辅助 + 错误处理 + 生命周期管理
+>
+> 独立程序集，`#if FFVM_SCRIPT_DEBUG`。
 
 ### 6.3 DAP 对接分阶段验证门控（降级关键）
 
