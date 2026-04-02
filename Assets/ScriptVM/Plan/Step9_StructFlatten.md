@@ -262,3 +262,70 @@ struct TypeName {
 | GC | V1 框架 | struct 操作零 GC 分配 |
 
 全部通过后，步骤 9 闭环。下一步：评估 S4（struct 函数参数传递）+ C4/F4 延期项，然后进入步骤 10（编辑器流程图投影）。
+
+---
+
+## 六、功能展望
+
+> 以下功能方向基于步骤 9 实现现状，面向后续步骤。暂无排期，按需启动。
+> 已同步录入 [Outlook_And_Risks.md §2.3](Outlook_And_Risks.md#23-结构体相关来源步骤-9)。
+
+### S4. 结构体作为函数参数 / 返回值的寄存器传递
+
+**现状**：结构体变量仅在声明函数的 local 区内使用；函数参数仅支持标量（`int`/`number`）。
+
+**方向**：caller 将 struct 各字段展开到 scratch zone（r0..rN），callee 在 local 区还原为连续寄存器。返回值同理，将字段写入 r0..rN。
+
+**前提**：需与 FO6（自适应寄存器窗口）联合评估——struct 参数会显著加大窗口压力。
+
+**触发时机**：最晚步骤 10 前，如编辑器需要展示"结构体参数传递"节点。
+
+**复杂度**：中。
+
+### SN1. 嵌套结构体（struct 字段为另一个 struct）
+
+**现状**：struct 字段仅支持标量类型（`int`/`number`），不支持嵌套 struct。
+
+**方向**：递归拍平嵌套 struct 为连续寄存器。例如 `struct Outer { inner: Inner; x: int }` 中，如果 `Inner` 有 2 个字段，则 `Outer` 占 3 个连续寄存器。编译器需递归计算 `SlotCount` + 递归解析 `FieldAccess`（`outer.inner.field`）。
+
+**约束**：禁止循环引用（编译期检查）。嵌套深度对寄存器占用的放大效应需关注。
+
+**触发时机**：后续步骤按需。
+
+**复杂度**：中。
+
+### SN2. 结构体字面量构造语法
+
+**现状**：struct 变量需要先声明后逐字段赋值（`var v: Vec2; v.x = 1; v.y = 2`）。
+
+**方向**：支持构造语法 `var v: Vec2 = Vec2 { x: 1, y: 2 }`。编译器将其展开为逐字段 `LOAD_CONST`。纯编译器 sugar，不影响运行时。
+
+**触发时机**：后续步骤按需（提升开发体验）。
+
+**复杂度**：低。
+
+---
+
+## 七、性能优化展望
+
+> 以下优化方向聚焦**结构体操作路径**（步骤 9 引入的新开销）。
+> 与 [VM_Optimization_Outlook.md](../Refs/VM_Optimization_Outlook.md) 中的通用 VM 优化（O1-O14）互补但不重叠。
+> 已同步录入 [Outlook_And_Risks.md §3.3](Outlook_And_Risks.md#33-结构体路径潜在优化来源step9)。
+
+### SO1. COPY_BLOCK OpCode（替代 N 条 MOVE 的结构体赋值）
+
+**现状**：`a = b`（同类型 struct 赋值）编译为 N 条 `MOVE` 指令（N = 字段数），逐字段复制寄存器。
+
+**方案**：新增 `COPY_BLOCK dst, src, count` OpCode，一条指令完成连续寄存器块的复制。VMWorld 执行循环中实现为 `for (int i = 0; i < count; i++) regs[dst+i] = regs[src+i]`。
+
+**收益场景**：字段数 ≥ 3 的 struct 赋值。字段数 ≤ 2 时 N 条 MOVE 的总开销可能低于一条 COPY_BLOCK + 循环。
+
+**前提**：需新增 OpCode（`OpCode.cs`）+ VMWorld 分发 case。与 O8（指令压缩）实施时需保持兼容。
+
+**预估收益**：大 struct 赋值指令数从 N 降至 1。**复杂度**：中。
+
+### 优先级排序
+
+| 编号 | 方向 | 优先级 | 理由 |
+|------|------|--------|------|
+| **SO1** | COPY_BLOCK | 🟡 中 | 当前业务 struct 通常 2-5 字段，收益有限；待大 struct 场景出现后评估 |

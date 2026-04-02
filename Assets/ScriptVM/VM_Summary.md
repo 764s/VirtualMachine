@@ -463,7 +463,7 @@ skill TracerBullet
 | 词法分析 | `Lexer`（手写，16 关键字 + 运算符 + 字面量 + 注释，含 `struct` 关键字 + `.` 分隔符） | ✅ 完成 |
 | 语法分析 | `Parser`（手写递归下降，source → `ModuleNode` AST，含 using/wait_for/struct 声明/字段访问/错误恢复） | ✅ 完成 |
 | 编译器 | `BytecodeCompiler`（AST → `VMProgram`，寄存器分配：r0-15 scratch / r16-47 locals / r48-63 temps，支持 using 配对 Syscall，支持多函数编译 + CALL emit，支持 struct 编译期拍平 → 连续寄存器槽位映射） | ✅ 完成 |
-| 测试 | 303 项 Assert 全部通过（112 TreeWalker + 156 Compiler + 17 Performance + 18 SkillScript），另有 5 项自动化性能基准 | ✅ Step 9 通过 |
+| 测试 | 315 项 Assert 全部通过（112 TreeWalker + 168 Compiler + 17 Performance + 18 SkillScript），另有 5 项自动化性能基准 | ✅ Step 10 前置通过 |
 | 性能基准 | `BenchmarkRunner`（5 组 VM vs C# 对比基准）+ `run-benchmarks.cmd` 自动化管线 → `benchmark_results.md` | ✅ 完成 |
 
 ### 5.2 未完成（按优先级排列）
@@ -557,7 +557,7 @@ skill TracerBullet
         G1. wait_for Parser + Compiler 接入（新增 WAIT_FOR OpCode）   ✅
         G2. POP_CLEANUP 首次被编译器生成（using 正常退出路径）         ✅
       确定执行（低优先级，最晚步骤 10 前）：
-        C4. 编译器 "requires cleanup" 强制检查                        ⏳ 延至步骤 10 前
+        C4. 编译器 "requires cleanup" 强制检查                        ✅ SyscallTable.RequiresCleanup + CompileSyscall 检查
       展望项（暂无排期）：
         C5. Cleanup 块执行超时保护                                    ⏳ 展望
         C6. 嵌套 using 作用域优化                                     ⏳ 展望
@@ -596,8 +596,15 @@ skill TracerBullet
         S1. Parser struct 声明 + 字段类型解析                              ✅
         S2. 编译器 struct → 连续寄存器槽位映射                            ✅
         S3. 结构体赋值 = 寄存器区块 COPY 验证                            ✅
-      展望项（最晚步骤 10 前，如需编辑器展示结构体节点）：
-        S4. 结构体作为函数参数 / 返回值的寄存器传递                       ⏳ 展望
+      功能展望（3 项 S4/SN1/SN2，暂无排期）：
+        结构体函数参数/返回值传递（S4，最晚步骤 10 前如需编辑器展示）、
+        嵌套结构体递归拍平（SN1）、结构体字面量构造语法（SN2）。
+      性能优化展望（1 项 SO1，暂无排期，benchmark 驱动）：
+        COPY_BLOCK OpCode 替代 N 条 MOVE 的结构体赋值。
+      已识别风险（4 项 SR1-SR4）：
+        寄存器快速耗尽（SR1, local 区 32 槽限制）、大 struct 赋值性能退化（SR2, N 条 MOVE）、
+        struct 与函数调用窗口交互（SR3, S4 展望时评估）、字段/方法语法歧义（SR4, 设计上不支持方法调用）。
+        详见 → [Step9_StructFlatten.md §四 风险分析](Plan/Step9_StructFlatten.md#四风险分析)
       ↓
   ┌────────────────────────────────────────────────────────┐
   │  Handle64 批处理协议（展望项）                       │
@@ -676,9 +683,10 @@ skill TracerBullet
 
 > 通用 VM 优化详见 [VM_Optimization_Outlook.md](Refs/VM_Optimization_Outlook.md)
 > 函数调用路径专项优化详见 [Step8_FunctionCall.md §七](Plan/Step8_FunctionCall.md#七性能优化展望)
+> 结构体路径潜在优化详见 [Step9_StructFlatten.md §七](Plan/Step9_StructFlatten.md#七性能优化展望)
 > 全部展望与风险的统一索引详见 [Plan/Outlook_And_Risks.md](Plan/Outlook_And_Risks.md)
 
-当前编译脚本性能基准为 5-7x（vs 等价 C#），手写字节码基准为 1.7x。在不改变功能语义的前提下，已识别 14 项通用优化方向 + 7 项函数调用专项优化方向：
+当前编译脚本性能基准为 5-7x（vs 等价 C#），手写字节码基准为 1.7x。在不改变功能语义的前提下，已识别 14 项通用优化方向 + 7 项函数调用专项优化方向 + 1 项结构体专项优化方向：
 
 **通用优化（O1-O14）**：
 
@@ -698,6 +706,12 @@ skill TracerBullet
 | 🟡 中 | FO1 叶函数优化、FO6 自适应窗口、FO7 静态深度分析 | 叶函数开销 -40-60%；嵌套深度从 ~3 扩展到 ~6 | 低-中 |
 | 🔵 低 | FO2 尾调用消除、FO3 小函数内联 | 尾调用不增长调用深度；小函数 -80% 指令 | 中-高 |
 
+**结构体专项优化（SO1）**：
+
+| 优先级 | 优化 | 预期收益 | 复杂度 |
+|--------|------|---------|--------|
+| 🟡 中 | SO1 COPY_BLOCK OpCode | 大 struct 赋值指令数从 N 降至 1 | 中 |
+
 **预估目标**：Tier 1 + Tier 2 完成后，编译脚本基准从 5-7x 降至 **2-3x**，手写字节码从 1.7x 降至 **~1.2x**。
 
 最大单一赢利点是 **O1（消除 fixed pin）**，推荐作为第一个实施项。
@@ -716,8 +730,8 @@ skill TracerBullet
 | G2 | `BytecodeCompiler` | ~~`POP_CLEANUP` 从未被编译器生成~~ → 已修复：`CompileUsing()` 在 using 块正常退出时 emit `POP_CLEANUP`（步骤 7） | 中 | ✅ 已修复 |
 | G3 | `BytecodeCompiler.BinOpCode()` / `UnOpCode()` | ~~遇到未知 `NodeKind` 时静默返回 `NOP`，不报错~~ → 已修复：添加 `_errors.Add(...)` 报告未知操作符 | 中 | ✅ 已修复 |
 | G4 | `VMWorld.ExecuteInstance()` | ~~步数上限耗尽时报 `PanicIllegalInstruction`~~ → 已修复：新增 `PanicStepLimitExceeded` 错误码 | 低 | ✅ 已修复 |
-| G5 | `BytecodeCompiler` | 编译器缺少 "requires cleanup" 强制检查：标记了 requires_cleanup 的 Syscall 未配 `using`/`defer` 时应编译报错（对应 C4） | 中（低） | 确定执行 → **最晚步骤 10 前** |
-| G6 | `BytecodeCompiler` | `defer`/`using` Cleanup 块内未禁止 `wait`/`wait_for`：语义上 Cleanup 块不应挂起（会阻塞实例回收），当前编译器无此检查 | 中 | 编译器语义检查阶段（与 C4/C5 同期） |
+| G5 | `BytecodeCompiler` | ~~编译器缺少 "requires cleanup" 强制检查~~ → 已修复：`SyscallTable.RequiresCleanup()` + `CompileSyscallVoid()`/`CompileSyscallExpr()` 检查（步骤 10 前置） | 中（低） | ✅ 已修复 |
+| G6 | `BytecodeCompiler` | ~~`defer`/`using` Cleanup 块内未禁止 `wait`/`wait_for`~~ → 已修复：`_inCleanupBlock` 标志 + `CompileWait()`/`CompileWaitFor()` 检查（步骤 10 前置） | 中 | ✅ 已修复 |
 
 ### 11.2 测试缺口
 
@@ -761,7 +775,7 @@ skill TracerBullet
 
 | Job | 触发 | 内容 |
 |-----|------|------|
-| **test** | push / PR | 构建 StandaloneRunner → 运行全部 303 个测试断言（TreeWalker 112 + Compiler 156 + Performance 17 + SkillScript 18） |
+| **test** | push / PR | 构建 StandaloneRunner → 运行全部 315 个测试断言（TreeWalker 112 + Compiler 168 + Performance 17 + SkillScript 18） |
 | **benchmark** | test 通过后 | 运行 B01-B05 VM vs C# 基准，生成 `benchmark_ci.md` artifact |
 | **cross-lang** | test 通过后 | 运行 Lua / Python / Node.js 同源基准，生成 `cross_lang_results.md` artifact |
 
@@ -797,11 +811,11 @@ skill TracerBullet
 
 | ID | 内容 | 来源 |
 |----|------|------|
-| C4 | 编译器 "requires cleanup" 强制检查 | §3.3 |
-| F4 | 寄存器生命周期分析 + 跨 await 变量提升 | Step 8 |
-| G5 | C4 对应代码缺口 | §11.1 |
-| G6 | Cleanup 块内禁止 wait 编译检查 | §11.1 |
-| V5 | 帧内 Profiler 验证 | §4.6 |
+| C4 | 编译器 "requires cleanup" 强制检查 | §3.3 | ✅ |
+| F4 | 寄存器生命周期分析 + 跨 await 变量提升 | Step 8 | ⏳ |
+| G5 | C4 对应代码缺口 | §11.1 | ✅ |
+| G6 | Cleanup 块内禁止 wait 编译检查 | §11.1 | ✅ |
+| V5 | 帧内 Profiler 验证 | §4.6 | ⏳ |
 
 ### 功能展望（18 项）
 

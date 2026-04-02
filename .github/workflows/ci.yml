@@ -9,7 +9,7 @@ on:
 
 jobs:
   # ───────────────────────────────────────────────────
-  #  Job 1: Build + Unit Tests (185 assertions)
+  #  Job 1: Build + Unit Tests (315 assertions)
   # ───────────────────────────────────────────────────
   test:
     name: Build & Test
