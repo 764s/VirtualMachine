@@ -1,0 +1,529 @@
+[LOG] [PASS] Arithmetic: 3 + 4 = 7
+[LOG] [PASS] Variables: 10 * 2 = 20
+[LOG] [PASS] If/Else: max(5,3) = 5
+[LOG] [PASS] If/Else: max(2,8) = 8
+[LOG] [PASS] While: sum(1..10) = 55
+[LOG] [PASS] Function call: quadruple(3) = 12
+[LOG] [PASS] Syscall: getHealth() = 100
+[LOG] [PASS] Syscall with args: damage(42,10) = 20
+[LOG] [PASS] Wait: wait(5) suspends for 5 frames
+[LOG] [PASS] Panic: stack overflow on recursion
+[LOG] [PASS] Logic: (3>2) && (5<10) = true
+[LOG] [PASS] For loop: factorial(5) = 120
+[LOG] [PASS] Number: 2.5 + 3.5 = 6.0
+[LOG] [PASS] Number: 2.5 * 3.5 = 8.75
+[LOG] [PASS] Number: 0 < 1
+[LOG] [PASS] Number: 1 == FromInt(1)
+[LOG] [PASS] Pool: allocated 2 distinct instances
+[LOG] [PASS] Pool: active count = 2
+[LOG] [PASS] Pool: after free, active = 1
+[LOG] [PASS] Pool: reused freed slot
+[LOG] [PASS] Snapshot: load frame 1 succeeded
+[LOG] [PASS] Snapshot: register restored to 42
+[LOG] [PASS] Snapshot: IP restored to 10
+[LOG] [PASS] Defer normal: exactly 2 syscalls
+[LOG] [PASS] Defer normal: order is [1, 0] (main first, cleanup after)
+[LOG] [PASS] Defer wait: WaitSignal thrown
+[LOG] [PASS] Defer wait: only SetBB(1) called, cleanup NOT fired on suspension
+[LOG] [PASS] Defer kill: PlayEffect NOT executed
+[LOG] [PASS] Defer kill: SetBB(1) then cleanup SetBB(0)
+[LOG] [PASS] Defer kill: IsKilled flag set
+[LOG] [PASS] Defer LIFO: order is [B, A]
+[LOG] [PASS] Snapshot cleanup: load succeeded
+[LOG] [PASS] Snapshot cleanup: StateFlags restored to Active
+[LOG] [PASS] Snapshot cleanup: CleanupDepth restored to 1
+[LOG] [PASS] Snapshot cleanup: CleanupEntryIP restored to 42
+[LOG] [PASS] Snapshot flags: load succeeded
+[LOG] [PASS] Snapshot flags: restored to Killed
+[LOG] [PASS] BC normal: tick 1 → SetBB(1)
+[LOG] [PASS] BC normal: waiting, no new syscalls
+[LOG] [PASS] BC normal: 3 total syscalls
+[LOG] [PASS] BC normal: PlayEffect after wait
+[LOG] [PASS] BC normal: cleanup SetBB(0)
+[LOG] [PASS] BC normal: Completed flag set
+[LOG] [PASS] BC kill: tick 1 → SetBB(1)
+[LOG] [PASS] BC kill: 2 total syscalls (no PlayEffect)
+[LOG] [PASS] BC kill: cleanup SetBB(0)
+[LOG] [PASS] BC kill: Completed flag set
+[LOG] [PASS] BC kill-prio: WaitCounter = 100
+[LOG] [PASS] BC kill-prio: cleanup ran despite WaitCounter > 0
+[LOG] [PASS] BC kill-prio: Completed
+[LOG] [PASS] BC LIFO: 2 cleanup syscalls
+[LOG] [PASS] BC LIFO: order is [B, A]
+[LOG] [PASS] BC LIFO: Completed
+[LOG] [PASS] Save/Load resume: same syscall count (3 vs 3)
+[LOG] [PASS] Save/Load resume: identical syscall sequence
+[LOG] [PASS] MOVE: R1 = R0 = 42
+[LOG] [PASS] MOVE: Completed
+[LOG] [PASS] Arith: 10 + 3 = 13
+[LOG] [PASS] Arith: 10 - 3 = 7
+[LOG] [PASS] Arith: 10 * 3 = 30
+[LOG] [PASS] Arith: 10 / 3 = 3
+[LOG] [PASS] Arith: 10 % 3 = 1
+[LOG] [PASS] CMP: 5 == 5 → 1
+[LOG] [PASS] CMP: 5 == 10 → 0
+[LOG] [PASS] CMP: 5 != 10 → 1
+[LOG] [PASS] CMP: 5 < 10 → 1
+[LOG] [PASS] CMP: 10 < 5 → 0
+[LOG] [PASS] CMP: 5 <= 5 → 1
+[LOG] [PASS] CMP: 5 > 10 → 0
+[LOG] [PASS] CMP: 5 >= 5 → 1
+[LOG] [PASS] Bool: AND(1,7) → 1
+[LOG] [PASS] Bool: AND(1,0) → 0
+[LOG] [PASS] Bool: OR(1,0) → 1
+[LOG] [PASS] Bool: OR(0,0) → 0
+[LOG] [PASS] Bool: NOT(0) → 1
+[LOG] [PASS] Bool: NOT(7) → 0
+[LOG] [PASS] Unary: NEG(7) → -7
+[LOG] [PASS] JUMP: skipped over R0=99, R0 still 1
+[LOG] [PASS] Branch: JUMP_IF_ZERO taken when R0==0
+[LOG] [PASS] Branch: JUMP_IF_NOT_ZERO taken when R1!=0
+[LOG] [PASS] Loop: sum(1..10) = 55
+[LOG] [PASS] Loop: Completed
+[LOG] [PASS] If/Else: max(5,8) = 8
+[LOG] [PASS] MOVE copy: R1 preserved after R0 overwrite
+[LOG] [PASS] MOVE copy: R0 changed to 99
+[LOG] [PASS] G4: step limit → PanicStepLimitExceeded (not PanicIllegalInstruction)
+[LOG] [PASS] T1 wait_for: A still waiting after tick 1
+[LOG] [PASS] T1 wait_for: B completed in tick 1
+[LOG] [PASS] T1 wait_for: A resumed after B completed, reported 99
+[LOG] [PASS] T1 wait_for: A completed after resuming
+[LOG] [PASS] T2a DIV/0: result = 0 (silent)
+[LOG] [PASS] T2a DIV/0: no panic
+[LOG] [PASS] T2a DIV/0: instance completed normally
+[LOG] [PASS] T2b MOD/0: result = 0 (silent)
+[LOG] [PASS] T2b MOD/0: no panic
+[LOG] [PASS] T4 pool: all 128 instances allocated successfully
+[LOG] [PASS] T4 pool: active count = 128 (== 128)
+[LOG] [PASS] T4 pool: 129th allocation returns -1 (pool full)
+[LOG] [PASS] F01: caller r16 = 100 (not clobbered)
+[LOG] [PASS] F01: r0 = 42 (return value from callee)
+[LOG] [PASS] F01: r17 = 42 (saved return value)
+[LOG] [PASS] F01: Completed
+[LOG] [PASS] F01: CallStackDepth back to 0
+[LOG] [PASS] F02: entry r16 = 43 (a returned b()+1)
+[LOG] [PASS] F02: r0 = 43 (final return value)
+[LOG] [PASS] F02: Completed
+[LOG] [PASS] F02: CallStackDepth back to 0
+[LOG] [PASS] F03: StackOverflow triggered
+[LOG] [PASS] F03: depth = 16 (== MaxCallDepth=16)
+[LOG] [PASS] F04: add(10,20) = 30 via scratch zone
+[LOG] [PASS] F04: Completed
+[LOG] [PASS] F05: CALL/RET_FUNC 0 GC (0 bytes)
+[LOG] ========================================
+[LOG] TreeWalker Tests: 112 passed, 0 failed
+[LOG] ========================================
+[LOG] [PASS] C01 compile success
+[LOG] [PASS] C01: Ping called once
+[LOG] [PASS] C01: Completed
+[LOG] [PASS] C02 compile success
+[LOG] [PASS] C02: args = (42, 7) expected (42, 7)
+[LOG] [PASS] C03 compile success
+[LOG] [PASS] C03: tick 1 → Before only
+[LOG] [PASS] C03: waiting, no new calls
+[LOG] [PASS] C03: tick 7 → After
+[LOG] [PASS] C03: Completed
+[LOG] [PASS] C04 compile success
+[LOG] [PASS] C04: tick 1 → SetBB(1)
+[LOG] [PASS] C04: waiting, no new syscalls
+[LOG] [PASS] C04: 3 total syscalls
+[LOG] [PASS] C04: PlayEffect after wait
+[LOG] [PASS] C04: cleanup SetBB(0)
+[LOG] [PASS] C04: Completed
+[LOG] [PASS] C05: tick 1 → SetBB(1)
+[LOG] [PASS] C05: kill → cleanup SetBB(0)
+[LOG] [PASS] C05: PlayEffect NOT called
+[LOG] [PASS] C05: Completed after kill
+[LOG] [PASS] C06 compile success
+[LOG] [PASS] C06: 3 reports
+[LOG] [PASS] C06: 10+3 = 13 (expected 13)
+[LOG] [PASS] C06: 10*3 = 30 (expected 30)
+[LOG] [PASS] C06: 10-3 = 7 (expected 7)
+[LOG] [PASS] C07 compile success
+[LOG] [PASS] C07: 2 reports
+[LOG] [PASS] C07: x>5 → Report(1), got 1
+[LOG] [PASS] C07: x<5 → else → Report(2), got 2
+[LOG] [PASS] C08 compile success
+[LOG] [PASS] C08: while loop → i = 5 (expected 5)
+[LOG] [PASS] C09 compile success
+[LOG] [PASS] C09: sum(1..10) = 55 (expected 55)
+[LOG] [PASS] C10 compile success
+[LOG] [PASS] C10: tick 1 → A
+[LOG] [PASS] C10: tick 3 → B
+[LOG] [PASS] C10: tick 5 → C
+[LOG] [PASS] C11 compile success
+[LOG] [PASS] C11: 2 reports
+[LOG] [PASS] C11: -10, got -10
+[LOG] [PASS] C11: !0 = 1, got 1
+[LOG] [PASS] C12 compile success
+[LOG] [PASS] C12: 2 reports
+[LOG] [PASS] C12: 1&&0 = 0, got 0
+[LOG] [PASS] C12: 1||0 = 1, got 1
+[LOG] [PASS] C13 compile success
+[LOG] [PASS] C13: 3 reports, got 3
+[LOG] [PASS] C13: body first → 3, got 3
+[LOG] [PASS] C13: LIFO → 2 before 1, got 2
+[LOG] [PASS] C13: LIFO → 1 last, got 1
+[LOG] [PASS] C14 compile success (comments)
+[LOG] [PASS] C14: Report(42), got 42
+[LOG] [PASS] C15 compile success
+[LOG] [PASS] C15: 5*2+3 = 13 (expected 13)
+[LOG] [PASS] C16 compile success
+[LOG] [PASS] C16: else-if → Report(2), got 2
+[LOG] [PASS] C17: Save/Load syscall sequence match (after=2, gold=2)
+[LOG] [PASS] C18 compile success
+[LOG] [PASS] C18: 3*4+2 = 14 (expected 14)
+[LOG] [PASS] C19: parse error detected for incomplete var decl
+[LOG] [PASS] C20: compile error for unknown function
+[LOG] [PASS] C21 compile success (bool literals)
+[LOG] [PASS] C21: 2 reports, got 2
+[LOG] [PASS] C21: true = 1, got 1
+[LOG] [PASS] C21: false = 0, got 0
+[LOG] [PASS] C22 compile success (float literals)
+[LOG] [PASS] C22: 2 reports, got 2
+[LOG] [PASS] C22: 3.5+2.5 = 6, got 6
+[LOG] [PASS] C22: 3.5-2.5 = 1, got 1
+[LOG] [PASS] C23: script A compiles
+[LOG] [PASS] C23: script B compiles
+[LOG] [PASS] C23: B must be instance 0 (script hardcodes wait_for(0))
+[LOG] [PASS] C23: tick 1 → Before + Work
+[LOG] [PASS] C23: B completes → Done
+[LOG] [PASS] C23: A resumes after B → After
+[LOG] [PASS] C23: A Completed
+[LOG] [PASS] C23: B Completed
+[LOG] [PASS] C24 compile success
+[LOG] [PASS] C24: expected 3 calls, got 3
+[LOG] [PASS] C24: acquire SetBB first, got SetBB
+[LOG] [PASS] C24: body Report(10), got Report(10)
+[LOG] [PASS] C24: after using Report(20), got Report(20)
+[LOG] [PASS] C24: ResetBB NOT called on normal exit
+[LOG] [PASS] C24: Completed
+[LOG] [PASS] C25 compile success
+[LOG] [PASS] C25: tick 1 → SetBB (acquire)
+[LOG] [PASS] C25: kill → cleanup ResetBB (release)
+[LOG] [PASS] C25: Completed
+[LOG] [PASS] C26 compile success
+[LOG] [PASS] C26: SetBB first, got SetBB
+[LOG] [PASS] C26: body Report(2)
+[LOG] [PASS] C26: after using Report(3)
+[LOG] [PASS] C26: defer cleanup Report(1)
+[LOG] [PASS] C26: ResetBB NOT called (POP_CLEANUP)
+[LOG] [PASS] C26: Completed
+[LOG] [PASS] C27 compile success
+[LOG] [PASS] C27: tick 1 → SetBB + Before, got 2
+[LOG] [PASS] C27: acquire SetBB
+[LOG] [PASS] C27: Before inside using
+[LOG] [PASS] C27: After after wait
+[LOG] [PASS] C27: ResetBB NOT called (normal exit)
+[LOG] [PASS] C27: Completed
+[LOG] [PASS] C28: compile error for unpaired syscall in using
+[LOG] [PASS] CF01 compile success
+[LOG] [PASS] CF01: add(3,4) = 7, got Report(7)
+[LOG] [PASS] CF01: Completed
+[LOG] [PASS] CF02 compile success
+[LOG] [PASS] CF02: a() = b()+1 = 43, got Report(43)
+[LOG] [PASS] CF02: Completed
+[LOG] [PASS] CF03 compile success
+[LOG] [PASS] CF03: caller x = 100, got 100
+[LOG] [PASS] CF03: callee returned 999, got 999
+[LOG] [PASS] CF03: Completed
+[LOG] [PASS] CF04 compile success
+[LOG] [PASS] CF04: Ping first
+[LOG] [PASS] CF04: double(21)=42, got Report(42)
+[LOG] [PASS] CF04: Completed
+[LOG] [PASS] CF05 compile success
+[LOG] [PASS] CF05: sideEffect reports 99, got 99
+[LOG] [PASS] CF05: main reports 0, got 0
+[LOG] [PASS] CF05: Completed
+[LOG] [PASS] CF06 compile success
+[LOG] [PASS] CF06: square(7) = 49, got 49
+[LOG] [PASS] CF06: Completed
+[LOG] [PASS] CF07 compile success
+[LOG] [PASS] CF07: body first
+[LOG] [PASS] CF07: defer cleanup after return
+[LOG] [PASS] CF07: Completed
+[LOG] [PASS] CF08: compile error on arg count mismatch
+[LOG] [PASS] CF09 compile success
+[LOG] [PASS] CF09: 10+20 = 30, got 30
+[LOG] [PASS] CS01 compile success
+[LOG] [PASS] CS01: v.x + v.y = 30, got 30
+[LOG] [PASS] CS01: Completed
+[LOG] [PASS] CS02 compile success
+[LOG] [PASS] CS02: b.x = 3, got 3
+[LOG] [PASS] CS02: b.y = 7, got 7
+[LOG] [PASS] CS03 compile success
+[LOG] [PASS] CS03: Apply(42,5,100), got (42,5,100)
+[LOG] [PASS] CS04 compile success
+[LOG] [PASS] CS04: hp > 0 → Report(1), got 1
+[LOG] [PASS] CS05 compile success
+[LOG] [PASS] CS05: a.x+b.x = 11, got 11
+[LOG] [PASS] CS05: a.y+b.y = 22, got 22
+[LOG] [PASS] CS06: unknown type treated as scalar (no error)
+[LOG] [PASS] CS07: compile error on nonexistent field 'z'
+[LOG] [PASS] CS08 compile success
+[LOG] [PASS] CS08: b.x = 5, got 5
+[LOG] [PASS] CS08: b.y = 15, got 15
+[LOG] [PASS] CS09 compile success
+[LOG] [PASS] CS09: counter loop → 5, got 5
+[LOG] [PASS] CS10 compile success
+[LOG] [PASS] CS10: 10*3+5 = 35, got 35
+[LOG] [PASS] CS11 compile success
+[LOG] [PASS] CS11: 3*2 + 4*2 = 14, got 14
+[LOG] [PASS] C4-01: compile error for direct call to requires_cleanup syscall
+[LOG] [PASS] C4-01: error message mentions 'requires cleanup'
+[LOG] [PASS] C4-01: error message mentions the syscall name 'Acquire'
+[LOG] [PASS] C4-02: using-wrapped requires_cleanup syscall compiles OK
+[LOG] [PASS] C4-03: normal syscall compiles OK (not affected by requires_cleanup)
+[LOG] [PASS] C4-04: no SyscallTable → skip requires_cleanup check
+[LOG] [PASS] G6-01: compile error for wait inside defer
+[LOG] [PASS] G6-01: error message mentions 'cleanup block'
+[LOG] [PASS] G6-02: compile error for wait_for inside defer
+[LOG] [PASS] G6-02: error message mentions 'cleanup block'
+[LOG] [PASS] G6-03: wait in normal body compiles OK
+[LOG] [PASS] G6-04: wait inside using body compiles OK (body != cleanup block)
+[LOG] [PASS] F4-01 compile success
+[LOG] [PASS] F4-01: last SetValue arg = 20 (expected 20)
+[LOG] [PASS] F4-01: Completed
+[LOG] [PASS] F4-02 compile success
+[LOG] [PASS] F4-02: cross-await var x = 42 (expected 42)
+[LOG] [PASS] F4-03 compile success
+[LOG] [PASS] F4-03: struct a.x = 5 (expected 5)
+[LOG] [PASS] F4-04 compile success
+[LOG] [PASS] F4-04: a + b = 3 (expected 3)
+[LOG] [PASS] O5-01 compile success
+[LOG] [PASS] O5-01: no ADD instruction (constant folded)
+[LOG] [PASS] O5-01: 2 + 3 folded to 5 (expected 5)
+[LOG] [PASS] O5-02 compile success
+[LOG] [PASS] O5-02: no CMP_GT instruction (constant folded)
+[LOG] [PASS] O5-02: 10 > 5 folded to 1 (expected 1)
+[LOG] [PASS] O5-03 compile success
+[LOG] [PASS] O5-03: ADD instruction present (variable prevents folding)
+[LOG] [PASS] O5-03: a + 3 = 10 (expected 10)
+[LOG] [PASS] O4-01 compile success
+[LOG] [PASS] O4-01: a + b = 30 (expected 30)
+[LOG] [PASS] O4-02 compile success
+[LOG] [PASS] O4-02: a * b = 21 (expected 21)
+[LOG] [PASS] O7-01 compile success
+[LOG] [PASS] O7-01: GetVal(5) = 50 (expected 50)
+[LOG] [PASS] DBG1_T01 compile success
+[LOG] [PASS] DBG1_T01: SourceMap is not null
+[LOG] [PASS] DBG1_T02 compile success
+[LOG] [PASS] DBG1_T02: SourceMap length (5) == Instructions length (5)
+[LOG] [PASS] DBG2_T01 compile success
+[LOG] [PASS] DBG2_T01: SymbolTable is not null
+[LOG] [PASS] DBG2_T01: SymbolTable has >= 2 entries (actual: 2)
+[LOG] [PASS] DBG2_T01: found symbol 'a'
+[LOG] [PASS] DBG2_T01: found symbol 'b'
+[LOG] [PASS] DBG2_T02 compile success
+[LOG] [PASS] DBG2_T02: found struct symbol 'v' with fields x, y
+[LOG] [PASS] R7-01: 100 functions compile success (Dictionary path)
+[LOG] [PASS] R7-02 compile success
+[LOG] [PASS] R7-02: helper() called Ping()
+[LOG] [PASS] R8-01: function call in defer → compile error
+[LOG] [PASS] R8-01: error mentions 'cleanup block'
+[LOG] [PASS] R8-02: normal function call compiles OK
+[LOG] [PASS] R8-03: function call in using body compiles OK (body != cleanup block)
+[LOG] [PASS] FO5-01 compile success
+[LOG] [PASS] FO5-01: double(7) = 14 (expected 14)
+[LOG] [PASS] FO7-01: depth 3 compiles OK
+[LOG] [PASS] FO7-02: recursive call compiles OK (runtime enforces depth)
+[LOG] ========================================
+[LOG] Compiler Tests: 214 passed, 0 failed
+[LOG] ========================================
+[LOG] [PASS] P01 0-GC basic: bytecode tick delta = 0 bytes (== 0)
+[LOG] [PASS] P02 V1 GC precise: 100 ticks alloc = 0 bytes (== 0)
+[LOG] [PASS] P02 V1 GC precise: instances actually executed (not idle)
+[LOG] [PASS] P03 V2 rollback: LoadState succeeded
+[LOG] [PASS] P03 V2 rollback: syscall count match (2 vs 2)
+[LOG] [PASS] P03 V2 rollback: syscall sequence bit-exact
+[LOG] [PASS] P03 V2 rollback: final StateFlags match (Active, Completed vs Active, Completed)
+[LOG] [PASS] P03 V2 rollback: instance completed in reference run
+[LOG] [PASS] P04 0-GC Phase2 opcodes: delta = 0 bytes (== 0)
+[LOG] [PASS] P05 Save/Load loop: reference sum = 210 (== 210)
+[LOG] [PASS] P05 Save/Load loop: rollback sum matches (210 vs 210)
+[LOG] [PASS] P05 Save/Load loop: syscall count match (1 vs 1)
+[LOG] [PASS] P05 Save/Load loop: syscall sequence bit-exact
+[LOG] [PASS] P06 V3 correctness: acc = 99980000 (== 99980000)
+[LOG] [BENCH] V3 Single-Instance Performance:
+[LOG] [BENCH]   VM bytecode : 663.0 µs/run (10000 iterations)
+[LOG] [BENCH]   C# native   : 496.8 µs/run (10000 iterations)
+[LOG] [BENCH]   Ratio       : 1.3x
+[LOG] [PASS] P06 V3 perf: VM/C# ratio = 1.3x (expected < 50x, reference 10-30x)
+[LOG] [PASS] P07 V4 correctness: acc = 15 (== 15)
+[LOG] [BENCH] V4 N-Instance Throughput (~57 instr/instance):
+[LOG] [BENCH]    128 instances: 0.144 ms/tick (1.13 µs/instance)
+[LOG] [PASS] P07 V4 throughput: 128 instances × ~57 instr = 0.144 ms (< 1ms)
+[LOG] [BENCH]    256 instances: 0.059 ms/tick (0.23 µs/instance)
+[LOG] [BENCH]    512 instances: 0.128 ms/tick (0.25 µs/instance)
+[LOG] [BENCH]   1024 instances: 0.256 ms/tick (0.25 µs/instance)
+[LOG] ========================================
+[LOG] Performance Tests: 17 passed, 0 failed
+[LOG] ========================================
+[LOG] [PASS] S01: skill_114feiyanxuanfengtui compiles
+[LOG] [PASS] S02 compile
+[LOG] [PASS] S02: tick 1 → BeginAction + SpawnEffectSelf
+[LOG] [PASS] S02: self displacement triggered at frame 9
+[LOG] [PASS] S02: self vert displacement triggered at frame 9
+[LOG] [PASS] S02: EndAction via defer
+[LOG] [PASS] S02: Completed after 56 frames
+[LOG] [PASS] S03: skill_25shangpanbeijizhong compiles
+[LOG] [PASS] S04 compile
+[LOG] [PASS] S04: tick 1 → BeginAction + SpawnEffectSelf
+[LOG] [PASS] S04: BeginAction(25,30)
+[LOG] [PASS] S04: SpawnEffectSelf(4001,300)
+[LOG] [PASS] S04: EndAction via defer
+[LOG] [PASS] S04: Completed after 30 frames
+[LOG] [PASS] S05 compile
+[LOG] [PASS] S05: ground hit damage at frame 10 → target 42, coeff 5, type 101
+[LOG] [PASS] S05: hitstun applied to target 42
+[LOG] [PASS] S05: self hitstun on hit
+[LOG] 
+===== SkillScriptTests: 18 passed, 0 failed =====
+[LOG] [PASS] DBG3-01 compile
+[LOG] [PASS] DBG3-01: breakpoint hit count >= 1, got 1
+[LOG] [PASS] DBG3-01: hit line == 4, got 4
+[LOG] [PASS] DBG3-01: hit instanceId == 0, got 0
+[LOG] [PASS] DBG3-01: script completed normally
+[LOG] [PASS] DBG3-02 compile
+[LOG] [PASS] DBG3-02: breakpoint on line 3 hit
+[LOG] [PASS] DBG3-02: breakpoint on line 4 hit
+[LOG] [PASS] DBG3-02: breakpoint on line 5 hit
+[LOG] [PASS] DBG3-03 compile
+[LOG] [PASS] DBG3-03: no breakpoints → no callback
+[LOG] [PASS] DBG3-03: script ran normally
+[LOG] [PASS] DBG3-04 compile
+[LOG] [PASS] DBG3-04: Debugger is null
+[LOG] [PASS] DBG3-04: script ran normally without debugger
+[LOG] [PASS] DBG3-04: completed
+[LOG] [PASS] DBG3-05 compile
+[LOG] [PASS] DBG3-05: breakpoint hit 3 times in loop, got 3
+[LOG] [PASS] DBG5-01 compile
+[LOG] [PASS] DBG5-01: variables captured at breakpoint
+[LOG] [PASS] DBG5-01: x = 42, got 42
+[LOG] [PASS] DBG5-01: y = 7, got 7
+[LOG] [PASS] DBG5-01: x is not struct
+[LOG] [PASS] DBG5-02 compile
+[LOG] [PASS] DBG5-02: variables captured at breakpoint
+[LOG] [PASS] DBG5-02: found struct variable 'v'
+[LOG] [PASS] DBG5-02: v is struct
+[LOG] [PASS] DBG5-02: v has 2 fields, got 2
+[LOG] [PASS] DBG5-02: v.x = 10, got 10
+[LOG] [PASS] DBG5-02: v.y = 20, got 20
+[LOG] [PASS] DBG5-03 compile
+[LOG] [PASS] DBG5-03: variables captured
+[LOG] [PASS] DBG5-03: helper's local_h visible
+[LOG] [PASS] DBG5-03: main's local_m NOT visible (different scope)
+[LOG] [PASS] DBG5-03: local_h = 105, got 105
+[LOG] [PASS] DBG6-01 compile
+[LOG] [PASS] DBG6-01: call stack captured
+[LOG] [PASS] DBG6-01: 1 frame, got 1
+[LOG] [PASS] DBG6-01: frame 0 = 'main', got 'main'
+[LOG] [PASS] DBG6-01: frame 0 line = 3, got 3
+[LOG] [PASS] DBG6-02 compile
+[LOG] [PASS] DBG6-02: call stack captured
+[LOG] [PASS] DBG6-02: 2 frames, got 2
+[LOG] [PASS] DBG6-02: frame 0 = 'helper', got 'helper'
+[LOG] [PASS] DBG6-02: frame 1 = 'main', got 'main'
+[LOG] [PASS] DBG6-03 compile
+[LOG] [PASS] DBG6-03: call stack captured
+[LOG] [PASS] DBG6-03: 3 frames, got 3
+[LOG] [PASS] DBG6-03: frame 0 = 'c', got 'c'
+[LOG] [PASS] DBG6-03: frame 1 = 'b', got 'b'
+[LOG] [PASS] DBG6-03: frame 2 = 'main', got 'main'
+[LOG] 
+===== DebugTests: 51 passed, 0 failed =====
+[LOG] [PASS] DAP-A01: ReadMessage parses Content-Length message
+[LOG] [PASS] DAP-A02: WriteMessage → ReadMessage roundtrip
+[LOG] [PASS] DAP-A03: Content-Length handles UTF-8
+[LOG] [PASS] DAP-A04: ReadMessage returns null on empty stream
+[LOG] [PASS] DAP-A05: first message
+[LOG] [PASS] DAP-A05: second message
+[LOG] [PASS] DAP-A05: third message
+[LOG] [PASS] DAP-B01: int roundtrip
+[LOG] [PASS] DAP-B01: string roundtrip
+[LOG] [PASS] DAP-B01: bool roundtrip
+[LOG] [PASS] DAP-B01: name roundtrip
+[LOG] [PASS] DAP-B02: outer string
+[LOG] [PASS] DAP-B02: nested object exists
+[LOG] [PASS] DAP-B02: nested int
+[LOG] [PASS] DAP-B02: nested string
+[LOG] [PASS] DAP-B03: array roundtrip count
+[LOG] [PASS] DAP-B04: string escaping
+[LOG] [PASS] DAP-B05: null roundtrip
+[LOG] [PASS] DAP-C01: initialized event
+[LOG] [PASS] DAP-C01: initialize success
+[LOG] [PASS] DAP-C01: capabilities
+[LOG] [PASS] DAP-C02: unknown command → success=false
+[LOG] [PASS] DAP-D01: initialized event
+[LOG] [PASS] DAP-D01: initialize success
+[LOG] [PASS] DAP-D01: launch success
+[LOG] [PASS] DAP-D01: setBreakpoints success
+[LOG] [PASS] DAP-D01: one breakpoint returned, got 1
+[LOG] [PASS] DAP-D01: breakpoint verified
+[LOG] [PASS] DAP-D01: stopped event received
+[LOG] [PASS] DAP-D01: stopped reason = breakpoint
+[LOG] [PASS] DAP-D01: at least 1 frame, got 1
+[LOG] [PASS] DAP-D01: top frame = main
+[LOG] [PASS] DAP-D01: line = 5, got 5
+[LOG] [PASS] DAP-D01: >= 2 vars, got 3
+[LOG] [PASS] DAP-D01: x = 42
+[LOG] [PASS] DAP-D01: y = 7
+[LOG] [PASS] DAP-D02: stopped in helper
+[LOG] [PASS] DAP-D02: 2 frames, got 2
+[LOG] [PASS] DAP-D02: frame 0 = helper
+[LOG] [PASS] DAP-D02: frame 1 = main
+[LOG] [PASS] DAP-D02: helper line = 3, got 3
+[LOG] [PASS] DAP-D03: stopped event
+[LOG] [PASS] DAP-D03: struct variable 'v' found
+[LOG] [PASS] DAP-D03: struct variablesReference >= 1000, got 1000
+[LOG] [PASS] DAP-D03: 2 fields, got 2
+[LOG] [PASS] DAP-D03: v.x = 10
+[LOG] [PASS] DAP-D03: v.y = 20
+[LOG] [PASS] DAP-D04: terminated event when no breakpoints
+[LOG] [PASS] DAP-D05: threads success
+[LOG] [PASS] DAP-D05: single thread
+[LOG] [PASS] DAP-D05: threadId = 1
+[LOG] [PASS] DAP-D06: stopped at breakpoint
+[LOG] [PASS] DAP-D06: a = 10 at breakpoint
+[LOG] [PASS] DAP-D06: b = 20 at breakpoint
+[LOG] [PASS] DAP-D06: terminated after second continue
+[LOG] [PASS] DAP-D07: unknown command → success=false
+[LOG] [PASS] DAP-E01: initialized event via stream
+[LOG] [PASS] DAP-E01: initialize response via stream
+[LOG] [PASS] DAP-S01: compile success
+[LOG] [PASS] DAP-S01: found IP for line 2
+[LOG] [PASS] DAP-S01: next IP > current IP
+[LOG] [PASS] DAP-S01: next line = 3, got 3
+[LOG] [PASS] DAP-S02: compile success
+[LOG] [PASS] DAP-S02: found CALL instruction
+[LOG] [PASS] DAP-S02: stepInto target = CALL.A = 3, got 3
+[LOG] [PASS] DAP-S03: compile success
+[LOG] [PASS] DAP-S03: found IP for line 2
+[LOG] [PASS] DAP-S03: stepInto == nextLine = 1, got 1
+[LOG] [PASS] DAP-S04: stepOut IP = 42, got 42
+[LOG] [PASS] DAP-S05: temp breakpoint hit at IP=5
+[LOG] [PASS] DAP-S05: hit count = 1
+[LOG] [PASS] DAP-S05: temp breakpoint auto-cleared
+[LOG] [PASS] DAP-S05: hit count still 1
+[LOG] [PASS] DAP-S06: stopped at breakpoint
+[LOG] [PASS] DAP-S06: reason = breakpoint
+[LOG] [PASS] DAP-S06: first stop at line 3, got 3
+[LOG] [PASS] DAP-S06: stopped after next
+[LOG] [PASS] DAP-S06: reason = step
+[LOG] [PASS] DAP-S06: after next at line 4, got 4
+[LOG] [PASS] DAP-S07: stopped at breakpoint
+[LOG] [PASS] DAP-S07: 1 frame at breakpoint, got 1
+[LOG] [PASS] DAP-S07: at main, got main
+[LOG] [PASS] DAP-S07: stopped after stepIn
+[LOG] [PASS] DAP-S07: reason = step
+[LOG] [PASS] DAP-S07: 2 frames after stepIn, got 2
+[LOG] [PASS] DAP-S07: inside helper, got helper
+[LOG] [PASS] DAP-S08: stopped at breakpoint in helper
+[LOG] [PASS] DAP-S08: 2 frames at breakpoint, got 2
+[LOG] [PASS] DAP-S08: inside helper, got helper
+[LOG] [PASS] DAP-S08: stopped after stepOut
+[LOG] [PASS] DAP-S08: reason = step
+[LOG] [PASS] DAP-S08: 1 frame after stepOut, got 1
+[LOG] [PASS] DAP-S08: back in main, got main
+[LOG] 
+===== DapTests: 93 passed, 0 failed =====
