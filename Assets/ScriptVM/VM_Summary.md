@@ -481,7 +481,7 @@ skill TracerBullet
 | P2 | Paired Syscall 注册协议（C2） | ✅ 完成 → 步骤 7（SyscallTable.RegisterPaired / GetPairedSlot / HasPair） |
 | P2 | 编译器 emit Cleanup 指令 for `using`（C3） | ✅ 完成 → 步骤 7（CompileUsing：SYSCALL + PUSH_CLEANUP + body + POP_CLEANUP） |
 | P2 | `wait_for` Parser + Compiler 接入（G1） | ✅ 完成 → 步骤 7（ParseWaitFor + CompileWaitFor + WAIT_FOR OpCode） |
-| P2（低） | 编译器 "requires cleanup" 强制检查（C4） | 确定执行 → **最晚步骤 10 前** |
+| P2（低） | 编译器 "requires cleanup" 强制检查（C4） | ✅ 完成 → 步骤 10 前置（SyscallTable.RequiresCleanup + CompileSyscall 检查） |
 | P2 | CALL / RET_FUNC OpCode + 跨函数调用 emit（F1-F2） | ✅ 完成 → 步骤 8（CALL=60, RET_FUNC=61, 两遍编译+前向引用回填） |
 | P2 | 函数调用 GC + 快照回滚验证（F3） | ✅ 完成 → 步骤 8（F05: 0 GC 验证通过） |
 | P2（低） | 编译器寄存器生命周期分析 + 跨 await 变量提升（F4） | 确定执行 → **最晚步骤 10 前** |
@@ -500,7 +500,7 @@ skill TracerBullet
 |----------|------|-------------|
 | ~~手写 AST，无 Parser~~ | ~~先验证 VM 物理闭环~~ | ✅ 完成：Lexer + Parser + BytecodeCompiler，端到端文本 → 字节码 → 执行 |
 | ~~TreeWalker 代替字节码 VM~~ | ~~Phase 2 快速验证语义正确性~~ | ✅ 完成：字节码解释循环 + 编译器流水线均已实现 |
-| ~~`defer` 代替 `using`~~ | ~~`using` 需要 Paired Syscall 注册协议 + 编译器支持~~ | ✅ 完成 → 步骤 7：C1 Parser 解析 + C2 配对协议 + C3 编译器 emit；C4 强制检查最晚步骤 10 前 |
+| ~~`defer` 代替 `using`~~ | ~~`using` 需要 Paired Syscall 注册协议 + 编译器支持~~ | ✅ 完成 → 步骤 7：C1 Parser 解析 + C2 配对协议 + C3 编译器 emit；C4 强制检查 ✅ 步骤 10 前置完成 |
 | 开发期 float（`Number`） | 快速迭代，Fix64 调试较痛苦 | float 模式仅用于开发迭代，正式测试和上线构建必须 `USE_FIXPOINT` |
 | 无 `MOVE`/`COPY` | 曳光弹不需要寄存器搬运 | ~~曳光弹通过后立即补充~~ ✅ Step 5 完成 |
 | 无分支/循环 OpCode | 曳光弹业务不含分支 | ~~`MOVE` 之后补 `JUMP`/`JUMP_IF`~~ ✅ Step 5 完成 |
@@ -565,7 +565,7 @@ skill TracerBullet
   ┌────────────────────────────────────────────────────────┐
   │  V5: 帧内 Profiler 验证  ← 真实 Syscall 接入 ECS 后    │
   │  通过条件见 §4.6，必须在进入步骤 10 前通过          │
-  │  C4 强制检查必须在进入步骤 10 前就位                 │
+  │  C4 强制检查 ← ✅ 已在步骤 10 前置完成               │
   └────────────────────────────────────────────────────────┘
       ↓
 8. 函数调用 + 固定深度调用栈验证  ✅ 279 项 Assert 通过
@@ -606,14 +606,42 @@ skill TracerBullet
         struct 与函数调用窗口交互（SR3, S4 展望时评估）、字段/方法语法歧义（SR4, 设计上不支持方法调用）。
         详见 → [Step9_StructFlatten.md §四 风险分析](Plan/Step9_StructFlatten.md#四风险分析)
       ↓
+  ┌── Step 10 前置：编译器语义安全检查 ─────────────────────┐
+  │  ✅ 315 项 Assert 通过（含 12 项新增 C4/G6 语义检查）  │
+  │  C4: 编译器 "requires cleanup" 强制检查        ✅    │
+  │  G5: C4 对应代码缺口                           ✅    │
+  │  G6: Cleanup 块内禁止 wait/wait_for 编译检查   ✅    │
+  │  详见 → Step10_Pre_CompilerSemanticChecks.md            │
+  └────────────────────────────────────────────────────────┘
+      ↓
+  F4: 寄存器生命周期分析 + 跨 await 变量提升              ⏳ 下一步
+      （来源：VM_Tracer_Bullet.md §十二 第 2 项"寄存器复用"）
+      自然优化（随 F4 顺带完成，零额外排期）：
+        O4/O5/O7/O3（编译器优化）、FO4/FO5/FO7（调用路径优化）
+      调试基础设施第一阶段（可与 F4 合并，边际成本极低）：
+        DBG1 源码映射表、DBG2 符号表
+      ↓
   ┌────────────────────────────────────────────────────────┐
-  │  Handle64 批处理协议（展望项）                       │
+  │  V5: 帧内 Profiler 验证  ← 真实 Syscall 接入 ECS 后    │
+  │  通过条件见 §4.6，必须在进入步骤 10 前通过            │
+  └────────────────────────────────────────────────────────┘
+      ↓
+  ┌────────────────────────────────────────────────────────┐
+  │  Handle64 批处理协议（展望项 H1）                     │
   │  来源：VM_Tracer_Bullet.md §十二 第 4 项              │
   │  不阻塞编辑器，最晚于真实多目标业务接入前实现        │
   │  依赖 Syscall 协议扩展，独立于函数调用与结构体       │
   └────────────────────────────────────────────────────────┘
       ↓
 10. 编辑器流程图投影
+      ↓
+  ┌────────────────────────────────────────────────────────┐
+  │  脚本调试第二阶段（运行时侧）：                      │
+  │    DBG3 断点 + DBG5 变量查看 + DBG6 调用栈查看        │
+  │    可在 Step 10 编辑器之前先以测试/命令行方式验证     │
+  │  脚本调试第三阶段（完整调试，依赖 Step 10 框架）：    │
+  │    DBG4 单步执行 + DBG8 调试协议 + DBG7 编辑器调试 UI │
+  └────────────────────────────────────────────────────────┘
 ```
 
 每一步的通过标准都由前一步建立的物理约束决定。任何新能力必须先通过 Architecture Rules 的裁决原则。
@@ -809,13 +837,13 @@ skill TracerBullet
 
 ### 步骤 10 前必须就位
 
-| ID | 内容 | 来源 |
-|----|------|------|
+| ID | 内容 | 来源 | 状态 |
+|----|------|------|------|
 | C4 | 编译器 "requires cleanup" 强制检查 | §3.3 | ✅ |
 | F4 | 寄存器生命周期分析 + 跨 await 变量提升 | Step 8 | ⏳ |
 | G5 | C4 对应代码缺口 | §11.1 | ✅ |
 | G6 | Cleanup 块内禁止 wait 编译检查 | §11.1 | ✅ |
-| V5 | 帧内 Profiler 验证 | §4.6 | ⏳ |
+| V5 | 帧内 Profiler 验证 | §4.6 | ⚪ 待前置 |
 
 ### 功能展望（15 项 + 脚本调试 8 项）
 
