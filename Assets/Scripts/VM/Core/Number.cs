@@ -72,7 +72,7 @@ namespace FFVM
             ulong quotient = ula / ulb;   // integer part of Q31.32 result
             ulong remainder = ula % ulb;
 
-            // Compute 32 fractional bits via iterative long division
+            // Compute 32 fractional bits via iterative long division (MSB to LSB)
             ulong frac = 0;
             for (int i = 31; i >= 0; i--)
             {

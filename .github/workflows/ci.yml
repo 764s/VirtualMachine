@@ -52,11 +52,7 @@ jobs:
 
       - name: Run Tests
         run: |
-          RUN_ARGS="--project StandaloneRunner/StandaloneRunner.csproj -c Release --no-build"
-          if [ "${{ matrix.fixpoint }}" = "true" ]; then
-            RUN_ARGS="$RUN_ARGS -p:DefineConstants=USE_FIXPOINT"
-          fi
-          dotnet run $RUN_ARGS 2>&1 | tee test-output.txt
+          dotnet run --project StandaloneRunner/StandaloneRunner.csproj -c Release --no-build 2>&1 | tee test-output.txt
           # Fail if any test failed
           if grep -q '\[FAIL\]' test-output.txt; then
             echo "::error::One or more tests FAILED"
