@@ -1,6 +1,28 @@
 namespace FFVM
 {
     /// <summary>
+    /// DBG2: Symbol table entry for debugging.
+    /// Maps variable name → register + struct field info + scope.
+    /// </summary>
+    public struct SymbolEntry
+    {
+        public readonly string Name;
+        public readonly int Register;
+        public readonly int FieldCount;           // >0 for struct variables
+        public readonly string[] FieldNames;       // null for scalar variables
+        public readonly string ScopeFunctionName;  // which function this variable belongs to
+
+        public SymbolEntry(string name, int register, int fieldCount, string[] fieldNames, string scopeFunctionName)
+        {
+            Name = name;
+            Register = register;
+            FieldCount = fieldCount;
+            FieldNames = fieldNames;
+            ScopeFunctionName = scopeFunctionName;
+        }
+    }
+
+    /// <summary>
     /// A compiled function's metadata in the function table.
     /// </summary>
     public struct FunctionEntry
@@ -30,12 +52,21 @@ namespace FFVM
         public readonly int RequiredRegisters;
         public readonly FunctionEntry[] Functions;
 
-        public VMProgram(Instruction[] instructions, Number[] constants, int requiredRegisters, FunctionEntry[] functions = null)
+        /// <summary>DBG1: IP → source line number mapping. Parallel array to Instructions. Null in release builds.</summary>
+        public readonly int[] SourceMap;
+
+        /// <summary>DBG2: Variable symbol table for debugging. Null in release builds.</summary>
+        public readonly SymbolEntry[] SymbolTable;
+
+        public VMProgram(Instruction[] instructions, Number[] constants, int requiredRegisters,
+            FunctionEntry[] functions = null, int[] sourceMap = null, SymbolEntry[] symbolTable = null)
         {
             Instructions = instructions;
             Constants = constants;
             RequiredRegisters = requiredRegisters;
             Functions = functions ?? System.Array.Empty<FunctionEntry>();
+            SourceMap = sourceMap;
+            SymbolTable = symbolTable;
         }
 
         /// <summary>
