@@ -19,6 +19,7 @@ Assets/ScriptVM/
     Step7_Using_PairedSyscall_Checklist.md   步骤 7 检查清单
     Step8_FunctionCall.md            步骤 8 完整文档（设计 + 实施 + 展望 + 风险）
     Step9_StructFlatten.md           步骤 9 检查清单（结构体编译期拍平）
+    Outlook_And_Risks.md             功能展望 + 优化展望 + 风险点汇总
   Archive/                   ← 归档：早期讨论稿（已被本文压缩替代）
     VMScript.md ~ VMScript4.md   初期需求与设计讨论
 ```
@@ -675,6 +676,7 @@ skill TracerBullet
 
 > 通用 VM 优化详见 [VM_Optimization_Outlook.md](Refs/VM_Optimization_Outlook.md)
 > 函数调用路径专项优化详见 [Step8_FunctionCall.md §七](Plan/Step8_FunctionCall.md#七性能优化展望)
+> 全部展望与风险的统一索引详见 [Plan/Outlook_And_Risks.md](Plan/Outlook_And_Risks.md)
 
 当前编译脚本性能基准为 5-7x（vs 等价 C#），手写字节码基准为 1.7x。在不改变功能语义的前提下，已识别 14 项通用优化方向 + 7 项函数调用专项优化方向：
 
@@ -782,3 +784,47 @@ skill TracerBullet
 - 预期 **与 Lua 5.4 同量级**（均为字节码解释器）
 - 预期 **慢于 V8 JIT**（V8 有多级编译优化）
 - 预期 **5-10x 于原生 C#**（使用相同 Number 数据类型）
+
+---
+
+## 十三、功能展望、优化展望与风险点汇总
+
+> 详见 [Plan/Outlook_And_Risks.md](Plan/Outlook_And_Risks.md)
+
+散布于各步骤子计划中的全部展望与风险已统一整理至上述文件。以下为入口索引。
+
+### 步骤 10 前必须就位
+
+| ID | 内容 | 来源 |
+|----|------|------|
+| C4 | 编译器 "requires cleanup" 强制检查 | §3.3 |
+| F4 | 寄存器生命周期分析 + 跨 await 变量提升 | Step 8 |
+| G5 | C4 对应代码缺口 | §11.1 |
+| G6 | Cleanup 块内禁止 wait 编译检查 | §11.1 |
+| V5 | 帧内 Profiler 验证 | §4.6 |
+
+### 功能展望（18 项）
+
+| 分组 | 条目 | 数量 |
+|------|------|------|
+| Cleanup / using 相关 | C5, C6 | 2 |
+| 函数调用相关 | FF1-FF5 | 5 |
+| 结构体相关 | S4, SN1, SN2 | 3 |
+| 全局 / 跨步骤 | H1, BB1, DBG1, PR1, FIX1, DM1 | 6 |
+
+### 优化展望（22 项）
+
+| 分组 | 条目 | 数量 |
+|------|------|------|
+| 通用 VM 优化 | O1-O14 | 14 |
+| 函数调用路径 | FO1-FO7 | 7 |
+| 结构体路径 | SO1 | 1 |
+
+### 已识别风险（15 项）
+
+| 分组 | 条目 | 数量 |
+|------|------|------|
+| 步骤 8 — 已缓解 | R1-R4 | 4 |
+| 步骤 8 — 前瞻 | R5-R8 | 4 |
+| 步骤 9 | SR1-SR4 | 4 |
+| 全局 | GR1-GR3 | 3 |
