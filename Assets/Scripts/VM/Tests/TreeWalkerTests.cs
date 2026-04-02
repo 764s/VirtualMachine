@@ -1467,7 +1467,7 @@ public static class TreeWalkerTests
         }
 
         // ===== Test F01: CALL + RET_FUNC basic (hand-written bytecode) =====
-        // Simulate: entry calls func at IP=5 which sets r16=42, then returns
+        // Simulate: entry calls func at IP=4 which sets r16=42, then returns
         //   IP 0: LOAD_CONST r16, 100          (caller local)
         //   IP 1: CALL target=4, windowSize=16  (caller window = 16)
         //   IP 2: MOVE r17, r0                  (save return value)
