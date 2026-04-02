@@ -63,7 +63,7 @@
 
 | ID | 内容 | 触发时机 | 来源 |
 |----|------|----------|------|
-| **H1** | Handle64 批处理协议 | 最晚于真实多目标业务接入前 | [§七 推进顺序](../VM_Summary.md#七推进顺序严格串行)（VM_Tracer_Bullet §十二 第 4 项） |
+| **H1** | Handle64 批处理协议 | 最晚于真实多目标业务接入前 | [§七 推进顺序](../VM_Summary.md#七推进顺序串行计划)（VM_Tracer_Bullet §十二 第 4 项） |
 | **BB1** | 黑板 Key 编译期自动分配 ID + 静态映射表 | 编译器成熟后 | [§六 决策妥协表](../VM_Summary.md#六决策妥协表为什么当前这样将来如何补全) |
 | **PR1** | Paired Syscall 支持带参反向调用 | 需要带参释放场景时 | [§六 决策妥协表](../VM_Summary.md#六决策妥协表为什么当前这样将来如何补全) |
 | **FIX1** | Fix64 模式 (`USE_FIXPOINT`) 独立构建验证 | 正式测试前 | [§11.2 T5](../VM_Summary.md#112-测试缺口) |
@@ -628,99 +628,34 @@ Gate 3: Unity Editor 内嵌 DAP（可选）             ← DBG7 Phase C
 ## 八、扩展串行计划（理想方案）
 
 > **原则**：每个风险点选择**最终 / 理想方案**而非保守妥协。
-> 扩展后的串行计划在 [VM_Summary.md §七](../VM_Summary.md#七推进顺序严格串行) 的基础上，
+> 扩展后的串行计划在 [VM_Summary.md §七](../VM_Summary.md#七推进顺序串行计划) 的基础上，
 > 将所有风险应对措施、调试子项、语言服务子项展开为具体的执行步骤。
 >
 > **调试决策详情**：见专用文档 → [Step_Debug_Decisions.md](Step_Debug_Decisions.md)
 
 ### 8.1 总览时间线
 
-```
-当前位置：Step 10 Pre（C4 + G6）✅ 已完成 → F4 前
-                                    ↓
-─────────────── F4 + 自然优化 + 调试 Phase 1 ────────────────
-    F4. 寄存器生命周期分析 + 跨 await 变量提升
-    ├─ 自然优化（7 项，零额外排期）
-    │   O4 → O5 → O7 → O3, FO4/FO5/FO7
-    ├─ DBG1. 源码映射表（int[] 平行数组，仅行号）
-    ├─ DBG2. 符号表 Phase 1（varName → register，不含生命周期）
-    └─ 风险应对：
-        R7 理想方案：_pendingCalls >50 函数自动切换 Dictionary
-        R8 理想方案：编译器禁止 Cleanup 块内函数调用（一行检查）
-                                    ↓
-─────────────── 调试 Phase 2（Gate 0 命令行调试）✅ ─────────────
-    DBG3. 宿主断点桥接（ScriptDebugger 回调模式）        ✅
-    DBG5. 变量查看适配器                                  ✅
-    DBG6. 调用栈查看                                      ✅
-    → Gate 0 验收：51 项 Assert 通过（断点 + 变量 + 调用栈）
-    详见 → Step_Debug_Phase2.md
-                                    ↓
-─────────────── GR1 理想方案：CI 构建矩阵 ✅ ────────────────
-    FIX1. USE_FIXPOINT 独立构建验证                      ✅
-    → CI 矩阵 float + Fix64 双模式，每次提交自动验证
-    → Fix64 除法溢出修复（Number.cs 迭代长除法）
-    → 412 项 Assert 双模式全通过
-    详见 → Step_GR1_CI_BuildMatrix.md
-                                    ↓
-─────────────── 调试 Phase 3A（DAP 最小协议）✅ ──────────────
-    DBG7-A. DAP Server 核心（stdin/stdout）
-        12 个必需消息 handler
-        VS Code 极简扩展（~60 行 JSON）
-        独立程序集 FFVM.Debug，#if FFVM_SCRIPT_DEBUG
-    → Gate 1 验收：VS Code 断点命中 + 变量显示
-    详见 → Step_Debug_Phase3A_DAP.md
-                                    ↓
-─────────────── 调试 Phase 3B（DAP 单步 + 完整体验）✅ ── ←
-    DBG4. 单步映射（归约为临时断点，复用 DBG3）     ✅
-    DBG7-B. next/stepIn/stepOut handler              ✅
-    → Gate 2 验收：VS Code 三种单步行为正确
-    → 505 项 Assert（93 DAP 测试含单步验证）
-    详见 → Step_Debug_Phase3B_DAP_SingleStep.md
-                                    ↓
-─────────────── 调试 Phase 3C（Unity Editor DAP，可选）────────
-    DBG7-C. EditorApplication.update 轮询模式
-    DR5 理想方案：主线程永不阻塞
-    → Gate 3 验收：Editor 模式下断点命中 + 变量查看
-                                    ↓
-─────────────── 语言服务 Phase 4 ─────────────────────────────
-    LSP2. 语法高亮（TextMate Grammar，可最早独立实施）
-    LSP1. LSP Server 核心框架（复用 DAP 通信层）
-    LSP3. 实时诊断（全量重编译，不做增量）
-    LSP4. 符号分析（基于 DBG2 符号表）
-    LSP5. 代码补全
-    DBG2 Phase 2. 符号表补充生命周期信息（F4 完成后）
-                                    ↓
-─────────────── 调整型优化（Benchmark 驱动）──────────────────
-    Tier 1: O1 → O2（dispatch 加速 ~40-60%）
-    Tier 2: O6（Peephole，指令数 -5~10%）
-    Tier 3+: O8, O9-O14, FO1-FO3, SO1
-    R1 理想方案：FO6 自适应寄存器窗口（嵌套 ~3→~6 层）
-    SR1 理想方案：FO6 扩大 local 区 + 编译器超限报错
-    SR2 理想方案：SO1 COPY_BLOCK OpCode
-                                    ↓
-─────────────── 功能补全（业务驱动，按需）────────────────────
-    S4. 结构体函数参数 / 返回值传递
-    FF5. 非 entry 函数 defer 完整支持
-    FF1-FF4: 跨模块调用、回调、可选参数、多返回值
-    C5/C6: Cleanup 超时保护 / 嵌套 using 优化
-    SN1/SN2: 嵌套结构体 / 字面量构造
-    BB1/PR1/DM1: 黑板/配对扩展/编排
-    GR3 理想方案：D1-D4 文档缺口批量补全
-                                    ↓
-═══════════════════════════════════════════════════════════════
-  编辑器 UI 类任务（脚本优先策略下延后执行）
-  前置条件：V5 帧内 Profiler + 真实 Syscall 接入 ECS
-═══════════════════════════════════════════════════════════════
-                                    ↓
-─────────────── V5 帧内 Profiler 验证 ────────────────────────
-    前置条件：真实 Syscall 接入 ECS 后
-    C4 强制检查 ✅ 已就位
-                                    ↓
-─────────────── Handle64 批处理协议（展望项）──────────────────
-    H1. 最晚于真实多目标业务接入前实现
-                                    ↓
-10. 编辑器流程图投影
-```
+> 已完成步骤的详细时间线见 VM_Summary.md §七-A。以下仅展开待执行部分。
+
+#### 脚本引擎侧（B 区间）
+
+| 序号 | 步骤 | 状态 | 子项 |
+|------|------|------|------|
+| B1 | 调试 Phase 3C（可选） | ⏳ | DBG7-C EditorApplication.update 轮询，DR5 主线程永不阻塞 |
+| B2 | 语言服务 Phase 4 | ⏳ | LSP2→LSP1→LSP3→LSP4→LSP5 + DBG2 Phase 2 |
+| B3 | 调整型优化 | ⏳ | O1→O2, O6, O8+O9-O14+FO1-FO3+SO1; R1/SR1/SR2 理想方案 |
+| B4 | 功能补全 | ⏳ | S4, FF5, FF1-FF4, C5/C6, SN1/SN2, BB1/PR1/DM1, GR3 |
+
+#### 宿主集成侧（C 区间 — 生产必经路径）
+
+| 序号 | 步骤 | 状态 | 子项 | 前置 |
+|------|------|------|------|------|
+| C1 | 真实 Syscall 接入 ECS | ⚪ | stub → 真实宿主实现（碰撞/伤害/击退/特效/黑板等） | 宿主 ECS 就绪 |
+| C2 | V5 帧内 Profiler | ⚪ | 含真实 ECS 交互的 Tick 耗时 + GC.Alloc = 0 | C1 |
+| C3 | 技能资源管线 🆕 | ⚪ | .vm 加载/编译/缓存/热更新 | C1 |
+| C4 | Handle64 批处理 | ⏳ | H1 句柄化多目标流转 | C1 |
+| C5 | 帧同步集成验证 🆕 | ⚪ | 真实网络快照/回滚正确性 | C1+C2 |
+| C6 | 编辑器流程图投影 | ⏳ | 步骤 10 AST→流程图 | C2 |
 
 ### 8.2 风险理想方案速查
 

@@ -4,8 +4,10 @@
 
 ### 文档目录结构
 
+> 文档区已从 `Assets/ScriptVM/` 迁移至仓库根目录 `Docs/`，以避免 Unity 为 `.md` 文件自动生成 `.meta` 文件。
+
 ```
-Assets/ScriptVM/
+Docs/
   VM_Summary.md              ← 本文（唯一入口文档）
   Refs/                      ← 子文件：当前活跃的引用文档
     VM_Architecture_Rules.md         架构硬约束（20 条纪律）
@@ -23,12 +25,17 @@ Assets/ScriptVM/
     Step_F4_RegisterLifecycle.md     F4 寄存器生命周期 + 自然优化 + 调试 Phase 1 + 风险理想方案
     Step_Debug_Decisions.md          脚本调试决策文档（全部决策理由 + 方案对比）
     Outlook_And_Risks.md             功能展望 + 优化展望 + 风险点 + 扩展串行计划
+  Skills/                    ← 技能脚本复现示例
+    skill_114feiyanxuanfengtui.vm    飞燕旋风腿（56 帧攻击技能）
+    skill_25shangpanbeijizhong.vm    上盘被击中（30 帧受击技能）
+    README.md                        Syscall 协议 + 能力评估
   Archive/                   ← 归档：早期讨论稿（已被本文压缩替代）
     VMScript.md ~ VMScript4.md   初期需求与设计讨论
 ```
 
 - **Refs/**：VM_Summary.md 引用的子文档，包含各专题的详细说明。
 - **Plan/**：计划与检查清单。
+- **Skills/**：真实技能脚本的复现示例与分析。
 - **Archive/**：早期分散的讨论稿，内容已合并入本文，保留仅供追溯。
 
 ---
@@ -525,232 +532,87 @@ skill TracerBullet
 
 ---
 
-## 七、推进顺序（严格串行）
+## 七、推进顺序（串行计划）
 
-```
-1. 补齐 VMInstanceState 中 Cleanup 相关字段                        ✅
-      ↓
-2. TreeWalker 层实现 defer + Kill Cleanup 验证测试 → Phase A 通过  ✅
-      ↓
-3. 实现最小 7 指令字节码解释循环（VMWorld.Tick）                ✅
-      ↓
-4. 字节码路径通过 Phase A + B 全部验证 → 曳光弹成立        ✅
-      ↓
-  ┌────────────────────────────────────────────────────────┐
-  │  V1: GC 精确验证        ← ✅ 通过                 │
-  │  V2: 回滚正确性验证      ← ✅ 通过                 │
-  └────────────────────────────────────────────────────────┘
-      ↓
-5. 补充 MOVE/COPY → JUMP/JUMP_IF → 比较/布尔                       ✅
-      ↓
-  ┌────────────────────────────────────────────────────────┐
-  │  V3: 单实例性能基准    ← ✅ 通过 (3.8x)             │
-  │  V4: N 实例吞吐上限    ← ✅ 通过 (128inst=0.391ms)   │
-  └────────────────────────────────────────────────────────┘
-      ↓
-6. 设计并确定脚本语法 → 实现 Lexer + Parser + BytecodeCompiler       ✅
-      ↓
-  ┌────────────────────────────────────────────────────────┐
-  │  编译器测试 C01-C22    ← ✅ 70 项 Assert 全部通过    │
-  │  自动化性能基准 B01-B05 ← ✅ 编译脚本 5-7x ratio     │
-  └────────────────────────────────────────────────────────┘
-      ↓
-7. 实现 using 语法 + Paired Syscall → 理想 Cleanup 模式             ✅
-      确定执行：
-        C1. using 语法 Parser 解析                                   ✅
-        C2. Paired Syscall 注册协议（SyscallTable 扩展）              ✅
-        C3. 编译器 emit PUSH_CLEANUP / POP_CLEANUP for using          ✅
-      同步修复：
-        G1. wait_for Parser + Compiler 接入（新增 WAIT_FOR OpCode）   ✅
-        G2. POP_CLEANUP 首次被编译器生成（using 正常退出路径）         ✅
-      确定执行（低优先级，最晚步骤 10 前）：
-        C4. 编译器 "requires cleanup" 强制检查                        ✅ SyscallTable.RequiresCleanup + CompileSyscall 检查
-      展望项（暂无排期）：
-        C5. Cleanup 块执行超时保护                                    ⏳ 展望
-        C6. 嵌套 using 作用域优化                                     ⏳ 展望
-      ↓
-  ┌────────────────────────────────────────────────────────┐
-  │  V5: 帧内 Profiler 验证  ← 真实 Syscall 接入 ECS 后    │
-  │  通过条件见 §4.6，必须在进入步骤 10 前通过          │
-  │  C4 强制检查 ✅ 已就位（步骤 10 前置）               │
-  └────────────────────────────────────────────────────────┘
-      ↓
-8. 函数调用 + 固定深度调用栈验证  ✅ 279 项 Assert 通过
-      （来源：VM_Tracer_Bullet.md §十二 第 3 项；CallFrame 基础设施已就位）
-      详见 → [Step8_FunctionCall.md](Plan/Step8_FunctionCall.md)
-      确定执行：
-        F1. CALL / RET_FUNC OpCode（VMWorld.Tick 扩展）                ✅
-        F2. 编译器跨函数调用 emit（CallExpr → CALL，区别于 SYSCALL）   ✅
-        F3. GC + 快照回滚验证（CallStack 不破坏 blittable / memcpy）   ✅
-      确定执行（低优先级，最晚步骤 10 前）：
-        F4. 编译器寄存器生命周期分析 + 跨 await 变量提升              ⏳
-            （来源：VM_Tracer_Bullet.md §十二 第 2 项"寄存器复用"）
-      功能展望（5 项 FF1-FF5，暂无排期）：
-        跨模块函数调用、函数作为 Syscall 参数（回调模式）、可选参数与默认值、
-        多返回值、非 entry 函数 defer 完整支持。
-      性能优化展望（7 项 FO1-FO7，暂无排期，benchmark 驱动）：
-        叶函数跳过压栈、尾调用消除、小函数内联、参数就位检测、返回值直达、
-        自适应寄存器窗口、调用栈深度静态分析。
-      已识别风险（4 项已缓解 + 4 项前瞻）：
-        寄存器窗口嵌套层数限制（R1, 已知可接受）、CleanupBase 跨函数交互（R4, 已验证）、
-        结构体参数窗口压力（R5, 步骤 9 评估）、Cleanup 块内函数调用语义（R8, 待编译器检查）。
-        详见 → [Step8_FunctionCall.md §五 风险分析](Plan/Step8_FunctionCall.md#五风险分析)
-      ↓
-9. 结构体编译期拍平验证  ✅ 303 项 Assert 通过
-      （来源：VM_Tracer_Bullet.md §十二 第 5 项；设计见 VM_Runtime_Layout.md §5.2）
-      详见 → [Step9_StructFlatten.md](Plan/Step9_StructFlatten.md)
-      确定执行：
-        S1. Parser struct 声明 + 字段类型解析                              ✅
-        S2. 编译器 struct → 连续寄存器槽位映射                            ✅
-        S3. 结构体赋值 = 寄存器区块 COPY 验证                            ✅
-      功能展望（3 项 S4/SN1/SN2，暂无排期）：
-        结构体函数参数/返回值传递（S4，最晚步骤 10 前如需编辑器展示）、
-        嵌套结构体递归拍平（SN1）、结构体字面量构造语法（SN2）。
-      性能优化展望（1 项 SO1，暂无排期，benchmark 驱动）：
-        COPY_BLOCK OpCode 替代 N 条 MOVE 的结构体赋值。
-      已识别风险（4 项 SR1-SR4）：
-        寄存器快速耗尽（SR1, local 区 32 槽限制）、大 struct 赋值性能退化（SR2, N 条 MOVE）、
-        struct 与函数调用窗口交互（SR3, S4 展望时评估）、字段/方法语法歧义（SR4, 设计上不支持方法调用）。
-        详见 → [Step9_StructFlatten.md §四 风险分析](Plan/Step9_StructFlatten.md#四风险分析)
-      ↓
-  ┌────────────────────────────────────────────────────────┐
-  │  Step 10 前置：编译器语义安全检查（C4 + G6） ✅      │
-  │  315 项 Assert（112 TW + 168 Compiler + 17 Perf       │
-  │  + 18 SkillScript）                                   │
-  │  详见 → Step10_Pre_CompilerSemanticChecks.md           │
-  │    C4. requires_cleanup 强制检查               ✅     │
-  │    G5. C4 对应代码缺口                         ✅     │
-  │    G6. Cleanup 块内禁止 wait/wait_for           ✅     │
-  └────────────────────────────────────────────────────────┘
-      ↓
-  ─── 优化 ＋ 功能补全 ＋ 脚本调试 ── 插入区间 ───────────
-      ↓
-  F4 + 自然优化 + 调试 Phase 1 + 风险理想方案            ✅
-      详见 → [Step_F4_RegisterLifecycle.md](Plan/Step_F4_RegisterLifecycle.md)
-      361 项 Assert（112 TW + 214 Compiler + 17 Perf + 18 SkillScript）
-      确定执行：
-        F4. 编译器寄存器生命周期分析 + 跨 await 变量提升    ✅
-      自然优化（随 F4 实施，零额外排期，7 项）：
-        O4 目标寄存器传递（dest-reg hint）                   ✅
-        O5 常量折叠                                         ✅
-        O7 Syscall 结果直达                                 ✅
-        O3 消除冗余 IP 边界检查（审查后确认仅 1 处必要检查） ✅
-        FO4 参数就位检测（已有）                             ✅
-        FO5 返回值直达                                       ✅
-        FO7 调用栈深度静态分析                               ✅
-      脚本调试 · Phase 1（编译器侧，随 F4 合并，边际排期极低）：
-        DBG1. 源码映射表（int[] 平行数组，仅行号）           ✅
-        DBG2. 符号表 Phase 1（varName → register，不含生命周期） ✅
-      风险理想方案（随 F4 一并实施）：
-        R7. _pendingCalls >50 函数自动切换 Dictionary         ✅
-        R8. 编译器禁止 Cleanup 块内函数调用                   ✅
-      调试决策详情 → [Step_Debug_Decisions.md](Plan/Step_Debug_Decisions.md)
-      ↓
-  ┌────────────────────────────────────────────────────────┐
-  │  脚本调试 · Phase 2（运行时，Gate 0 命令行调试）✅   │
-  │    DBG3. 宿主断点桥接（ScriptDebugger 回调模式）     ✅
-  │    DBG5. 变量查看适配器（Symbol Table → 可读值）     ✅
-  │    DBG6. 调用栈查看（CallStack → Source Map 映射）   ✅
-  │  Gate 0 验收：StandaloneRunner 命令行断点 + 变量值    │
-  │  此时已具备命令行调试能力（零外部依赖）               │
-  │  412 项 Assert（112 TW + 214 Compiler + 17 Perf      │
-  │  + 18 SkillScript + 51 Debug）                       │
-  │  详见 → [Step_Debug_Phase2.md](Plan/Step_Debug_Phase2.md) │
-  └────────────────────────────────────────────────────────┘
-      ↓
-  ┌────────────────────────────────────────────────────────┐
-  │  GR1 理想方案：CI 构建矩阵                   ✅      │
-  │    FIX1. USE_FIXPOINT CI 自动验证             ✅      │
-  │    CI 矩阵 float + Fix64 双模式，每次提交自动验证     │
-  │    Fix64 除法溢出 bug 已修复（Number.cs 迭代长除法）   │
-  │    412 项 Assert 在两种模式下均通过                    │
-  │  详见 → [Step_GR1_CI_BuildMatrix.md](Plan/Step_GR1_CI_BuildMatrix.md) │
-  └────────────────────────────────────────────────────────┘
-      ↓
-  ┌────────────────────────────────────────────────────────┐
-  │  脚本调试 · Phase 3A（DAP 最小协议）          ✅      │
-  │    DBG7-A. DAP Server 核心（stdin/stdout JSON-RPC）   │
-  │    ContentLengthStream + JsonHelper + DapServer       │
-  │    12 消息 handler + HaltOnBreakpoint + SkipNextCheck │
-  │    VS Code 极简扩展（package.json + TextMate grammar）│
-  │    StandaloneRunner --dap 模式                        │
-  │  Gate 1 验收：58 项 DAP 自动化测试通过                │
-  │  470 项 Assert × 2 模式（float + Fix64）              │
-  │  详见 → [Step_Debug_Phase3A_DAP.md](Plan/Step_Debug_Phase3A_DAP.md) │
-  └────────────────────────────────────────────────────────┘
-      ↓
-  ┌────────────────────────────────────────────────────────┐
-  │  脚本调试 · Phase 3B（DAP 单步 + 完整体验）   ✅      │
-  │    DBG4. 单步映射（归约为临时断点，复用 DBG3） ✅     │
-  │    DBG7-B. next/stepIn/stepOut handler          ✅     │
-  │  Gate 2 验收：VS Code 三种单步行为正确                │
-  │  505 项 Assert（112 TW + 214 Compiler + 17 Perf      │
-  │  + 18 SkillScript + 51 Debug + 93 DAP）              │
-  │  详见 → [Step_Debug_Phase3B_DAP_SingleStep.md](Plan/Step_Debug_Phase3B_DAP_SingleStep.md) │
-  └────────────────────────────────────────────────────────┘
-      ↓
-  ┌────────────────────────────────────────────────────────┐
-  │  脚本调试 · Phase 3C（Unity Editor DAP，可选） ⏳      │
-  │    DBG7-C. EditorApplication.update 轮询模式          │
-  │    DR5 理想方案：主线程永不阻塞                       │
-  │  Gate 3 验收：Editor 模式下断点命中 + 变量查看        │
-  └────────────────────────────────────────────────────────┘
-      ↓
-  ┌────────────────────────────────────────────────────────┐
-  │  语言服务 · Phase 4                           ⏳      │
-  │    LSP2. 语法高亮（TextMate Grammar，可最早独立实施） │
-  │    LSP1. LSP Server 核心框架（复用 DAP 通信层）       │
-  │    LSP3. 实时诊断（全量重编译，不做增量）             │
-  │    LSP4. 符号分析（Go-to-Definition / Hover）         │
-  │    LSP5. 代码补全（关键字/变量/函数/Syscall/struct）  │
-  │    DBG2 Phase 2. 符号表补充生命周期信息               │
-  └────────────────────────────────────────────────────────┘
-      ↓
-  ┌────────────────────────────────────────────────────────┐
-  │  调整型优化（Benchmark 驱动）                 ⏳      │
-  │  Tier 1: O1 → O2（dispatch 加速 ~40-60%）             │
-  │  Tier 2: O6（Peephole，指令数 -5~10%）                │
-  │  Tier 3+: O8, O9-O14, FO1-FO3, SO1                   │
-  │  R1 理想方案：FO6 自适应寄存器窗口（~3→~6 层）       │
-  │  SR1 理想方案：FO6 扩大 local 区 + 编译器报错         │
-  │  SR2 理想方案：SO1 COPY_BLOCK OpCode                  │
-  │  按 benchmark 数据排序，逐项验证收益后推进             │
-  └────────────────────────────────────────────────────────┘
-      ↓
-  ┌────────────────────────────────────────────────────────┐
-  │  功能补全（业务驱动，按需）                   ⏳      │
-  │    S4. 结构体函数参数 / 返回值传递                    │
-  │    FF5. 非 entry 函数 defer 完整支持                  │
-  │    FF1-FF4: 跨模块调用、回调、可选参数、多返回值      │
-  │    C5/C6: Cleanup 超时保护 / 嵌套 using 优化          │
-  │    SN1/SN2: 嵌套结构体 / 字面量构造                   │
-  │    BB1/PR1/FIX1/DM1: 黑板/配对扩展/Fix64 验证/编排    │
-  │    GR3 理想方案：D1-D4 文档缺口批量补全               │
-  └────────────────────────────────────────────────────────┘
-      ↓
-  ═══════════════════════════════════════════════════════════
-  ║  以下为编辑器 UI 类任务（脚本优先策略下延后执行）     ║
-  ║  前置条件：V5 帧内 Profiler + 真实 Syscall 接入 ECS   ║
-  ═══════════════════════════════════════════════════════════
-      ↓
-  ┌────────────────────────────────────────────────────────┐
-  │  V5: 帧内 Profiler 验证  ← 真实 Syscall 接入 ECS 后   │
-  │  C4 强制检查 ✅ 已就位                                │
-  │  通过条件见 §4.6，必须在进入编辑器 UI 前通过          │
-  └────────────────────────────────────────────────────────┘
-      ↓
-  ┌────────────────────────────────────────────────────────┐
-  │  Handle64 批处理协议（展望项）                        │
-  │  来源：VM_Tracer_Bullet.md §十二 第 4 项              │
-  │  最晚于真实多目标业务接入前实现                       │
-  │  依赖 Syscall 协议扩展，独立于函数调用与结构体        │
-  └────────────────────────────────────────────────────────┘
-      ↓
-  ┌────────────────────────────────────────────────────────┐
-  │  10. 编辑器流程图投影                         ⏳      │
-  │  依赖 V5 通过 + 真实 Syscall/ECS 接入                 │
-  └────────────────────────────────────────────────────────┘
-```
+> **阅读指南**：
+> - 本节为项目唯一的串行执行计划，所有任务严格串行推进。
+> - ✅ = 已完成，⏳ = 待执行，⚪ = 被外部前置条件阻塞。
+> - 已完成步骤仅保留摘要，详情见各步骤子文档链接。
+> - 展望项（暂无排期）的完整索引见 [Outlook_And_Risks.md](Plan/Outlook_And_Risks.md)。
+
+---
+
+### A. 已完成阶段（Steps 1–9 + 调试 + CI）
+
+下表按实际执行顺序列出所有已完成步骤。
+
+| # | 步骤 | 关键产出 | 测试数 | 详情 |
+|---|------|---------|--------|------|
+| 1 | VMInstanceState Cleanup 字段 | blittable struct + CleanupStack | — | — |
+| 2 | TreeWalker defer + Kill 验证 | Phase A 通过 | — | — |
+| 3 | 最小 7 指令字节码解释循环 | VMWorld.Tick | — | — |
+| 4 | 字节码 Phase A+B 全部验证 | **曳光弹成立** | — | [TracerBullet_Checklist.md](Plan/TracerBullet_Checklist.md) |
+| — | V1 GC 精确验证 | 100 Tick 0 bytes alloc | — | §4.6 |
+| — | V2 回滚正确性验证 | Syscall 序列 bit-exact | — | §4.6 |
+| 5 | MOVE/JUMP/比较/布尔 | 19 条 Phase 2 指令 | — | — |
+| — | V3 单实例性能基准 | 3.8x vs C# | — | §4.6 |
+| — | V4 N 实例吞吐上限 | 128 实例 = 0.391ms | — | §4.6 |
+| 6 | Lexer + Parser + BytecodeCompiler | 端到端文本→字节码→执行 | C01-C22 | — |
+| — | 自动化性能基准 B01-B05 | 编译脚本 5-7x ratio | — | §4.6 |
+| 7 | using + Paired Syscall (C1-C3, G1-G2) | 理想 Cleanup 模式 | — | [Step7](Plan/Step7_Using_PairedSyscall_Checklist.md) |
+| 8 | 函数调用 + 调用栈 (F1-F3) | CALL/RET_FUNC + GC/回滚验证 | 279 | [Step8](Plan/Step8_FunctionCall.md) |
+| 9 | 结构体编译期拍平 (S1-S3) | struct → 连续寄存器 | 303 | [Step9](Plan/Step9_StructFlatten.md) |
+| — | Step 10 前置 (C4+G6) | requires_cleanup + Cleanup 块禁 wait | 315 | [Step10_Pre](Plan/Step10_Pre_CompilerSemanticChecks.md) |
+| — | F4 + 自然优化 + 调试 Phase 1 | 寄存器生命周期 + O4/O5/O7/O3 + DBG1/DBG2 + R7/R8 | 361 | [Step_F4](Plan/Step_F4_RegisterLifecycle.md) |
+| — | 调试 Phase 2 (Gate 0) | ScriptDebugger: DBG3+DBG5+DBG6 命令行调试 | 412 | [Phase2](Plan/Step_Debug_Phase2.md) |
+| — | GR1 CI 构建矩阵 | float + Fix64 双模式自动验证 | 412×2 | [GR1](Plan/Step_GR1_CI_BuildMatrix.md) |
+| — | 调试 Phase 3A (Gate 1) | DAP Server 核心 + VS Code 扩展 | 470 | [Phase3A](Plan/Step_Debug_Phase3A_DAP.md) |
+| — | **调试 Phase 3B (Gate 2)** | **DAP 单步 next/stepIn/stepOut** | **505** | [Phase3B](Plan/Step_Debug_Phase3B_DAP_SingleStep.md) |
+
+**当前位置 → Phase 3B 完成，505 项 Assert × 2 模式全通过。**
+
+---
+
+### B. 待执行阶段（脚本引擎侧）
+
+以下步骤不依赖真实 ECS/Syscall 接入，可在当前独立环境中推进。
+
+| 序号 | 步骤 | 状态 | 内容 | 说明 |
+|------|------|------|------|------|
+| B1 | 调试 Phase 3C | ⏳ 可选 | Unity Editor DAP（EditorApplication.update 轮询，DR5） | 仅在需要 Editor 内调试时实施；VS Code 独立调试已可用 |
+| B2 | 语言服务 Phase 4 | ⏳ | LSP Server：语法高亮(LSP2)→核心框架(LSP1)→诊断(LSP3)→符号(LSP4)→补全(LSP5) | 复用 DAP 通信层；LSP2 TextMate grammar 可最早独立实施 |
+| B3 | 调整型优化 | ⏳ | Tier 1: O1→O2（dispatch -40~60%），Tier 2: O6（peephole），Tier 3+: O8/O9-O14/FO1-FO3/SO1 | Benchmark 驱动；含 R1/SR1/SR2 风险理想方案 |
+| B4 | 功能补全 | ⏳ | S4 结构体参数、FF5 非 entry defer、FF1-FF4、C5/C6、SN1/SN2、BB1/PR1/DM1 | 业务驱动按需；GR3 文档缺口 D1-D4 也在此批次 |
+
+---
+
+### C. 待执行阶段（宿主集成侧 — 生产必经路径）
+
+以下步骤依赖真实游戏宿主环境，是从"引擎可用"到"生产上线"的关键差距。
+
+| 序号 | 步骤 | 状态 | 内容 | 前置条件 | 说明 |
+|------|------|------|------|----------|------|
+| C1 | 真实 Syscall 接入 ECS | ⚪ | 将 stub Syscall 替换为真实宿主实现（碰撞检测、伤害、击退、特效、黑板读写等） | 宿主 ECS 框架就绪 | **最关键的生产差距**：当前全部 Syscall 均为 mock，技能脚本无法与真实游戏世界交互 |
+| C2 | V5 帧内 Profiler 验证 | ⚪ | 含真实 ECS 交互开销的 Tick 耗时测量，确认帧预算可行 | C1 完成 | Unity Profiler Timeline 观察 VM Tick marker，GC.Alloc = 0 |
+| C3 | 技能资源管线 | ⚪ | .vm 文件加载/编译/缓存/热更新策略 | C1 完成 | 编译后 VMProgram 的序列化与缓存，运行时按需加载 |
+| C4 | Handle64 批处理协议 | ⏳ | H1：句柄化多目标数据流转 | C1 完成 | 最晚于真实多目标业务（AOE 技能）接入前实现 |
+| C5 | 帧同步集成验证 | ⚪ | 真实网络环境下快照/回滚正确性验证 | C1+C2 完成 | V2 已验证离线正确性，此处验证网络帧同步场景 |
+| C6 | 编辑器流程图投影 | ⏳ | 步骤 10：AST → 结构化流程图主视图 | C2 通过 | 依赖 V5 + 真实 Syscall/ECS 接入 |
+
+---
+
+### D. 生产差距总结
+
+| 差距领域 | 计划覆盖 | 说明 |
+|----------|---------|------|
+| 真实 Syscall 接入 ECS | C1 ✅ 已纳入 | 原计划中隐含于 V5 前置条件，现已显式列为 C1 |
+| V5 帧内 Profiler | C2 ✅ 已纳入 | 原 V5，现归入宿主集成阶段 |
+| 技能资源管线（加载/缓存/热更新） | C3 🆕 新增 | 原计划**未覆盖**。编译后 VMProgram 如何序列化、运行时如何按需加载，需要明确方案 |
+| Handle64 批处理 | C4 ✅ 已纳入 | 原为展望项 H1 |
+| 帧同步集成验证 | C5 🆕 新增 | 原计划**未覆盖**。V2 验证了离线快照回滚正确性，但真实网络帧同步场景未验证 |
+| 编辑器流程图 | C6 ✅ 已纳入 | 原步骤 10 |
+| LSP 语言服务 | B2 ✅ 已纳入 | 影响开发效率，非生产阻塞 |
+| 调整型优化 | B3 ✅ 已纳入 | 5-7x → 2-3x，非生产阻塞但影响性能预算 |
 
 每一步的通过标准都由前一步建立的物理约束决定。任何新能力必须先通过 Architecture Rules 的裁决原则。
 
