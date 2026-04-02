@@ -1,0 +1,721 @@
+using System;
+using System.Collections.Generic;
+using System.IO;
+using System.Text;
+using FFVM;
+using FFVM.Compiler;
+using FFVM.Debug;
+using UnityEngine;
+
+/// <summary>
+/// DAP Phase 3A tests: Content-Length framing, JSON helper, and DAP protocol interaction.
+/// Gate 1: verify DAP server can handle a complete debug session programmatically.
+/// </summary>
+public static class DapTests
+{
+#if UNITY_EDITOR
+    [UnityEditor.MenuItem("TestVM/RunDapTests")]
+#endif
+    public static void RunAll()
+    {
+        int passed = 0;
+        int failed = 0;
+
+        void Assert(bool condition, string testName)
+        {
+            if (condition)
+            {
+                Debug.Log($"[PASS] {testName}");
+                passed++;
+            }
+            else
+            {
+                Debug.LogError($"[FAIL] {testName}");
+                failed++;
+            }
+        }
+
+        // ================================================================
+        // A. Content-Length Stream Tests
+        // ================================================================
+
+        // ===== Test DAP-A01: ReadMessage parses Content-Length framed message =====
+        {
+            string body = "{\"type\":\"request\",\"command\":\"initialize\"}";
+            string framed = $"Content-Length: {Encoding.UTF8.GetByteCount(body)}\r\n\r\n{body}";
+            var stream = new MemoryStream(Encoding.UTF8.GetBytes(framed));
+
+            string result = ContentLengthStream.ReadMessage(stream);
+            Assert(result == body, "DAP-A01: ReadMessage parses Content-Length message");
+        }
+
+        // ===== Test DAP-A02: WriteMessage + ReadMessage roundtrip =====
+        {
+            string original = "{\"seq\":1,\"type\":\"response\",\"success\":true}";
+            var ms = new MemoryStream();
+            ContentLengthStream.WriteMessage(ms, original);
+
+            ms.Position = 0;
+            string result = ContentLengthStream.ReadMessage(ms);
+            Assert(result == original, "DAP-A02: WriteMessage → ReadMessage roundtrip");
+        }
+
+        // ===== Test DAP-A03: ReadMessage handles multi-byte UTF-8 =====
+        {
+            string body = "{\"name\":\"变量\"}";
+            var ms = new MemoryStream();
+            ContentLengthStream.WriteMessage(ms, body);
+            ms.Position = 0;
+            string result = ContentLengthStream.ReadMessage(ms);
+            Assert(result == body, "DAP-A03: Content-Length handles UTF-8");
+        }
+
+        // ===== Test DAP-A04: ReadMessage returns null on empty stream =====
+        {
+            var ms = new MemoryStream(new byte[0]);
+            string result = ContentLengthStream.ReadMessage(ms);
+            Assert(result == null, "DAP-A04: ReadMessage returns null on empty stream");
+        }
+
+        // ===== Test DAP-A05: Multiple messages in sequence =====
+        {
+            var ms = new MemoryStream();
+            ContentLengthStream.WriteMessage(ms, "msg1");
+            ContentLengthStream.WriteMessage(ms, "msg2");
+            ContentLengthStream.WriteMessage(ms, "msg3");
+            ms.Position = 0;
+
+            Assert(ContentLengthStream.ReadMessage(ms) == "msg1", "DAP-A05: first message");
+            Assert(ContentLengthStream.ReadMessage(ms) == "msg2", "DAP-A05: second message");
+            Assert(ContentLengthStream.ReadMessage(ms) == "msg3", "DAP-A05: third message");
+        }
+
+        // ================================================================
+        // B. JSON Helper Tests
+        // ================================================================
+
+        // ===== Test DAP-B01: JsonObject roundtrip =====
+        {
+            var obj = new JsonObject();
+            obj.Set("seq", 1);
+            obj.Set("type", "request");
+            obj.Set("success", true);
+            obj.Set("name", "test");
+
+            string json = obj.ToJson();
+            var parsed = JsonObject.Parse(json);
+
+            Assert(parsed.GetInt("seq") == 1, "DAP-B01: int roundtrip");
+            Assert(parsed.GetString("type") == "request", "DAP-B01: string roundtrip");
+            Assert(parsed.GetBool("success") == true, "DAP-B01: bool roundtrip");
+            Assert(parsed.GetString("name") == "test", "DAP-B01: name roundtrip");
+        }
+
+        // ===== Test DAP-B02: Nested object roundtrip =====
+        {
+            var inner = new JsonObject();
+            inner.Set("line", 42);
+            inner.Set("path", "/test/file.ffvm");
+
+            var outer = new JsonObject();
+            outer.Set("source", inner);
+            outer.Set("command", "setBreakpoints");
+
+            string json = outer.ToJson();
+            var parsed = JsonObject.Parse(json);
+
+            Assert(parsed.GetString("command") == "setBreakpoints", "DAP-B02: outer string");
+            var source = parsed.GetObject("source");
+            Assert(source != null, "DAP-B02: nested object exists");
+            Assert(source.GetInt("line") == 42, "DAP-B02: nested int");
+            Assert(source.GetString("path") == "/test/file.ffvm", "DAP-B02: nested string");
+        }
+
+        // ===== Test DAP-B03: Array roundtrip =====
+        {
+            var obj = new JsonObject();
+            var arr = new List<object> { 1.0, 2.0, 3.0 };
+            obj.Set("items", arr);
+
+            string json = obj.ToJson();
+            var parsed = JsonObject.Parse(json);
+            var items = parsed.GetArray("items");
+            Assert(items != null && items.Count == 3, "DAP-B03: array roundtrip count");
+        }
+
+        // ===== Test DAP-B04: String escaping roundtrip =====
+        {
+            var obj = new JsonObject();
+            obj.Set("text", "line1\nline2\ttab \"quoted\" \\slash");
+
+            string json = obj.ToJson();
+            var parsed = JsonObject.Parse(json);
+            Assert(parsed.GetString("text") == "line1\nline2\ttab \"quoted\" \\slash", "DAP-B04: string escaping");
+        }
+
+        // ===== Test DAP-B05: Null value =====
+        {
+            var obj = new JsonObject();
+            obj.Set("nullVal", null);
+
+            string json = obj.ToJson();
+            var parsed = JsonObject.Parse(json);
+            Assert(parsed.Get("nullVal") == null, "DAP-B05: null roundtrip");
+        }
+
+        // ================================================================
+        // C. DapServer Basic Protocol Tests
+        // ================================================================
+
+        // ===== Test DAP-C01: Initialize returns capabilities =====
+        {
+            var session = new DapBatchSession();
+            session.AddRequest("initialize", new JsonObject());
+            session.AddRequest("disconnect", new JsonObject());
+            session.Run();
+
+            var initEvent = session.ReadNext();
+            Assert(initEvent?.GetString("event") == "initialized", "DAP-C01: initialized event");
+
+            var initResp = session.ReadNext();
+            Assert(initResp?.GetBool("success") == true, "DAP-C01: initialize success");
+            var body = initResp?.GetObject("body");
+            Assert(body != null && body.GetBool("supportsConfigurationDoneRequest"), "DAP-C01: capabilities");
+        }
+
+        // ===== Test DAP-C02: Unknown command returns success=false =====
+        {
+            var session = new DapBatchSession();
+            session.AddRequest("initialize", new JsonObject());
+            session.AddRequest("unknownCommand", new JsonObject());
+            session.AddRequest("disconnect", new JsonObject());
+            session.Run();
+
+            session.SkipUntilResponse("initialize");
+            var unkResp = session.ReadNext();
+            Assert(unkResp?.GetBool("success") == false, "DAP-C02: unknown command → success=false");
+        }
+
+        // ================================================================
+        // D. Full DAP Session Tests
+        // ================================================================
+
+        // ===== Test DAP-D01: Full session — breakpoint + stackTrace + variables =====
+        {
+            string scriptPath = Path.Combine(Path.GetTempPath(), "dap_test_d01.ffvm");
+            File.WriteAllText(scriptPath, @"
+func main() {
+    var x: int = 42
+    var y: int = 7
+    var z: int = x + y
+}");
+
+            try
+            {
+                var session = new DapBatchSession();
+                session.AddRequest("initialize", new JsonObject());
+                session.AddLaunch(scriptPath);
+                session.AddRequest("setBreakpoints", MakeSetBreakpointsArgs(scriptPath, 5));
+                session.AddRequest("configurationDone", new JsonObject());
+                session.AddContinue();
+                session.AddStackTrace();
+                session.AddScopes(0);
+                session.AddVariables(1);
+                session.AddRequest("disconnect", new JsonObject());
+                session.Run();
+
+                // Parse outputs
+                var initEvent = session.ExpectEvent("initialized");
+                Assert(initEvent != null, "DAP-D01: initialized event");
+
+                var initResp = session.ExpectResponse("initialize");
+                Assert(initResp?.GetBool("success") == true, "DAP-D01: initialize success");
+
+                var launchResp = session.ExpectResponse("launch");
+                Assert(launchResp?.GetBool("success") == true, "DAP-D01: launch success");
+
+                var bpResp = session.ExpectResponse("setBreakpoints");
+                Assert(bpResp?.GetBool("success") == true, "DAP-D01: setBreakpoints success");
+                var bpBody = bpResp?.GetObject("body");
+                var bps = bpBody?.GetArray("breakpoints");
+                Assert(bps != null && bps.Count == 1, $"DAP-D01: one breakpoint returned, got {bps?.Count}");
+                if (bps?.Count > 0)
+                {
+                    var bp0 = bps[0] as JsonObject;
+                    Assert(bp0?.GetBool("verified") == true, "DAP-D01: breakpoint verified");
+                }
+
+                session.ExpectResponse("configurationDone");
+
+                var stoppedEvent = session.ExpectEvent("stopped");
+                Assert(stoppedEvent != null, "DAP-D01: stopped event received");
+                var stoppedBody = stoppedEvent?.GetObject("body");
+                Assert(stoppedBody?.GetString("reason") == "breakpoint", "DAP-D01: stopped reason = breakpoint");
+
+                session.ExpectResponse("continue");
+
+                var stResp = session.ExpectResponse("stackTrace");
+                var frames = stResp?.GetObject("body")?.GetArray("stackFrames");
+                Assert(frames != null && frames.Count >= 1, $"DAP-D01: at least 1 frame, got {frames?.Count}");
+                if (frames?.Count >= 1)
+                {
+                    var f0 = frames[0] as JsonObject;
+                    Assert(f0?.GetString("name") == "main", "DAP-D01: top frame = main");
+                    Assert(f0?.GetInt("line") == 5, $"DAP-D01: line = 5, got {f0?.GetInt("line")}");
+                }
+
+                session.ExpectResponse("scopes");
+
+                var varResp = session.ExpectResponse("variables");
+                var variables = varResp?.GetObject("body")?.GetArray("variables");
+                Assert(variables != null && variables.Count >= 2, $"DAP-D01: >= 2 vars, got {variables?.Count}");
+                if (variables != null)
+                {
+                    bool foundX = false, foundY = false;
+                    foreach (var vObj in variables)
+                    {
+                        var v = vObj as JsonObject;
+                        if (v?.GetString("name") == "x" && v?.GetString("value") == "42") foundX = true;
+                        if (v?.GetString("name") == "y" && v?.GetString("value") == "7") foundY = true;
+                    }
+                    Assert(foundX, "DAP-D01: x = 42");
+                    Assert(foundY, "DAP-D01: y = 7");
+                }
+
+                session.ExpectResponse("disconnect");
+            }
+            finally
+            {
+                if (File.Exists(scriptPath)) File.Delete(scriptPath);
+            }
+        }
+
+        // ===== Test DAP-D02: Breakpoint in function — 2-frame call stack =====
+        {
+            string scriptPath = Path.Combine(Path.GetTempPath(), "dap_test_d02.ffvm");
+            File.WriteAllText(scriptPath, @"
+func helper(): int {
+    var val: int = 100
+    return val
+}
+
+func main() {
+    var result: int = helper()
+}");
+
+            try
+            {
+                var session = new DapBatchSession();
+                session.AddRequest("initialize", new JsonObject());
+                session.AddLaunch(scriptPath);
+                session.AddRequest("setBreakpoints", MakeSetBreakpointsArgs(scriptPath, 3));
+                session.AddRequest("configurationDone", new JsonObject());
+                session.AddContinue();
+                session.AddStackTrace();
+                session.AddRequest("disconnect", new JsonObject());
+                session.Run();
+
+                session.SkipUntilResponse("configurationDone");
+
+                var stoppedEvent = session.ExpectEvent("stopped");
+                Assert(stoppedEvent != null, "DAP-D02: stopped in helper");
+
+                session.ExpectResponse("continue");
+
+                var stResp = session.ExpectResponse("stackTrace");
+                var frames = stResp?.GetObject("body")?.GetArray("stackFrames");
+                Assert(frames != null && frames.Count == 2, $"DAP-D02: 2 frames, got {frames?.Count}");
+                if (frames?.Count >= 2)
+                {
+                    Assert((frames[0] as JsonObject)?.GetString("name") == "helper", "DAP-D02: frame 0 = helper");
+                    Assert((frames[1] as JsonObject)?.GetString("name") == "main", "DAP-D02: frame 1 = main");
+                    Assert((frames[0] as JsonObject)?.GetInt("line") == 3,
+                        $"DAP-D02: helper line = 3, got {(frames[0] as JsonObject)?.GetInt("line")}");
+                }
+            }
+            finally
+            {
+                if (File.Exists(scriptPath)) File.Delete(scriptPath);
+            }
+        }
+
+        // ===== Test DAP-D03: Struct variable expansion =====
+        {
+            string scriptPath = Path.Combine(Path.GetTempPath(), "dap_test_d03.ffvm");
+            File.WriteAllText(scriptPath, @"
+struct Vec2 {
+    x: int
+    y: int
+}
+
+func main() {
+    var v: Vec2
+    v.x = 10
+    v.y = 20
+    var z: int = v.x
+}");
+
+            try
+            {
+                var session = new DapBatchSession();
+                session.AddRequest("initialize", new JsonObject());
+                session.AddLaunch(scriptPath);
+                session.AddRequest("setBreakpoints", MakeSetBreakpointsArgs(scriptPath, 11));
+                session.AddRequest("configurationDone", new JsonObject());
+                session.AddContinue();
+                session.AddScopes(0);
+                session.AddVariables(1);
+                session.AddVariables(1000); // struct expansion
+                session.AddRequest("disconnect", new JsonObject());
+                session.Run();
+
+                session.SkipUntilResponse("configurationDone");
+
+                var stoppedEvent = session.ExpectEvent("stopped");
+                Assert(stoppedEvent != null, "DAP-D03: stopped event");
+
+                session.ExpectResponse("continue");
+                session.ExpectResponse("scopes");
+
+                var varResp = session.ExpectResponse("variables");
+                var variables = varResp?.GetObject("body")?.GetArray("variables");
+
+                JsonObject structVar = null;
+                int structRef = 0;
+                if (variables != null)
+                {
+                    foreach (var vObj in variables)
+                    {
+                        var v = vObj as JsonObject;
+                        if (v?.GetString("name") == "v" && v?.GetString("type") == "struct")
+                        {
+                            structVar = v;
+                            structRef = v.GetInt("variablesReference");
+                            break;
+                        }
+                    }
+                }
+
+                Assert(structVar != null, "DAP-D03: struct variable 'v' found");
+                Assert(structRef >= 1000, $"DAP-D03: struct variablesReference >= 1000, got {structRef}");
+
+                var fieldResp = session.ExpectResponse("variables");
+                var fields = fieldResp?.GetObject("body")?.GetArray("variables");
+                Assert(fields != null && fields.Count == 2, $"DAP-D03: 2 fields, got {fields?.Count}");
+                if (fields?.Count >= 2)
+                {
+                    Assert((fields[0] as JsonObject)?.GetString("name") == "x"
+                        && (fields[0] as JsonObject)?.GetString("value") == "10", "DAP-D03: v.x = 10");
+                    Assert((fields[1] as JsonObject)?.GetString("name") == "y"
+                        && (fields[1] as JsonObject)?.GetString("value") == "20", "DAP-D03: v.y = 20");
+                }
+            }
+            finally
+            {
+                if (File.Exists(scriptPath)) File.Delete(scriptPath);
+            }
+        }
+
+        // ===== Test DAP-D04: No breakpoints → terminated event =====
+        {
+            string scriptPath = Path.Combine(Path.GetTempPath(), "dap_test_d04.ffvm");
+            File.WriteAllText(scriptPath, "func main() {\n    var x: int = 1\n}\n");
+
+            try
+            {
+                var session = new DapBatchSession();
+                session.AddRequest("initialize", new JsonObject());
+                session.AddLaunch(scriptPath);
+                session.AddRequest("configurationDone", new JsonObject());
+                session.AddContinue();
+                session.AddRequest("disconnect", new JsonObject());
+                session.Run();
+
+                session.SkipUntilResponse("configurationDone");
+
+                var terminatedEvent = session.ExpectEvent("terminated");
+                Assert(terminatedEvent != null, "DAP-D04: terminated event when no breakpoints");
+            }
+            finally
+            {
+                if (File.Exists(scriptPath)) File.Delete(scriptPath);
+            }
+        }
+
+        // ===== Test DAP-D05: Threads returns single thread =====
+        {
+            string scriptPath = Path.Combine(Path.GetTempPath(), "dap_test_d05.ffvm");
+            File.WriteAllText(scriptPath, "func main() {\n    var x: int = 1\n}\n");
+
+            try
+            {
+                var session = new DapBatchSession();
+                session.AddRequest("initialize", new JsonObject());
+                session.AddLaunch(scriptPath);
+                session.AddRequest("threads", new JsonObject());
+                session.AddRequest("disconnect", new JsonObject());
+                session.Run();
+
+                session.SkipUntilResponse("launch");
+                var threadsResp = session.ExpectResponse("threads");
+                Assert(threadsResp?.GetBool("success") == true, "DAP-D05: threads success");
+                var threads = threadsResp?.GetObject("body")?.GetArray("threads");
+                Assert(threads != null && threads.Count == 1, "DAP-D05: single thread");
+                if (threads?.Count > 0)
+                    Assert((threads[0] as JsonObject)?.GetInt("id") == 1, "DAP-D05: threadId = 1");
+            }
+            finally
+            {
+                if (File.Exists(scriptPath)) File.Delete(scriptPath);
+            }
+        }
+
+        // ===== Test DAP-D06: Continue after breakpoint → second continue completes =====
+        {
+            string scriptPath = Path.Combine(Path.GetTempPath(), "dap_test_d06.ffvm");
+            File.WriteAllText(scriptPath, @"
+func main() {
+    var a: int = 10
+    var b: int = 20
+    var c: int = a + b
+    var d: int = c * 2
+}");
+
+            try
+            {
+                var session = new DapBatchSession();
+                session.AddRequest("initialize", new JsonObject());
+                session.AddLaunch(scriptPath);
+                session.AddRequest("setBreakpoints", MakeSetBreakpointsArgs(scriptPath, 5));
+                session.AddRequest("configurationDone", new JsonObject());
+                session.AddContinue();
+                session.AddVariables(1);
+                session.AddContinue(); // second continue → should complete
+                session.AddRequest("disconnect", new JsonObject());
+                session.Run();
+
+                session.SkipUntilResponse("configurationDone");
+
+                var stopped = session.ExpectEvent("stopped");
+                Assert(stopped != null, "DAP-D06: stopped at breakpoint");
+
+                session.ExpectResponse("continue");
+
+                var varResp = session.ExpectResponse("variables");
+                var vars = varResp?.GetObject("body")?.GetArray("variables");
+                bool foundA = false, foundB = false;
+                if (vars != null)
+                {
+                    foreach (var vObj in vars)
+                    {
+                        var v = vObj as JsonObject;
+                        if (v?.GetString("name") == "a" && v?.GetString("value") == "10") foundA = true;
+                        if (v?.GetString("name") == "b" && v?.GetString("value") == "20") foundB = true;
+                    }
+                }
+                Assert(foundA, "DAP-D06: a = 10 at breakpoint");
+                Assert(foundB, "DAP-D06: b = 20 at breakpoint");
+
+                var terminated = session.ExpectEvent("terminated");
+                Assert(terminated != null, "DAP-D06: terminated after second continue");
+            }
+            finally
+            {
+                if (File.Exists(scriptPath)) File.Delete(scriptPath);
+            }
+        }
+
+        // ===== Test DAP-D07: Unknown command → success=false =====
+        {
+            var session = new DapBatchSession();
+            session.AddRequest("initialize", new JsonObject());
+            session.AddRequest("unknownCommand", new JsonObject());
+            session.AddRequest("disconnect", new JsonObject());
+            session.Run();
+
+            session.SkipUntilResponse("initialize");
+            var unkResp = session.ExpectResponse("unknownCommand");
+            Assert(unkResp?.GetBool("success") == false, "DAP-D07: unknown command → success=false");
+        }
+
+        // ================================================================
+        // E. StandaloneRunner Stream Integration Test
+        // ================================================================
+
+        // ===== Test DAP-E01: Full pipeline via ContentLengthStream =====
+        {
+            var inputMs = new MemoryStream();
+            var outputMs = new MemoryStream();
+            int seq = 1;
+            WriteRequest(inputMs, ref seq, "initialize", new JsonObject());
+            WriteRequest(inputMs, ref seq, "disconnect", new JsonObject());
+            inputMs.Position = 0;
+
+            var server = new DapServer(inputMs, outputMs);
+            server.Run();
+
+            outputMs.Position = 0;
+            var msg1 = JsonObject.Parse(ContentLengthStream.ReadMessage(outputMs));
+            var msg2 = JsonObject.Parse(ContentLengthStream.ReadMessage(outputMs));
+
+            Assert(msg1?.GetString("type") == "event" && msg1?.GetString("event") == "initialized",
+                "DAP-E01: initialized event via stream");
+            Assert(msg2?.GetString("type") == "response" && msg2?.GetBool("success") == true,
+                "DAP-E01: initialize response via stream");
+        }
+
+        // ================================================================
+        // Summary
+        // ================================================================
+        Debug.Log($"\n===== DapTests: {passed} passed, {failed} failed =====");
+    }
+
+    // ============================================================
+    // Helpers
+    // ============================================================
+
+    private static JsonObject MakeSetBreakpointsArgs(string scriptPath, params int[] lines)
+    {
+        var args = new JsonObject();
+        var source = new JsonObject();
+        source.Set("path", scriptPath);
+        args.Set("source", source);
+
+        var bpList = new List<object>();
+        foreach (int line in lines)
+        {
+            var bp = new JsonObject();
+            bp.Set("line", line);
+            bpList.Add(bp);
+        }
+        args.Set("breakpoints", bpList);
+        return args;
+    }
+
+    private static void WriteRequest(MemoryStream ms, ref int seq, string command, JsonObject arguments)
+    {
+        var req = new JsonObject();
+        req.Set("seq", seq++);
+        req.Set("type", "request");
+        req.Set("command", command);
+        if (arguments != null)
+            req.Set("arguments", arguments);
+        ContentLengthStream.WriteMessage(ms, req.ToJson());
+    }
+
+    /// <summary>
+    /// Batch-mode DAP test session. All requests are added upfront, server runs once,
+    /// then outputs are consumed in order. Simple, deterministic, no concurrency.
+    /// </summary>
+    private class DapBatchSession
+    {
+        private readonly MemoryStream _inputMs = new MemoryStream();
+        private int _seq = 1;
+        private List<JsonObject> _messages;
+        private int _readIndex;
+
+        public void AddRequest(string command, JsonObject arguments)
+        {
+            var req = new JsonObject();
+            req.Set("seq", _seq++);
+            req.Set("type", "request");
+            req.Set("command", command);
+            if (arguments != null)
+                req.Set("arguments", arguments);
+            ContentLengthStream.WriteMessage(_inputMs, req.ToJson());
+        }
+
+        public void AddLaunch(string scriptPath)
+        {
+            var args = new JsonObject();
+            args.Set("program", scriptPath);
+            AddRequest("launch", args);
+        }
+
+        public void AddContinue()
+        {
+            var args = new JsonObject();
+            args.Set("threadId", 1);
+            AddRequest("continue", args);
+        }
+
+        public void AddStackTrace()
+        {
+            var args = new JsonObject();
+            args.Set("threadId", 1);
+            AddRequest("stackTrace", args);
+        }
+
+        public void AddScopes(int frameId)
+        {
+            var args = new JsonObject();
+            args.Set("frameId", frameId);
+            AddRequest("scopes", args);
+        }
+
+        public void AddVariables(int variablesReference)
+        {
+            var args = new JsonObject();
+            args.Set("variablesReference", variablesReference);
+            AddRequest("variables", args);
+        }
+
+        public void Run()
+        {
+            _inputMs.Position = 0;
+            var outputMs = new MemoryStream();
+            var server = new DapServer(_inputMs, outputMs);
+            server.Run();
+
+            outputMs.Position = 0;
+            _messages = new List<JsonObject>();
+            while (true)
+            {
+                string msg = ContentLengthStream.ReadMessage(outputMs);
+                if (msg == null) break;
+                var parsed = JsonObject.Parse(msg);
+                if (parsed != null) _messages.Add(parsed);
+            }
+            _readIndex = 0;
+        }
+
+        public JsonObject ReadNext()
+        {
+            if (_messages != null && _readIndex < _messages.Count)
+                return _messages[_readIndex++];
+            return null;
+        }
+
+        public JsonObject ExpectResponse(string command)
+        {
+            while (_messages != null && _readIndex < _messages.Count)
+            {
+                var msg = _messages[_readIndex++];
+                if (msg.GetString("type") == "response" && msg.GetString("command") == command)
+                    return msg;
+            }
+            return null;
+        }
+
+        public JsonObject ExpectEvent(string eventName)
+        {
+            while (_messages != null && _readIndex < _messages.Count)
+            {
+                var msg = _messages[_readIndex++];
+                if (msg.GetString("type") == "event" && msg.GetString("event") == eventName)
+                    return msg;
+            }
+            return null;
+        }
+
+        public void SkipUntilResponse(string command)
+        {
+            while (_messages != null && _readIndex < _messages.Count)
+            {
+                var msg = _messages[_readIndex++];
+                if (msg.GetString("type") == "response" && msg.GetString("command") == command)
+                    return;
+            }
+        }
+    }
+}

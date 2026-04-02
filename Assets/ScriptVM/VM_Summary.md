@@ -467,8 +467,10 @@ skill TracerBullet
 | 语法分析 | `Parser`（手写递归下降，source → `ModuleNode` AST，含 using/wait_for/struct 声明/字段访问/错误恢复） | ✅ 完成 |
 | 编译器 | `BytecodeCompiler`（AST → `VMProgram`，寄存器分配：r0-15 scratch / r16-47 locals / r48-63 temps，支持 using 配对 Syscall，支持多函数编译 + CALL emit，支持 struct 编译期拍平 → 连续寄存器槽位映射，F4 寄存器生命周期分析 + 复用，O4 dest-reg hint，O5 常量折叠，O7 Syscall 结果直达，FO5 返回值直达，FO7 调用栈深度静态分析，R7 >50 函数回填 Dictionary 切换，R8 Cleanup 块禁止函数调用） | ✅ 完成 |
 | 调试信息 | `VMProgram.SourceMap`（DBG1：IP→行号平行数组）+ `VMProgram.SymbolTable`（DBG2：变量名→寄存器+struct字段信息） | ✅ 完成 |
-| 运行时调试 | `ScriptDebugger`（DBG3 断点桥接 + DBG5 变量查看适配器 + DBG6 调用栈查看，Gate 0 命令行调试能力） | ✅ 完成 |
-| 测试 | 412 项 Assert 全部通过（112 TreeWalker + 214 Compiler + 17 Performance + 18 SkillScript + 51 Debug），另有 5 项自动化性能基准 | ✅ Phase 2 调试通过 |
+| 运行时调试 | `ScriptDebugger`（DBG3 断点桥接 + DBG5 变量查看适配器 + DBG6 调用栈查看，Gate 0 命令行调试能力，HaltOnBreakpoint + SkipNextCheck DAP 暂停支持） | ✅ 完成 |
+| DAP 适配器 | `DapServer`（DBG7-A：12 消息 DAP 最小协议，stdin/stdout JSON-RPC + ContentLengthStream 分帧 + JsonHelper 手写 JSON），`StandaloneRunner --dap` 模式，Gate 1 自动化验证通过 | ✅ Phase 3A 完成 |
+| VS Code 扩展 | `vscode-ffvm-debug/`（package.json + TextMate grammar + language-configuration.json + launch.json 模板） | ✅ 完成 |
+| 测试 | 470 项 Assert 全部通过（112 TreeWalker + 214 Compiler + 17 Performance + 18 SkillScript + 51 Debug + 58 DAP），另有 5 项自动化性能基准 | ✅ Phase 3A DAP 通过 |
 | 性能基准 | `BenchmarkRunner`（5 组 VM vs C# 对比基准）+ `run-benchmarks.cmd` 自动化管线 → `benchmark_results.md` | ✅ 完成 |
 
 ### 5.2 未完成（按优先级排列）
@@ -698,11 +700,15 @@ skill TracerBullet
   └────────────────────────────────────────────────────────┘
       ↓
   ┌────────────────────────────────────────────────────────┐
-  │  脚本调试 · Phase 3A（DAP 最小协议）          ⏳      │
+  │  脚本调试 · Phase 3A（DAP 最小协议）          ✅      │
   │    DBG7-A. DAP Server 核心（stdin/stdout JSON-RPC）   │
-  │    VS Code 极简扩展（~60 行 JSON，无 TypeScript）     │
-  │    独立程序集 FFVM.Debug，#if FFVM_SCRIPT_DEBUG       │
-  │  Gate 1 验收：VS Code 断点命中 + 变量显示             │
+  │    ContentLengthStream + JsonHelper + DapServer       │
+  │    12 消息 handler + HaltOnBreakpoint + SkipNextCheck │
+  │    VS Code 极简扩展（package.json + TextMate grammar）│
+  │    StandaloneRunner --dap 模式                        │
+  │  Gate 1 验收：58 项 DAP 自动化测试通过                │
+  │  470 项 Assert × 2 模式（float + Fix64）              │
+  │  详见 → [Step_Debug_Phase3A_DAP.md](Plan/Step_Debug_Phase3A_DAP.md) │
   └────────────────────────────────────────────────────────┘
       ↓
   ┌────────────────────────────────────────────────────────┐
@@ -948,7 +954,7 @@ skill TracerBullet
 | 函数调用相关 | FF1-FF5 | 5 |
 | 结构体相关 | S4, SN1, SN2 | 3 |
 | 全局 / 跨步骤 | H1, BB1, PR1, FIX1, DM1 | 5 |
-| 脚本调试（真实宿主断点 + DAP） | DBG1-DBG7 | 7 | DBG1-DBG3,DBG5-DBG6 ✅，DBG4/DBG7 待 Phase 3 |
+| 脚本调试（真实宿主断点 + DAP） | DBG1-DBG7 | 7 | DBG1-DBG3,DBG5-DBG6 ✅，DBG7-A ✅ (Phase 3A)，DBG4/DBG7-B 待 Phase 3B |
 | 语言服务（LSP） | LSP1-LSP5 | 5 |
 
 ### 优化展望（22 项 = 自然 7 + 调整型 15）

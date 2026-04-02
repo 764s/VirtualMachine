@@ -48,6 +48,18 @@ namespace FFVM
         /// <summary>Tracks last hit line per-tick to avoid duplicate triggers on same line.</summary>
         private int _lastHitLine = -1;
 
+        /// <summary>
+        /// When true, the VM yields after hitting a breakpoint (for DAP mode).
+        /// When false (default), breakpoints fire callbacks but don't halt execution (Phase 2 mode).
+        /// </summary>
+        public bool HaltOnBreakpoint { get; set; }
+
+        /// <summary>
+        /// When true, skip the next breakpoint check once (used to resume past a hit breakpoint).
+        /// Automatically resets to false after one check.
+        /// </summary>
+        public bool SkipNextCheck { get; set; }
+
         // --- Breakpoint management ---
 
         public void AddBreakpoint(int line) => _breakpointLines.Add(line);
@@ -72,6 +84,12 @@ namespace FFVM
         {
             if (sourceMap == null || _breakpointLines.Count == 0)
                 return false;
+
+            if (SkipNextCheck)
+            {
+                SkipNextCheck = false;
+                return false;
+            }
 
             if (ip < 0 || ip >= sourceMap.Length)
                 return false;
