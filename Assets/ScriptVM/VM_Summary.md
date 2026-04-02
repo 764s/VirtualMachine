@@ -18,6 +18,7 @@ Assets/ScriptVM/
     TracerBullet_Checklist.md        曳光弹检查清单
     Step7_Using_PairedSyscall_Checklist.md   步骤 7 检查清单
     Step8_FunctionCall.md            步骤 8 完整文档（设计 + 实施 + 展望 + 风险）
+    Step9_StructFlatten.md           步骤 9 检查清单（结构体编译期拍平）
   Archive/                   ← 归档：早期讨论稿（已被本文压缩替代）
     VMScript.md ~ VMScript4.md   初期需求与设计讨论
 ```
