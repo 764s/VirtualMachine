@@ -20,6 +20,7 @@ Assets/ScriptVM/
     Step8_FunctionCall.md            步骤 8 完整文档（设计 + 实施 + 展望 + 风险）
     Step9_StructFlatten.md           步骤 9 检查清单（结构体编译期拍平）
     Step10_Pre_CompilerSemanticChecks.md  步骤 10 前置（C4+G6 编译器语义检查）
+    Step_F4_RegisterLifecycle.md     F4 寄存器生命周期 + 自然优化 + 调试 Phase 1 + 风险理想方案
     Step_Debug_Decisions.md          脚本调试决策文档（全部决策理由 + 方案对比）
     Outlook_And_Risks.md             功能展望 + 优化展望 + 风险点 + 扩展串行计划
   Archive/                   ← 归档：早期讨论稿（已被本文压缩替代）
@@ -621,6 +622,7 @@ skill TracerBullet
   ─── 优化 ＋ 功能补全 ＋ 脚本调试 ── 插入区间 ───────────
       ↓
   F4 + 自然优化 + 调试 Phase 1 + 风险理想方案            ⏳
+      详见 → [Step_F4_RegisterLifecycle.md](Plan/Step_F4_RegisterLifecycle.md)
       确定执行：
         F4. 编译器寄存器生命周期分析 + 跨 await 变量提升
       自然优化（随 F4 实施，零额外排期，7 项）：
