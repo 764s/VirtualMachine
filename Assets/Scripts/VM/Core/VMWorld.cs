@@ -120,6 +120,15 @@ namespace FFVM
             }
         }
 
+        /// <summary>
+        /// Resolve a logical register index to a physical register index.
+        /// r0-r15 (scratch zone) are absolute; r16+ are offset by RegisterBase.
+        /// </summary>
+        private static int Reg(int r, int regBase)
+        {
+            return r < 16 ? r : r + regBase;
+        }
+
         private void ExecuteInstance(ref VMInstanceState inst)
         {
             VMProgram program = Modules.Get(inst.ModuleSlot);
@@ -142,6 +151,7 @@ namespace FFVM
                 }
 
                 ref Instruction op = ref code[inst.IP];
+                int rb = inst.RegisterBase;
                 steps++;
 
                 switch (op.Code)
@@ -151,7 +161,7 @@ namespace FFVM
                         break;
 
                     case OpCode.LOAD_CONST:
-                        inst.Registers.Set(op.A, consts[op.B]);
+                        inst.Registers.Set(Reg(op.A, rb), consts[op.B]);
                         inst.IP++;
                         break;
 
@@ -167,7 +177,7 @@ namespace FFVM
                         return; // Yield to next tick
 
                     case OpCode.WAIT_FOR:
-                        inst.WaitTargetInstanceId = inst.Registers.Get(op.A).ToInt();
+                        inst.WaitTargetInstanceId = inst.Registers.Get(Reg(op.A, rb)).ToInt();
                         inst.IP++;
                         return; // Yield to next tick — Tick() checks WaitTargetInstanceId
 
@@ -225,7 +235,7 @@ namespace FFVM
                     // --- Phase 2: Data Movement ---
 
                     case OpCode.MOVE:
-                        inst.Registers.Set(op.A, inst.Registers.Get(op.B));
+                        inst.Registers.Set(Reg(op.A, rb), inst.Registers.Get(Reg(op.B, rb)));
                         inst.IP++;
                         break;
 
@@ -236,14 +246,14 @@ namespace FFVM
                         break;
 
                     case OpCode.JUMP_IF_ZERO:
-                        if (inst.Registers.Get(op.B) == Number.Zero)
+                        if (inst.Registers.Get(Reg(op.B, rb)) == Number.Zero)
                             inst.IP = op.A;
                         else
                             inst.IP++;
                         break;
 
                     case OpCode.JUMP_IF_NOT_ZERO:
-                        if (inst.Registers.Get(op.B) != Number.Zero)
+                        if (inst.Registers.Get(Reg(op.B, rb)) != Number.Zero)
                             inst.IP = op.A;
                         else
                             inst.IP++;
@@ -252,85 +262,85 @@ namespace FFVM
                     // --- Phase 2: Arithmetic ---
 
                     case OpCode.ADD:
-                        inst.Registers.Set(op.A, inst.Registers.Get(op.B) + inst.Registers.Get(op.C));
+                        inst.Registers.Set(Reg(op.A, rb), inst.Registers.Get(Reg(op.B, rb)) + inst.Registers.Get(Reg(op.C, rb)));
                         inst.IP++;
                         break;
 
                     case OpCode.SUB:
-                        inst.Registers.Set(op.A, inst.Registers.Get(op.B) - inst.Registers.Get(op.C));
+                        inst.Registers.Set(Reg(op.A, rb), inst.Registers.Get(Reg(op.B, rb)) - inst.Registers.Get(Reg(op.C, rb)));
                         inst.IP++;
                         break;
 
                     case OpCode.MUL:
-                        inst.Registers.Set(op.A, inst.Registers.Get(op.B) * inst.Registers.Get(op.C));
+                        inst.Registers.Set(Reg(op.A, rb), inst.Registers.Get(Reg(op.B, rb)) * inst.Registers.Get(Reg(op.C, rb)));
                         inst.IP++;
                         break;
 
                     case OpCode.DIV:
-                        inst.Registers.Set(op.A, inst.Registers.Get(op.B) / inst.Registers.Get(op.C));
+                        inst.Registers.Set(Reg(op.A, rb), inst.Registers.Get(Reg(op.B, rb)) / inst.Registers.Get(Reg(op.C, rb)));
                         inst.IP++;
                         break;
 
                     case OpCode.MOD:
-                        inst.Registers.Set(op.A, inst.Registers.Get(op.B) % inst.Registers.Get(op.C));
+                        inst.Registers.Set(Reg(op.A, rb), inst.Registers.Get(Reg(op.B, rb)) % inst.Registers.Get(Reg(op.C, rb)));
                         inst.IP++;
                         break;
 
                     // --- Phase 2: Comparison ---
 
                     case OpCode.CMP_EQ:
-                        inst.Registers.Set(op.A, inst.Registers.Get(op.B) == inst.Registers.Get(op.C) ? Number.One : Number.Zero);
+                        inst.Registers.Set(Reg(op.A, rb), inst.Registers.Get(Reg(op.B, rb)) == inst.Registers.Get(Reg(op.C, rb)) ? Number.One : Number.Zero);
                         inst.IP++;
                         break;
 
                     case OpCode.CMP_NEQ:
-                        inst.Registers.Set(op.A, inst.Registers.Get(op.B) != inst.Registers.Get(op.C) ? Number.One : Number.Zero);
+                        inst.Registers.Set(Reg(op.A, rb), inst.Registers.Get(Reg(op.B, rb)) != inst.Registers.Get(Reg(op.C, rb)) ? Number.One : Number.Zero);
                         inst.IP++;
                         break;
 
                     case OpCode.CMP_LT:
-                        inst.Registers.Set(op.A, inst.Registers.Get(op.B) < inst.Registers.Get(op.C) ? Number.One : Number.Zero);
+                        inst.Registers.Set(Reg(op.A, rb), inst.Registers.Get(Reg(op.B, rb)) < inst.Registers.Get(Reg(op.C, rb)) ? Number.One : Number.Zero);
                         inst.IP++;
                         break;
 
                     case OpCode.CMP_LTE:
-                        inst.Registers.Set(op.A, inst.Registers.Get(op.B) <= inst.Registers.Get(op.C) ? Number.One : Number.Zero);
+                        inst.Registers.Set(Reg(op.A, rb), inst.Registers.Get(Reg(op.B, rb)) <= inst.Registers.Get(Reg(op.C, rb)) ? Number.One : Number.Zero);
                         inst.IP++;
                         break;
 
                     case OpCode.CMP_GT:
-                        inst.Registers.Set(op.A, inst.Registers.Get(op.B) > inst.Registers.Get(op.C) ? Number.One : Number.Zero);
+                        inst.Registers.Set(Reg(op.A, rb), inst.Registers.Get(Reg(op.B, rb)) > inst.Registers.Get(Reg(op.C, rb)) ? Number.One : Number.Zero);
                         inst.IP++;
                         break;
 
                     case OpCode.CMP_GTE:
-                        inst.Registers.Set(op.A, inst.Registers.Get(op.B) >= inst.Registers.Get(op.C) ? Number.One : Number.Zero);
+                        inst.Registers.Set(Reg(op.A, rb), inst.Registers.Get(Reg(op.B, rb)) >= inst.Registers.Get(Reg(op.C, rb)) ? Number.One : Number.Zero);
                         inst.IP++;
                         break;
 
                     // --- Phase 2: Boolean / Unary ---
 
                     case OpCode.AND:
-                        inst.Registers.Set(op.A,
-                            (inst.Registers.Get(op.B) != Number.Zero && inst.Registers.Get(op.C) != Number.Zero)
+                        inst.Registers.Set(Reg(op.A, rb),
+                            (inst.Registers.Get(Reg(op.B, rb)) != Number.Zero && inst.Registers.Get(Reg(op.C, rb)) != Number.Zero)
                                 ? Number.One : Number.Zero);
                         inst.IP++;
                         break;
 
                     case OpCode.OR:
-                        inst.Registers.Set(op.A,
-                            (inst.Registers.Get(op.B) != Number.Zero || inst.Registers.Get(op.C) != Number.Zero)
+                        inst.Registers.Set(Reg(op.A, rb),
+                            (inst.Registers.Get(Reg(op.B, rb)) != Number.Zero || inst.Registers.Get(Reg(op.C, rb)) != Number.Zero)
                                 ? Number.One : Number.Zero);
                         inst.IP++;
                         break;
 
                     case OpCode.NOT:
-                        inst.Registers.Set(op.A, inst.Registers.Get(op.B) == Number.Zero ? Number.One : Number.Zero);
+                        inst.Registers.Set(Reg(op.A, rb), inst.Registers.Get(Reg(op.B, rb)) == Number.Zero ? Number.One : Number.Zero);
                         inst.IP++;
                         break;
 
                     case OpCode.NEG:
-                        inst.Registers.Set(op.A, -inst.Registers.Get(op.B));
+                        inst.Registers.Set(Reg(op.A, rb), -inst.Registers.Get(Reg(op.B, rb)));
                         inst.IP++;
                         break;
 

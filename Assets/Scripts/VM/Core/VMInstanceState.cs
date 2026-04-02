@@ -63,6 +63,9 @@ namespace FFVM
 
         /// <summary>Base register index for the caller's register window.</summary>
         public int RegisterBase;
+
+        /// <summary>Caller's CleanupDepth at time of CALL (scopes function-level cleanup walk).</summary>
+        public int CleanupBase;
     }
 
     /// <summary>
