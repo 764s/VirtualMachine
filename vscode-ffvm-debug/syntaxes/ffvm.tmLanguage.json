@@ -1,10 +1,9 @@
 {
     "name": "FFVM Script",
     "scopeName": "source.ffvm",
-    "fileTypes": ["ffvm"],
+    "fileTypes": ["ffvm", "vm"],
     "patterns": [
         { "include": "#comments" },
-        { "include": "#strings" },
         { "include": "#keywords" },
         { "include": "#types" },
         { "include": "#numbers" },
@@ -20,26 +19,11 @@
                 }
             ]
         },
-        "strings": {
-            "patterns": [
-                {
-                    "name": "string.quoted.double.ffvm",
-                    "begin": "\"",
-                    "end": "\"",
-                    "patterns": [
-                        {
-                            "name": "constant.character.escape.ffvm",
-                            "match": "\\\\."
-                        }
-                    ]
-                }
-            ]
-        },
         "keywords": {
             "patterns": [
                 {
                     "name": "keyword.control.ffvm",
-                    "match": "\\b(if|else|while|for|return|yield|wait|wait_for|defer|using|break|continue)\\b"
+                    "match": "\\b(if|else|while|for|return|yield|wait_for|wait|defer|using)\\b"
                 },
                 {
                     "name": "keyword.declaration.ffvm",
@@ -55,15 +39,19 @@
             "patterns": [
                 {
                     "name": "support.type.ffvm",
-                    "match": "\\b(int|bool|void)\\b"
+                    "match": "\\b(int|float|bool|void)\\b"
                 }
             ]
         },
         "numbers": {
             "patterns": [
                 {
-                    "name": "constant.numeric.ffvm",
-                    "match": "\\b[0-9]+(\\.[0-9]+)?\\b"
+                    "name": "constant.numeric.float.ffvm",
+                    "match": "\\b[0-9]+\\.[0-9]+\\b"
+                },
+                {
+                    "name": "constant.numeric.integer.ffvm",
+                    "match": "\\b[0-9]+\\b"
                 }
             ]
         },

@@ -50,7 +50,7 @@
             {
                 "id": "ffvm",
                 "aliases": ["FFVM Script", "ffvm"],
-                "extensions": [".ffvm"],
+                "extensions": [".ffvm", ".vm"],
                 "configuration": "./language-configuration.json"
             }
         ],
