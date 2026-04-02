@@ -50,6 +50,7 @@ namespace FFVM
 
         // --- Phase 3: function calls ---
         CALL         = 60,  // A=targetEntryIP, B=callerWindowSize → push CallFrame + jump
+        RET_FUNC     = 61,  // pop CallFrame, restore IP + RegisterBase
     }
 
     /// <summary>

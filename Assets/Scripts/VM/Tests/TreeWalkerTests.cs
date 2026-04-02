@@ -1466,6 +1466,202 @@ public static class TreeWalkerTests
             Assert(overflow == -1, "T4 pool: 129th allocation returns -1 (pool full)");
         }
 
+        // ===== Test F01: CALL + RET_FUNC basic (hand-written bytecode) =====
+        // Simulate: entry calls func at IP=5 which sets r16=42, then returns
+        //   IP 0: LOAD_CONST r16, 100          (caller local)
+        //   IP 1: CALL target=4, windowSize=16  (caller window = 16)
+        //   IP 2: MOVE r17, r0                  (save return value)
+        //   IP 3: RETURN
+        //   IP 4: LOAD_CONST r16, 42            (callee local — physically r32 due to window)
+        //   IP 5: MOVE r0, r16                  (return value in r0)
+        //   IP 6: RET_FUNC
+        {
+            var prog = new VMProgram(
+                new Instruction[]
+                {
+                    new Instruction(OpCode.LOAD_CONST, 16, 0),         // IP 0: r16 = 100
+                    new Instruction(OpCode.CALL, 4, 16),               // IP 1: CALL entry=4, winSize=16
+                    new Instruction(OpCode.MOVE, 17, 0),               // IP 2: r17 = r0 (return value)
+                    new Instruction(OpCode.RETURN),                    // IP 3: RETURN
+                    new Instruction(OpCode.LOAD_CONST, 16, 1),         // IP 4: callee r16 = 42
+                    new Instruction(OpCode.MOVE, 0, 16),               // IP 5: r0 = callee r16
+                    new Instruction(OpCode.RET_FUNC),                  // IP 6: RET_FUNC
+                },
+                new Number[] { Number.FromInt(100), Number.FromInt(42) },
+                48 // need physical registers up to r32
+            );
+
+            var world = new VMWorld();
+            world.Modules.Load(0, prog);
+            int id = world.SpawnInstance(0, 0);
+            world.Tick();
+
+            // Caller's r16 (phys r16) should still be 100 (not clobbered by callee)
+            Assert(world.Pool.Instances[id].Registers.Get(16) == Number.FromInt(100),
+                "F01: caller r16 = 100 (not clobbered)");
+            // r0 should hold return value 42
+            Assert(world.Pool.Instances[id].Registers.Get(0) == Number.FromInt(42),
+                "F01: r0 = 42 (return value from callee)");
+            // r17 should hold the saved return value = 42
+            Assert(world.Pool.Instances[id].Registers.Get(17) == Number.FromInt(42),
+                "F01: r17 = 42 (saved return value)");
+            Assert((world.Pool.Instances[id].StateFlags & VMStateFlags.Completed) != 0,
+                "F01: Completed");
+            Assert(world.Pool.Instances[id].CallStackDepth == 0,
+                "F01: CallStackDepth back to 0");
+        }
+
+        // ===== Test F02: CALL chain — a() calls b() =====
+        // entry → func_a → func_b → return 42, func_a returns it +1 = 43
+        //   IP 0: CALL target=3, winSize=16    (call func_a)
+        //   IP 1: MOVE r16, r0                 (save result)
+        //   IP 2: RETURN
+        //   IP 3: CALL target=7, winSize=16    (func_a calls func_b)
+        //   IP 4: MOVE r16, r0                 (func_a saves b's return)
+        //   IP 5: ADD r0, r16, r17             (return b() + 1) — r17 loaded with 1
+        //   IP 6: RET_FUNC
+        //   IP 7: LOAD_CONST r16, 42           (func_b returns 42)
+        //   IP 8: MOVE r0, r16
+        //   IP 9: RET_FUNC
+        {
+            var prog = new VMProgram(
+                new Instruction[]
+                {
+                    // entry
+                    new Instruction(OpCode.CALL, 3, 16),               // IP 0: call func_a
+                    new Instruction(OpCode.MOVE, 16, 0),               // IP 1: r16 = return from a
+                    new Instruction(OpCode.RETURN),                    // IP 2
+                    // func_a (window base offset = 16 from entry)
+                    new Instruction(OpCode.CALL, 8, 16),               // IP 3: call func_b
+                    new Instruction(OpCode.MOVE, 16, 0),               // IP 4: r16 = return from b
+                    new Instruction(OpCode.LOAD_CONST, 17, 0),         // IP 5: r17 = 1
+                    new Instruction(OpCode.ADD, 0, 16, 17),            // IP 6: r0 = r16 + r17 = 43
+                    new Instruction(OpCode.RET_FUNC),                  // IP 7
+                    // func_b (window base offset = 32 from entry)
+                    new Instruction(OpCode.LOAD_CONST, 16, 1),         // IP 8: r16 = 42
+                    new Instruction(OpCode.MOVE, 0, 16),               // IP 9: r0 = r16
+                    new Instruction(OpCode.RET_FUNC),                  // IP 10
+                },
+                new Number[] { Number.FromInt(1), Number.FromInt(42) },
+                64 // need registers up to physical r48
+            );
+
+            var world = new VMWorld();
+            world.Modules.Load(0, prog);
+            int id = world.SpawnInstance(0, 0);
+            world.Tick();
+
+            // entry's r16 should hold result from func_a = 43
+            Assert(world.Pool.Instances[id].Registers.Get(16) == Number.FromInt(43),
+                "F02: entry r16 = 43 (a returned b()+1)");
+            Assert(world.Pool.Instances[id].Registers.Get(0) == Number.FromInt(43),
+                "F02: r0 = 43 (final return value)");
+            Assert((world.Pool.Instances[id].StateFlags & VMStateFlags.Completed) != 0,
+                "F02: Completed");
+            Assert(world.Pool.Instances[id].CallStackDepth == 0,
+                "F02: CallStackDepth back to 0");
+        }
+
+        // ===== Test F03: StackOverflow protection =====
+        // Self-recursive function: CALL self forever → should trigger StackOverflow at depth 16
+        //   IP 0: CALL target=0, winSize=2      (infinite recursion with tiny window)
+        //   IP 1: RETURN                         (never reached)
+        {
+            var prog = new VMProgram(
+                new Instruction[]
+                {
+                    new Instruction(OpCode.CALL, 0, 2),   // IP 0: call self
+                    new Instruction(OpCode.RETURN),         // IP 1: never reached
+                },
+                new Number[0],
+                64
+            );
+
+            var world = new VMWorld();
+            world.Modules.Load(0, prog);
+            int id = world.SpawnInstance(0, 0);
+            world.Tick();
+
+            Assert(world.Pool.Instances[id].ErrorFlag == VMError.PanicStackOverflow,
+                "F03: StackOverflow triggered");
+            Assert(world.Pool.Instances[id].CallStackDepth == VMConstants.MaxCallDepth,
+                $"F03: depth = {world.Pool.Instances[id].CallStackDepth} (== MaxCallDepth={VMConstants.MaxCallDepth})");
+        }
+
+        // ===== Test F04: CALL with parameter passing via scratch zone =====
+        // entry loads args into r0,r1, calls add(a,b) which returns a+b
+        //   IP 0: LOAD_CONST r0, 10     (arg a)
+        //   IP 1: LOAD_CONST r1, 20     (arg b)
+        //   IP 2: CALL target=5, winSize=16
+        //   IP 3: MOVE r16, r0          (save result 30)
+        //   IP 4: RETURN
+        //   IP 5: ADD r0, r0, r1        (callee: r0 = r0 + r1, scratch is shared)
+        //   IP 6: RET_FUNC
+        {
+            var prog = new VMProgram(
+                new Instruction[]
+                {
+                    new Instruction(OpCode.LOAD_CONST, 0, 0),    // IP 0: r0 = 10
+                    new Instruction(OpCode.LOAD_CONST, 1, 1),    // IP 1: r1 = 20
+                    new Instruction(OpCode.CALL, 5, 16),          // IP 2: call add
+                    new Instruction(OpCode.MOVE, 16, 0),          // IP 3: r16 = r0 (result)
+                    new Instruction(OpCode.RETURN),               // IP 4
+                    new Instruction(OpCode.ADD, 0, 0, 1),         // IP 5: r0 = r0 + r1
+                    new Instruction(OpCode.RET_FUNC),             // IP 6
+                },
+                new Number[] { Number.FromInt(10), Number.FromInt(20) },
+                32
+            );
+
+            var world = new VMWorld();
+            world.Modules.Load(0, prog);
+            int id = world.SpawnInstance(0, 0);
+            world.Tick();
+
+            Assert(world.Pool.Instances[id].Registers.Get(16) == Number.FromInt(30),
+                "F04: add(10,20) = 30 via scratch zone");
+            Assert((world.Pool.Instances[id].StateFlags & VMStateFlags.Completed) != 0,
+                "F04: Completed");
+        }
+
+        // ===== Test F05: GC zero-allocation for CALL/RET_FUNC =====
+        {
+            var prog = new VMProgram(
+                new Instruction[]
+                {
+                    new Instruction(OpCode.LOAD_CONST, 0, 0),     // r0 = 5
+                    new Instruction(OpCode.CALL, 4, 16),           // call func
+                    new Instruction(OpCode.MOVE, 16, 0),
+                    new Instruction(OpCode.RETURN),
+                    new Instruction(OpCode.ADD, 0, 0, 0),          // r0 = r0 + r0 = 10
+                    new Instruction(OpCode.RET_FUNC),
+                },
+                new Number[] { Number.FromInt(5) },
+                32
+            );
+
+            var world = new VMWorld();
+            world.Modules.Load(0, prog);
+            int id = world.SpawnInstance(0, 0);
+
+            // Warm up first
+            world.Tick();
+            world.DestroyInstance(id);
+
+            // Measure GC
+            long before = System.GC.GetAllocatedBytesForCurrentThread();
+            for (int trial = 0; trial < 100; trial++)
+            {
+                id = world.SpawnInstance(0, 0);
+                world.Tick();
+                world.DestroyInstance(id);
+            }
+            long after = System.GC.GetAllocatedBytesForCurrentThread();
+            long gcBytes = after - before;
+
+            Assert(gcBytes == 0, $"F05: CALL/RET_FUNC 0 GC ({gcBytes} bytes)");
+        }
+
         // ===== Summary =====
         Debug.Log($"========================================");
         Debug.Log($"TreeWalker Tests: {passed} passed, {failed} failed");

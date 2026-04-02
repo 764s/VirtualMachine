@@ -344,6 +344,38 @@ namespace FFVM
                         inst.IP++;
                         break;
 
+                    // --- Phase 3: Function Calls ---
+
+                    case OpCode.CALL:
+                    {
+                        if (inst.CallStackDepth >= VMConstants.MaxCallDepth)
+                        {
+                            inst.ErrorFlag = VMError.PanicStackOverflow;
+                            return;
+                        }
+                        var frame = new CallFrame
+                        {
+                            ReturnIP = inst.IP + 1,
+                            ReturnModuleSlot = inst.ModuleSlot,
+                            RegisterBase = inst.RegisterBase,
+                            CleanupBase = inst.CleanupDepth
+                        };
+                        inst.CallStack.Set(inst.CallStackDepth, frame);
+                        inst.CallStackDepth++;
+                        inst.RegisterBase += op.B; // B = callerWindowSize
+                        inst.IP = op.A;            // A = target function entry IP
+                        break;                     // don't IP++ — already jumped
+                    }
+
+                    case OpCode.RET_FUNC:
+                    {
+                        inst.CallStackDepth--;
+                        var frame = inst.CallStack.Get(inst.CallStackDepth);
+                        inst.IP = frame.ReturnIP;
+                        inst.RegisterBase = frame.RegisterBase;
+                        break;                     // don't IP++ — ReturnIP is already CALL+1
+                    }
+
                     default:
                         inst.ErrorFlag = VMError.PanicIllegalInstruction;
                         return;
