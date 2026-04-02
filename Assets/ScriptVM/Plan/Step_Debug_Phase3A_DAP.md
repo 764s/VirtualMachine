@@ -154,7 +154,8 @@
   - 发送 `initialized` event
 - [ ] **D2**. `launch` handler
   - 读取 `program` 参数 → 编译脚本 → 创建 VMWorld + Spawn 实例
-  - 存储 VMProgram / VMWorld 引用供后续 handler 使用
+  - VMProgram / VMWorld 作为 DapServer 实例字段存储（单会话生命周期）
+  - disconnect 时置 null，无并发访问（单线程状态机模型，见 D6 说明）
 - [ ] **D3**. `setBreakpoints` handler
   - 读取 source + breakpoints[] → 更新 ScriptDebugger.BreakpointLines
   - 返回验证后的断点列表（verified=true，行号映射到 SourceMap 中实际有效行）
@@ -164,9 +165,13 @@
   - 返回单线程（threadId=1, name="FFVM Main Thread"）
   - FFVM 是单线程 VM，DAP 线程模型映射为单一线程
 - [ ] **D6**. `continue` handler
-  - 调用 VMWorld.Tick() 循环执行直到断点命中或脚本结束
-  - 断点命中 → 发送 `stopped` event（reason="breakpoint"）
-  - 脚本结束 → 发送 `terminated` event
+  - **单线程状态机模型**（非多线程）：DapServer.Run() 主循环为顶层状态机
+  - 收到 continue 请求 → 进入"执行态"：循环调用 VMWorld.Tick()
+  - ScriptDebugger.OnBreakpointHit 回调中设置 `_hitBreakpoint = true` 标志
+  - 每次 Tick() 后检查标志：命中 → 退出 Tick 循环，回到消息读取循环
+  - 脚本结束（所有实例 Finished）→ 发送 `terminated` event，回到消息循环
+  - 无死锁风险：执行态与消息态交替，不存在并发线程
+  - 安全保护：最大 Tick 数上限（如 100000），超出视为超时 → 发送 terminated
 - [ ] **D7**. `stackTrace` handler
   - 调用 ScriptDebugger.GetCallStack() → 转换为 DAP StackFrame[]
   - 每帧包含：id, name, source(path), line, column
@@ -232,7 +237,7 @@
 | JSON 手写序列化可能有边界 case | DAP 消息解析错误 | 使用 System.Text.Json（.NET 内置）或充分测试手写实现 |
 | stdin/stdout 在 VS Code 启动进程时可能有缓冲问题 | 连接失败 | Console.OpenStandardInput/Output + Flush 每条响应 |
 | FFVM 单线程模型与 DAP 多线程假设不匹配 | VS Code 显示异常 | threads 返回单一线程，所有操作绑定 threadId=1 |
-| ScriptDebugger.OnBreakpointHit 当前为回调模式，DAP 需要阻塞等待 | 断点后无法查询状态 | continue handler 内循环 Tick → 断点命中时暂停循环，进入消息等待 |
+| ScriptDebugger.OnBreakpointHit 当前为回调模式，DAP 需要阻塞等待 | 断点后无法查询状态 | **单线程状态机**：continue handler 内循环 Tick → 回调设标志 → 检查标志退出循环 → 回到消息读取。无线程阻塞，无死锁风险 |
 | VS Code 扩展需要最低 package.json 结构 | 扩展加载失败 | 参考 mock-debug 示例，保持最小配置 |
 
 ---
