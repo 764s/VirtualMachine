@@ -116,6 +116,15 @@ namespace FFVM.Debug
                     case "continue":
                         responseBody = HandleContinue(arguments);
                         break;
+                    case "next":
+                        responseBody = HandleNext(arguments);
+                        break;
+                    case "stepIn":
+                        responseBody = HandleStepIn(arguments);
+                        break;
+                    case "stepOut":
+                        responseBody = HandleStepOut(arguments);
+                        break;
                     case "stackTrace":
                         responseBody = HandleStackTrace(arguments);
                         break;
@@ -270,12 +279,71 @@ namespace FFVM.Debug
             if (_world == null || _instanceId < 0)
                 throw new InvalidOperationException("continue: no active session");
 
-            _hitBreakpoint = false;
-
-            // If resuming from a breakpoint, skip the first breakpoint check
-            // to avoid re-triggering the same breakpoint at the current IP.
-            if (_debugger != null)
+            // Only skip the first breakpoint check when resuming from a breakpoint hit.
+            // On initial continue (after launch), do not skip — we want to catch breakpoints
+            // even at the very first instruction (IP=0).
+            if (_debugger != null && _hitBreakpoint)
                 _debugger.SkipNextCheck = true;
+
+            return RunUntilBreakpoint("breakpoint");
+        }
+
+        private JsonObject HandleNext(JsonObject arguments)
+        {
+            if (_world == null || _instanceId < 0 || _program == null || _debugger == null)
+                throw new InvalidOperationException("next: no active session");
+
+            ref VMInstanceState inst = ref _world.Pool.Instances[_instanceId];
+            int targetIP = ScriptDebugger.FindNextLineIP(_program, inst.IP);
+
+            _debugger.SkipNextCheck = true;
+
+            if (targetIP >= 0)
+                _debugger.SetTempBreakpoint(targetIP);
+
+            return RunUntilBreakpoint("step");
+        }
+
+        private JsonObject HandleStepIn(JsonObject arguments)
+        {
+            if (_world == null || _instanceId < 0 || _program == null || _debugger == null)
+                throw new InvalidOperationException("stepIn: no active session");
+
+            ref VMInstanceState inst = ref _world.Pool.Instances[_instanceId];
+            int targetIP = ScriptDebugger.FindStepIntoIP(_program, inst.IP);
+
+            _debugger.SkipNextCheck = true;
+
+            if (targetIP >= 0)
+                _debugger.SetTempBreakpoint(targetIP);
+
+            return RunUntilBreakpoint("step");
+        }
+
+        private JsonObject HandleStepOut(JsonObject arguments)
+        {
+            if (_world == null || _instanceId < 0 || _debugger == null)
+                throw new InvalidOperationException("stepOut: no active session");
+
+            ref VMInstanceState inst = ref _world.Pool.Instances[_instanceId];
+            int targetIP = ScriptDebugger.FindStepOutIP(ref inst);
+
+            _debugger.SkipNextCheck = true;
+
+            if (targetIP >= 0)
+                _debugger.SetTempBreakpoint(targetIP);
+
+            return RunUntilBreakpoint("step");
+        }
+
+        /// <summary>
+        /// Shared execution loop: tick the VM until a breakpoint is hit, the instance completes, or timeout.
+        /// Used by continue, next, stepIn, and stepOut handlers.
+        /// </summary>
+        /// <param name="stoppedReason">The reason string for the stopped event ("breakpoint" or "step").</param>
+        private JsonObject RunUntilBreakpoint(string stoppedReason)
+        {
+            _hitBreakpoint = false;
 
             // Execute ticks until breakpoint or completion
             for (int t = 0; t < MaxContinueTicks; t++)
@@ -285,6 +353,7 @@ namespace FFVM.Debug
                 // Check if instance has finished
                 if ((inst.StateFlags & VMStateFlags.Completed) != 0 || inst.ErrorFlag != VMError.None)
                 {
+                    _debugger?.ClearTempBreakpoint();
                     SendEvent("terminated", null);
                     return new JsonObject();
                 }
@@ -295,7 +364,7 @@ namespace FFVM.Debug
                 if (_hitBreakpoint)
                 {
                     var stoppedBody = new JsonObject();
-                    stoppedBody.Set("reason", "breakpoint");
+                    stoppedBody.Set("reason", stoppedReason);
                     stoppedBody.Set("threadId", 1);
                     SendEvent("stopped", stoppedBody);
                     return new JsonObject();
@@ -305,12 +374,14 @@ namespace FFVM.Debug
                 inst = ref _world.Pool.Instances[_instanceId];
                 if ((inst.StateFlags & VMStateFlags.Completed) != 0 || inst.ErrorFlag != VMError.None)
                 {
+                    _debugger?.ClearTempBreakpoint();
                     SendEvent("terminated", null);
                     return new JsonObject();
                 }
             }
 
             // Timeout — send terminated
+            _debugger?.ClearTempBreakpoint();
             SendEvent("terminated", null);
             return new JsonObject();
         }

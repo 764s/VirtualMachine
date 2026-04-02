@@ -30,12 +30,20 @@ namespace FFVM
     /// Attach to VMWorld.Debugger to enable. Null = no debugging (zero overhead).
     /// 
     /// Phase 2: command-line debugging (Gate 0). No external dependencies.
-    /// Phase 3: DAP adapter will wrap this class for IDE integration.
+    /// Phase 3A: DAP adapter wraps this class for IDE integration.
+    /// Phase 3B: single-step mapping (next/stepIn/stepOut) via temporary breakpoints.
     /// </summary>
     public class ScriptDebugger
     {
         /// <summary>Set of source line numbers where breakpoints are active.</summary>
         private readonly HashSet<int> _breakpointLines = new HashSet<int>();
+
+        /// <summary>
+        /// Temporary breakpoint IP for single-step operations.
+        /// -1 = no temporary breakpoint. Automatically cleared after one hit.
+        /// Used by Step Over (next), Step Into (stepIn), Step Out (stepOut).
+        /// </summary>
+        private int _tempBreakpointIP = -1;
 
         /// <summary>
         /// Callback when a breakpoint is hit.
@@ -65,7 +73,13 @@ namespace FFVM
         public void AddBreakpoint(int line) => _breakpointLines.Add(line);
         public void RemoveBreakpoint(int line) => _breakpointLines.Remove(line);
         public void ClearBreakpoints() => _breakpointLines.Clear();
-        public bool HasBreakpoints => _breakpointLines.Count > 0;
+        public bool HasBreakpoints => _breakpointLines.Count > 0 || _tempBreakpointIP >= 0;
+
+        /// <summary>Set a temporary breakpoint at a specific IP (single-shot, auto-cleared on hit).</summary>
+        public void SetTempBreakpoint(int ip) => _tempBreakpointIP = ip;
+
+        /// <summary>Clear the temporary breakpoint without triggering.</summary>
+        public void ClearTempBreakpoint() => _tempBreakpointIP = -1;
 
         /// <summary>
         /// Called at the start of each Tick to reset per-tick state.
@@ -79,17 +93,29 @@ namespace FFVM
         /// <summary>
         /// Check if the current IP hits a breakpoint. Called from VMWorld.ExecuteInstance.
         /// Returns true if a breakpoint was triggered (caller may want to yield).
+        /// Checks temporary breakpoint (IP-exact) first, then line breakpoints.
         /// </summary>
         public bool CheckBreakpoint(int instanceId, int ip, int[] sourceMap)
         {
-            if (sourceMap == null || _breakpointLines.Count == 0)
-                return false;
-
             if (SkipNextCheck)
             {
                 SkipNextCheck = false;
                 return false;
             }
+
+            // --- Temporary breakpoint check (IP-exact, single-shot) ---
+            if (_tempBreakpointIP >= 0 && ip == _tempBreakpointIP)
+            {
+                _tempBreakpointIP = -1; // Auto-clear after hit
+                int tempLine = (sourceMap != null && ip >= 0 && ip < sourceMap.Length) ? sourceMap[ip] : 0;
+                _lastHitLine = tempLine;
+                OnBreakpointHit?.Invoke(instanceId, ip, tempLine);
+                return true;
+            }
+
+            // --- Line breakpoint check ---
+            if (sourceMap == null || _breakpointLines.Count == 0)
+                return false;
 
             if (ip < 0 || ip >= sourceMap.Length)
                 return false;
@@ -107,6 +133,71 @@ namespace FFVM
             _lastHitLine = line;
             OnBreakpointHit?.Invoke(instanceId, ip, line);
             return true;
+        }
+
+        // --- DBG4: Single-Step Mapping ---
+
+        /// <summary>
+        /// Step Over: find the IP of the next source line after currentIP.
+        /// Scans SourceMap from currentIP+1 for the first IP with a different (non-zero) line number.
+        /// Returns -1 if no next line found (end of function/program).
+        /// </summary>
+        public static int FindNextLineIP(VMProgram program, int currentIP)
+        {
+            if (program.SourceMap == null || currentIP < 0 || currentIP >= program.SourceMap.Length)
+                return -1;
+
+            int currentLine = program.SourceMap[currentIP];
+
+            for (int ip = currentIP + 1; ip < program.SourceMap.Length; ip++)
+            {
+                int line = program.SourceMap[ip];
+                if (line > 0 && line != currentLine)
+                    return ip;
+            }
+
+            return -1; // No next line found
+        }
+
+        /// <summary>
+        /// Step Into: scan instructions on the current line for a CALL instruction.
+        /// If found, return the CALL target IP. Otherwise, fall back to Step Over.
+        /// SYSCALL is not steppable (host code, not script).
+        /// </summary>
+        public static int FindStepIntoIP(VMProgram program, int currentIP)
+        {
+            if (program.Instructions == null || program.SourceMap == null ||
+                currentIP < 0 || currentIP >= program.Instructions.Length)
+                return FindNextLineIP(program, currentIP);
+
+            int currentLine = program.SourceMap[currentIP];
+
+            // Scan forward within the same source line to find a CALL instruction
+            for (int ip = currentIP; ip < program.Instructions.Length; ip++)
+            {
+                int line = (ip < program.SourceMap.Length) ? program.SourceMap[ip] : 0;
+                if (line > 0 && line != currentLine)
+                    break; // Past current line, no CALL found
+
+                if (program.Instructions[ip].Code == OpCode.CALL)
+                    return program.Instructions[ip].A; // A = target function entry IP
+            }
+
+            // No CALL on this line — degrade to Step Over
+            return FindNextLineIP(program, currentIP);
+        }
+
+        /// <summary>
+        /// Step Out: return the ReturnIP from the top CallStack frame.
+        /// Returns -1 if at the top-level function (no call stack to return from).
+        /// </summary>
+        public static int FindStepOutIP(ref VMInstanceState inst)
+        {
+            if (inst.CallStackDepth <= 0)
+                return -1; // Already at top level
+
+            var frame = inst.CallStack.Get(inst.CallStackDepth - 1);
+            return frame.ReturnIP;
         }
 
         // --- DBG5: Variable Display Adapter ---
