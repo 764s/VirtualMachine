@@ -1519,6 +1519,8 @@ func main() {
             Assert(!result.Success, "C4-01: compile error for direct call to requires_cleanup syscall");
             Assert(result.Errors != null && result.Errors.Count > 0 && result.Errors[0].Contains("requires cleanup"),
                    "C4-01: error message mentions 'requires cleanup'");
+            Assert(result.Errors[0].Contains("Acquire"),
+                   "C4-01: error message mentions the syscall name 'Acquire'");
         }
 
         // ===== Test C4-02: using-wrapped call to requires_cleanup syscall → compile success =====

@@ -745,7 +745,7 @@ namespace FFVM.Compiler
             // C4: requires_cleanup check — only 'using' wrapped calls are exempt (they don't go through this path)
             if (_syscallTable != null && _syscallTable.RequiresCleanup(slot))
             {
-                _errors.Add($"Syscall '{call.FunctionName}' requires cleanup. Use 'using {call.FunctionName}(args) {{ ... }}' or wrap with 'defer'. (line {call.Line})");
+                _errors.Add($"Syscall '{call.FunctionName}' requires cleanup. Use 'using {call.FunctionName}(args) {{ ... }}'. (line {call.Line})");
                 return TempRegBase;
             }
 
@@ -779,7 +779,7 @@ namespace FFVM.Compiler
             // C4: requires_cleanup check — only 'using' wrapped calls are exempt (they don't go through this path)
             if (_syscallTable != null && _syscallTable.RequiresCleanup(slot))
             {
-                _errors.Add($"Syscall '{call.FunctionName}' requires cleanup. Use 'using {call.FunctionName}(args) {{ ... }}' or wrap with 'defer'. (line {call.Line})");
+                _errors.Add($"Syscall '{call.FunctionName}' requires cleanup. Use 'using {call.FunctionName}(args) {{ ... }}'. (line {call.Line})");
                 return;
             }
 

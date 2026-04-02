@@ -1,7 +1,7 @@
 # 步骤 10 前置：编译器语义安全检查（C4 + G6）
 
 > **在整体计划中的位置**：本文档对应 VM_Summary.md §七 推进顺序中"步骤 10 前必须就位"的 C4、G5、G6 三项。
-> **状态**：⏳ 待执行
+> **状态**：✅ 全部完成（315 项 Assert 通过，其中 12 项为新增 C4/G6 语义检查测试）。
 > **前置**：步骤 9 已全部完成（303 项 Assert 通过）。
 > **来源**：
 > - C4 / G5：VM_Summary §3.3、§11.1 — 编译器 "requires cleanup" 强制检查
@@ -75,11 +75,11 @@ Sub-task E: 文档更新
 
 ### 具体变更
 
-- [ ] A.1 **SyscallTable.cs — 新增字段**：`bool[] _requiresCleanup`（与 `_handlers` 同长度），初始全 `false`
-- [ ] A.2 **SyscallTable.cs — 注册扩展**：`RegisterPaired()` 中，自动将 acquire 槽标记为 `requiresCleanup = true`（配对 Syscall 的 acquire 端天然需要 cleanup）
-- [ ] A.3 **SyscallTable.cs — 独立标记方法**：`void MarkRequiresCleanup(int slot)` — 允许非配对 Syscall 也可被标记为需要 cleanup（未来扩展点）
-- [ ] A.4 **SyscallTable.cs — 查询方法**：`bool RequiresCleanup(int slot)` — 编译器在 emit SYSCALL 前调用此方法
-- [ ] A.5 **测试**：验证 `RegisterPaired()` 后 `RequiresCleanup(acquireSlot)` 返回 `true`，`RequiresCleanup(releaseSlot)` 返回 `false`
+- [x] A.1 **SyscallTable.cs — 新增字段**：`bool[] _requiresCleanup`（与 `_handlers` 同长度），初始全 `false`
+- [x] A.2 **SyscallTable.cs — 注册扩展**：`RegisterPaired()` 中，自动将 acquire 槽标记为 `requiresCleanup = true`（配对 Syscall 的 acquire 端天然需要 cleanup）
+- [x] A.3 **SyscallTable.cs — 独立标记方法**：`void MarkRequiresCleanup(int slot)` — 允许非配对 Syscall 也可被标记为需要 cleanup（未来扩展点）
+- [x] A.4 **SyscallTable.cs — 查询方法**：`bool RequiresCleanup(int slot)` — 编译器在 emit SYSCALL 前调用此方法
+- [x] A.5 **测试**：验证 `RegisterPaired()` 后 `RequiresCleanup(acquireSlot)` 返回 `true`，`RequiresCleanup(releaseSlot)` 返回 `false`
 
 ### 验收标准
 
@@ -116,12 +116,12 @@ Sub-task E: 文档更新
 
 ### 具体变更
 
-- [ ] B.1 **BytecodeCompiler — CompileSyscall()**：在 emit `SYSCALL` 指令前，检查 `_syscallTable?.RequiresCleanup(slot) == true`，若是则 `_errors.Add(...)` 并跳过 emit
-- [ ] B.2 **BytecodeCompiler — CompileUsing()**：确认 `CompileUsing()` 的 acquire SYSCALL 不经过通用 `CompileSyscall()`（当前已如此，无需修改），即 `using` 包裹的调用天然免除检查
-- [ ] B.3 **测试 C4-01**：直接调用 `requires_cleanup` 的 Syscall → 编译报错，错误信息包含 syscall 名称和建议
-- [ ] B.4 **测试 C4-02**：`using` 包裹调用同一 Syscall → 编译成功，无错误
-- [ ] B.5 **测试 C4-03**：调用非 `requires_cleanup` 的普通 Syscall → 编译成功（不受影响）
-- [ ] B.6 **测试 C4-04**：`_syscallTable` 为 null 时（无 SyscallTable 传入）→ 跳过检查，编译成功（兼容旧用法）
+- [x] B.1 **BytecodeCompiler — CompileSyscall()**：在 emit `SYSCALL` 指令前，检查 `_syscallTable?.RequiresCleanup(slot) == true`，若是则 `_errors.Add(...)` 并跳过 emit
+- [x] B.2 **BytecodeCompiler — CompileUsing()**：确认 `CompileUsing()` 的 acquire SYSCALL 不经过通用 `CompileSyscall()`（当前已如此，无需修改），即 `using` 包裹的调用天然免除检查
+- [x] B.3 **测试 C4-01**：直接调用 `requires_cleanup` 的 Syscall → 编译报错，错误信息包含 syscall 名称和建议
+- [x] B.4 **测试 C4-02**：`using` 包裹调用同一 Syscall → 编译成功，无错误
+- [x] B.5 **测试 C4-03**：调用非 `requires_cleanup` 的普通 Syscall → 编译成功（不受影响）
+- [x] B.6 **测试 C4-04**：`_syscallTable` 为 null 时（无 SyscallTable 传入）→ 跳过检查，编译成功（兼容旧用法）
 
 ### 验收标准
 
@@ -156,14 +156,14 @@ Cleanup 块（`defer` body / `using` release）在语义上是"实例退出前�
 
 ### 具体变更
 
-- [ ] C.1 **BytecodeCompiler — 新增字段**：`bool _inCleanupBlock = false`
-- [ ] C.2 **BytecodeCompiler — EmitDeferredCleanups()**：在编译 `DeferredCleanup.Body`（defer body）前设 `_inCleanupBlock = true`，编译后恢复为先前值
-- [ ] C.3 **BytecodeCompiler — CompileWait()**：在 emit `WAIT` 前检查 `_inCleanupBlock`，若 `true` 则 `_errors.Add("Cannot use 'wait' inside a cleanup block (defer/using)")` 并跳过 emit
-- [ ] C.4 **BytecodeCompiler — CompileWaitFor()**：同上，检查 `_inCleanupBlock`，报错 `"Cannot use 'wait_for' inside a cleanup block (defer/using)"`
-- [ ] C.5 **测试 G6-01**：`defer { wait(10) }` → 编译报错
-- [ ] C.6 **测试 G6-02**：`defer { wait_for(someId) }` → 编译报错
-- [ ] C.7 **测试 G6-03**：正常函数体内的 `wait(10)` → 编译成功（不受影响）
-- [ ] C.8 **测试 G6-04**：`using SomeSyscall(args) { wait(10) }` → 编译成功（using body 不是 cleanup 块，只有 release 路径是 cleanup 块）
+- [x] C.1 **BytecodeCompiler — 新增字段**：`bool _inCleanupBlock = false`
+- [x] C.2 **BytecodeCompiler — EmitDeferredCleanups()**：在编译 `DeferredCleanup.Body`（defer body）前设 `_inCleanupBlock = true`，编译后恢复为先前值
+- [x] C.3 **BytecodeCompiler — CompileWait()**：在 emit `WAIT` 前检查 `_inCleanupBlock`，若 `true` 则 `_errors.Add("Cannot use 'wait' inside a cleanup block (defer/using)")` 并跳过 emit
+- [x] C.4 **BytecodeCompiler — CompileWaitFor()**：同上，检查 `_inCleanupBlock`，报错 `"Cannot use 'wait_for' inside a cleanup block (defer/using)"`
+- [x] C.5 **测试 G6-01**：`defer { wait(10) }` → 编译报错
+- [x] C.6 **测试 G6-02**：`defer { wait_for(someId) }` → 编译报错
+- [x] C.7 **测试 G6-03**：正常函数体内的 `wait(10)` → 编译成功（不受影响）
+- [x] C.8 **测试 G6-04**：`using SomeSyscall(args) { wait(10) }` → 编译成功（using body 不是 cleanup 块，只有 release 路径是 cleanup 块）
 
 ### 验收标准
 
@@ -183,10 +183,10 @@ Cleanup 块（`defer` body / `using` release）在语义上是"实例退出前�
 
 ### 具体变更
 
-- [ ] D.1 **CompilerTests — C4 系列**：新增 4 个测试（B.3–B.6），覆盖 requires_cleanup 的正确/错误路径
-- [ ] D.2 **CompilerTests — G6 系列**：新增 4 个测试（C.5–C.8），覆盖 cleanup 块内 wait 的正确/错误路径
-- [ ] D.3 **回归验证**：现有 303 项 Assert 全部通过无回归
-- [ ] D.4 **CI 验证**：确认 CI 工作流仍然通过（如果可触发）
+- [x] D.1 **CompilerTests — C4 系列**：新增 4 个测试（B.3–B.6），覆盖 requires_cleanup 的正确/错误路径
+- [x] D.2 **CompilerTests — G6 系列**：新增 4 个测试（C.5–C.8），覆盖 cleanup 块内 wait 的正确/错误路径
+- [x] D.3 **回归验证**：现有 303 项 Assert 全部通过无回归
+- [x] D.4 **CI 验证**：确认 CI 工作流仍然通过（如果可触发）
 
 ### 验收标准
 
@@ -200,11 +200,11 @@ Cleanup 块（`defer` body / `using` release）在语义上是"实例退出前�
 
 ### 具体变更
 
-- [ ] E.1 **VM_Summary.md §七 推进顺序**：标记 C4 ✅、G6 ✅
-- [ ] E.2 **VM_Summary.md §11.1 代码缺口**：标记 G5 ✅ 已修复、G6 ✅ 已修复
-- [ ] E.3 **Outlook_And_Risks.md §一 确定执行**：更新 C4、G5、G6 状态为 ✅
-- [ ] E.4 **本文件**：更新状态为 ✅，记录最终测试数量
-- [ ] E.5 **VM_Summary.md**：更新总 Assert 数量
+- [x] E.1 **VM_Summary.md §七 推进顺序**：标记 C4 ✅、G6 ✅
+- [x] E.2 **VM_Summary.md §11.1 代码缺口**：标记 G5 ✅ 已修复、G6 ✅ 已修复
+- [x] E.3 **Outlook_And_Risks.md §一 确定执行**：更新 C4、G5、G6 状态为 ✅
+- [x] E.4 **本文件**：更新状态为 ✅，记录最终测试数量
+- [x] E.5 **VM_Summary.md**：更新总 Assert 数量
 
 ---
 

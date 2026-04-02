@@ -18,10 +18,10 @@
 
 | ID | 来源 | 内容 | 说明 | 状态 |
 |----|------|------|------|------|
-| **C4** | [§3.3 C4](../VM_Summary.md#33-cleanup-机制using理想defer逃生舱) | 编译器 "requires cleanup" 强制检查 | 标记了 `requires_cleanup` 的 Syscall 若既未配 `using` 也未配 `defer`，编译报错 | ⏳ 最晚步骤 10 前 |
+| **C4** | [§3.3 C4](../VM_Summary.md#33-cleanup-机制using理想defer逃生舱) | 编译器 "requires cleanup" 强制检查 | 标记了 `requires_cleanup` 的 Syscall 若既未配 `using` 也未配 `defer`，编译报错 | ✅ 已完成 |
 | **F4** | [Step8 §八](Step8_FunctionCall.md#八依赖关系总览) | 编译器寄存器生命周期分析 + 跨 await 变量提升 | 来源：VM_Tracer_Bullet.md §十二 第 2 项"寄存器复用" | ⏳ 最晚步骤 10 前 |
-| **G5** | [§11.1 G5](../VM_Summary.md#111-代码缺口) | C4 对应的代码缺口（同上） | — | ⏳ 同 C4 |
-| **G6** | [§11.1 G6](../VM_Summary.md#111-代码缺口) | `defer`/`using` Cleanup 块内禁止 `wait`/`wait_for` 编译检查 | 语义上 Cleanup 块不应挂起 | ⏳ 与 C4 同期 |
+| **G5** | [§11.1 G5](../VM_Summary.md#111-代码缺口) | C4 对应的代码缺口（同上） | — | ✅ 已完成（同 C4） |
+| **G6** | [§11.1 G6](../VM_Summary.md#111-代码缺口) | `defer`/`using` Cleanup 块内禁止 `wait`/`wait_for` 编译检查 | 语义上 Cleanup 块不应挂起 | ✅ 已完成 |
 | **V5** | [§4.6 V5](../VM_Summary.md#v5-帧内-profiler-验证真实-syscall-接入后--待前置) | 帧内 Profiler 验证（真实 Syscall 接入后） | 必须在步骤 10 前通过 | ⚪ 待前置条件 |
 
 ---
@@ -161,7 +161,7 @@
 | ID | 风险 | 影响 | 来源 |
 |----|------|------|------|
 | **GR1** | Fix64 模式 (`USE_FIXPOINT`) 未经独立构建验证 | 上线前必须通过 | [§11.2 T5](../VM_Summary.md#112-测试缺口) |
-| **GR2** | Cleanup 块内 `wait`/`wait_for` 未被编译器禁止 | 阻塞实例回收 | [§11.1 G6](../VM_Summary.md#111-代码缺口)（与 C4 同期修复） |
+| **GR2** | ~~Cleanup 块内 `wait`/`wait_for` 未被编译器禁止~~ → 已修复：G6 编译器检查 | ~~阻塞实例回收~~ | ✅ 已修复 |
 | **GR3** | 文档缺口 D1-D4 未合并入总结文档 | 设计上下文缺失 | [§11.3](../VM_Summary.md#113-文档缺口来自档案交叉审查) |
 
 ---
