@@ -670,10 +670,11 @@ Gate 3: Unity Editor 内嵌 DAP（可选）             ← DBG7 Phase C
     → Gate 1 验收：VS Code 断点命中 + 变量显示
     详见 → Step_Debug_Phase3A_DAP.md
                                     ↓
-─────────────── 调试 Phase 3B（DAP 单步 + 完整体验）── ← 当前位置
-    DBG4. 单步映射（归约为临时断点，复用 DBG3）
-    DBG7-B. next/stepIn/stepOut handler
+─────────────── 调试 Phase 3B（DAP 单步 + 完整体验）✅ ── ←
+    DBG4. 单步映射（归约为临时断点，复用 DBG3）     ✅
+    DBG7-B. next/stepIn/stepOut handler              ✅
     → Gate 2 验收：VS Code 三种单步行为正确
+    → 505 项 Assert（93 DAP 测试含单步验证）
     详见 → Step_Debug_Phase3B_DAP_SingleStep.md
                                     ↓
 ─────────────── 调试 Phase 3C（Unity Editor DAP，可选）────────

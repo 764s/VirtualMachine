@@ -1,7 +1,7 @@
 # 调试 Phase 3B：DAP 单步 + 完整调试体验（DBG4 + DBG7-B）
 
 > **在整体计划中的位置**：本文档对应 VM_Summary.md §七 推进顺序中 Phase 3A ✅ 之后的**调试 Phase 3B**。
-> **状态**：⏳ 进行中
+> **状态**：✅ 完成。505 项 Assert（112 TW + 214 Compiler + 17 Perf + 18 SkillScript + 51 Debug + 93 DAP），float + Fix64 双模式通过。
 > **前置**：
 > - Debug Phase 3A（Gate 1）✅ 已完成 — DAP Server 核心（12 消息 handler + HaltOnBreakpoint + SkipNextCheck）
 > - ScriptDebugger ✅ 已有 — 断点桥接 + 变量查看 + 调用栈
@@ -77,26 +77,26 @@
 
 ### A. ScriptDebugger 单步映射（DBG4）
 
-- [ ] **A1**. `ScriptDebugger` 新增临时断点字段
+- [x] **A1**. `ScriptDebugger` 新增临时断点字段
   - `private int _tempBreakpointIP = -1;`
   - `public void SetTempBreakpoint(int ip)` → 设置单次临时断点
   - `public void ClearTempBreakpoint()` → 清除
-- [ ] **A2**. `CheckBreakpoint` 扩展：检查 `_tempBreakpointIP`
+- [x] **A2**. `CheckBreakpoint` 扩展：检查 `_tempBreakpointIP`
   - 在现有行号断点检查之前，增加 IP 精确匹配检查
   - 命中后自动 `_tempBreakpointIP = -1`（单次触发）
   - 命中临时断点时也触发 `OnBreakpointHit` 回调
-- [ ] **A3**. `FindNextLineIP(VMProgram, int currentIP)` — Step Over
+- [x] **A3**. `FindNextLineIP(VMProgram, int currentIP)` — Step Over
   - 从 `currentIP + 1` 开始扫描 SourceMap
   - 找到首个 `line != currentLine && line > 0` 的 IP
   - 如果找不到（函数末尾），返回 -1
-- [ ] **A4**. `FindStepIntoIP(VMProgram, int currentIP)` — Step Into
+- [x] **A4**. `FindStepIntoIP(VMProgram, int currentIP)` — Step Into
   - 检查 `program.Instructions[currentIP].Code == OpCode.CALL`
   - 如果是 CALL：返回 `Instructions[currentIP].A`（目标函数入口 IP）
   - 如果不是 CALL：退化为 Step Over（返回 `FindNextLineIP` 结果）
-- [ ] **A5**. `FindStepOutIP(VMProgram, ref VMInstanceState inst)` — Step Out
+- [x] **A5**. `FindStepOutIP(VMProgram, ref VMInstanceState inst)` — Step Out
   - 如果 `inst.CallStackDepth > 0`：返回 `CallStack.Get(depth-1).ReturnIP`
   - 如果 `depth == 0`（已在顶层函数）：返回 -1（无法 Step Out）
-- [ ] **A6**. 单元测试 — DBG4 核心逻辑
+- [x] **A6**. 单元测试 — DBG4 核心逻辑
   - DAP-S01: Step Over 找到下一行 IP
   - DAP-S02: Step Into 进入 CALL 目标
   - DAP-S03: Step Into 无 CALL 退化为 Step Over
@@ -105,32 +105,32 @@
 
 ### B. DapServer 单步 handler（DBG7-B）
 
-- [ ] **B1**. 重构 `HandleContinue` → 提取 `RunUntilBreakpoint()` 共用方法
+- [x] **B1**. 重构 `HandleContinue` → 提取 `RunUntilBreakpoint()` 共用方法
   - `RunUntilBreakpoint()` 包含 Tick 循环 + 断点检查 + terminated 逻辑
   - `HandleContinue` 调用 `RunUntilBreakpoint()`
   - 单步 handler 先设临时断点，再调用 `RunUntilBreakpoint()`
-- [ ] **B2**. `next` handler
+- [x] **B2**. `next` handler
   - 获取当前 IP → `FindNextLineIP` → `SetTempBreakpoint` → `RunUntilBreakpoint()`
   - stopped event 的 reason = "step"
-- [ ] **B3**. `stepIn` handler
+- [x] **B3**. `stepIn` handler
   - 获取当前 IP → `FindStepIntoIP` → `SetTempBreakpoint` → `RunUntilBreakpoint()`
   - stopped event 的 reason = "step"
-- [ ] **B4**. `stepOut` handler
+- [x] **B4**. `stepOut` handler
   - 获取当前 inst → `FindStepOutIP` → `SetTempBreakpoint` → `RunUntilBreakpoint()`
   - stopped event 的 reason = "step"
-- [ ] **B5**. DapServer switch 中注册 `"next"` / `"stepIn"` / `"stepOut"` case
+- [x] **B5**. DapServer switch 中注册 `"next"` / `"stepIn"` / `"stepOut"` case
 
 ### C. 自动化测试
 
-- [ ] **C1**. DAP-S06: 完整 DAP 会话 — next 单步（多行脚本，验证行号递进）
-- [ ] **C2**. DAP-S07: 完整 DAP 会话 — stepIn 进入函数（验证函数名切换）
-- [ ] **C3**. DAP-S08: 完整 DAP 会话 — stepOut 返回 caller（验证行号回到调用点）
+- [x] **C1**. DAP-S06: 完整 DAP 会话 — next 单步（多行脚本，验证行号递进）
+- [x] **C2**. DAP-S07: 完整 DAP 会话 — stepIn 进入函数（验证函数名切换）
+- [x] **C3**. DAP-S08: 完整 DAP 会话 — stepOut 返回 caller（验证行号回到调用点）
 
 ### D. 回归验证 + 文档更新
 
-- [ ] **D1**. 运行全部测试 — 零回归（470 现有 + 新增单步测试）
-- [ ] **D2**. 更新 `VM_Summary.md §五` — 标记 Phase 3B 状态
-- [ ] **D3**. 更新 `VM_Summary.md §七` — 串行计划中 Phase 3B 完成
+- [x] **D1**. 运行全部测试 — 零回归（470 现有 + 新增单步测试）
+- [x] **D2**. 更新 `VM_Summary.md §五` — 标记 Phase 3B 状态
+- [x] **D3**. 更新 `VM_Summary.md §七` — 串行计划中 Phase 3B 完成
 
 ---
 
