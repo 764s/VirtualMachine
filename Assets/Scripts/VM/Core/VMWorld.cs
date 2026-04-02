@@ -164,9 +164,15 @@ namespace FFVM
                 }
 
                 // --- Breakpoint check (zero overhead when Debugger is null) ---
+                bool shouldHaltAtBreakpoint = false;
                 if (srcMap != null)
                 {
-                    dbg.CheckBreakpoint(inst.InstanceId, inst.IP, srcMap);
+                    if (dbg.CheckBreakpoint(inst.InstanceId, inst.IP, srcMap) && dbg.HaltOnBreakpoint)
+                    {
+                        // DAP mode: halt BEFORE executing the instruction so the user
+                        // sees the breakpoint line as the current line in stackTrace.
+                        return;
+                    }
                 }
 
                 ref Instruction op = ref code[inst.IP];
