@@ -7,7 +7,7 @@
 > **来源**：
 > - [Outlook_And_Risks.md §八.1](Outlook_And_Risks.md#81-总览时间线) — 串行计划中 GR1 位置
 > - [Outlook_And_Risks.md §四.3](Outlook_And_Risks.md#43-全局风险) — GR1 风险定义
-> - [VM_Summary.md §七](../VM_Summary.md#七推进顺序严格串行) — 串行计划 GR1 条目
+> - [VM_Summary.md §七](../VM_Summary.md#七推进顺序串行计划) — 串行计划 GR1 条目
 >
 > **核心目标**：在现有 CI 工作流中增加 `USE_FIXPOINT` 构建配置，每次提交自动验证 Fix64 模式下的编译和测试通过，
 > 消除 GR1 风险（Fix64 模式长期无验证导致积累隐性破坏）。

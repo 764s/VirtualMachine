@@ -6,7 +6,7 @@
 > **来源**：
 > - [Outlook_And_Risks.md §二.5](Outlook_And_Risks.md#25-脚本调试dbg-系列) — DBG3/DBG5/DBG6 定义
 > - [Step_Debug_Decisions.md](Step_Debug_Decisions.md) — 决策 D-01（真实宿主断点）、D-02（DAP）、D-04（Release 隔离）
-> - [VM_Summary.md §七](../VM_Summary.md#七推进顺序严格串行) — 串行计划中 Phase 2 位置
+> - [VM_Summary.md §七](../VM_Summary.md#七推进顺序串行计划) — 串行计划中 Phase 2 位置
 >
 > **核心原则**：Phase 2 的目标是在**零外部依赖**下建立命令行调试能力（Gate 0）。
 > 所有调试代码通过 `#if FFVM_SCRIPT_DEBUG` 条件编译隔离，Release 构建零残留。

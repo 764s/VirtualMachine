@@ -6,7 +6,7 @@
 > **引用关系**：
 > - [Outlook_And_Risks.md §二.5](Outlook_And_Risks.md#25-脚本调试dbg-系列) — DBG1-DBG7 子项定义
 > - [Outlook_And_Risks.md §六](Outlook_And_Risks.md#六风险降级计划目标全部--低--极低) — 风险降级计划
-> - [VM_Summary.md §七](../VM_Summary.md#七推进顺序严格串行) — 串行计划中调试阶段的位置
+> - [VM_Summary.md §七](../VM_Summary.md#七推进顺序串行计划) — 串行计划中调试阶段的位置
 >
 > **维护原则**：调试相关的设计决策变更时同步更新本文件。
 
@@ -372,7 +372,7 @@ private void OnEditorUpdate()
 
 ## 六、扩展串行计划（调试专项）
 
-> 以下计划是 [VM_Summary.md §七](../VM_Summary.md#七推进顺序严格串行) 和
+> 以下计划是 [VM_Summary.md §七](../VM_Summary.md#七推进顺序串行计划) 和
 > [Outlook_And_Risks.md §八](Outlook_And_Risks.md#八扩展串行计划理想方案) 中调试部分的详细展开。
 
 ### Phase 1：编译器侧（与 F4 合并，边际排期极低）

@@ -10,7 +10,7 @@
 > - [Step_Debug_Decisions.md D-02](Step_Debug_Decisions.md#决策-d-02外部-idedap-vs-自研调试-ui) — 外部 IDE + DAP 决策
 > - [Step_Debug_Decisions.md D-04](Step_Debug_Decisions.md#决策-d-04release-模式隔离) — Release 隔离策略
 > - [Outlook_And_Risks.md §八.1](Outlook_And_Risks.md#81-总览时间线) — 串行计划中 Phase 3A 位置
-> - [VM_Summary.md §七](../VM_Summary.md#七推进顺序严格串行) — 串行计划
+> - [VM_Summary.md §七](../VM_Summary.md#七推进顺序串行计划) — 串行计划
 >
 > **核心目标**：实现 DAP 最小协议 Server，使 VS Code 可通过 launch.json 连接 StandaloneRunner，
 > 在命中断点时显示调用栈与变量值（Gate 1 验收）。

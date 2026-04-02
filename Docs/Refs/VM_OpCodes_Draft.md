@@ -64,7 +64,7 @@
 
 ## 三、第一颗曳光弹反推出的最小能力
 
-根据 [VM_Tracer_Bullet.md](Assets/ScriptVM/VM_Tracer_Bullet.md)，最小业务语义是：
+根据 [VM_Tracer_Bullet.md](VM_Tracer_Bullet.md)，最小业务语义是：
 
 1. 注册 Cleanup
 2. 写黑板状态
