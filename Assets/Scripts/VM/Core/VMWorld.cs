@@ -10,6 +10,12 @@ namespace FFVM
         public SyscallTable Syscalls { get; }
         public VMModuleTable Modules { get; }
 
+        /// <summary>
+        /// Optional script debugger. Null = no debugging (zero overhead).
+        /// Set before Tick() to enable breakpoints, variable inspection, and call stack viewing.
+        /// </summary>
+        public ScriptDebugger Debugger;
+
         private readonly SnapshotRingBuffer _snapshots;
         private int _frameNumber;
 
@@ -71,6 +77,9 @@ namespace FFVM
         public void Tick()
         {
             _frameNumber++;
+
+            // Reset debugger per-tick state (allows same-line breakpoints to re-trigger next tick)
+            Debugger?.ResetTickState();
 
             for (int i = 0; i < VMConstants.MaxInstances; i++)
             {
@@ -142,12 +151,22 @@ namespace FFVM
             var consts = program.Constants;
             int steps = 0;
 
+            // Cache debugger reference for the duration of this execution burst
+            var dbg = Debugger;
+            var srcMap = (dbg != null) ? program.SourceMap : null;
+
             while (steps < MaxStepsPerTick)
             {
                 if (inst.IP < 0 || inst.IP >= code.Length)
                 {
                     inst.ErrorFlag = VMError.PanicOutOfBounds;
                     return;
+                }
+
+                // --- Breakpoint check (zero overhead when Debugger is null) ---
+                if (srcMap != null)
+                {
+                    dbg.CheckBreakpoint(inst.InstanceId, inst.IP, srcMap);
                 }
 
                 ref Instruction op = ref code[inst.IP];

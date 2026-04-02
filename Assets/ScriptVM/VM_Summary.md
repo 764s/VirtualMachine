@@ -467,7 +467,8 @@ skill TracerBullet
 | 语法分析 | `Parser`（手写递归下降，source → `ModuleNode` AST，含 using/wait_for/struct 声明/字段访问/错误恢复） | ✅ 完成 |
 | 编译器 | `BytecodeCompiler`（AST → `VMProgram`，寄存器分配：r0-15 scratch / r16-47 locals / r48-63 temps，支持 using 配对 Syscall，支持多函数编译 + CALL emit，支持 struct 编译期拍平 → 连续寄存器槽位映射，F4 寄存器生命周期分析 + 复用，O4 dest-reg hint，O5 常量折叠，O7 Syscall 结果直达，FO5 返回值直达，FO7 调用栈深度静态分析，R7 >50 函数回填 Dictionary 切换，R8 Cleanup 块禁止函数调用） | ✅ 完成 |
 | 调试信息 | `VMProgram.SourceMap`（DBG1：IP→行号平行数组）+ `VMProgram.SymbolTable`（DBG2：变量名→寄存器+struct字段信息） | ✅ 完成 |
-| 测试 | 361 项 Assert 全部通过（112 TreeWalker + 214 Compiler + 17 Performance + 18 SkillScript），另有 5 项自动化性能基准 | ✅ F4 阶段通过 |
+| 运行时调试 | `ScriptDebugger`（DBG3 断点桥接 + DBG5 变量查看适配器 + DBG6 调用栈查看，Gate 0 命令行调试能力） | ✅ 完成 |
+| 测试 | 412 项 Assert 全部通过（112 TreeWalker + 214 Compiler + 17 Performance + 18 SkillScript + 51 Debug），另有 5 项自动化性能基准 | ✅ Phase 2 调试通过 |
 | 性能基准 | `BenchmarkRunner`（5 组 VM vs C# 对比基准）+ `run-benchmarks.cmd` 自动化管线 → `benchmark_results.md` | ✅ 完成 |
 
 ### 5.2 未完成（按优先级排列）
@@ -656,12 +657,15 @@ skill TracerBullet
   └────────────────────────────────────────────────────────┘
       ↓
   ┌────────────────────────────────────────────────────────┐
-  │  脚本调试 · Phase 2（运行时，Gate 0 命令行调试）⏳   │
-  │    DBG3. 宿主断点桥接（5 行代码，#if 隔离）          │
-  │    DBG5. 变量查看适配器（Symbol Table → 可读值）      │
-  │    DBG6. 调用栈查看（CallStack → Source Map 映射）    │
+  │  脚本调试 · Phase 2（运行时，Gate 0 命令行调试）✅   │
+  │    DBG3. 宿主断点桥接（ScriptDebugger 回调模式）     ✅
+  │    DBG5. 变量查看适配器（Symbol Table → 可读值）     ✅
+  │    DBG6. 调用栈查看（CallStack → Source Map 映射）   ✅
   │  Gate 0 验收：StandaloneRunner 命令行断点 + 变量值    │
   │  此时已具备命令行调试能力（零外部依赖）               │
+  │  412 项 Assert（112 TW + 214 Compiler + 17 Perf      │
+  │  + 18 SkillScript + 51 Debug）                       │
+  │  详见 → [Step_Debug_Phase2.md](Plan/Step_Debug_Phase2.md) │
   └────────────────────────────────────────────────────────┘
       ↓
   ┌────────────────────────────────────────────────────────┐
@@ -928,7 +932,7 @@ skill TracerBullet
 | ID | 内容 | 来源 | 状态 |
 |----|------|------|------|
 | C4 | 编译器 "requires cleanup" 强制检查 | §3.3 | ✅ |
-| F4 | 寄存器生命周期分析 + 跨 await 变量提升 | Step 8 | ⏳ |
+| F4 | 寄存器生命周期分析 + 跨 await 变量提升 | Step 8 | ✅ |
 | G5 | C4 对应代码缺口 | §11.1 | ✅ |
 | G6 | Cleanup 块内禁止 wait 编译检查 | §11.1 | ✅ |
 | V5 | 帧内 Profiler 验证 | §4.6 | ⏳ |
@@ -941,7 +945,7 @@ skill TracerBullet
 | 函数调用相关 | FF1-FF5 | 5 |
 | 结构体相关 | S4, SN1, SN2 | 3 |
 | 全局 / 跨步骤 | H1, BB1, PR1, FIX1, DM1 | 5 |
-| 脚本调试（真实宿主断点 + DAP） | DBG1-DBG7 | 7 |
+| 脚本调试（真实宿主断点 + DAP） | DBG1-DBG7 | 7 | DBG1-DBG3,DBG5-DBG6 ✅，DBG4/DBG7 待 Phase 3 |
 | 语言服务（LSP） | LSP1-LSP5 | 5 |
 
 ### 优化展望（22 项 = 自然 7 + 调整型 15）
