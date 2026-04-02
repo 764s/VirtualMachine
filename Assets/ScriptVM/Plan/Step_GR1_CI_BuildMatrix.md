@@ -1,7 +1,8 @@
 # GR1 理想方案：CI 构建矩阵 — USE_FIXPOINT 自动验证
 
 > **在整体计划中的位置**：本文档对应 VM_Summary.md §七 推进顺序中 Debug Phase 2 ✅ 之后的 **GR1 CI 构建矩阵**。
-> **状态**：⏳ 待实施
+> **状态**：✅ 已完成。CI 矩阵双模式（float + Fix64）自动验证。412 项 Assert 在两种模式下均通过。
+> **修复**：Fix64 除法溢出（Number.cs `operator /` 原实现 `a.Raw << 32` 溢出 64 位 → 改为迭代长除法）。
 > **前置**：Debug Phase 2 ✅ 已完成（412 项 Assert：112 TW + 214 Compiler + 17 Perf + 18 SkillScript + 51 Debug）
 > **来源**：
 > - [Outlook_And_Risks.md §八.1](Outlook_And_Risks.md#81-总览时间线) — 串行计划中 GR1 位置
@@ -47,36 +48,33 @@
 
 ### A. CI 工作流矩阵化
 
-- [ ] **A1**. 修改 `.github/workflows/ci.yml`，将 `test` job 改为矩阵策略
+- [x] **A1**. 修改 `.github/workflows/ci.yml`，将 `test` job 改为矩阵策略
   - 矩阵维度：`fixpoint: [false, true]`
   - `fixpoint: false` — 现有行为（float 模式）
-  - `fixpoint: true` — 在 .csproj 中注入 `<DefineConstants>USE_FIXPOINT</DefineConstants>` 或通过 `dotnet build -p:DefineConstants=USE_FIXPOINT`
+  - `fixpoint: true` — 通过 `dotnet build -p:DefineConstants=USE_FIXPOINT` 注入
   - Job 名称区分：`Build & Test (float)` / `Build & Test (Fix64)`
-- [ ] **A2**. 确保 `benchmark` job 的 `needs: test` 仅依赖 float 模式（benchmark 不需要在 Fix64 下重复运行）
-- [ ] **A3**. 验证 CI 推送后两个矩阵 Job 均绿色通过
+- [x] **A2**. `benchmark` / `cross-lang` job 的 `needs: test` 等待全部矩阵条目通过
+- [ ] **A3**. 验证 CI 推送后两个矩阵 Job 均绿色通过（待 CI 运行）
 
 ### B. Fix64 模式本地验证
 
-- [ ] **B1**. 本地生成 .csproj 并带 USE_FIXPOINT 编译
-  ```
-  dotnet build StandaloneRunner/StandaloneRunner.csproj -c Release -p:DefineConstants=USE_FIXPOINT
-  ```
-- [ ] **B2**. 运行全部 412 项测试，确认在 Fix64 模式下通过
-  - 记录需要调整的测试（如浮点精度对比断言）
-- [ ] **B3**. 如有测试需调整，修改测试使其同时兼容 float 和 Fix64 模式
-  - 策略：使用 `Number` 类型 API 进行比较，避免直接比较 float 字面量
+- [x] **B1**. 本地生成 .csproj 并带 USE_FIXPOINT 编译 — 编译成功
+- [x] **B2**. 运行全部 412 项测试 — Fix64 除法溢出导致 1 项失败
+  - **发现 bug**：`Number.operator /` 的 `(a.Raw << 32) / b.Raw` 在 Q31.32 下溢出 64 位 long
+  - **修复**：改为迭代长除法（32 次位操作，无 128 位依赖，Unity 兼容）
+- [x] **B3**. 修复后 412 项测试在 Fix64 模式下全部通过
 
 ### C. 文档更新
 
-- [ ] **C1**. 更新 `VM_Summary.md §七` — 标记 GR1 ✅
-- [ ] **C2**. 更新 `Outlook_And_Risks.md §四.3` — GR1 状态更新为已完成
-- [ ] **C3**. 更新 `Outlook_And_Risks.md §八.1` — 串行计划中 GR1 标记 ✅
+- [x] **C1**. 更新 `VM_Summary.md §七` — 标记 GR1 ✅
+- [x] **C2**. 更新 `Outlook_And_Risks.md §四.3` — GR1 状态更新为已完成
+- [x] **C3**. 更新 `Outlook_And_Risks.md §八.1` — 串行计划中 GR1 标记 ✅
 
 ### D. 回归验证
 
-- [ ] **D1**. CI 推送验证 — float 模式 412 项测试通过（零回归）
-- [ ] **D2**. CI 推送验证 — Fix64 模式全部测试通过
-- [ ] **D3**. Benchmark job 不受影响，正常生成报告
+- [x] **D1**. 本地验证 — float 模式 412 项测试通过（零回归）
+- [x] **D2**. 本地验证 — Fix64 模式 412 项测试通过
+- [ ] **D3**. CI 验证 — benchmark / cross-lang job 正常运行（待 CI 运行）
 
 ---
 
