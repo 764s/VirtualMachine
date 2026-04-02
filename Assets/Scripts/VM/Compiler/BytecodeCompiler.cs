@@ -1376,6 +1376,8 @@ namespace FFVM.Compiler
             }
 
             int entryDepth = callGraph.ContainsKey(entryFunc) ? ComputeDepth(entryFunc) : 0;
+            // Note: recursive functions return their non-recursive child depth (ignoring back-edges).
+            // This means recursion doesn't inflate the static depth — runtime MaxCallDepth check handles it.
             if (entryDepth > VMConstants.MaxCallDepth)
             {
                 _errors.Add($"Static call depth from '{entryFunc}' is {entryDepth}, exceeding MaxCallDepth ({VMConstants.MaxCallDepth}). Reduce function nesting or increase limit.");

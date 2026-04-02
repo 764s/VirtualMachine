@@ -1,4 +1,5 @@
 using System.Collections.Generic;
+using System.Text;
 using FFVM;
 using FFVM.Compiler;
 using UnityEditor;
@@ -1971,7 +1972,7 @@ func main() {
 
         // R7-01: 100 functions with forward references → compile success
         {
-            var sb = new System.Text.StringBuilder();
+            var sb = new StringBuilder();
             // Generate 100 leaf functions that all just call Ping (no deep chain)
             for (int i = 0; i < 100; i++)
                 sb.AppendLine($"func f{i}() {{ Ping() }}");
