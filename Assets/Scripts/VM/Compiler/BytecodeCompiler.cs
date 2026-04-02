@@ -142,17 +142,50 @@ namespace FFVM.Compiler
             }
 
             // --- Backpatch forward references: CALL instructions whose target was -1 at emit time ---
-            for (int i = 0; i < _pendingCalls.Count; i++)
+            // R7: when >50 pending calls, build Dictionary index for O(1) lookup per function
+            if (_pendingCalls.Count > 50)
             {
-                var pending = _pendingCalls[i];
-                if (_functionTable.TryGetValue(pending.FunctionName, out int targetIP) && targetIP >= 0)
+                var pendingByName = new Dictionary<string, List<int>>();
+                for (int i = 0; i < _pendingCalls.Count; i++)
                 {
-                    var instr = _instructions[pending.InstructionIP];
-                    _instructions[pending.InstructionIP] = new Instruction(instr.Code, targetIP, instr.B, instr.C);
+                    var pending = _pendingCalls[i];
+                    if (!pendingByName.TryGetValue(pending.FunctionName, out var list))
+                    {
+                        list = new List<int>();
+                        pendingByName[pending.FunctionName] = list;
+                    }
+                    list.Add(pending.InstructionIP);
                 }
-                else
+                foreach (var kv in pendingByName)
                 {
-                    _errors.Add($"Unresolved function '{pending.FunctionName}'");
+                    if (_functionTable.TryGetValue(kv.Key, out int targetIP) && targetIP >= 0)
+                    {
+                        for (int j = 0; j < kv.Value.Count; j++)
+                        {
+                            var instr = _instructions[kv.Value[j]];
+                            _instructions[kv.Value[j]] = new Instruction(instr.Code, targetIP, instr.B, instr.C);
+                        }
+                    }
+                    else
+                    {
+                        _errors.Add($"Unresolved function '{kv.Key}'");
+                    }
+                }
+            }
+            else
+            {
+                for (int i = 0; i < _pendingCalls.Count; i++)
+                {
+                    var pending = _pendingCalls[i];
+                    if (_functionTable.TryGetValue(pending.FunctionName, out int targetIP) && targetIP >= 0)
+                    {
+                        var instr = _instructions[pending.InstructionIP];
+                        _instructions[pending.InstructionIP] = new Instruction(instr.Code, targetIP, instr.B, instr.C);
+                    }
+                    else
+                    {
+                        _errors.Add($"Unresolved function '{pending.FunctionName}'");
+                    }
                 }
             }
 
@@ -413,7 +446,8 @@ namespace FFVM.Compiler
             int reg = DeclareVar(stmt.Name);
             if (stmt.Initializer != null)
             {
-                int valueReg = CompileExpr(stmt.Initializer);
+                // O4: pass dest-reg hint so expression writes directly into var register
+                int valueReg = CompileExpr(stmt.Initializer, destReg: reg);
                 if (valueReg != reg)
                     Emit(OpCode.MOVE, reg, valueReg);
             }
@@ -617,28 +651,100 @@ namespace FFVM.Compiler
             CompileExpr(stmt.Expression);
         }
 
+        // ===== Constant folding (O5) =====
+
+        /// <summary>
+        /// Try to evaluate a constant expression at compile time.
+        /// Returns true if the expression is a pure constant (literals + arithmetic/comparison/boolean).
+        /// </summary>
+        private bool TryFoldConstant(Expr expr, out Number value)
+        {
+            value = Number.Zero;
+
+            if (expr is IntLiteralExpr intLit)
+            {
+                value = Number.FromInt(intLit.Value);
+                return true;
+            }
+            if (expr is NumberLiteralExpr numLit)
+            {
+                value = Number.FromFloat(numLit.Value);
+                return true;
+            }
+            if (expr is BoolLiteralExpr boolLit)
+            {
+                value = boolLit.Value ? Number.One : Number.Zero;
+                return true;
+            }
+            if (expr is UnaryExpr un)
+            {
+                if (!TryFoldConstant(un.Operand, out Number operand))
+                    return false;
+                switch (un.Kind)
+                {
+                    case NodeKind.Negate: value = -operand; return true;
+                    case NodeKind.Not:    value = operand == Number.Zero ? Number.One : Number.Zero; return true;
+                    default: return false;
+                }
+            }
+            if (expr is BinaryExpr bin)
+            {
+                if (!TryFoldConstant(bin.Left, out Number left) || !TryFoldConstant(bin.Right, out Number right))
+                    return false;
+                switch (bin.Kind)
+                {
+                    case NodeKind.Add: value = left + right; return true;
+                    case NodeKind.Sub: value = left - right; return true;
+                    case NodeKind.Mul: value = left * right; return true;
+                    case NodeKind.Div: value = left / right; return true;
+                    case NodeKind.Mod: value = left % right; return true;
+                    case NodeKind.Eq:  value = left == right ? Number.One : Number.Zero; return true;
+                    case NodeKind.Neq: value = left != right ? Number.One : Number.Zero; return true;
+                    case NodeKind.Lt:  value = left < right ? Number.One : Number.Zero; return true;
+                    case NodeKind.Lte: value = left <= right ? Number.One : Number.Zero; return true;
+                    case NodeKind.Gt:  value = left > right ? Number.One : Number.Zero; return true;
+                    case NodeKind.Gte: value = left >= right ? Number.One : Number.Zero; return true;
+                    case NodeKind.And: value = (left != Number.Zero && right != Number.Zero) ? Number.One : Number.Zero; return true;
+                    case NodeKind.Or:  value = (left != Number.Zero || right != Number.Zero) ? Number.One : Number.Zero; return true;
+                    default: return false;
+                }
+            }
+            return false;
+        }
+
         // ===== Expression compilation =====
         // Returns the register holding the result
 
-        private int CompileExpr(Expr expr)
+        private int CompileExpr(Expr expr, int destReg = -1)
         {
+            // O5: constant folding — evaluate pure constant expressions at compile time
+            if (expr is BinaryExpr || expr is UnaryExpr)
+            {
+                if (TryFoldConstant(expr, out Number foldedValue))
+                {
+                    int reg = destReg >= 0 ? destReg : AllocTemp();
+                    Emit(OpCode.LOAD_CONST, reg, AddConst(foldedValue));
+                    return reg;
+                }
+            }
+
             if (expr is IntLiteralExpr intLit)
             {
-                int reg = AllocTemp();
+                int reg = destReg >= 0 ? destReg : AllocTemp();
                 Emit(OpCode.LOAD_CONST, reg, AddConst(Number.FromInt(intLit.Value)));
                 return reg;
             }
 
             if (expr is NumberLiteralExpr numLit)
             {
-                int reg = AllocTemp();
+                int reg = destReg >= 0 ? destReg : AllocTemp();
                 Emit(OpCode.LOAD_CONST, reg, AddConst(Number.FromFloat(numLit.Value)));
                 return reg;
             }
 
             if (expr is BoolLiteralExpr boolLit)
             {
-                int reg = AllocTemp();
+                int reg = destReg >= 0 ? destReg : AllocTemp();
                 Emit(OpCode.LOAD_CONST, reg, AddConst(boolLit.Value ? Number.One : Number.Zero));
                 return reg;
             }
@@ -657,7 +763,7 @@ namespace FFVM.Compiler
             {
                 int left = CompileExpr(bin.Left);
                 int right = CompileExpr(bin.Right);
-                int dest = AllocTemp();
+                int dest = destReg >= 0 ? destReg : AllocTemp();
                 Emit(BinOpCode(bin.Kind), dest, left, right);
                 return dest;
             }
@@ -665,7 +771,7 @@ namespace FFVM.Compiler
             if (expr is UnaryExpr un)
             {
                 int operand = CompileExpr(un.Operand);
-                int dest = AllocTemp();
+                int dest = destReg >= 0 ? destReg : AllocTemp();
                 Emit(UnOpCode(un.Kind), dest, operand);
                 return dest;
             }
@@ -695,33 +801,38 @@ namespace FFVM.Compiler
                 if (assign.Target is FieldAccessExpr fieldTarget)
                 {
                     int fieldReg = ResolveFieldAccess(fieldTarget);
-                    int valueReg = CompileExpr(assign.Value);
+                    // O4: pass dest-reg hint for field assignment
+                    int valueReg = CompileExpr(assign.Value, destReg: fieldReg);
                     if (valueReg != fieldReg)
                         Emit(OpCode.MOVE, fieldReg, valueReg);
                     return fieldReg;
                 }
 
                 // Scalar assignment (original path)
-                int scalarValueReg = CompileExpr(assign.Value);
                 if (assign.Target is IdentifierExpr scalarTarget)
                 {
                     int scalarTargetReg = ResolveVar(scalarTarget.Name);
+                    // O4: pass dest-reg hint so expression writes directly into target register
+                    int scalarValueReg = CompileExpr(assign.Value, destReg: scalarTargetReg);
                     if (scalarValueReg != scalarTargetReg)
                         Emit(OpCode.MOVE, scalarTargetReg, scalarValueReg);
                     return scalarTargetReg;
                 }
-                _errors.Add($"Invalid assignment target (line {assign.Line})");
-                return scalarValueReg;
+                {
+                    int scalarValueReg = CompileExpr(assign.Value);
+                    _errors.Add($"Invalid assignment target (line {assign.Line})");
+                    return scalarValueReg;
+                }
             }
 
             if (expr is CallExpr call)
             {
                 // User function call (returns value in r0)
                 if (_functionTable != null && _functionTable.ContainsKey(call.FunctionName))
-                    return CompileUserCallExpr(call);
+                    return CompileUserCallExpr(call, destReg);
 
                 // Syscall call
-                return CompileSyscallExpr(call);
+                return CompileSyscallExpr(call, destReg);
             }
 
             _errors.Add($"Unknown expression type: {expr.GetType().Name}");
@@ -734,7 +845,7 @@ namespace FFVM.Compiler
         /// Compile a syscall call as an expression (saves result to temp).
         /// Two-phase arg compilation to avoid register conflicts with nested calls.
         /// </summary>
-        private int CompileSyscallExpr(CallExpr call)
+        private int CompileSyscallExpr(CallExpr call, int destReg = -1)
         {
             if (!_syscalls.TryGetValue(call.FunctionName, out int slot))
             {
@@ -763,10 +874,11 @@ namespace FFVM.Compiler
 
             Emit(OpCode.SYSCALL, slot, 0, call.Arguments.Count);
 
-            // Save result from r0 to temp (protect from future overwrites)
-            int resultTemp = AllocTemp();
-            Emit(OpCode.MOVE, resultTemp, 0);
-            return resultTemp;
+            // O7/FO5: save result from r0 directly to destReg if available
+            int resultReg = destReg >= 0 ? destReg : AllocTemp();
+            if (resultReg != 0)
+                Emit(OpCode.MOVE, resultReg, 0);
+            return resultReg;
         }
 
         /// <summary>
@@ -804,14 +916,15 @@ namespace FFVM.Compiler
         /// Emit arguments to scratch zone, then CALL user function.
         /// Returns temp register holding the return value (from r0).
         /// </summary>
-        private int CompileUserCallExpr(CallExpr call)
+        private int CompileUserCallExpr(CallExpr call, int destReg = -1)
         {
             EmitUserCall(call);
 
-            // Save result from r0 to temp (protect from future overwrites)
-            int resultTemp = AllocTemp();
-            Emit(OpCode.MOVE, resultTemp, 0);
-            return resultTemp;
+            // FO5: save result from r0 directly to destReg if available
+            int resultReg = destReg >= 0 ? destReg : AllocTemp();
+            if (resultReg != 0)
+                Emit(OpCode.MOVE, resultReg, 0);
+            return resultReg;
         }
 
         /// <summary>
@@ -828,6 +941,13 @@ namespace FFVM.Compiler
         /// </summary>
         private void EmitUserCall(CallExpr call)
         {
+            // R8: prohibit function calls inside cleanup blocks (defer/using release)
+            if (_inCleanupBlock)
+            {
+                _errors.Add($"Cannot call functions inside a cleanup block (defer/using) (line {call.Line})");
+                return;
+            }
+
             int entryIP = _functionTable[call.FunctionName];
 
             // Validate parameter count
