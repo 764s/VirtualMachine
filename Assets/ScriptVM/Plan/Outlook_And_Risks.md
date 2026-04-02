@@ -319,7 +319,7 @@ LSP1（LSP Server 核心框架）           ← 所有 LSP 功能的通信基础
 
 | ID | 风险 | 影响 | 来源 |
 |----|------|------|------|
-| **GR1** | Fix64 模式 (`USE_FIXPOINT`) 未经独立构建验证 | 上线前必须通过 | [§11.2 T5](../VM_Summary.md#112-测试缺口) |
+| **GR1** | ~~Fix64 模式 (`USE_FIXPOINT`) 未经独立构建验证~~ → 已修复：CI 矩阵双模式自动验证 + Fix64 除法溢出修复 | ~~上线前必须通过~~ | ✅ 已完成 |
 | **GR2** | ~~Cleanup 块内 `wait`/`wait_for` 未被编译器禁止~~ → 已修复：G6 编译器检查 | ~~阻塞实例回收~~ | ✅ 已修复 |
 | **GR3** | 文档缺口 D1-D4 未合并入总结文档 | 设计上下文缺失 | [§11.3](../VM_Summary.md#113-文档缺口来自档案交叉审查) |
 
@@ -352,8 +352,8 @@ LSP1（LSP Server 核心框架）           ← 所有 LSP 功能的通信基础
 
 | 等级 | 条目 | 数量 |
 |------|------|------|
-| **极低** | R2, R3, R4, R7, SR4, GR2, DBG3, DBG5, DBG6, LSP2, DR1, DR3, DR4 | 13 |
-| **低** | R1, R5, R6, R8, SR1, SR2, SR3, GR1, GR3, DBG1, DBG2, DBG4, DBG7, LSP1, LSP3, LSP4, LSP5, DR2, DR5 | 19 |
+| **极低** | R2, R3, R4, R7, SR4, GR1, GR2, DBG3, DBG5, DBG6, LSP2, DR1, DR3, DR4 | 14 |
+| **低** | R1, R5, R6, R8, SR1, SR2, SR3, GR3, DBG1, DBG2, DBG4, DBG7, LSP1, LSP3, LSP4, LSP5, DR2, DR5 | 18 |
 | **中 / 高** | — | 0 |
 
 ### 按优化类别
@@ -585,7 +585,7 @@ Gate 3: Unity Editor 内嵌 DAP（可选）             ← DBG7 Phase C
 
 | ID | 原等级 | 降级后 | 措施 |
 |----|--------|--------|------|
-| GR1 | ⚠️ | **低** | FIX1 验证任务已列入计划；构建配置矩阵（§6.1）确保 Release 强制 USE_FIXPOINT |
+| GR1 | ⚠️ | **极低** | ✅ CI 矩阵双模式自动验证 + Fix64 除法溢出修复；412 项 Assert 双模式通过 |
 | GR2 | ✅ 已修复 | **极低** | 不变 |
 | GR3 | ⚠️ | **低** | D1-D4 文档缺口列入步骤 10 前批量补全，不阻塞功能 |
 
@@ -603,8 +603,8 @@ Gate 3: Unity Editor 内嵌 DAP（可选）             ← DBG7 Phase C
 
 | 等级 | 条目 | 数量 |
 |------|------|------|
-| **极低** | R2, R3, R4, R7, SR4, GR2, DBG3, DBG5, DBG6, LSP2, DR1, DR3, DR4 | 13 |
-| **低** | R1, R5, R6, R8, SR1, SR2, SR3, GR1, GR3, DBG1, DBG2, DBG4, DBG7, LSP1, LSP3, LSP4, LSP5, DR2, DR5 | 19 |
+| **极低** | R2, R3, R4, R7, SR4, GR1, GR2, DBG3, DBG5, DBG6, LSP2, DR1, DR3, DR4 | 14 |
+| **低** | R1, R5, R6, R8, SR1, SR2, SR3, GR3, DBG1, DBG2, DBG4, DBG7, LSP1, LSP3, LSP4, LSP5, DR2, DR5 | 18 |
 | **中** | — | 0 |
 | **高** | — | 0 |
 
@@ -664,9 +664,12 @@ Gate 3: Unity Editor 内嵌 DAP（可选）             ← DBG7 Phase C
     → Gate 0 验收：51 项 Assert 通过（断点 + 变量 + 调用栈）
     详见 → Step_Debug_Phase2.md
                                     ↓
-─────────────── GR1 理想方案：CI 构建矩阵 ────────────────────
-    FIX1. USE_FIXPOINT 独立构建验证
-    → CI 矩阵中增加 USE_FIXPOINT 配置，每次提交自动验证
+─────────────── GR1 理想方案：CI 构建矩阵 ✅ ────────────────
+    FIX1. USE_FIXPOINT 独立构建验证                      ✅
+    → CI 矩阵 float + Fix64 双模式，每次提交自动验证
+    → Fix64 除法溢出修复（Number.cs 迭代长除法）
+    → 412 项 Assert 双模式全通过
+    详见 → Step_GR1_CI_BuildMatrix.md
                                     ↓
 ─────────────── Handle64 批处理协议（展望项）──────────────────
     H1. 最晚于真实多目标业务接入前实现
@@ -724,7 +727,7 @@ Gate 3: Unity Editor 内嵌 DAP（可选）             ← DBG7 Phase C
 | **R8** | 编译器禁止 Cleanup 块内函数调用 | F4 阶段 | 与 G6（禁止 wait）一致，一行检查 |
 | **SR1** | 编译器超限报错 + FO6 扩大 local 区 | FO6 实施时 | 明确错误信息 + 根本解决方案 |
 | **SR2** | SO1 COPY_BLOCK OpCode | 调整型优化阶段 | `Buffer.MemoryCopy` 批量拷贝替代 N×MOVE |
-| **GR1** | CI 构建矩阵 USE_FIXPOINT 自动验证 | Step 10 前 | 每次提交自动验证，不依赖手动 |
+| **GR1** | ✅ CI 构建矩阵 USE_FIXPOINT 自动验证 + Fix64 除法溢出修复 | ✅ 已完成 | CI 矩阵双模式，412 项 Assert 均通过 |
 | **GR3** | D1-D4 文档缺口批量补全 | 功能补全阶段 | 不阻塞功能，但必须补全 |
 | **DR5** | EditorApplication.update 轮询模式 | Phase 3C | 主线程永不阻塞 |
 

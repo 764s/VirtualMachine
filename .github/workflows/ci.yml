@@ -7,13 +7,19 @@ on:
     branches: [ main, master ]
   workflow_dispatch:
 
+permissions:
+  contents: read
+
 jobs:
   # ───────────────────────────────────────────────────
-  #  Job 1: Build + Unit Tests (315 assertions)
+  #  Job 1: Build + Unit Tests (412 assertions × 2 modes)
   # ───────────────────────────────────────────────────
   test:
-    name: Build & Test
+    name: Build & Test (${{ matrix.fixpoint && 'Fix64' || 'float' }})
     runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        fixpoint: [false, true]
     steps:
       - uses: actions/checkout@v4
 
@@ -40,7 +46,12 @@ jobs:
           EOF
 
       - name: Build
-        run: dotnet build StandaloneRunner/StandaloneRunner.csproj -c Release --nologo
+        run: |
+          BUILD_ARGS="StandaloneRunner/StandaloneRunner.csproj -c Release --nologo"
+          if [ "${{ matrix.fixpoint }}" = "true" ]; then
+            BUILD_ARGS="$BUILD_ARGS -p:DefineConstants=USE_FIXPOINT"
+          fi
+          dotnet build $BUILD_ARGS
 
       - name: Run Tests
         run: |
@@ -57,7 +68,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: test-output
+          name: test-output-${{ matrix.fixpoint && 'fix64' || 'float' }}
           path: test-output.txt
 
   # ───────────────────────────────────────────────────

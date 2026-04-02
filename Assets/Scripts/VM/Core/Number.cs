@@ -61,7 +61,33 @@ namespace FFVM
         public static Number operator /(Number a, Number b)
         {
             if (b.Raw == 0) return Zero; // Panic handled at VM level
-            return new Number((a.Raw << 32) / b.Raw);
+
+            // (a.Raw << 32) / b.Raw overflows 64-bit; use split long division.
+            long la = a.Raw;
+            long lb = b.Raw;
+            bool neg = (la < 0) != (lb < 0);
+            ulong ula = la >= 0 ? (ulong)la : (ulong)(-la);
+            ulong ulb = lb >= 0 ? (ulong)lb : (ulong)(-lb);
+
+            ulong quotient = ula / ulb;   // integer part of Q31.32 result
+            ulong remainder = ula % ulb;
+
+            // Compute 32 fractional bits via iterative long division (MSB to LSB)
+            ulong frac = 0;
+            for (int i = 31; i >= 0; i--)
+            {
+                bool overflowed = (remainder & 0x8000000000000000UL) != 0;
+                remainder <<= 1;
+                if (overflowed || remainder >= ulb)
+                {
+                    remainder -= ulb;
+                    frac |= 1UL << i;
+                }
+            }
+
+            ulong raw = (quotient << 32) | frac;
+            long result = (long)raw;
+            return new Number(neg ? -result : result);
         }
 
         public static Number operator %(Number a, Number b)
