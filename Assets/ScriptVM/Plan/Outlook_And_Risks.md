@@ -348,6 +348,14 @@ LSP1（LSP Server 核心框架）           ← 所有 LSP 功能的通信基础
 | 中 | F4, S4, O4, O6, O10, O11, O14, FO1, FO6, FO7, FO2, FF1, FF2, FF4, FF5, SO1, SN1, H1, DBG1, DBG2, DBG4, DBG7, LSP1, LSP3, LSP4, LSP5 |
 | 高 | O8, O13, FO3 |
 
+### 按风险等级（§六 降级后）
+
+| 等级 | 条目 | 数量 |
+|------|------|------|
+| **极低** | R2, R3, R4, R7, SR4, GR2, DBG3, DBG5, DBG6, LSP2, DR1, DR3, DR4 | 13 |
+| **低** | R1, R5, R6, R8, SR1, SR2, SR3, GR1, GR3, DBG1, DBG2, DBG4, DBG7, LSP1, LSP3, LSP4, LSP5, DR2, DR5 | 19 |
+| **中 / 高** | — | 0 |
+
 ### 按优化类别
 
 | 类别 | 条目 | 数量 | 说明 |
@@ -357,7 +365,248 @@ LSP1（LSP Server 核心框架）           ← 所有 LSP 功能的通信基础
 
 ---
 
-## 六、文档缺口（来自档案交叉审查）
+## 六、风险降级计划（目标：全部 → 低 / 极低）
+
+> **迭代 1**：2026-04-02。针对所有中/高风险项，制定具体降级措施。
+> 特别聚焦：外部工具对接（DAP/LSP）、宿主断点包装为脚本调试、Release 模式隔离。
+
+### 6.1 Release 模式隔离策略（`FFVM_SCRIPT_DEBUG` 条件编译）
+
+**原则**：所有调试 / 外部工具对接代码在 Release 构建中**完全不存在**（零运行时开销、零代码残留）。
+
+**实现**：引入编译符号 `FFVM_SCRIPT_DEBUG`，与已有 `USE_FIXPOINT` 模式一致。
+
+```
+编译配置矩阵：
+┌──────────────┬──────────────────┬─────────────────┐
+│ 构建模式     │ FFVM_SCRIPT_DEBUG │ USE_FIXPOINT    │
+├──────────────┼──────────────────┼─────────────────┤
+│ Dev/Editor   │ ✅ 定义          │ ❌ 不定义       │
+│ Release      │ ❌ 不定义        │ ✅ 定义         │
+│ Release-Debug│ ✅ 定义          │ ✅ 定义         │ ← 仅内部 QA
+└──────────────┴──────────────────┴─────────────────┘
+```
+
+**隔离边界**：
+
+| 层级 | 被隔离的内容 | 隔离方式 |
+|------|-------------|---------|
+| `VMProgram` | `SourceMap` / `SymbolTable` 字段 | `#if FFVM_SCRIPT_DEBUG` 包裹字段 + 构造函数重载 |
+| `BytecodeCompiler` | Source Map emit 逻辑、符号表收集逻辑 | `#if` 包裹对应代码块 |
+| `VMWorld.ExecuteInstance` | 断点检查热路径注入点 | `#if` 包裹整个断点检查分支 |
+| DAP 适配器 | 整个 `FFVM.Debug` namespace | 独立程序集（asmdef），`#if` + Assembly Definition Reference 双重隔离 |
+| LSP Server | 整个 `FFVM.LanguageService` namespace | 独立程序集，不被 Release 构建引用 |
+
+**验证门控**：
+- ✅ Release 构建中 `grep -r "FFVM_SCRIPT_DEBUG"` 确认无符号泄漏
+- ✅ Release 构建体积 diff < 1KB（与隔离前对比）
+- ✅ Release `ExecuteInstance` 反编译确认无断点检查分支
+
+> **风险等级**：**极低**。模式与已验证的 `USE_FIXPOINT` 完全一致，无新模式引入。
+
+### 6.2 DBG 系列风险逐项降级
+
+#### DBG1（Source Map） — 中 → **低**
+
+| 维度 | 原始风险 | 降级措施 |
+|------|---------|---------|
+| 实现复杂度 | 中 | **窄化**：仅记录 `IP → lineNumber`（省略 column），用 `int[]` 平行数组，索引 = IP |
+| 数据正确性 | 编译器优化 pass 可能破坏映射 | **约束**：Source Map 在所有优化 pass 之后、`_instructions` 冻结时最终生成 |
+| 验证 | 无 | **门控测试**：`DBG1_T01` 编译已知脚本 → 断言每个 LOAD_CONST/SYSCALL IP 的 lineNumber 正确 |
+
+#### DBG2（Symbol Table） — 中 → **低**
+
+| 维度 | 原始风险 | 降级措施 |
+|------|---------|---------|
+| 与 F4 耦合 | 符号表需要寄存器生命周期 | **解耦**：Phase 1 只记录 `varName → register`（不含生命周期范围）；生命周期信息在 F4 完成后补充 |
+| struct 字段映射 | 需追踪拍平后的寄存器布局 | **复用**：编译器 `_structVarTypes` + `_structTypes` 已有数据，只需序列化 |
+| 验证 | 无 | **门控测试**：`DBG2_T01` 编译含 var + struct 的脚本 → 断言符号表各项正确 |
+
+#### DBG3（宿主断点桥接） — 低 → **极低**
+
+| 维度 | 原始风险 | 降级措施 |
+|------|---------|---------|
+| 实现 | ~5 行代码 | 不变，极简 |
+| 热路径性能 | ExecuteInstance 每条指令多一次检查 | **#if 隔离**：Release 构建零开销；Dev 构建中用 `HashSet<int>` 行号命中检查，O(1) |
+| 验证 | 无 | **门控测试**：`DBG3_T01` 设断点行 → 验证 `Debugger.Break()` 被调用（mock 方式） |
+
+**DBG3 伪代码（确认极简性）**：
+
+```csharp
+// VMWorld.ExecuteInstance 热路径中，#if FFVM_SCRIPT_DEBUG 包裹
+#if FFVM_SCRIPT_DEBUG
+if (_breakpointLines != null && program.SourceMap != null)
+{
+    int line = program.SourceMap[inst.IP];
+    if (line > 0 && _breakpointLines.Contains(line))
+        System.Diagnostics.Debugger.Break();
+}
+#endif
+```
+
+> 完全确认：5 行代码，无新依赖，Release 零残留。
+
+#### DBG4（单步映射） — 中 → **低**
+
+| 维度 | 原始风险 | 降级措施 |
+|------|---------|---------|
+| Step Over 复杂度 | 需找"下一行"的首 IP | **简化**：Source Map 为 `int[]`，线性扫描 `IP+1` 起找到 `line != currentLine` 的首个 IP，设为临时断点 |
+| Step Into | 需感知 CALL 指令 | **简化**：检查当前 IP 是否为 CALL OpCode → 是则在 CALL 目标 IP 设临时断点 |
+| Step Out | 需感知 RET_FUNC | **简化**：在 `CallStack.ReturnIP` 设临时断点 |
+| 验证 | 无 | **门控测试**：`DBG4_T01` Step Over 验证、`DBG4_T02` Step Into 验证、`DBG4_T03` Step Out 验证 |
+
+> 三种单步都归约为"设临时断点 + 继续执行"，实现复用 DBG3 的断点检查路径。
+
+#### DBG5（变量查看适配器） — 低 → **极低**
+
+不变，已经是低复杂度。纯读取 Symbol Table + 寄存器值。
+
+#### DBG6（调用栈查看） — 低 → **极低**
+
+不变，已经是低复杂度。`CallStack` 已有完整帧信息。
+
+#### DBG7（DAP 适配器） — 中 → **低**（关键降级项）
+
+| 维度 | 原始风险 | 降级措施 |
+|------|---------|---------|
+| 协议复杂度 | DAP 全协议约 50+ 消息 | **窄化 MVP**：仅实现 12 个必需消息（见下表） |
+| JSON-RPC 通信层 | 需实现 Content-Length 分帧 | **复用**：C# 标准 StreamReader + 手写 header 解析（~50 行），或直接使用 `Newtonsoft.Json`（Unity 已内置） |
+| 线程模型 | DAP I/O 线程 vs Unity 主线程 | **简化方案**：Unity Editor 模式下用 `EditorApplication.update` 轮询而非多线程；StandaloneRunner 用 stdin/stdout 同步 I/O |
+| VS Code 扩展 | 需要编写扩展 | **极简**：`package.json` + `launch.json` 配置（~60 行 JSON），无 TypeScript 逻辑 |
+| 验证 | 无 | **分阶段验证**：见 §6.3 |
+
+**DAP MVP 消息集（12 个）**：
+
+| 消息 | 方向 | 复杂度 | 说明 |
+|------|------|--------|------|
+| `initialize` | Request | 极低 | 返回 capabilities 静态对象 |
+| `launch` | Request | 低 | 加载脚本模块 + spawn 实例 |
+| `setBreakpoints` | Request | 低 | Source Map 查表 → `_breakpointLines` |
+| `configurationDone` | Request | 极低 | 空响应 |
+| `threads` | Request | 极低 | 返回单线程（VM 主线程） |
+| `continue` | Request | 极低 | 清除单步标记 + 恢复 Tick |
+| `next` | Request | 低 | Step Over → 设临时断点 + continue |
+| `stepIn` | Request | 低 | Step Into → 设临时断点 + continue |
+| `stepOut` | Request | 低 | Step Out → 设临时断点 + continue |
+| `stackTrace` | Request | 低 | DBG6 调用栈查看 |
+| `scopes` / `variables` | Request | 低 | DBG5 变量查看 |
+| `disconnect` | Request | 极低 | 清理 |
+
+> **总代码量预估**：~600-800 行 C#（含 JSON 序列化辅助）。独立程序集，`#if FFVM_SCRIPT_DEBUG`。
+
+### 6.3 DAP 对接分阶段验证门控（降级关键）
+
+**核心策略**：不一次性实现全部 DAP，而是逐层叠加，每层有独立验证门控。
+
+```
+Gate 0: 纯命令行调试（零外部依赖）              ← DBG3+DBG5+DBG6
+  验证：StandaloneRunner 中手动设断点行号 →
+        命中时 Console 输出调用栈 + 变量值
+  通过标准：3 个门控测试通过
+  风险等级：极低（零外部依赖）
+      │
+      ↓
+Gate 1: DAP 最小协议（stdin/stdout JSON-RPC）    ← DBG7 Phase A
+  验证：StandaloneRunner 作为 DAP server →
+        VS Code launch.json 连接 →
+        setBreakpoints → continue → 命中 → stackTrace + variables 正确
+  通过标准：手动验证 VS Code 断点命中 + 变量显示
+  风险等级：低（标准协议，有参考实现可对照）
+      │
+      ↓
+Gate 2: DAP 单步 + 完整 VS Code 体验             ← DBG7 Phase B + DBG4
+  验证：next / stepIn / stepOut → 源码行正确跳转
+  通过标准：手动验证三种单步行为
+  风险等级：低（复用断点机制）
+      │
+      ↓
+Gate 3: Unity Editor 内嵌 DAP（可选）             ← DBG7 Phase C
+  验证：Unity Editor Play Mode 中 VS Code 附加调试
+  通过标准：Editor 模式下断点命中 + 变量查看
+  风险等级：中 → 低（EditorApplication.update 轮询模式规避线程问题）
+```
+
+> **关键洞察**：Gate 0 完全不依赖外部工具，用纯测试验证 Source Map + 断点 + 变量查看的正确性。
+> 即使 DAP 对接遇到问题，Gate 0 的能力已经可用（命令行调试）。
+
+### 6.4 LSP 系列风险逐项降级
+
+#### LSP1（LSP Server 核心框架） — 中 → **低**
+
+| 维度 | 原始风险 | 降级措施 |
+|------|---------|---------|
+| 协议复杂度 | LSP 全协议 100+ 消息 | **窄化**：仅实现 `initialize` + `textDocument/didOpen` + `textDocument/didChange` + `textDocument/publishDiagnostics` |
+| 通信层 | 与 DAP 相同的 JSON-RPC | **复用 DAP 通信层**：共享 `ContentLengthStream` + JSON 序列化 |
+| 验证 | 无 | **门控**：VS Code 扩展安装后，脚本文件打开 → 实时报错红线出现 |
+
+#### LSP2（语法高亮） — 低 → **极低**
+
+零风险。纯 JSON 文件（TextMate grammar），约 80-100 行，16 个关键字 + 运算符。可立即实施。
+
+#### LSP3-LSP5 — 中 → **低**
+
+| 措施 | 说明 |
+|------|------|
+| **增量编译不做** | 初版直接全量重编译（当前编译器 ~800 行，编译速度对小脚本文件足够） |
+| **复用编译器错误列表** | `BytecodeCompiler._errors` 已有行号信息（待 DBG1 Source Map 增强） |
+| **延迟实施** | LSP4/LSP5 排在 LSP3 之后，逐步叠加 |
+
+### 6.5 已有风险项降级汇总
+
+#### 步骤 8 风险
+
+| ID | 原等级 | 降级后 | 措施 |
+|----|--------|--------|------|
+| R1 | ⚠️ 已知限制 | **低** | FO6 自适应窗口已在调整型优化中，且 3 层嵌套覆盖绝大多数业务场景 |
+| R2 | ✅ 已验证 | **极低** | 不变 |
+| R3 | ✅ 已保证 | **极低** | 不变 |
+| R4 | ✅ 已验证 | **极低** | 不变 |
+| R5 | 前瞻 | **低** | S4 实施时 struct 参数仅允许 ≤4 字段的结构体直接传递，>4 时编译报错 |
+| R6 | 前瞻 | **低** | 跨模块调用推迟至业务需要时；当前单模块完全满足 |
+| R7 | 前瞻 | **极低** | 百函数级模块下 `_pendingCalls` 线性扫描 < 1ms，无实际影响 |
+| R8 | 前瞻 | **低** | G6 已禁止 Cleanup 块内 wait；进一步扩展为禁止 Cleanup 块内函数调用（增加一行编译器检查） |
+
+#### 步骤 9 风险
+
+| ID | 原等级 | 降级后 | 措施 |
+|----|--------|--------|------|
+| SR1 | ⚠️ | **低** | 编译器已有超限报错；实际业务 struct ≤5 字段为主 |
+| SR2 | ⚠️ | **低** | 业务 struct 通常 2-5 字段；SO1 COPY_BLOCK 作为后备 |
+| SR3 | ⚠️ | **低** | S4 实施时联合验证；当前局部 struct 不涉及窗口偏移 |
+| SR4 | ⚠️ | **极低** | 语法层面已禁止方法调用；Parser 不支持 `a.b(c)` 形式 |
+
+#### 全局风险
+
+| ID | 原等级 | 降级后 | 措施 |
+|----|--------|--------|------|
+| GR1 | ⚠️ | **低** | FIX1 验证任务已列入计划；构建配置矩阵（§6.1）确保 Release 强制 USE_FIXPOINT |
+| GR2 | ✅ 已修复 | **极低** | 不变 |
+| GR3 | ⚠️ | **低** | D1-D4 文档缺口列入步骤 10 前批量补全，不阻塞功能 |
+
+### 6.6 新增风险识别（外部工具对接）
+
+| ID | 风险 | 原等级 | 降级措施 | 降级后 |
+|----|------|--------|---------|--------|
+| **DR1** | DAP JSON 序列化/反序列化引入 GC 压力 | 中 | Editor 模式专用，不影响 Release；`#if` 隔离 | **极低** |
+| **DR2** | VS Code 扩展维护成本 | 中 | 极简扩展（纯 JSON 配置，无 TypeScript 逻辑）；无运行时代码 | **低** |
+| **DR3** | DAP 协议版本演进导致不兼容 | 低 | MVP 仅用 DAP 1.0 核心消息，极稳定子集 | **极低** |
+| **DR4** | `Debugger.Break()` 在非 IDE 环境中无效 | 低 | Gate 0 提供纯 Console 回退路径 | **极低** |
+| **DR5** | Unity Editor 主线程阻塞导致 UI 冻结 | 中 | 改用轮询模式：`_isPaused` 标志位 + `EditorApplication.update` 检查，主线程不阻塞 | **低** |
+
+### 6.7 全风险矩阵（降级后）
+
+| 等级 | 条目 | 数量 |
+|------|------|------|
+| **极低** | R2, R3, R4, R7, SR4, GR2, DBG3, DBG5, DBG6, LSP2, DR1, DR3, DR4 | 13 |
+| **低** | R1, R5, R6, R8, SR1, SR2, SR3, GR1, GR3, DBG1, DBG2, DBG4, DBG7, LSP1, LSP3, LSP4, LSP5, DR2, DR5 | 19 |
+| **中** | — | 0 |
+| **高** | — | 0 |
+
+> ✅ **目标达成**：全部 32 项风险降至低或极低。
+
+---
+
+## 七、文档缺口（来自档案交叉审查）
 
 > 详见 [VM_Summary.md §11.3](../VM_Summary.md#113-文档缺口来自档案交叉审查)
 
