@@ -834,12 +834,31 @@ skill TracerBullet
 | Job | 触发 | 内容 |
 |-----|------|------|
 | **test** | push / PR | 构建 StandaloneRunner → 运行全部 315 个测试断言（TreeWalker 112 + Compiler 168 + Performance 17 + FFScript 18） |
-| **benchmark** | test 通过后 | 运行 B01-B05 VM vs C# 基准，生成 `benchmark_ci.md` artifact |
+| **benchmark** | test 通过后 | 运行 B01-B05 VM vs C# 基准，生成 `benchmark_ci.md` artifact；push 到 main/master 时自动追加历史记录 |
 | **cross-lang** | test 通过后 | 运行 Lua / Python / Node.js 同源基准，生成 `cross_lang_results.md` artifact |
 
 由于 `StandaloneRunner.csproj` 被 `.gitignore` 排除（Unity 约定），CI 中通过 inline `cat >` 自动生成。
 
-### 12.2 跨语言性能基准
+### 12.2 性能历史追踪
+
+每次 push 到 main/master 后，benchmark Job 自动执行以下流程：
+
+1. 运行 B01-B05 基准测试
+2. 调用 `benchmarks/update-history.sh` 解析结果并追加到 [`benchmarks/performance_history.md`](../benchmarks/performance_history.md)
+3. 与上一次记录对比，计算 VM 时间和 Ratio 的变化量（Δ）
+4. 若任一 Benchmark 的 Ratio 退化超过 10%，标注 ⚠️ 回归警告
+5. 自动 commit 并 push 更新后的历史文件（`[skip ci]` 避免循环触发）
+
+**历史文件格式**：每条记录包含日期、commit SHA、运行环境、各 Benchmark 的绝对值与 Δ 变化。最新记录在最上方。
+
+手动生成历史记录：
+
+```bash
+dotnet run --project StandaloneRunner/StandaloneRunner.csproj -c Release -- --bench 2>&1 | tee bench-raw.txt
+bash benchmarks/update-history.sh bench-raw.txt
+```
+
+### 12.3 跨语言性能基准
 
 `benchmarks/` 目录包含与 FFVM BenchmarkRunner (B01-B05) **逻辑完全一致**的实现：
 
