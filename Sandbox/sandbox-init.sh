@@ -3,7 +3,7 @@
 #  FFScript Sandbox — One-Click Initialization (macOS / Linux)
 #
 #  First-time setup after checkout:
-#    1. Run this script:  bash sandbox-init.sh
+#    1. Run this script:  bash Sandbox/sandbox-init.sh
 #    2. Run the generated: ./run-sandbox.sh
 #    3. (Optional) Open VS Code — debug extension auto-installed
 # ============================================================
@@ -11,7 +11,7 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-cd "$SCRIPT_DIR"
+cd "$SCRIPT_DIR/.."
 
 echo
 echo " ========================================================"
