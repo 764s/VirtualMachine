@@ -626,17 +626,18 @@ skill TracerBullet
 | 9 | B-γ4 | C6 嵌套 using 作用域优化 | ⏳ | 合并相邻 PUSH_CLEANUP 指令 + 性能验证 + 测试通过 | 无 |
 | 10 | B-γ5 | SN1 嵌套结构体 | ⏳ | 递归拍平为连续寄存器 + 编译/运行测试通过 | struct ✅ |
 | 11 | B-γ6 | GR3 文档缺口 D1-D4 | ⏳ | D1-D4 内容补入 VM_Summary.md 对应章节 | 无 |
+| 12 | B-γ7 | STR1 常量字符串（最小化） | ⏳ | Lexer StringLiteral + VMProgram.StringConstants ROM + LOAD_CONST 索引 + Syscall 日志/宿主传递验证 + 不支持拼接 + 测试通过 | 无 |
 
 #### Phase δ: 按需补全
 
 | # | ID | 内容 | 状态 | 完成条件 | 依赖 |
 |---|-----|------|------|----------|------|
-| 12 | B-δ1 | O10 快照只拷贝活跃实例 | ⏳ | 快照数据量减少 80-90% + 性能验证 | B-β3 (O9) |
-| 13 | B-δ2 | SO1 COPY_BLOCK OpCode | ⏳ | 新 OpCode + Buffer.MemoryCopy 实现 + 大 struct 赋值验证 | struct ✅ |
-| 14 | B-δ3 | FF3 可选参数与默认值 | ⏳ | 编译器支持可选参数 + 默认值填充 + 测试通过 | 函数调用 ✅ |
-| 15 | B-δ4 | SN2 结构体字面量构造语法 | ⏳ | 编译器 sugar 实现 + 测试通过 | struct ✅ |
-| 16 | B-δ5 | C5 Cleanup 超时保护 | ⏳ | Cleanup 块执行超时检测 + 实例回收保证 + 测试通过 | 无 |
-| 17 | B-δ6 | B1 Unity Editor DAP (可选) | ⏳ | EditorApplication.update 轮询模式 + DR5 解决 + 测试通过 | DAP ✅ |
+| 13 | B-δ1 | O10 快照只拷贝活跃实例 | ⏳ | 快照数据量减少 80-90% + 性能验证 | B-β3 (O9) |
+| 14 | B-δ2 | SO1 COPY_BLOCK OpCode | ⏳ | 新 OpCode + Buffer.MemoryCopy 实现 + 大 struct 赋值验证 | struct ✅ |
+| 15 | B-δ3 | FF3 可选参数与默认值 | ⏳ | 编译器支持可选参数 + 默认值填充 + 测试通过 | 函数调用 ✅ |
+| 16 | B-δ4 | SN2 结构体字面量构造语法 | ⏳ | 编译器 sugar 实现 + 测试通过 | struct ✅ |
+| 17 | B-δ5 | C5 Cleanup 超时保护 | ⏳ | Cleanup 块执行超时检测 + 实例回收保证 + 测试通过 | 无 |
+| 18 | B-δ6 | B1 Unity Editor DAP (可选) | ⏳ | EditorApplication.update 轮询模式 + DR5 解决 + 测试通过 | DAP ✅ |
 
 > **剩余展望项**（暂无排期，业务驱动激活）：FF1 跨模块调用、FF2 函数回调、FF4 多返回值、
 > O8 指令压缩、O11-O14 运行时优化、FO2 尾调用、FO3 小函数内联、
@@ -943,4 +944,4 @@ bash benchmarks/update-history.sh bench-raw.txt
 | # | 实践文档 | 主题 | 日期 | 产出建议去向 |
 |---|---------|------|------|------------|
 | P001 | [P001_Performance_Baseline_Rebuild.md](Practice/P001_Performance_Baseline_Rebuild.md) | 性能基线重建 + 执行循环优化 | 2026-04-03 | 串行计划新步骤 / 展望 |
-// | Sandbox 构建 | [Practice_Sandbox.md](Plan/Practice_Sandbox.md) | P1 寄存器生命周期 Bug（高优先），P3 Syscall 约定文档化，P4 DapServer Syscall 支持，P8 .vscode gitignore |
+| P002 | [P002_Sandbox_Build.md](Practice/P002_Sandbox_Build.md) | Sandbox 构建实践 | 2026-04-03 | P1 寄存器生命周期 Bug（高优先），P3 Syscall 约定文档化，P4 DapServer Syscall 支持，P8 .vscode gitignore |
