@@ -927,3 +927,13 @@ bash benchmarks/update-history.sh bench-raw.txt
 
 > 风险降级详细措施见 [Outlook_And_Risks.md §六](Plan/Outlook_And_Risks.md#六风险降级计划目标全部--低--极低)。
 > Release 模式隔离策略（`FFVM_SCRIPT_DEBUG` 条件编译）见 §6.1。
+
+---
+
+### 实践专区
+
+实际构建过程中发现的问题、阻碍和改进建议。经讨论后将纳入串行计划、展望计划或风险点。
+
+| 来源 | 文件 | 关键发现 |
+|------|------|----------|
+| Sandbox 构建 | [Practice_Sandbox.md](Plan/Practice_Sandbox.md) | P1 寄存器生命周期 Bug（高优先），P3 Syscall 约定文档化，P4 DapServer Syscall 支持，P8 .vscode gitignore |

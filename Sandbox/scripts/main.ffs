@@ -5,6 +5,11 @@
 // Run with: dotnet run -- --run
 // Debug with: F5 in VSCode (see README.md)
 
+// Simple function call (demonstrates leaf function optimization)
+func add(a: int, b: int): int {
+    return a + b
+}
+
 func main() {
     // --- Basic printing ---
     print(42)
@@ -17,34 +22,28 @@ func main() {
     print_str(9, 50)
 
     // --- Math syscalls ---
-    var a: int = -7
-    var b: int = abs(a)
-    print_str(0, b)
+    var neg: int = -7
+    var pos: int = abs(neg)
+    print_str(0, pos)
 
-    var x: int = 10
-    var y: int = 20
-    var lo: int = min(x, y)
-    var hi: int = max(x, y)
-    print_str(14, lo)
-    print_str(15, hi)
+    print_str(14, min(10, 20))
+    print_str(15, max(10, 20))
 
-    var clamped: int = clamp(50, 0, 30)
-    print_str(0, clamped)
-
-    var s: int = sqrt(144)
-    print_str(0, s)
+    print_str(0, clamp(50, 0, 30))
+    print_str(0, sqrt(144))
 
     // --- Random ---
-    var r: int = random(100)
-    print_str(0, r)
+    print_str(0, random(100))
 
     // --- Time ---
-    var t: int = time()
-    print_str(3, t)
+    print_str(3, time())
 
     // --- Frame count ---
-    var f: int = frame_count()
-    print_str(5, f)
+    print_str(5, frame_count())
+
+    // --- Function call example ---
+    var added: int = add(17, 25)
+    print_str(0, added)
 
     // --- Computation example: sum 1..100 ---
     var sum: int = 0
@@ -55,14 +54,5 @@ func main() {
     }
     print_str(10, sum)
 
-    // --- Function call example ---
-    var added: int = add(17, 25)
-    print_str(0, added)
-
     print(0)
-}
-
-// Simple function call (demonstrates leaf function optimization)
-func add(a: int, b: int): int {
-    return a + b
 }

@@ -1,0 +1,21 @@
+{
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "Debug FFScript (Sandbox)",
+            "type": "ffvm",
+            "request": "launch",
+            "program": "${workspaceFolder}/Sandbox/scripts/main.ffs"
+        },
+        {
+            "name": "Run Sandbox (Console)",
+            "type": "coreclr",
+            "request": "launch",
+            "program": "${workspaceFolder}/Sandbox/bin/Release/net8.0/Sandbox",
+            "args": ["--run"],
+            "cwd": "${workspaceFolder}/Sandbox",
+            "console": "integratedTerminal",
+            "preLaunchTask": "build-sandbox"
+        }
+    ]
+}
