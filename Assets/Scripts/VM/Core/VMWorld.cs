@@ -138,7 +138,7 @@ namespace FFVM
             return r < 16 ? r : r + regBase;
         }
 
-        private void ExecuteInstance(ref VMInstanceState inst)
+        private unsafe void ExecuteInstance(ref VMInstanceState inst)
         {
             VMProgram program = Modules.Get(inst.ModuleSlot);
             if (program == null)
@@ -155,256 +155,262 @@ namespace FFVM
             var dbg = Debugger;
             var srcMap = (dbg != null) ? program.SourceMap : null;
 
-            while (steps < MaxStepsPerTick)
+            // O1: Pin registers once for the entire execution burst.
+            // Previously each Get/Set call did its own fixed pin/unpin — the single
+            // largest per-instruction overhead in the dispatch loop.
+            fixed (Number* regs = &inst.Registers.R00)
             {
-                if (inst.IP < 0 || inst.IP >= code.Length)
+                while (steps < MaxStepsPerTick)
                 {
-                    inst.ErrorFlag = VMError.PanicOutOfBounds;
-                    return;
-                }
-
-                // --- Breakpoint check (zero overhead when Debugger is null) ---
-                if (srcMap != null)
-                {
-                    if (dbg.CheckBreakpoint(inst.InstanceId, inst.IP, srcMap) && dbg.HaltOnBreakpoint)
+                    if (inst.IP < 0 || inst.IP >= code.Length)
                     {
-                        // DAP mode: halt BEFORE executing the instruction so the user
-                        // sees the breakpoint line as the current line in stackTrace.
+                        inst.ErrorFlag = VMError.PanicOutOfBounds;
                         return;
                     }
-                }
 
-                ref Instruction op = ref code[inst.IP];
-                int rb = inst.RegisterBase;
-                steps++;
-
-                switch (op.Code)
-                {
-                    case OpCode.NOP:
-                        inst.IP++;
-                        break;
-
-                    case OpCode.LOAD_CONST:
-                        inst.Registers.Set(Reg(op.A, rb), consts[op.B]);
-                        inst.IP++;
-                        break;
-
-                    case OpCode.SYSCALL:
-                        Syscalls.Invoke(op.A, ref inst);
-                        if (inst.ErrorFlag != VMError.None) return;
-                        inst.IP++;
-                        break;
-
-                    case OpCode.WAIT:
-                        inst.WaitCounter = op.A;
-                        inst.IP++;
-                        return; // Yield to next tick
-
-                    case OpCode.WAIT_FOR:
-                        inst.WaitTargetInstanceId = inst.Registers.Get(Reg(op.A, rb)).ToInt();
-                        inst.IP++;
-                        return; // Yield to next tick — Tick() checks WaitTargetInstanceId
-
-                    case OpCode.PUSH_CLEANUP:
-                        if (inst.CleanupDepth >= VMConstants.MaxCleanupDepth)
+                    // --- Breakpoint check (zero overhead when Debugger is null) ---
+                    if (srcMap != null)
+                    {
+                        if (dbg.CheckBreakpoint(inst.InstanceId, inst.IP, srcMap) && dbg.HaltOnBreakpoint)
                         {
-                            inst.ErrorFlag = VMError.PanicStackOverflow;
+                            // DAP mode: halt BEFORE executing the instruction so the user
+                            // sees the breakpoint line as the current line in stackTrace.
                             return;
                         }
-                        inst.CleanupStack.Set(inst.CleanupDepth, new CleanupFrame { CleanupEntryIP = op.A });
-                        inst.CleanupDepth++;
-                        inst.IP++;
-                        break;
+                    }
 
-                    case OpCode.POP_CLEANUP:
-                        if (inst.CleanupDepth > 0) inst.CleanupDepth--;
-                        inst.IP++;
-                        break;
+                    ref Instruction op = ref code[inst.IP];
+                    int rb = inst.RegisterBase;
+                    steps++;
 
-                    case OpCode.RETURN:
-                        if ((inst.StateFlags & VMStateFlags.InCleanup) != 0)
-                        {
-                            // Finished one cleanup block
-                            if (inst.CleanupDepth > 0)
+                    switch (op.Code)
+                    {
+                        case OpCode.NOP:
+                            inst.IP++;
+                            break;
+
+                        case OpCode.LOAD_CONST:
+                            regs[Reg(op.A, rb)] = consts[op.B];
+                            inst.IP++;
+                            break;
+
+                        case OpCode.SYSCALL:
+                            Syscalls.Invoke(op.A, ref inst);
+                            if (inst.ErrorFlag != VMError.None) return;
+                            inst.IP++;
+                            break;
+
+                        case OpCode.WAIT:
+                            inst.WaitCounter = op.A;
+                            inst.IP++;
+                            return; // Yield to next tick
+
+                        case OpCode.WAIT_FOR:
+                            inst.WaitTargetInstanceId = regs[Reg(op.A, rb)].ToInt();
+                            inst.IP++;
+                            return; // Yield to next tick — Tick() checks WaitTargetInstanceId
+
+                        case OpCode.PUSH_CLEANUP:
+                            if (inst.CleanupDepth >= VMConstants.MaxCleanupDepth)
                             {
-                                // More cleanup blocks to run (LIFO)
-                                inst.CleanupDepth--;
-                                inst.IP = inst.CleanupStack.Get(inst.CleanupDepth).CleanupEntryIP;
+                                inst.ErrorFlag = VMError.PanicStackOverflow;
+                                return;
+                            }
+                            inst.CleanupStack.Set(inst.CleanupDepth, new CleanupFrame { CleanupEntryIP = op.A });
+                            inst.CleanupDepth++;
+                            inst.IP++;
+                            break;
+
+                        case OpCode.POP_CLEANUP:
+                            if (inst.CleanupDepth > 0) inst.CleanupDepth--;
+                            inst.IP++;
+                            break;
+
+                        case OpCode.RETURN:
+                            if ((inst.StateFlags & VMStateFlags.InCleanup) != 0)
+                            {
+                                // Finished one cleanup block
+                                if (inst.CleanupDepth > 0)
+                                {
+                                    // More cleanup blocks to run (LIFO)
+                                    inst.CleanupDepth--;
+                                    inst.IP = inst.CleanupStack.Get(inst.CleanupDepth).CleanupEntryIP;
+                                }
+                                else
+                                {
+                                    // All cleanups done
+                                    inst.StateFlags &= ~VMStateFlags.InCleanup;
+                                    inst.StateFlags |= VMStateFlags.Completed;
+                                    return;
+                                }
                             }
                             else
                             {
-                                // All cleanups done
-                                inst.StateFlags &= ~VMStateFlags.InCleanup;
-                                inst.StateFlags |= VMStateFlags.Completed;
-                                return;
+                                // Normal return — enter cleanup if any
+                                if (inst.CleanupDepth > 0)
+                                {
+                                    inst.StateFlags |= VMStateFlags.InCleanup;
+                                    inst.CleanupDepth--;
+                                    inst.IP = inst.CleanupStack.Get(inst.CleanupDepth).CleanupEntryIP;
+                                }
+                                else
+                                {
+                                    inst.StateFlags |= VMStateFlags.Completed;
+                                    return;
+                                }
                             }
-                        }
-                        else
-                        {
-                            // Normal return — enter cleanup if any
-                            if (inst.CleanupDepth > 0)
-                            {
-                                inst.StateFlags |= VMStateFlags.InCleanup;
-                                inst.CleanupDepth--;
-                                inst.IP = inst.CleanupStack.Get(inst.CleanupDepth).CleanupEntryIP;
-                            }
+                            break;
+
+                        // --- Phase 2: Data Movement ---
+
+                        case OpCode.MOVE:
+                            regs[Reg(op.A, rb)] = regs[Reg(op.B, rb)];
+                            inst.IP++;
+                            break;
+
+                        // --- Phase 2: Control Flow ---
+
+                        case OpCode.JUMP:
+                            inst.IP = op.A;
+                            break;
+
+                        case OpCode.JUMP_IF_ZERO:
+                            if (regs[Reg(op.B, rb)] == Number.Zero)
+                                inst.IP = op.A;
                             else
+                                inst.IP++;
+                            break;
+
+                        case OpCode.JUMP_IF_NOT_ZERO:
+                            if (regs[Reg(op.B, rb)] != Number.Zero)
+                                inst.IP = op.A;
+                            else
+                                inst.IP++;
+                            break;
+
+                        // --- Phase 2: Arithmetic ---
+
+                        case OpCode.ADD:
+                            regs[Reg(op.A, rb)] = regs[Reg(op.B, rb)] + regs[Reg(op.C, rb)];
+                            inst.IP++;
+                            break;
+
+                        case OpCode.SUB:
+                            regs[Reg(op.A, rb)] = regs[Reg(op.B, rb)] - regs[Reg(op.C, rb)];
+                            inst.IP++;
+                            break;
+
+                        case OpCode.MUL:
+                            regs[Reg(op.A, rb)] = regs[Reg(op.B, rb)] * regs[Reg(op.C, rb)];
+                            inst.IP++;
+                            break;
+
+                        case OpCode.DIV:
+                            regs[Reg(op.A, rb)] = regs[Reg(op.B, rb)] / regs[Reg(op.C, rb)];
+                            inst.IP++;
+                            break;
+
+                        case OpCode.MOD:
+                            regs[Reg(op.A, rb)] = regs[Reg(op.B, rb)] % regs[Reg(op.C, rb)];
+                            inst.IP++;
+                            break;
+
+                        // --- Phase 2: Comparison ---
+
+                        case OpCode.CMP_EQ:
+                            regs[Reg(op.A, rb)] = regs[Reg(op.B, rb)] == regs[Reg(op.C, rb)] ? Number.One : Number.Zero;
+                            inst.IP++;
+                            break;
+
+                        case OpCode.CMP_NEQ:
+                            regs[Reg(op.A, rb)] = regs[Reg(op.B, rb)] != regs[Reg(op.C, rb)] ? Number.One : Number.Zero;
+                            inst.IP++;
+                            break;
+
+                        case OpCode.CMP_LT:
+                            regs[Reg(op.A, rb)] = regs[Reg(op.B, rb)] < regs[Reg(op.C, rb)] ? Number.One : Number.Zero;
+                            inst.IP++;
+                            break;
+
+                        case OpCode.CMP_LTE:
+                            regs[Reg(op.A, rb)] = regs[Reg(op.B, rb)] <= regs[Reg(op.C, rb)] ? Number.One : Number.Zero;
+                            inst.IP++;
+                            break;
+
+                        case OpCode.CMP_GT:
+                            regs[Reg(op.A, rb)] = regs[Reg(op.B, rb)] > regs[Reg(op.C, rb)] ? Number.One : Number.Zero;
+                            inst.IP++;
+                            break;
+
+                        case OpCode.CMP_GTE:
+                            regs[Reg(op.A, rb)] = regs[Reg(op.B, rb)] >= regs[Reg(op.C, rb)] ? Number.One : Number.Zero;
+                            inst.IP++;
+                            break;
+
+                        // --- Phase 2: Boolean / Unary ---
+
+                        case OpCode.AND:
+                            regs[Reg(op.A, rb)] =
+                                (regs[Reg(op.B, rb)] != Number.Zero && regs[Reg(op.C, rb)] != Number.Zero)
+                                    ? Number.One : Number.Zero;
+                            inst.IP++;
+                            break;
+
+                        case OpCode.OR:
+                            regs[Reg(op.A, rb)] =
+                                (regs[Reg(op.B, rb)] != Number.Zero || regs[Reg(op.C, rb)] != Number.Zero)
+                                    ? Number.One : Number.Zero;
+                            inst.IP++;
+                            break;
+
+                        case OpCode.NOT:
+                            regs[Reg(op.A, rb)] = regs[Reg(op.B, rb)] == Number.Zero ? Number.One : Number.Zero;
+                            inst.IP++;
+                            break;
+
+                        case OpCode.NEG:
+                            regs[Reg(op.A, rb)] = -regs[Reg(op.B, rb)];
+                            inst.IP++;
+                            break;
+
+                        // --- Phase 3: Function Calls ---
+
+                        case OpCode.CALL:
+                        {
+                            if (inst.CallStackDepth >= VMConstants.MaxCallDepth)
                             {
-                                inst.StateFlags |= VMStateFlags.Completed;
+                                inst.ErrorFlag = VMError.PanicStackOverflow;
                                 return;
                             }
+                            var frame = new CallFrame
+                            {
+                                ReturnIP = inst.IP + 1,
+                                ReturnModuleSlot = inst.ModuleSlot,
+                                RegisterBase = inst.RegisterBase,
+                                CleanupBase = inst.CleanupDepth
+                            };
+                            inst.CallStack.Set(inst.CallStackDepth, frame);
+                            inst.CallStackDepth++;
+                            inst.RegisterBase += op.B; // B = callerWindowSize
+                            inst.IP = op.A;            // A = target function entry IP
+                            break;                     // don't IP++ — already jumped
                         }
-                        break;
 
-                    // --- Phase 2: Data Movement ---
-
-                    case OpCode.MOVE:
-                        inst.Registers.Set(Reg(op.A, rb), inst.Registers.Get(Reg(op.B, rb)));
-                        inst.IP++;
-                        break;
-
-                    // --- Phase 2: Control Flow ---
-
-                    case OpCode.JUMP:
-                        inst.IP = op.A;
-                        break;
-
-                    case OpCode.JUMP_IF_ZERO:
-                        if (inst.Registers.Get(Reg(op.B, rb)) == Number.Zero)
-                            inst.IP = op.A;
-                        else
-                            inst.IP++;
-                        break;
-
-                    case OpCode.JUMP_IF_NOT_ZERO:
-                        if (inst.Registers.Get(Reg(op.B, rb)) != Number.Zero)
-                            inst.IP = op.A;
-                        else
-                            inst.IP++;
-                        break;
-
-                    // --- Phase 2: Arithmetic ---
-
-                    case OpCode.ADD:
-                        inst.Registers.Set(Reg(op.A, rb), inst.Registers.Get(Reg(op.B, rb)) + inst.Registers.Get(Reg(op.C, rb)));
-                        inst.IP++;
-                        break;
-
-                    case OpCode.SUB:
-                        inst.Registers.Set(Reg(op.A, rb), inst.Registers.Get(Reg(op.B, rb)) - inst.Registers.Get(Reg(op.C, rb)));
-                        inst.IP++;
-                        break;
-
-                    case OpCode.MUL:
-                        inst.Registers.Set(Reg(op.A, rb), inst.Registers.Get(Reg(op.B, rb)) * inst.Registers.Get(Reg(op.C, rb)));
-                        inst.IP++;
-                        break;
-
-                    case OpCode.DIV:
-                        inst.Registers.Set(Reg(op.A, rb), inst.Registers.Get(Reg(op.B, rb)) / inst.Registers.Get(Reg(op.C, rb)));
-                        inst.IP++;
-                        break;
-
-                    case OpCode.MOD:
-                        inst.Registers.Set(Reg(op.A, rb), inst.Registers.Get(Reg(op.B, rb)) % inst.Registers.Get(Reg(op.C, rb)));
-                        inst.IP++;
-                        break;
-
-                    // --- Phase 2: Comparison ---
-
-                    case OpCode.CMP_EQ:
-                        inst.Registers.Set(Reg(op.A, rb), inst.Registers.Get(Reg(op.B, rb)) == inst.Registers.Get(Reg(op.C, rb)) ? Number.One : Number.Zero);
-                        inst.IP++;
-                        break;
-
-                    case OpCode.CMP_NEQ:
-                        inst.Registers.Set(Reg(op.A, rb), inst.Registers.Get(Reg(op.B, rb)) != inst.Registers.Get(Reg(op.C, rb)) ? Number.One : Number.Zero);
-                        inst.IP++;
-                        break;
-
-                    case OpCode.CMP_LT:
-                        inst.Registers.Set(Reg(op.A, rb), inst.Registers.Get(Reg(op.B, rb)) < inst.Registers.Get(Reg(op.C, rb)) ? Number.One : Number.Zero);
-                        inst.IP++;
-                        break;
-
-                    case OpCode.CMP_LTE:
-                        inst.Registers.Set(Reg(op.A, rb), inst.Registers.Get(Reg(op.B, rb)) <= inst.Registers.Get(Reg(op.C, rb)) ? Number.One : Number.Zero);
-                        inst.IP++;
-                        break;
-
-                    case OpCode.CMP_GT:
-                        inst.Registers.Set(Reg(op.A, rb), inst.Registers.Get(Reg(op.B, rb)) > inst.Registers.Get(Reg(op.C, rb)) ? Number.One : Number.Zero);
-                        inst.IP++;
-                        break;
-
-                    case OpCode.CMP_GTE:
-                        inst.Registers.Set(Reg(op.A, rb), inst.Registers.Get(Reg(op.B, rb)) >= inst.Registers.Get(Reg(op.C, rb)) ? Number.One : Number.Zero);
-                        inst.IP++;
-                        break;
-
-                    // --- Phase 2: Boolean / Unary ---
-
-                    case OpCode.AND:
-                        inst.Registers.Set(Reg(op.A, rb),
-                            (inst.Registers.Get(Reg(op.B, rb)) != Number.Zero && inst.Registers.Get(Reg(op.C, rb)) != Number.Zero)
-                                ? Number.One : Number.Zero);
-                        inst.IP++;
-                        break;
-
-                    case OpCode.OR:
-                        inst.Registers.Set(Reg(op.A, rb),
-                            (inst.Registers.Get(Reg(op.B, rb)) != Number.Zero || inst.Registers.Get(Reg(op.C, rb)) != Number.Zero)
-                                ? Number.One : Number.Zero);
-                        inst.IP++;
-                        break;
-
-                    case OpCode.NOT:
-                        inst.Registers.Set(Reg(op.A, rb), inst.Registers.Get(Reg(op.B, rb)) == Number.Zero ? Number.One : Number.Zero);
-                        inst.IP++;
-                        break;
-
-                    case OpCode.NEG:
-                        inst.Registers.Set(Reg(op.A, rb), -inst.Registers.Get(Reg(op.B, rb)));
-                        inst.IP++;
-                        break;
-
-                    // --- Phase 3: Function Calls ---
-
-                    case OpCode.CALL:
-                    {
-                        if (inst.CallStackDepth >= VMConstants.MaxCallDepth)
+                        case OpCode.RET_FUNC:
                         {
-                            inst.ErrorFlag = VMError.PanicStackOverflow;
+                            inst.CallStackDepth--;
+                            var frame = inst.CallStack.Get(inst.CallStackDepth);
+                            inst.IP = frame.ReturnIP;
+                            inst.RegisterBase = frame.RegisterBase;
+                            break;                     // don't IP++ — ReturnIP is already CALL+1
+                        }
+
+                        default:
+                            inst.ErrorFlag = VMError.PanicIllegalInstruction;
                             return;
-                        }
-                        var frame = new CallFrame
-                        {
-                            ReturnIP = inst.IP + 1,
-                            ReturnModuleSlot = inst.ModuleSlot,
-                            RegisterBase = inst.RegisterBase,
-                            CleanupBase = inst.CleanupDepth
-                        };
-                        inst.CallStack.Set(inst.CallStackDepth, frame);
-                        inst.CallStackDepth++;
-                        inst.RegisterBase += op.B; // B = callerWindowSize
-                        inst.IP = op.A;            // A = target function entry IP
-                        break;                     // don't IP++ — already jumped
                     }
-
-                    case OpCode.RET_FUNC:
-                    {
-                        inst.CallStackDepth--;
-                        var frame = inst.CallStack.Get(inst.CallStackDepth);
-                        inst.IP = frame.ReturnIP;
-                        inst.RegisterBase = frame.RegisterBase;
-                        break;                     // don't IP++ — ReturnIP is already CALL+1
-                    }
-
-                    default:
-                        inst.ErrorFlag = VMError.PanicIllegalInstruction;
-                        return;
                 }
-            }
+            } // end fixed
 
             // Hit step limit — treat as runaway
             inst.ErrorFlag = VMError.PanicStepLimitExceeded;
