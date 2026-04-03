@@ -7,11 +7,11 @@
 首次检出仓库后，只需两步即可运行沙盒：
 
 **Windows:**
-1. 双击仓库根目录的 `sandbox-init.cmd`（自动完成全部初始化）
+1. 双击 `Sandbox\sandbox-init.cmd`（自动完成全部初始化）
 2. 双击新生成的 `run-sandbox.cmd`，输入 `R` 回车即可编译运行
 
 **macOS / Linux:**
-1. 在仓库根目录执行 `bash sandbox-init.sh`
+1. 在仓库根目录执行 `bash Sandbox/sandbox-init.sh`
 2. 执行 `./run-sandbox.sh`，输入 `R` 回车即可编译运行
 
 初始化脚本会自动完成以下工作：

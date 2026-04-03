@@ -5,12 +5,12 @@ setlocal enabledelayedexpansion
 ::  FFScript Sandbox — One-Click Initialization (Windows)
 ::
 ::  First-time setup after checkout:
-::    1. Double-click this file
+::    1. Double-click Sandbox\sandbox-init.cmd
 ::    2. Double-click the generated  run-sandbox.cmd
 ::    3. (Optional) Open VS Code — debug extension auto-installed
 :: ============================================================
 
-cd /d "%~dp0"
+cd /d "%~dp0.."
 
 echo.
 echo  ========================================================
