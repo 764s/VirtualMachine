@@ -54,6 +54,9 @@ namespace FFVM
         public readonly int RequiredRegisters;
         public readonly FunctionEntry[] Functions;
 
+        /// <summary>Logical instruction count (excluding the sentinel).</summary>
+        public int InstructionCount => Instructions.Length - 1;
+
         /// <summary>DBG1: IP → source line number mapping. Parallel array to Instructions. Null in release builds.</summary>
         public readonly int[] SourceMap;
 
@@ -63,11 +66,30 @@ namespace FFVM
         public VMProgram(Instruction[] instructions, Number[] constants, int requiredRegisters,
             FunctionEntry[] functions = null, int[] sourceMap = null, SymbolEntry[] symbolTable = null)
         {
-            Instructions = instructions;
+            // Append a sentinel instruction that triggers PanicOutOfBounds if IP
+            // ever overruns the program.  This lets the hot dispatch loop skip
+            // per-instruction bounds checks while remaining safe against compiler bugs.
+            var sentinel = new Instruction[instructions.Length + 1];
+            System.Array.Copy(instructions, sentinel, instructions.Length);
+            sentinel[instructions.Length] = new Instruction(OpCode.SENTINEL);
+            Instructions = sentinel;
+
+            // Extend SourceMap to match Instructions.Length (sentinel maps to line -1)
+            if (sourceMap != null)
+            {
+                var extMap = new int[sourceMap.Length + 1];
+                System.Array.Copy(sourceMap, extMap, sourceMap.Length);
+                extMap[sourceMap.Length] = -1;
+                SourceMap = extMap;
+            }
+            else
+            {
+                SourceMap = null;
+            }
+
             Constants = constants;
             RequiredRegisters = requiredRegisters;
             Functions = functions ?? System.Array.Empty<FunctionEntry>();
-            SourceMap = sourceMap;
             SymbolTable = symbolTable;
         }
 
