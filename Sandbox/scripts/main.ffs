@@ -16,7 +16,9 @@ func main() {
     print(3.14)
 
     // --- Labeled printing ---
-    // Label IDs: 0=result, 1=value, 2=count, 3=time, 8=x, 9=y, 10=sum
+    // Label IDs: 0=result, 1=value, 2=count, 3=time, 4=delta, 5=frame,
+    //   6=error, 7=debug, 8=x, 9=y, 10=sum, 11=diff, 12=product,
+    //   13=quotient, 14=min, 15=max
     print_str(0, 100)
     print_str(8, 25)
     print_str(9, 50)

@@ -113,7 +113,7 @@ namespace Sandbox
             {
                 int labelId = s.Registers.Get(0).ToInt();
                 var val = s.Registers.Get(1);
-                string label = StringLabels.TryGetValue(labelId, out var l) ? l : $"#{labelId}";
+                string label = StringLabels.TryGetValue(labelId, out var labelText) ? labelText : $"#{labelId}";
                 LogOutput($"{label} = {val}");
             });
             table.RegisterSignature(1, new SyscallSignature(

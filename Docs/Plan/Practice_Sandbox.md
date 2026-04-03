@@ -21,7 +21,7 @@ func main() {
     var sum: int = 0
     var i: int = 1
     while i <= 100 { sum = sum + i; i = i + 1 }
-    Report(sum)         // 预期 5050，实际 127
+    print(sum)          // 预期 5050，实际 127
     var r: int = add(1, 2)
 }
 ```
