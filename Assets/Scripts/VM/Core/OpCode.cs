@@ -4,7 +4,7 @@ namespace FFVM
 {
     /// <summary>
     /// Bytecode opcodes for the VM.
-    /// Continuous numbering 0-28 for JIT jump table optimization (O2).
+    /// Continuous numbering 0-30 for JIT jump table optimization (O2).
     /// Phase 1 (tracer bullet): 8 instructions for execution loop.
     /// Phase 2 (step 5): data movement, control flow, arithmetic, comparison, boolean/unary.
     /// Phase 3 (step 8): function calls.
@@ -53,6 +53,10 @@ namespace FFVM
         // --- Phase 3: function calls ---
         CALL         = 27,  // A=targetEntryIP, B=callerWindowSize → push CallFrame + jump
         RET_FUNC     = 28,  // pop CallFrame, restore IP + RegisterBase
+
+        // --- FO1: leaf function optimization ---
+        CALL_LEAF    = 29,  // A=targetEntryIP, B=callerWindowSize → skip CallFrame, save to inst fields
+        RET_LEAF     = 30,  // restore IP + RegisterBase from inst fields (no CallFrame pop)
     }
 
     /// <summary>

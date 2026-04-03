@@ -405,6 +405,58 @@ namespace FFVM
                             break;                     // don't IP++ — ReturnIP is already CALL+1
                         }
 
+                        // --- FO1: Leaf function calls (skip CallFrame push/pop) ---
+
+                        case OpCode.CALL_LEAF:
+                        {
+                            if (dbg != null)
+                            {
+                                // Debugger attached: promote to full CALL for call stack visibility
+                                if (inst.CallStackDepth >= VMConstants.MaxCallDepth)
+                                {
+                                    inst.ErrorFlag = VMError.PanicStackOverflow;
+                                    return;
+                                }
+                                var frame = new CallFrame
+                                {
+                                    ReturnIP = inst.IP + 1,
+                                    ReturnModuleSlot = inst.ModuleSlot,
+                                    RegisterBase = inst.RegisterBase,
+                                    CleanupBase = inst.CleanupDepth
+                                };
+                                inst.CallStack.Set(inst.CallStackDepth, frame);
+                                inst.CallStackDepth++;
+                            }
+                            else
+                            {
+                                // Fast path: save return info to instance fields, skip CallFrame
+                                inst.LeafReturnIP = inst.IP + 1;
+                                inst.LeafRegisterBase = inst.RegisterBase;
+                            }
+                            inst.RegisterBase += op.B;
+                            inst.IP = op.A;
+                            break;
+                        }
+
+                        case OpCode.RET_LEAF:
+                        {
+                            if (dbg != null)
+                            {
+                                // Debugger attached: promoted call used full CallFrame
+                                inst.CallStackDepth--;
+                                var frame = inst.CallStack.Get(inst.CallStackDepth);
+                                inst.IP = frame.ReturnIP;
+                                inst.RegisterBase = frame.RegisterBase;
+                            }
+                            else
+                            {
+                                // Fast path: restore from instance fields
+                                inst.IP = inst.LeafReturnIP;
+                                inst.RegisterBase = inst.LeafRegisterBase;
+                            }
+                            break;
+                        }
+
                         default:
                             inst.ErrorFlag = VMError.PanicIllegalInstruction;
                             return;

@@ -602,17 +602,18 @@ func main() {
             var result = compiler.Compile(source, "main", new Dictionary<string, int>());
             Assert(result.Success, "DAP-S02: compile success");
 
-            // Find a CALL instruction
+            // Find a CALL or CALL_LEAF instruction
             int callIP = -1;
             for (int i = 0; i < result.Program.Instructions.Length; i++)
             {
-                if (result.Program.Instructions[i].Code == OpCode.CALL)
+                if (result.Program.Instructions[i].Code == OpCode.CALL ||
+                    result.Program.Instructions[i].Code == OpCode.CALL_LEAF)
                 {
                     callIP = i;
                     break;
                 }
             }
-            Assert(callIP >= 0, "DAP-S02: found CALL instruction");
+            Assert(callIP >= 0, "DAP-S02: found CALL/CALL_LEAF instruction");
 
             int stepIntoIP = ScriptDebugger.FindStepIntoIP(result.Program, callIP);
             Assert(stepIntoIP == result.Program.Instructions[callIP].A,

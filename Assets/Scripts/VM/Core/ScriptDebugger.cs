@@ -180,7 +180,8 @@ namespace FFVM
                 if (line > 0 && line != currentLine)
                     break; // Past current line, no CALL found
 
-                if (program.Instructions[ip].Code == OpCode.CALL)
+                if (program.Instructions[ip].Code == OpCode.CALL ||
+                    program.Instructions[ip].Code == OpCode.CALL_LEAF)
                     return program.Instructions[ip].A; // A = target function entry IP
             }
 
