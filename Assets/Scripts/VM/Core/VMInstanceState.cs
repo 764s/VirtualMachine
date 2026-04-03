@@ -90,6 +90,10 @@ namespace FFVM
         // Call stack
         public int CallStackDepth;
 
+        // FO1: Leaf function call return state (avoids CallFrame push/pop)
+        public int LeafReturnIP;
+        public int LeafRegisterBase;
+
         // Status flags
         public VMError ErrorFlag;
         public bool IsAlive;

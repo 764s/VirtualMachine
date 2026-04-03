@@ -48,7 +48,11 @@ namespace FFVM.Compiler
         private Dictionary<string, int> _functionTable;  // funcName → entryIP (-1 = not yet compiled)
         private Dictionary<string, FuncDecl> _funcDecls; // funcName → AST for param count lookup
         private bool _isEntryFunction;                   // true when compiling the entry func
+        private bool _isLeafFunction;                    // FO1: true when compiling a leaf func
         private int _callerWindowSize;                   // localVarCount for current function
+
+        // FO1: Leaf function analysis — funcName → isLeaf
+        private Dictionary<string, bool> _leafFunctions;
 
         // Forward-reference backpatch: CALL instructions that reference not-yet-compiled functions
         private struct PendingCall
@@ -148,22 +152,26 @@ namespace FFVM.Compiler
             if (entryDecl == null)
                 return new CompileResult { Errors = new List<string> { $"Entry function '{entryFunc}' not found" } };
 
+            // FO1: analyze leaf functions before compilation
+            AnalyzeLeafFunctions(module, entryFunc);
+
             // --- Pass 2: compile entry function first, then all other functions ---
             var functionEntries = new List<FunctionEntry>();
 
             _functionTable[entryDecl.Name] = 0;
             CompileFunction(entryDecl, isEntry: true);
-            functionEntries.Add(new FunctionEntry(entryDecl.Name, 0, entryDecl.Parameters.Count, _callerWindowSize));
+            functionEntries.Add(new FunctionEntry(entryDecl.Name, 0, entryDecl.Parameters.Count, _callerWindowSize, false));
 
             for (int i = 0; i < module.Functions.Count; i++)
             {
                 var f = module.Functions[i];
                 if (f.Name == entryFunc) continue;
 
+                bool isLeaf = _leafFunctions.TryGetValue(f.Name, out bool lf) && lf;
                 int ip = CurrentIP();
                 _functionTable[f.Name] = ip;
                 CompileFunction(f, isEntry: false);
-                functionEntries.Add(new FunctionEntry(f.Name, ip, f.Parameters.Count, _callerWindowSize));
+                functionEntries.Add(new FunctionEntry(f.Name, ip, f.Parameters.Count, _callerWindowSize, isLeaf));
             }
 
             // --- Backpatch forward references: CALL instructions whose target was -1 at emit time ---
@@ -256,6 +264,7 @@ namespace FFVM.Compiler
             _tempTop = TempRegBase;
             _deferredCleanups = new List<DeferredCleanup>();
             _isEntryFunction = isEntry;
+            _isLeafFunction = !isEntry && _leafFunctions.TryGetValue(func.Name, out bool lf) && lf;
             _inCleanupBlock = false;
             _freeVarRegs = new List<int>();
             _maxVarRegUsed = VarRegBase - 1;
@@ -281,7 +290,7 @@ namespace FFVM.Compiler
             if (isEntry)
                 Emit(OpCode.RETURN);
             else
-                Emit(OpCode.RET_FUNC);
+                Emit(_isLeafFunction ? OpCode.RET_LEAF : OpCode.RET_FUNC);
 
             // Emit deferred cleanup blocks for this function
             for (int i = 0; i < _deferredCleanups.Count; i++)
@@ -857,8 +866,8 @@ namespace FFVM.Compiler
                     Emit(OpCode.MOVE, 0, valueReg);
             }
             // Entry function: RETURN (triggers cleanup chain / Completed)
-            // Non-entry function: RET_FUNC (pop CallFrame, resume caller)
-            Emit(_isEntryFunction ? OpCode.RETURN : OpCode.RET_FUNC);
+            // Non-entry function: RET_FUNC/RET_LEAF (pop CallFrame or restore from leaf fields)
+            Emit(_isEntryFunction ? OpCode.RETURN : (_isLeafFunction ? OpCode.RET_LEAF : OpCode.RET_FUNC));
         }
 
         private void CompileWait(WaitStmt stmt)
@@ -1303,7 +1312,9 @@ namespace FFVM.Compiler
             if (windowSize < 1) windowSize = 1; // minimum 1 to prevent zero-offset stacking
 
             int callIP = CurrentIP();
-            Emit(OpCode.CALL, entryIP, windowSize);
+            // FO1: emit CALL_LEAF for leaf function targets
+            bool targetIsLeaf = _leafFunctions.TryGetValue(call.FunctionName, out bool tl) && tl;
+            Emit(targetIsLeaf ? OpCode.CALL_LEAF : OpCode.CALL, entryIP, windowSize);
 
             // If target IP is still placeholder (-1), record for backpatch
             if (entryIP < 0)
@@ -1474,6 +1485,119 @@ namespace FFVM.Compiler
             }
         }
 
+        // ===== FO1: Leaf function analysis =====
+
+        /// <summary>
+        /// Analyze all functions and determine which are leaf functions.
+        /// A function is leaf if its body contains no CallExpr, WaitStmt, WaitForStmt, or YieldStmt.
+        /// Entry function is never treated as leaf (uses RETURN, not RET_FUNC/RET_LEAF).
+        /// </summary>
+        private void AnalyzeLeafFunctions(ModuleNode module, string entryFunc)
+        {
+            _leafFunctions = new Dictionary<string, bool>();
+            for (int i = 0; i < module.Functions.Count; i++)
+            {
+                var func = module.Functions[i];
+                if (func.Name == entryFunc)
+                {
+                    _leafFunctions[func.Name] = false; // entry function is never leaf
+                    continue;
+                }
+                _leafFunctions[func.Name] = !ContainsNonLeafNode(func.Body);
+            }
+        }
+
+        /// <summary>
+        /// Returns true if the statement subtree contains any node that disqualifies
+        /// a function from being a leaf: CallExpr, WaitStmt, WaitForStmt, YieldStmt.
+        /// </summary>
+        private bool ContainsNonLeafNode(Stmt stmt)
+        {
+            if (stmt == null) return false;
+
+            if (stmt is WaitStmt || stmt is WaitForStmt || stmt is YieldStmt)
+                return true;
+
+            if (stmt is BlockStmt block)
+            {
+                for (int i = 0; i < block.Statements.Count; i++)
+                    if (ContainsNonLeafNode(block.Statements[i])) return true;
+            }
+            else if (stmt is ExprStmt exprStmt)
+            {
+                if (ContainsNonLeafExpr(exprStmt.Expression)) return true;
+            }
+            else if (stmt is VarDeclStmt varDecl)
+            {
+                if (varDecl.Initializer != null && ContainsNonLeafExpr(varDecl.Initializer)) return true;
+            }
+            else if (stmt is IfStmt ifStmt)
+            {
+                if (ContainsNonLeafExpr(ifStmt.Condition)) return true;
+                if (ContainsNonLeafNode(ifStmt.ThenBranch)) return true;
+                if (ifStmt.ElseBranch != null && ContainsNonLeafNode(ifStmt.ElseBranch)) return true;
+            }
+            else if (stmt is WhileStmt whileStmt)
+            {
+                if (ContainsNonLeafExpr(whileStmt.Condition)) return true;
+                if (ContainsNonLeafNode(whileStmt.Body)) return true;
+            }
+            else if (stmt is ForStmt forStmt)
+            {
+                if (forStmt.Initializer != null && ContainsNonLeafNode(forStmt.Initializer)) return true;
+                if (forStmt.Condition != null && ContainsNonLeafExpr(forStmt.Condition)) return true;
+                if (forStmt.Increment != null && ContainsNonLeafExpr(forStmt.Increment)) return true;
+                if (ContainsNonLeafNode(forStmt.Body)) return true;
+            }
+            else if (stmt is ReturnStmt retStmt)
+            {
+                if (retStmt.Value != null && ContainsNonLeafExpr(retStmt.Value)) return true;
+            }
+            else if (stmt is DeferStmt deferStmt)
+            {
+                if (ContainsNonLeafNode(deferStmt.Body)) return true;
+            }
+            else if (stmt is UsingStmt usingStmt)
+            {
+                for (int i = 0; i < usingStmt.Arguments.Count; i++)
+                    if (ContainsNonLeafExpr(usingStmt.Arguments[i])) return true;
+                if (ContainsNonLeafNode(usingStmt.Body)) return true;
+            }
+
+            return false;
+        }
+
+        /// <summary>
+        /// Returns true if the expression subtree contains a CallExpr (user function call).
+        /// SyscallExpr is not disqualifying — syscalls don't use the call stack.
+        /// </summary>
+        private static bool ContainsNonLeafExpr(Expr expr)
+        {
+            if (expr == null) return false;
+
+            if (expr is CallExpr) return true;
+
+            if (expr is BinaryExpr bin)
+                return ContainsNonLeafExpr(bin.Left) || ContainsNonLeafExpr(bin.Right);
+
+            if (expr is UnaryExpr un)
+                return ContainsNonLeafExpr(un.Operand);
+
+            if (expr is AssignExpr assign)
+                return ContainsNonLeafExpr(assign.Target) || ContainsNonLeafExpr(assign.Value);
+
+            if (expr is SyscallExpr sc)
+            {
+                for (int i = 0; i < sc.Arguments.Count; i++)
+                    if (ContainsNonLeafExpr(sc.Arguments[i])) return true;
+            }
+
+            if (expr is FieldAccessExpr fa)
+                return ContainsNonLeafExpr(fa.Target);
+
+            return false;
+        }
+
         // ===== OpCode mapping =====
 
         private OpCode BinOpCode(NodeKind kind)
@@ -1545,6 +1669,7 @@ namespace FFVM.Compiler
                 case OpCode.JUMP_IF_ZERO:
                 case OpCode.JUMP_IF_NOT_ZERO:
                 case OpCode.CALL:
+                case OpCode.CALL_LEAF:
                 case OpCode.PUSH_CLEANUP:
                     return true;
                 default:

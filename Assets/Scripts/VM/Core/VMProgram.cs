@@ -31,13 +31,15 @@ namespace FFVM
         public readonly int EntryIP;
         public readonly int ParamCount;
         public readonly int LocalRegCount; // window size: registers above r16 used by this function
+        public readonly bool IsLeaf; // FO1: true if function contains no CallExpr/wait/wait_for
 
-        public FunctionEntry(string name, int entryIP, int paramCount, int localRegCount)
+        public FunctionEntry(string name, int entryIP, int paramCount, int localRegCount, bool isLeaf = false)
         {
             Name = name;
             EntryIP = entryIP;
             ParamCount = paramCount;
             LocalRegCount = localRegCount;
+            IsLeaf = isLeaf;
         }
     }
 
