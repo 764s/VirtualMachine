@@ -54,7 +54,11 @@ fi
 
 # ── Parse previous entry from history for delta calculation ─
 declare -A PREV_VM PREV_RATIO
+PREV_ENV=""
 if [ -f "$HISTORY" ]; then
+    # Extract environment line from the most recent history entry
+    PREV_ENV=$(grep -m1 '> \.NET' "$HISTORY" | sed 's/^> //' || echo "")
+
     # Find the last table entry block before HISTORY_END
     # Look for lines like "| B01_ArithLoop | 540.7 | 78.7 | 6.87x |"
     LAST_BLOCK=""
@@ -80,6 +84,13 @@ if [ -f "$HISTORY" ]; then
     fi
 fi
 
+# Build current environment fingerprint for comparison
+CUR_ENV=".NET ${RUNTIME} | ${OS_NAME} | ${CORES} cores"
+ENV_CHANGED=false
+if [ -n "$PREV_ENV" ] && [ "$PREV_ENV" != "$CUR_ENV" ]; then
+    ENV_CHANGED=true
+fi
+
 # ── Build the new history entry ─────────────────────────────
 ENTRY=""
 ENTRY+="### ${DATE} — \`${COMMIT}\`"$'\n'
@@ -96,31 +107,36 @@ for b in "${BENCHMARKS[@]}"; do
     cs="${CUR_CS[$b]}"
     ratio="${CUR_RATIO[$b]}"
 
-    # Calculate deltas
+    # Calculate deltas (only meaningful when environment matches)
     delta_vm="—"
     delta_ratio="—"
-    if [ -n "${PREV_VM[$b]:-}" ]; then
-        delta_vm=$(awk "BEGIN {
-            d = $vm - ${PREV_VM[$b]};
-            pct = (${PREV_VM[$b]} > 0) ? (d / ${PREV_VM[$b]}) * 100 : 0;
-            if (d > 0) printf \"+%.1f (↑%.0f%%)\", d, pct;
-            else if (d < 0) printf \"%.1f (↓%.0f%%)\", d, -pct;
-            else printf \"0 (=)\";
-        }")
-    fi
-    if [ -n "${PREV_RATIO[$b]:-}" ]; then
-        delta_ratio=$(awk -v thresh="$REGRESSION_THRESHOLD" "BEGIN {
-            d = $ratio - ${PREV_RATIO[$b]};
-            if (d > thresh) printf \"+%.2fx ⚠️\", d;
-            else if (d > 0) printf \"+%.2fx\", d;
-            else if (d < -thresh) printf \"%.2fx ✅\", d;
-            else if (d < 0) printf \"%.2fx\", d;
-            else printf \"= \";
-        }")
-        # Check for regression (ratio increased by > 10%)
-        is_regress=$(awk "BEGIN { print ($ratio > ${PREV_RATIO[$b]} * 1.1) ? 1 : 0 }")
-        if [ "$is_regress" = "1" ]; then
-            ANY_REGRESSION=true
+    if $ENV_CHANGED; then
+        delta_vm="(env changed)"
+        delta_ratio="(env changed)"
+    else
+        if [ -n "${PREV_VM[$b]:-}" ]; then
+            delta_vm=$(awk "BEGIN {
+                d = $vm - ${PREV_VM[$b]};
+                pct = (${PREV_VM[$b]} > 0) ? (d / ${PREV_VM[$b]}) * 100 : 0;
+                if (d > 0) printf \"+%.1f (↑%.0f%%)\", d, pct;
+                else if (d < 0) printf \"%.1f (↓%.0f%%)\", d, -pct;
+                else printf \"0 (=)\";
+            }")
+        fi
+        if [ -n "${PREV_RATIO[$b]:-}" ]; then
+            delta_ratio=$(awk -v thresh="$REGRESSION_THRESHOLD" "BEGIN {
+                d = $ratio - ${PREV_RATIO[$b]};
+                if (d > thresh) printf \"+%.2fx ⚠️\", d;
+                else if (d > 0) printf \"+%.2fx\", d;
+                else if (d < -thresh) printf \"%.2fx ✅\", d;
+                else if (d < 0) printf \"%.2fx\", d;
+                else printf \"= \";
+            }")
+            # Check for regression (ratio increased by > 10%)
+            is_regress=$(awk "BEGIN { print ($ratio > ${PREV_RATIO[$b]} * 1.1) ? 1 : 0 }")
+            if [ "$is_regress" = "1" ]; then
+                ANY_REGRESSION=true
+            fi
         fi
     fi
 

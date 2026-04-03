@@ -5,7 +5,9 @@
 
 ## Baseline (Initial)
 
-> 初始基线来自 `benchmarks/benchmark_results.md`（.NET 6.0, Windows, 20 核）
+> 初始基线来自 `benchmarks/benchmark_results.md`（.NET 6.0, Windows, 20 核）。
+> ⚠️ **注意**: 基线采集环境（Windows / .NET 6 / 20 核）与 CI 环境（Unix / .NET 8 / 2 核）不同。
+> 绝对时间和 Ratio 不可直接对比。CI 历史条目之间的 Δ 仅在相同环境下有意义。
 
 | Benchmark | VM (μs) | C# (μs) | Ratio | Date |
 |-----------|---------|---------|-------|------|
