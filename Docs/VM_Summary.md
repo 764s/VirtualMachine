@@ -25,6 +25,7 @@ Docs/
     Step_F4_RegisterLifecycle.md     F4 寄存器生命周期 + 自然优化 + 调试 Phase 1 + 风险理想方案
     Step_Debug_Decisions.md          脚本调试决策文档（全部决策理由 + 方案对比）
     Outlook_And_Risks.md             功能展望 + 优化展望 + 风险点 + 扩展串行计划
+    Step_B3_Optimization_Tier1.md    B3 调整型优化 Tier 1（O1 fixed pin + O2 连续 OpCode）
   Skills/                    ← 技能脚本复现示例
     skill_114feiyanxuanfengtui.vm    飞燕旋风腿（56 帧攻击技能）
     skill_25shangpanbeijizhong.vm    上盘被击中（30 帧受击技能）
@@ -571,8 +572,9 @@ skill TracerBullet
 | — | **语言服务 Phase 4 (LSP2+LSP1+LSP3)** | **TextMate Grammar 修复 + LSP Server 核心 + 实时诊断** | **546** | [Phase4](Plan/Step_LSP_Phase4.md) |
 | — | **语言服务 LSP4 (符号分析)** | **documentSymbol + hover + definition + references** | **586** | [LSP4](Plan/Step_LSP4_Symbols.md) |
 | — | **语言服务 LSP5 (代码补全)** | **textDocument/completion：关键字+函数+变量+结构体+Syscall+字段补全** | **624** | [LSP5](Plan/Step_LSP5_Completion.md) |
+| — | **B3 Tier 1 (O1+O2)** | **OpCode 连续编号 0-28 + ExecuteInstance unsafe fixed 寄存器钉住** | **624** | [B3-T1](Plan/Step_B3_Optimization_Tier1.md) |
 
-**当前位置 → LSP5 (代码补全) 完成，624 项 Assert × 2 模式全通过。**
+**当前位置 → B3 Tier 1 (O1+O2) 完成，624 项 Assert × 2 模式全通过。.NET JIT dispatch ~9% 加速。**
 
 ---
 
@@ -584,7 +586,7 @@ skill TracerBullet
 |------|------|------|------|------|
 | B1 | 调试 Phase 3C | ⏳ 可选 | Unity Editor DAP（EditorApplication.update 轮询，DR5） | 仅在需要 Editor 内调试时实施；VS Code 独立调试已可用 |
 | B2 | 语言服务 Phase 4 | ✅ LSP2+LSP1+LSP3+LSP4+LSP5 | LSP Server：语法高亮(LSP2)✅→核心框架(LSP1)✅→诊断(LSP3)✅→符号(LSP4)✅→补全(LSP5)✅→Syscall声明协议(LSP6)⏳→参数提示(LSP7)⏳ | 复用 DAP 通信层；LSP6/LSP7 待后续增量添加 |
-| B3 | 调整型优化 | ⏳ | Tier 1: O1→O2（dispatch -40~60%），Tier 2: O6（peephole），Tier 3+: O8/O9-O14/FO1-FO3/SO1 | Benchmark 驱动；含 R1/SR1/SR2 风险理想方案 |
+| B3 | 调整型优化 | ⏳ | Tier 1: O1→O2 ✅（dispatch ~9% .NET JIT；IL2CPP 预期 30-50%），Tier 2: O6（peephole），Tier 3+: O8/O9-O14/FO1-FO3/SO1 | Benchmark 驱动；含 R1/SR1/SR2 风险理想方案 |
 | B4 | 功能补全 | ⏳ | S4 结构体参数、FF5 非 entry defer、FF1-FF4、C5/C6、SN1/SN2、BB1/PR1/DM1 | 业务驱动按需；GR3 文档缺口 D1-D4 也在此批次 |
 
 ---
@@ -691,13 +693,13 @@ skill TracerBullet
 
 **通用优化（O1-O14）**：
 
-| Tier | 核心优化 | 预期收益 | 复杂度 |
-|------|---------|---------|--------|
-| **1. 解释器热路径** | 消除逐次 fixed pin（O1）、连续 OpCode 跳转表（O2）、去冗余边界检查（O3） | dispatch **40-60%** 加速 | 低 |
-| **2. 编译器优化** | dest-reg 传递（O4）、常量折叠（O5）、peephole pass（O6）、Syscall 直达（O7） | 指令数减少 **15-25%** | 中 |
-| **3. 指令编码** | 16B → 4B 紧凑指令（O8） | L1 缓存 **10-20%** | 高 |
-| **4. 调度层** | 活跃实例链表（O9）、稀疏快照（O10） | 调度/快照开销按稀疏度大幅降低 | 低-中 |
-| **5. 长期** | 函数指针 Syscall（O11）、SIMD Fix64（O14）等 | 特定路径加速 | 中-高 |
+| Tier | 核心优化 | 预期收益 | 复杂度 | 状态 |
+|------|---------|---------|--------|------|
+| **1. 解释器热路径** | 消除逐次 fixed pin（O1）✅、连续 OpCode 跳转表（O2）✅、去冗余边界检查（O3）✅ | dispatch ~9% (.NET JIT)；IL2CPP 预期 30-50% | 低 | **✅ Tier 1 完成** |
+| **2. 编译器优化** | dest-reg 传递（O4）✅、常量折叠（O5）✅、peephole pass（O6）、Syscall 直达（O7）✅ | 指令数减少 **15-25%** | 中 | O4/O5/O7 随 F4 完成；O6 待实施 |
+| **3. 指令编码** | 16B → 4B 紧凑指令（O8） | L1 缓存 **10-20%** | 高 | ⏳ |
+| **4. 调度层** | 活跃实例链表（O9）、稀疏快照（O10） | 调度/快照开销按稀疏度大幅降低 | 低-中 | ⏳ |
+| **5. 长期** | 函数指针 Syscall（O11）、SIMD Fix64（O14）等 | 特定路径加速 | 中-高 | ⏳ |
 
 **函数调用专项优化（FO1-FO7）**：
 
@@ -713,9 +715,9 @@ skill TracerBullet
 |--------|------|---------|--------|
 | 🟡 中 | SO1 COPY_BLOCK OpCode | 大 struct 赋值指令数从 N 降至 1 | 中 |
 
-**预估目标**：Tier 1 + Tier 2 完成后，编译脚本基准从 5-7x 降至 **2-3x**，手写字节码从 1.7x 降至 **~1.2x**。
+**预估目标**：Tier 1 完成（O1+O2 ✅），.NET JIT ~9% dispatch 加速。IL2CPP 预期 30-50%。Tier 2（O6 peephole）完成后，编译脚本基准预期从当前降至 **2-3x**。
 
-最大单一赢利点是 **O1（消除 fixed pin）**，推荐作为第一个实施项。
+> **B3 Tier 1 实施详情**：[Step_B3_Optimization_Tier1.md](Plan/Step_B3_Optimization_Tier1.md)
 
 ---
 
@@ -833,8 +835,8 @@ skill TracerBullet
 
 | 分组 | 条目 | 数量 | 说明 |
 |------|------|------|------|
-| **自然优化**（随功能实现） | O3, O4, O5, O7, FO4, FO5, FO7 | 7 | 随 F4 / 编译器成熟化顺带完成，优先 |
-| 调整型 — 解释器热路径 | O1, O2, O6, O8 | 4 | Benchmark 驱动 |
+| **自然优化**（随功能实现） | O3, O4, O5, O7, FO4, FO5, FO7 | 7 | 随 F4 / 编译器成熟化顺带完成 ✅ |
+| 调整型 — 解释器热路径 | O1 ✅, O2 ✅, O6, O8 | 4 | O1+O2 = B3 Tier 1 ✅；O6/O8 待 Benchmark 驱动 |
 | 调整型 — 调度/快照/运行时 | O9-O14 | 6 | Benchmark 驱动 |
 | 调整型 — 函数调用路径 | FO1-FO3, FO6 | 4 | Benchmark 驱动 |
 | 调整型 — 结构体路径 | SO1 | 1 | Benchmark 驱动 |
