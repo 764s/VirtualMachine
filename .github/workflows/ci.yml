@@ -12,7 +12,7 @@ permissions:
 
 jobs:
   # ───────────────────────────────────────────────────
-  #  Job 1: Build + Unit Tests (624 assertions × 2 modes)
+  #  Job 1: Build + Unit Tests (644 assertions × 2 modes)
   # ───────────────────────────────────────────────────
   test:
     name: Build & Test (${{ matrix.fixpoint && 'Fix64' || 'float' }})

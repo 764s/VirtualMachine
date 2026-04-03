@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Text;
+using FFVM;
 using FFVM.Debug;
 using UnityEngine;
 
@@ -957,6 +958,205 @@ public static class LspTests
             }
         }
 
+        // ================================================================
+        // F. LSP6 Syscall Declaration Protocol Tests
+        // ================================================================
+
+        // ===== Test LSP6-T01: syscall with signature appears in completion =====
+        {
+            string source = "func entry() {\n  \n}";
+            var session = new LspBatchSession();
+            var syscalls = new Dictionary<string, int> { { "PlayAnim", 0 }, { "GetHP", 1 } };
+            var signatures = new Dictionary<string, SyscallSignature>
+            {
+                { "PlayAnim", new SyscallSignature(
+                    new[] { new SyscallParamInfo("animId", "int"), new SyscallParamInfo("speed", "float") },
+                    "void", "Play animation by ID at given speed") },
+                { "GetHP", new SyscallSignature(
+                    new SyscallParamInfo[0], "int", "Get current hit points") }
+            };
+            session.SetSyscalls(syscalls, signatures);
+            session.AddInitialize();
+            session.AddInitialized();
+            session.AddDidOpen("file:///lsp6.ffs", source);
+            session.AddCompletion("file:///lsp6.ffs", 1, 2);
+            session.AddShutdown();
+            session.AddExit();
+            session.Run();
+
+            session.ExpectResponse(0);
+            var compResp = session.ExpectResponse(1);
+            Assert(compResp != null, "LSP6-T01: completion response received");
+            if (compResp != null)
+            {
+                var items = compResp.GetArray("result");
+                Assert(items != null, "LSP6-T01: result is array");
+                if (items != null)
+                {
+                    // Find PlayAnim and verify signature in detail
+                    string playAnimDetail = null;
+                    string getHPDetail = null;
+                    foreach (var obj in items)
+                    {
+                        var item = obj as JsonObject;
+                        string label = item?.GetString("label");
+                        if (label == "PlayAnim") playAnimDetail = item?.GetString("detail");
+                        if (label == "GetHP") getHPDetail = item?.GetString("detail");
+                    }
+                    Assert(playAnimDetail != null, "LSP6-T01: PlayAnim found");
+                    Assert(playAnimDetail != null && playAnimDetail.Contains("animId: int"),
+                        $"LSP6-T01: PlayAnim detail contains param info, got '{playAnimDetail}'");
+                    Assert(playAnimDetail != null && playAnimDetail.Contains("speed: float"),
+                        $"LSP6-T01: PlayAnim detail contains second param, got '{playAnimDetail}'");
+                    Assert(getHPDetail != null, "LSP6-T01: GetHP found");
+                    Assert(getHPDetail != null && getHPDetail.Contains("int"),
+                        $"LSP6-T01: GetHP detail contains return type, got '{getHPDetail}'");
+                }
+            }
+        }
+
+        // ===== Test LSP6-T02: .ffvm.d.json loading populates syscall metadata =====
+        {
+            string source = "func entry() {\n  \n}";
+            string declJson = @"{
+  ""syscalls"": [
+    { ""name"": ""Attack"", ""slot"": 0,
+      ""parameters"": [{ ""name"": ""target"", ""type"": ""int"" }, { ""name"": ""damage"", ""type"": ""float"" }],
+      ""returnType"": ""void"", ""description"": ""Attack a target"" },
+    { ""name"": ""Heal"", ""slot"": 1,
+      ""parameters"": [{ ""name"": ""amount"", ""type"": ""int"" }],
+      ""returnType"": ""int"", ""description"": ""Heal and return new HP"" }
+  ]
+}";
+            var session = new LspBatchSession();
+            session.SetDeclarationJson(declJson);
+            session.AddInitialize();
+            session.AddInitialized();
+            session.AddDidOpen("file:///lsp6decl.ffs", source);
+            session.AddCompletion("file:///lsp6decl.ffs", 1, 2);
+            session.AddShutdown();
+            session.AddExit();
+            session.Run();
+
+            session.ExpectResponse(0);
+            var compResp = session.ExpectResponse(1);
+            Assert(compResp != null, "LSP6-T02: completion response received");
+            if (compResp != null)
+            {
+                var items = compResp.GetArray("result");
+                Assert(items != null, "LSP6-T02: result is array");
+                if (items != null)
+                {
+                    string attackDetail = null;
+                    string healDetail = null;
+                    foreach (var obj in items)
+                    {
+                        var item = obj as JsonObject;
+                        string label = item?.GetString("label");
+                        if (label == "Attack") attackDetail = item?.GetString("detail");
+                        if (label == "Heal") healDetail = item?.GetString("detail");
+                    }
+                    Assert(attackDetail != null, "LSP6-T02: Attack found from declaration");
+                    Assert(attackDetail != null && attackDetail.Contains("target: int"),
+                        $"LSP6-T02: Attack detail has params, got '{attackDetail}'");
+                    Assert(healDetail != null, "LSP6-T02: Heal found from declaration");
+                    Assert(healDetail != null && healDetail.Contains("amount: int"),
+                        $"LSP6-T02: Heal detail has params, got '{healDetail}'");
+                    Assert(healDetail != null && healDetail.Contains(": int"),
+                        $"LSP6-T02: Heal detail contains return type, got '{healDetail}'");
+                }
+            }
+        }
+
+        // ===== Test LSP6-T03: multi-param syscall detail format is correct =====
+        {
+            string source = "func entry() {\n  \n}";
+            var session = new LspBatchSession();
+            var syscalls = new Dictionary<string, int> { { "MoveTo", 0 } };
+            var signatures = new Dictionary<string, SyscallSignature>
+            {
+                { "MoveTo", new SyscallSignature(
+                    new[] {
+                        new SyscallParamInfo("x", "float"),
+                        new SyscallParamInfo("y", "float"),
+                        new SyscallParamInfo("z", "float")
+                    },
+                    "void", null) }
+            };
+            session.SetSyscalls(syscalls, signatures);
+            session.AddInitialize();
+            session.AddInitialized();
+            session.AddDidOpen("file:///lsp6fmt.ffs", source);
+            session.AddCompletion("file:///lsp6fmt.ffs", 1, 2);
+            session.AddShutdown();
+            session.AddExit();
+            session.Run();
+
+            session.ExpectResponse(0);
+            var compResp = session.ExpectResponse(1);
+            Assert(compResp != null, "LSP6-T03: completion response received");
+            if (compResp != null)
+            {
+                var items = compResp.GetArray("result");
+                Assert(items != null, "LSP6-T03: result is array");
+                if (items != null)
+                {
+                    string moveToDetail = null;
+                    foreach (var obj in items)
+                    {
+                        var item = obj as JsonObject;
+                        if (item?.GetString("label") == "MoveTo")
+                        {
+                            moveToDetail = item?.GetString("detail");
+                            break;
+                        }
+                    }
+                    Assert(moveToDetail == "(syscall) MoveTo(x: float, y: float, z: float)",
+                        $"LSP6-T03: exact detail format, got '{moveToDetail}'");
+                }
+            }
+        }
+
+        // ===== Test LSP6-T04: syscall without signature shows backward-compatible detail =====
+        {
+            string source = "func entry() {\n  \n}";
+            var session = new LspBatchSession();
+            // Register syscall without signature
+            var syscalls = new Dictionary<string, int> { { "LegacyCall", 0 } };
+            session.SetSyscalls(syscalls, null);
+            session.AddInitialize();
+            session.AddInitialized();
+            session.AddDidOpen("file:///lsp6compat.ffs", source);
+            session.AddCompletion("file:///lsp6compat.ffs", 1, 2);
+            session.AddShutdown();
+            session.AddExit();
+            session.Run();
+
+            session.ExpectResponse(0);
+            var compResp = session.ExpectResponse(1);
+            Assert(compResp != null, "LSP6-T04: completion response received");
+            if (compResp != null)
+            {
+                var items = compResp.GetArray("result");
+                Assert(items != null, "LSP6-T04: result is array");
+                if (items != null)
+                {
+                    string legacyDetail = null;
+                    foreach (var obj in items)
+                    {
+                        var item = obj as JsonObject;
+                        if (item?.GetString("label") == "LegacyCall")
+                        {
+                            legacyDetail = item?.GetString("detail");
+                            break;
+                        }
+                    }
+                    Assert(legacyDetail == "(syscall) LegacyCall",
+                        $"LSP6-T04: legacy detail format preserved, got '{legacyDetail}'");
+                }
+            }
+        }
+
         Debug.Log($"\n===== LspTests: {passed} passed, {failed} failed =====");
     }
 
@@ -975,6 +1175,11 @@ public static class LspTests
         private List<JsonObject> _messages;
         private int _readIndex;
         public bool ServerStopped { get; private set; }
+
+        // LSP6: optional syscall declarations
+        private Dictionary<string, int> _syscalls;
+        private Dictionary<string, SyscallSignature> _signatures;
+        private string _declarationJson;
 
         public void AddRequest(string method, JsonObject parameters)
         {
@@ -1112,11 +1317,36 @@ public static class LspTests
             AddRequest("textDocument/completion", parameters);
         }
 
+        /// <summary>
+        /// Register syscall declarations to be passed to the LspServer (LSP6).
+        /// </summary>
+        public void SetSyscalls(Dictionary<string, int> syscalls, Dictionary<string, SyscallSignature> signatures)
+        {
+            _syscalls = syscalls;
+            _signatures = signatures;
+        }
+
+        /// <summary>
+        /// Set a .ffvm.d.json string to be loaded by the server on startup (LSP6).
+        /// </summary>
+        public void SetDeclarationJson(string json)
+        {
+            _declarationJson = json;
+        }
+
         public void Run()
         {
             _inputMs.Position = 0;
             var outputMs = new MemoryStream();
-            var server = new LspServer(_inputMs, outputMs);
+            LspServer server;
+            if (_syscalls != null || _signatures != null)
+                server = new LspServer(_inputMs, outputMs, _syscalls, _signatures);
+            else
+                server = new LspServer(_inputMs, outputMs);
+
+            if (_declarationJson != null)
+                server.LoadDeclarationJson(_declarationJson);
+
             server.Run();
             ServerStopped = true;
 

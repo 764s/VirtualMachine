@@ -578,8 +578,9 @@ skill TracerBullet
 | — | **语言服务 LSP5 (代码补全)** | **textDocument/completion：关键字+函数+变量+结构体+Syscall+字段补全** | **624** | [LSP5](Plan/Step_LSP5_Completion.md) |
 | — | **B3 Tier 1 (O1+O2)** | **OpCode 连续编号 0-28 + ExecuteInstance unsafe fixed 寄存器钉住** | **624** | [B3-T1](Plan/Step_B3_Optimization_Tier1.md) |
 | — | **B-R1 FFScript 正式命名** | **脚本正式命名 FFScript + 源文件后缀 `.vm` → `.ffs` 全局统一** | **624** | [B-R1](Plan/Step_R1_FFScript_Rename.md) |
+| — | **B-α1 LSP6 Syscall 声明协议** | **SyscallTable 签名元数据 + .ffvm.d.json 声明文件加载 + 补全增强** | **644** | [B-α1](Plan/Step_B_Alpha1_LSP6_SyscallDecl.md) |
 
-**当前位置 → B-R1 完成，624 项 Assert × 2 模式全通过。脚本正式命名 FFScript，源文件后缀 `.ffs`。**
+**当前位置 → B-α1 完成，644 项 Assert × 2 模式全通过。Syscall 声明协议实现：SyscallSignature 元数据 + .ffvm.d.json 加载 + 补全增强。**
 
 ---
 
@@ -588,7 +589,7 @@ skill TracerBullet
 以下步骤不依赖真实 ECS/Syscall 接入，可在当前独立环境中推进。
 步骤严格按编号顺序串行执行，每步完成后更新状态标记。
 
-> **当前位置 → B-α1**（LSP6 Syscall 声明协议）
+> **当前位置 → B-α2**（LSP7 参数提示 signatureHelp）
 
 #### Phase 0: 正式命名
 
@@ -600,8 +601,8 @@ skill TracerBullet
 
 | # | ID | 内容 | 状态 | 完成条件 | 依赖 |
 |---|-----|------|------|----------|------|
-| 1 | B-α1 | LSP6 Syscall 声明协议 | ⏳ | SyscallTable 扩展签名元数据 + .ffvm.d.json 声明文件加载 + 补全增强测试通过 | LSP5 ✅ |
-| 2 | B-α2 | LSP7 参数提示 (signatureHelp) | ⏳ | textDocument/signatureHelp 实现 + 用户函数/Syscall 参数提示测试通过 | B-α1 |
+| 1 | B-α1 | LSP6 Syscall 声明协议 | ✅ | SyscallTable 扩展签名元数据 + .ffvm.d.json 声明文件加载 + 补全增强测试通过 | LSP5 ✅ |
+| 2 | B-α2 | LSP7 参数提示 (signatureHelp) | ⏳ | textDocument/signatureHelp 实现 + 用户函数/Syscall 参数提示测试通过 | B-α1 ✅ |
 
 #### Phase β: 优化 Tier 2
 
