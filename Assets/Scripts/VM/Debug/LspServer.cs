@@ -16,7 +16,7 @@ namespace FFVM.Debug
     ///   Requests:       initialize, shutdown,
     ///                   textDocument/documentSymbol, textDocument/hover,
     ///                   textDocument/definition, textDocument/references,
-    ///                   textDocument/completion
+    ///                   textDocument/completion, textDocument/signatureHelp
     ///   Notifications:  initialized, exit, textDocument/didOpen, textDocument/didChange
     ///   Server→Client:  textDocument/publishDiagnostics
     ///
@@ -193,6 +193,9 @@ namespace FFVM.Debug
                     case "textDocument/completion":
                         result = HandleCompletion(parameters);
                         break;
+                    case "textDocument/signatureHelp":
+                        result = HandleSignatureHelp(parameters);
+                        break;
                     default:
                         success = false;
                         errorCode = -32601; // MethodNotFound
@@ -257,6 +260,12 @@ namespace FFVM.Debug
             var triggerChars = new List<object> { "." };
             completionProvider.Set("triggerCharacters", triggerChars);
             capabilities.Set("completionProvider", completionProvider);
+
+            // LSP7: Signature help (parameter hints)
+            var signatureHelpProvider = new JsonObject();
+            var sigTriggerChars = new List<object> { "(", "," };
+            signatureHelpProvider.Set("triggerCharacters", sigTriggerChars);
+            capabilities.Set("signatureHelpProvider", signatureHelpProvider);
 
             var result = new JsonObject();
             result.Set("capabilities", capabilities);
@@ -988,6 +997,189 @@ namespace FFVM.Debug
             }
 
             return MakeArrayResult(items);
+        }
+
+        // ============================================================
+        // LSP7: Signature help (parameter hints)
+        // ============================================================
+
+        private JsonObject HandleSignatureHelp(JsonObject parameters)
+        {
+            string uri = GetDocumentUri(parameters);
+            string source = null;
+            if (uri != null) _documents.TryGetValue(uri, out source);
+            if (source == null) return null;
+
+            var position = parameters?.GetObject("position");
+            if (position == null) return null;
+
+            int lspLine = position.GetInt("line");
+            int lspChar = position.GetInt("character");
+
+            // Convert LSP position to offset in source
+            int offset = LspPositionToOffset(source, lspLine, lspChar);
+            if (offset < 0) return null;
+
+            // Scan backwards from cursor to find the function name and active parameter index
+            string funcName;
+            int activeParam;
+            if (!FindCallContext(source, offset, out funcName, out activeParam))
+                return null;
+
+            // Look up function signature: first user functions, then syscalls
+            var ast = GetCachedAst(uri);
+
+            // User-defined function
+            if (ast != null)
+            {
+                foreach (var func in ast.Functions)
+                {
+                    if (func.Name == funcName)
+                        return MakeSignatureHelp(FormatFuncSignature(func), func.Parameters, activeParam, false);
+                }
+            }
+
+            // Syscall with signature metadata (LSP6)
+            SyscallSignature sig;
+            if (_syscallSignatures.TryGetValue(funcName, out sig))
+                return MakeSignatureHelp(sig.Format(funcName), sig.Parameters, activeParam, true);
+
+            // Syscall without metadata — no parameter info available
+            if (_defaultSyscalls.ContainsKey(funcName))
+                return null;
+
+            return null;
+        }
+
+        /// <summary>
+        /// Convert LSP 0-based line/character to a character offset in the source string.
+        /// </summary>
+        private static int LspPositionToOffset(string source, int lspLine, int lspChar)
+        {
+            int line = 0;
+            int i = 0;
+            while (i < source.Length && line < lspLine)
+            {
+                if (source[i] == '\n') line++;
+                i++;
+            }
+            if (line != lspLine) return -1;
+            int result = i + lspChar;
+            return result <= source.Length ? result : -1;
+        }
+
+        /// <summary>
+        /// Scan backwards from cursor offset to find the enclosing function call name
+        /// and the 0-based index of the active parameter (comma count).
+        /// Handles nested parentheses and string literals.
+        /// </summary>
+        private static bool FindCallContext(string source, int offset, out string funcName, out int activeParam)
+        {
+            funcName = null;
+            activeParam = 0;
+
+            int depth = 0;
+            int commas = 0;
+            int i = offset - 1;
+
+            while (i >= 0)
+            {
+                char c = source[i];
+
+                // Skip string literals (scan backwards to matching quote)
+                if (c == '"')
+                {
+                    i--;
+                    while (i >= 0 && source[i] != '"') i--;
+                    i--;
+                    continue;
+                }
+
+                if (c == ')')
+                {
+                    depth++;
+                    i--;
+                    continue;
+                }
+
+                if (c == '(')
+                {
+                    if (depth > 0)
+                    {
+                        depth--;
+                        i--;
+                        continue;
+                    }
+                    // Found the opening paren of our call — extract function name
+                    int nameEnd = i;
+                    int nameStart = nameEnd - 1;
+                    // Skip whitespace before '('
+                    while (nameStart >= 0 && source[nameStart] == ' ') nameStart--;
+                    nameEnd = nameStart + 1;
+                    // Read identifier characters
+                    while (nameStart >= 0 && (char.IsLetterOrDigit(source[nameStart]) || source[nameStart] == '_'))
+                        nameStart--;
+                    nameStart++;
+                    if (nameStart < nameEnd)
+                    {
+                        funcName = source.Substring(nameStart, nameEnd - nameStart);
+                        activeParam = commas;
+                        return true;
+                    }
+                    return false;
+                }
+
+                if (c == ',' && depth == 0)
+                {
+                    commas++;
+                }
+
+                i--;
+            }
+
+            return false;
+        }
+
+        /// <summary>
+        /// Build a SignatureHelp response object.
+        /// </summary>
+        private static JsonObject MakeSignatureHelp(string label, IReadOnlyList<ParamDecl> funcParams, int activeParam, bool isSyscall)
+        {
+            var paramInfos = new List<object>();
+            foreach (var p in funcParams)
+            {
+                var pi = new JsonObject();
+                pi.Set("label", $"{p.Name}: {p.TypeName}");
+                paramInfos.Add(pi);
+            }
+            return BuildSignatureHelpResult(label, paramInfos, activeParam);
+        }
+
+        private static JsonObject MakeSignatureHelp(string label, SyscallParamInfo[] syscallParams, int activeParam, bool isSyscall)
+        {
+            var paramInfos = new List<object>();
+            foreach (var p in syscallParams)
+            {
+                var pi = new JsonObject();
+                pi.Set("label", $"{p.Name}: {p.TypeName}");
+                paramInfos.Add(pi);
+            }
+            return BuildSignatureHelpResult(label, paramInfos, activeParam);
+        }
+
+        private static JsonObject BuildSignatureHelpResult(string label, List<object> paramInfos, int activeParam)
+        {
+            var sig = new JsonObject();
+            sig.Set("label", label);
+            sig.Set("parameters", paramInfos);
+
+            var signatures = new List<object> { sig };
+
+            var result = new JsonObject();
+            result.Set("signatures", signatures);
+            result.Set("activeSignature", 0);
+            result.Set("activeParameter", activeParam);
+            return result;
         }
 
         private static JsonObject MakeCompletionItem(string label, int kind, string detail)

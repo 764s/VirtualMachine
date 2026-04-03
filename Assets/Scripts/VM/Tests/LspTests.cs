@@ -1157,6 +1157,284 @@ public static class LspTests
             }
         }
 
+        // ================================================================
+        // F. LSP7 Tests — signatureHelp (parameter hints)
+        // ================================================================
+
+        // ===== Test LSP7-T01: signatureHelp for user function on '(' =====
+        {
+            string source = "func add(a: int, b: int): int {\n  return a + b\n}\nfunc entry() {\n  add(\n}";
+            // cursor at line 4 (0-based), char 6: right after "add("
+            var session = new LspBatchSession();
+            session.AddInitialize();
+            session.AddInitialized();
+            session.AddDidOpen("file:///sig1.ffs", source);
+            session.AddSignatureHelp("file:///sig1.ffs", 4, 6);
+            session.AddShutdown();
+            session.AddExit();
+            session.Run();
+
+            session.ExpectResponse(0); // initialize
+            var sigResp = session.ExpectResponse(1); // signatureHelp
+            Assert(sigResp != null, "LSP7-T01: signatureHelp response received");
+            if (sigResp != null)
+            {
+                var result = sigResp.GetObject("result");
+                Assert(result != null, "LSP7-T01: result is not null");
+                if (result != null)
+                {
+                    var sigs = result.GetArray("signatures");
+                    Assert(sigs != null && sigs.Count == 1, $"LSP7-T01: one signature, got {sigs?.Count}");
+                    if (sigs != null && sigs.Count > 0)
+                    {
+                        var sig = sigs[0] as JsonObject;
+                        string label = sig?.GetString("label");
+                        Assert(label == "func add(a: int, b: int): int",
+                            $"LSP7-T01: label matches, got '{label}'");
+                        var parms = sig?.GetArray("parameters");
+                        Assert(parms != null && parms.Count == 2,
+                            $"LSP7-T01: 2 parameters, got {parms?.Count}");
+                    }
+                    int ap = result.GetInt("activeParameter");
+                    Assert(ap == 0, $"LSP7-T01: activeParameter=0, got {ap}");
+                }
+            }
+        }
+
+        // ===== Test LSP7-T02: activeParameter increments on ',' =====
+        {
+            string source = "func add(a: int, b: int): int {\n  return a + b\n}\nfunc entry() {\n  add(1, \n}";
+            // cursor at line 4, char 9: right after "add(1, "
+            var session = new LspBatchSession();
+            session.AddInitialize();
+            session.AddInitialized();
+            session.AddDidOpen("file:///sig2.ffs", source);
+            session.AddSignatureHelp("file:///sig2.ffs", 4, 9);
+            session.AddShutdown();
+            session.AddExit();
+            session.Run();
+
+            session.ExpectResponse(0);
+            var sigResp = session.ExpectResponse(1);
+            Assert(sigResp != null, "LSP7-T02: signatureHelp response received");
+            if (sigResp != null)
+            {
+                var result = sigResp.GetObject("result");
+                Assert(result != null, "LSP7-T02: result is not null");
+                if (result != null)
+                {
+                    int ap = result.GetInt("activeParameter");
+                    Assert(ap == 1, $"LSP7-T02: activeParameter=1, got {ap}");
+                }
+            }
+        }
+
+        // ===== Test LSP7-T03: syscall signatureHelp =====
+        {
+            string source = "func entry() {\n  PlayAnim(\n}";
+            var session = new LspBatchSession();
+            var syscalls = new Dictionary<string, int> { { "PlayAnim", 0 } };
+            var signatures = new Dictionary<string, SyscallSignature>
+            {
+                { "PlayAnim", new SyscallSignature(
+                    new[] { new SyscallParamInfo("animId", "int"), new SyscallParamInfo("speed", "float") },
+                    "void", "Play animation") }
+            };
+            session.SetSyscalls(syscalls, signatures);
+            session.AddInitialize();
+            session.AddInitialized();
+            session.AddDidOpen("file:///sig3.ffs", source);
+            session.AddSignatureHelp("file:///sig3.ffs", 1, 12);
+            session.AddShutdown();
+            session.AddExit();
+            session.Run();
+
+            session.ExpectResponse(0);
+            var sigResp = session.ExpectResponse(1);
+            Assert(sigResp != null, "LSP7-T03: signatureHelp response received");
+            if (sigResp != null)
+            {
+                var result = sigResp.GetObject("result");
+                Assert(result != null, "LSP7-T03: result is not null");
+                if (result != null)
+                {
+                    var sigs = result.GetArray("signatures");
+                    Assert(sigs != null && sigs.Count == 1, $"LSP7-T03: one signature");
+                    if (sigs != null && sigs.Count > 0)
+                    {
+                        var sig = sigs[0] as JsonObject;
+                        string label = sig?.GetString("label");
+                        Assert(label != null && label.Contains("PlayAnim"),
+                            $"LSP7-T03: label contains PlayAnim, got '{label}'");
+                        var parms = sig?.GetArray("parameters");
+                        Assert(parms != null && parms.Count == 2,
+                            $"LSP7-T03: 2 parameters, got {parms?.Count}");
+                        if (parms != null && parms.Count > 0)
+                        {
+                            var p0 = parms[0] as JsonObject;
+                            Assert(p0?.GetString("label") == "animId: int",
+                                $"LSP7-T03: first param label, got '{p0?.GetString("label")}'");
+                        }
+                    }
+                    int ap = result.GetInt("activeParameter");
+                    Assert(ap == 0, $"LSP7-T03: activeParameter=0, got {ap}");
+                }
+            }
+        }
+
+        // ===== Test LSP7-T04: unknown function returns null =====
+        {
+            string source = "func entry() {\n  unknown(\n}";
+            var session = new LspBatchSession();
+            session.AddInitialize();
+            session.AddInitialized();
+            session.AddDidOpen("file:///sig4.ffs", source);
+            session.AddSignatureHelp("file:///sig4.ffs", 1, 10);
+            session.AddShutdown();
+            session.AddExit();
+            session.Run();
+
+            session.ExpectResponse(0);
+            var sigResp = session.ExpectResponse(1);
+            Assert(sigResp != null, "LSP7-T04: signatureHelp response received");
+            if (sigResp != null)
+            {
+                var result = sigResp.GetObject("result");
+                Assert(result == null, $"LSP7-T04: result is null for unknown function");
+            }
+        }
+
+        // ===== Test LSP7-T05: nested parentheses in arguments =====
+        {
+            string source = "func add(a: int, b: int): int {\n  return a + b\n}\nfunc mul(x: int, y: int): int {\n  return x\n}\nfunc entry() {\n  add(mul(1, 2), \n}";
+            // cursor at line 7, after "add(mul(1, 2), " → activeParameter should be 1 (second param of add)
+            var session = new LspBatchSession();
+            session.AddInitialize();
+            session.AddInitialized();
+            session.AddDidOpen("file:///sig5.ffs", source);
+            session.AddSignatureHelp("file:///sig5.ffs", 7, 17);
+            session.AddShutdown();
+            session.AddExit();
+            session.Run();
+
+            session.ExpectResponse(0);
+            var sigResp = session.ExpectResponse(1);
+            Assert(sigResp != null, "LSP7-T05: signatureHelp response received");
+            if (sigResp != null)
+            {
+                var result = sigResp.GetObject("result");
+                Assert(result != null, "LSP7-T05: result is not null");
+                if (result != null)
+                {
+                    var sigs = result.GetArray("signatures");
+                    if (sigs != null && sigs.Count > 0)
+                    {
+                        var sig = sigs[0] as JsonObject;
+                        string label = sig?.GetString("label");
+                        Assert(label != null && label.Contains("add"),
+                            $"LSP7-T05: outer function is 'add', got '{label}'");
+                    }
+                    int ap = result.GetInt("activeParameter");
+                    Assert(ap == 1, $"LSP7-T05: activeParameter=1 for second arg, got {ap}");
+                }
+            }
+        }
+
+        // ===== Test LSP7-T06: three-parameter function, third param active =====
+        {
+            string source = "func tri(a: int, b: int, c: int): int {\n  return a\n}\nfunc entry() {\n  tri(1, 2, \n}";
+            // cursor at line 4, after "tri(1, 2, " → activeParameter = 2
+            var session = new LspBatchSession();
+            session.AddInitialize();
+            session.AddInitialized();
+            session.AddDidOpen("file:///sig6.ffs", source);
+            session.AddSignatureHelp("file:///sig6.ffs", 4, 12);
+            session.AddShutdown();
+            session.AddExit();
+            session.Run();
+
+            session.ExpectResponse(0);
+            var sigResp = session.ExpectResponse(1);
+            Assert(sigResp != null, "LSP7-T06: signatureHelp response received");
+            if (sigResp != null)
+            {
+                var result = sigResp.GetObject("result");
+                Assert(result != null, "LSP7-T06: result is not null");
+                if (result != null)
+                {
+                    int ap = result.GetInt("activeParameter");
+                    Assert(ap == 2, $"LSP7-T06: activeParameter=2 for third arg, got {ap}");
+                    var sigs = result.GetArray("signatures");
+                    if (sigs != null && sigs.Count > 0)
+                    {
+                        var sig = sigs[0] as JsonObject;
+                        var parms = sig?.GetArray("parameters");
+                        Assert(parms != null && parms.Count == 3,
+                            $"LSP7-T06: 3 parameters, got {parms?.Count}");
+                    }
+                }
+            }
+        }
+
+        // ===== Test LSP7-T07: signatureHelp capability advertised =====
+        {
+            var session = new LspBatchSession();
+            session.AddInitialize();
+            session.AddShutdown();
+            session.AddExit();
+            session.Run();
+
+            var initResp = session.ExpectResponse(0);
+            Assert(initResp != null, "LSP7-T07: initialize response received");
+            if (initResp != null)
+            {
+                var caps = initResp.GetObject("result")?.GetObject("capabilities");
+                var sigProv = caps?.GetObject("signatureHelpProvider");
+                Assert(sigProv != null, "LSP7-T07: signatureHelpProvider capability present");
+                if (sigProv != null)
+                {
+                    var trigChars = sigProv.GetArray("triggerCharacters");
+                    Assert(trigChars != null && trigChars.Count >= 2,
+                        $"LSP7-T07: trigger characters present, got {trigChars?.Count}");
+                }
+            }
+        }
+
+        // ===== Test LSP7-T08: syscall second param active =====
+        {
+            string source = "func entry() {\n  PlayAnim(1, \n}";
+            var session = new LspBatchSession();
+            var syscalls = new Dictionary<string, int> { { "PlayAnim", 0 } };
+            var signatures = new Dictionary<string, SyscallSignature>
+            {
+                { "PlayAnim", new SyscallSignature(
+                    new[] { new SyscallParamInfo("animId", "int"), new SyscallParamInfo("speed", "float") },
+                    "void", "Play animation") }
+            };
+            session.SetSyscalls(syscalls, signatures);
+            session.AddInitialize();
+            session.AddInitialized();
+            session.AddDidOpen("file:///sig8.ffs", source);
+            session.AddSignatureHelp("file:///sig8.ffs", 1, 15);
+            session.AddShutdown();
+            session.AddExit();
+            session.Run();
+
+            session.ExpectResponse(0);
+            var sigResp = session.ExpectResponse(1);
+            Assert(sigResp != null, "LSP7-T08: signatureHelp response received");
+            if (sigResp != null)
+            {
+                var result = sigResp.GetObject("result");
+                Assert(result != null, "LSP7-T08: result is not null");
+                if (result != null)
+                {
+                    int ap = result.GetInt("activeParameter");
+                    Assert(ap == 1, $"LSP7-T08: activeParameter=1, got {ap}");
+                }
+            }
+        }
+
         Debug.Log($"\n===== LspTests: {passed} passed, {failed} failed =====");
     }
 
@@ -1315,6 +1593,19 @@ public static class LspTests
             pos.Set("character", character);
             parameters.Set("position", pos);
             AddRequest("textDocument/completion", parameters);
+        }
+
+        public void AddSignatureHelp(string uri, int line, int character)
+        {
+            var parameters = new JsonObject();
+            var textDoc = new JsonObject();
+            textDoc.Set("uri", uri);
+            parameters.Set("textDocument", textDoc);
+            var pos = new JsonObject();
+            pos.Set("line", line);
+            pos.Set("character", character);
+            parameters.Set("position", pos);
+            AddRequest("textDocument/signatureHelp", parameters);
         }
 
         /// <summary>

@@ -159,7 +159,7 @@ DBG7（DAP 适配器）                ← DBG3-DBG6 的 DAP 协议封装 → �
 | **LSP4** | 符号分析（Go-to-Definition / References / Hover / Document Symbols） | 编译器 | 中 | 基于 AST + Symbol Table 实现 `textDocument/definition`、`textDocument/references`、`textDocument/hover`、`textDocument/documentSymbol` | ✅ 已完成 |
 | **LSP5** | 代码补全（Completion） | 编译器 | 中 | 关键字 + 作用域内变量 + 函数名 + Syscall 名 + struct 字段补全（`textDocument/completion`）；当 LSP6 声明可用时，补全项包含 Syscall 参数签名 | ✅ 已完成 |
 | **LSP6** | Syscall 声明协议（Declaration Protocol） | 基础设施 | 中 | 允许宿主通过声明文件（`.ffvm.d.json`）或注册 API 声明 Syscall 签名（参数名、参数类型、返回类型、说明文本），为 LSP5/LSP7 提供宿主方法元数据 | ✅ 已完成 → [B-α1](Step_B_Alpha1_LSP6_SyscallDecl.md) |
-| **LSP7** | 参数提示（Signature Help） | 编译器 | 中 | 输入 `funcName(` 或 `,` 时显示参数列表与当前参数高亮（`textDocument/signatureHelp`）；覆盖用户函数 + Syscall（需 LSP6 声明） |
+| **LSP7** | 参数提示（Signature Help） | 编译器 | 中 | 输入 `funcName(` 或 `,` 时显示参数列表与当前参数高亮（`textDocument/signatureHelp`）；覆盖用户函数 + Syscall（需 LSP6 声明） | ✅ 已完成 → [B-α2](Step_B_Alpha2_LSP7_SignatureHelp.md) |
 
 #### 前置任务与依赖关系
 
