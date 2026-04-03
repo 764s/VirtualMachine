@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 
 namespace FFVM
 {
@@ -11,6 +12,52 @@ namespace FFVM
     public delegate void SyscallHandler(ref VMInstanceState instance);
 
     /// <summary>
+    /// Describes a single syscall parameter (name + type).
+    /// </summary>
+    public sealed class SyscallParamInfo
+    {
+        public readonly string Name;
+        public readonly string TypeName;
+
+        public SyscallParamInfo(string name, string typeName)
+        {
+            Name = name;
+            TypeName = typeName;
+        }
+    }
+
+    /// <summary>
+    /// Full signature metadata for a syscall (parameters, return type, description).
+    /// Used by LSP6 Syscall Declaration Protocol to provide editor completion / signature help.
+    /// </summary>
+    public sealed class SyscallSignature
+    {
+        public readonly SyscallParamInfo[] Parameters;
+        public readonly string ReturnType;
+        public readonly string Description;
+
+        public SyscallSignature(SyscallParamInfo[] parameters, string returnType, string description)
+        {
+            Parameters = parameters ?? Array.Empty<SyscallParamInfo>();
+            ReturnType = returnType;
+            Description = description;
+        }
+
+        /// <summary>
+        /// Format as human-readable signature string: "(paramName: type, ...) : returnType"
+        /// </summary>
+        public string Format(string name)
+        {
+            var parts = new List<string>();
+            foreach (var p in Parameters)
+                parts.Add($"{p.Name}: {p.TypeName}");
+            string ret = !string.IsNullOrEmpty(ReturnType) && ReturnType != "void"
+                ? $": {ReturnType}" : "";
+            return $"(syscall) {name}({string.Join(", ", parts)}){ret}";
+        }
+    }
+
+    /// <summary>
     /// Fixed-size syscall dispatch table.
     /// Slot replacement at frame boundary for hot-swap.
     /// Zero overhead when no override: caller checks delegate != null.
@@ -21,6 +68,7 @@ namespace FFVM
         private readonly string[] _names; // Debug only
         private readonly int[] _pairedSlots; // Paired (release) slot for each syscall, -1 = no pair
         private readonly bool[] _requiresCleanup; // True if syscall must be wrapped in using/defer
+        private readonly SyscallSignature[] _signatures; // LSP6: parameter/return/description metadata
 
         public SyscallTable()
         {
@@ -28,6 +76,7 @@ namespace FFVM
             _names = new string[VMConstants.MaxSyscalls];
             _pairedSlots = new int[VMConstants.MaxSyscalls];
             _requiresCleanup = new bool[VMConstants.MaxSyscalls];
+            _signatures = new SyscallSignature[VMConstants.MaxSyscalls];
             for (int i = 0; i < VMConstants.MaxSyscalls; i++)
                 _pairedSlots[i] = -1;
         }
@@ -124,6 +173,25 @@ namespace FFVM
             if (slot < 0 || slot >= VMConstants.MaxSyscalls)
                 return false;
             return _requiresCleanup[slot];
+        }
+
+        /// <summary>
+        /// Register signature metadata for a syscall slot (LSP6).
+        /// </summary>
+        public void RegisterSignature(int slot, SyscallSignature signature)
+        {
+            if (slot >= 0 && slot < VMConstants.MaxSyscalls)
+                _signatures[slot] = signature;
+        }
+
+        /// <summary>
+        /// Get signature metadata for a syscall slot. Returns null if not registered.
+        /// </summary>
+        public SyscallSignature GetSignature(int slot)
+        {
+            if (slot < 0 || slot >= VMConstants.MaxSyscalls)
+                return null;
+            return _signatures[slot];
         }
     }
 }

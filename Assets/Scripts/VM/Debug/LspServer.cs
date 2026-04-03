@@ -38,6 +38,9 @@ namespace FFVM.Debug
         // --- Syscall table for compilation (stub, no real syscalls needed for diagnostics) ---
         private readonly Dictionary<string, int> _defaultSyscalls;
 
+        // --- LSP6: Syscall signature metadata for enhanced completion ---
+        private readonly Dictionary<string, SyscallSignature> _syscallSignatures;
+
         /// <summary>
         /// Exposed for testing: all diagnostics published since last clear.
         /// Key = URI, Value = list of diagnostic objects.
@@ -50,6 +53,74 @@ namespace FFVM.Debug
             _input = input;
             _output = output;
             _defaultSyscalls = new Dictionary<string, int>();
+            _syscallSignatures = new Dictionary<string, SyscallSignature>();
+        }
+
+        /// <summary>
+        /// Construct with pre-registered syscall declarations (LSP6).
+        /// </summary>
+        public LspServer(Stream input, Stream output,
+                         Dictionary<string, int> syscalls,
+                         Dictionary<string, SyscallSignature> signatures)
+        {
+            _input = input;
+            _output = output;
+            _defaultSyscalls = syscalls ?? new Dictionary<string, int>();
+            _syscallSignatures = signatures ?? new Dictionary<string, SyscallSignature>();
+        }
+
+        /// <summary>
+        /// Load syscall declarations from a .ffvm.d.json string (LSP6).
+        /// Merges into existing syscall table and signature metadata.
+        /// JSON format: { "syscalls": [ { "name": "...", "slot": N, "parameters": [...], "returnType": "...", "description": "..." } ] }
+        /// </summary>
+        public void LoadDeclarationJson(string json)
+        {
+            if (string.IsNullOrEmpty(json)) return;
+
+            var root = JsonObject.Parse(json);
+            if (root == null) return;
+
+            var syscalls = root.GetArray("syscalls");
+            if (syscalls == null) return;
+
+            foreach (var item in syscalls)
+            {
+                var obj = item as JsonObject;
+                if (obj == null) continue;
+
+                string name = obj.GetString("name");
+                int slot = obj.GetInt("slot", -1);
+                if (string.IsNullOrEmpty(name) || slot < 0) continue;
+
+                // Register in compilation table
+                _defaultSyscalls[name] = slot;
+
+                // Parse parameters
+                var paramList = obj.GetArray("parameters");
+                var parms = new List<SyscallParamInfo>();
+                if (paramList != null)
+                {
+                    foreach (var pItem in paramList)
+                    {
+                        var pObj = pItem as JsonObject;
+                        if (pObj == null) continue;
+                        string pName = pObj.GetString("name");
+                        string pType = pObj.GetString("type");
+                        if (!string.IsNullOrEmpty(pName) && !string.IsNullOrEmpty(pType))
+                            parms.Add(new SyscallParamInfo(pName, pType));
+                    }
+                }
+
+                string returnType = obj.GetString("returnType");
+                string description = obj.GetString("description");
+
+                _syscallSignatures[name] = new SyscallSignature(
+                    parms.ToArray(),
+                    returnType,
+                    description
+                );
+            }
         }
 
         /// <summary>
@@ -903,10 +974,16 @@ namespace FFVM.Debug
                     }
                 }
 
-                // Syscall names
+                // Syscall names (with signature metadata from LSP6 if available)
                 foreach (string name in _defaultSyscalls.Keys)
                 {
-                    items.Add(MakeCompletionItem(name, 3 /* Function */, $"(syscall) {name}"));
+                    string detail;
+                    SyscallSignature sig;
+                    if (_syscallSignatures.TryGetValue(name, out sig))
+                        detail = sig.Format(name);
+                    else
+                        detail = $"(syscall) {name}";
+                    items.Add(MakeCompletionItem(name, 3 /* Function */, detail));
                 }
             }
 
