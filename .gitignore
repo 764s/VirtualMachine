@@ -84,3 +84,10 @@ crashlytics-build.properties
 /Sandbox/bin/
 /Sandbox/obj/
 /Sandbox/Sandbox.csproj
+
+/run-sandbox.cmd
+/run-sandbox.sh
+/StandaloneRunner/StandaloneRunner.csproj
+vscode-ffvm-debug/node_modules/
+vscode-ffvm-debug/package-lock.json
+vscode-ffvm-debug/*.vsix
