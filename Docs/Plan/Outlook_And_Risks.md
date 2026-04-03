@@ -240,7 +240,7 @@ LSP1（LSP Server 核心框架）           ← 所有 LSP 功能的通信基础
 
 | Tier | ID | 内容 | 预期收益 | 复杂度 |
 |------|----|------|---------|--------|
-| **4** | **O9** | 活跃实例链表 | 稀疏场景 ~85% 无效遍历减少 | 低 |
+| **4** | **O9** | 活跃实例链表 | 稀疏场景 ~85% 无效遍历减少 | 低 | ✅ [B-β3](Step_B_Beta3_O9_ActiveList.md) |
 | **4** | **O10** | 快照只拷贝活跃实例 | 快照 80-90% 数据量减少 | 中 |
 | **5** | **O11** | Syscall 函数指针（`delegate*`） | Syscall 调用 ~30% 加速 | 中 |
 | **5** | **O12** | Number 原始字段比较优化 | 比较指令 ~10% | 低 |
@@ -337,6 +337,13 @@ LSP1（LSP Server 核心框架）           ← 所有 LSP 功能的通信基础
 |----|------|------|------|
 | **R-LSP6-1** | `.ffvm.d.json` 仅通过 API 加载，无文件系统自动发现 | 宿主需显式调用 `LoadDeclarationJson`；编辑器扩展需配置路径 | [B-α1](Step_B_Alpha1_LSP6_SyscallDecl.md) |
 | **R-LSP6-2** | 声明文件 slot 与运行时 SyscallTable slot 的一致性由宿主保证 | slot 不匹配时补全签名与实际行为不符 | [B-α1](Step_B_Alpha1_LSP6_SyscallDecl.md) |
+
+### 4.5 B-β3 风险（O9 活跃实例链表）
+
+| ID | 风险 | 影响 | 来源 |
+|----|------|------|------|
+| **R-O9-1** | swap-remove 改变 ActiveList 遍历顺序 | Tick 遍历顺序 = 最近 spawn 顺序，语义上无保证；Snapshot 恢复确定性由 Array.Copy 保证 | [B-β3](Step_B_Beta3_O9_ActiveList.md) |
+| **R-O9-2** | Tick 内 Syscall 调用 Spawn/Destroy | 当前单线程设计无此问题；若未来支持 Tick 内 spawn 需在循环后追加 | [B-β3](Step_B_Beta3_O9_ActiveList.md) |
 
 ---
 

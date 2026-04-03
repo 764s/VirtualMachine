@@ -86,4 +86,24 @@ LoadState: 反向恢复 + 各实例的 `ActiveListIndex` 已包含在 Instances 
 1. ✅ Tick() 使用 ActiveList 遍历替代全量扫描
 2. ✅ Snapshot Save/Load 包含 ActiveList 状态
 3. ✅ 稀疏场景性能测试通过
-4. ✅ 700+ assertions × 2 模式全通过
+4. ✅ 711 assertions × 2 模式全通过
+
+## 五、功能展望
+
+| ID | 内容 | 触发时机 |
+|----|------|----------|
+| **O10** | 快照只拷贝活跃实例（B-δ1） | ActiveList 已就绪，SaveState 可按 ActiveList 遍历拷贝，减少 80-90% 快照数据量 |
+
+## 六、优化展望
+
+| ID | 内容 | 说明 |
+|----|------|------|
+| O9+ | Tick 中 Completed 实例自动移出 ActiveList | 当前 Completed 实例仍在 ActiveList 中（由 Tick 跳过）。可在 Tick 中检测 Completed 后自动 swap-remove，进一步减少无效遍历。需注意与 DestroyInstance 的交互。 |
+
+## 七、风险点
+
+| 风险 | 说明 | 缓解措施 |
+|------|------|----------|
+| R-O9-1 | swap-remove 改变遍历顺序 | Tick 内不做 swap-remove，仅 spawn/destroy API 触发。Tick 遍历顺序 = 最近 spawn 顺序，语义上无保证。Snapshot 恢复确定性由 Array.Copy 保证。 |
+| R-O9-2 | 并发 Spawn/Destroy 在 Tick 中 | 当前设计单线程，Tick 内不调用 Spawn/Destroy。若未来支持 Tick 内 spawn（如 Syscall 中），需在 Tick 循环后追加新实例。 |
+

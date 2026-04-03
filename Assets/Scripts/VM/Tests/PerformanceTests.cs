@@ -854,11 +854,11 @@ public static class PerformanceTests
                 for (int i = 0; i < 3; i++)
                     sparseWorld.SpawnInstance(0, 0);
                 sparseWorld.Tick();
-                for (int i = 0; i < sparseWorld.Pool.ActiveListCount; )
+                // Destroy all: iterate backwards to avoid swap-remove index confusion
+                for (int i = sparseWorld.Pool.ActiveListCount - 1; i >= 0; i--)
                 {
                     int did = sparseWorld.Pool.ActiveList[i];
                     sparseWorld.DestroyInstance(did);
-                    // swap-remove may move last to i, don't increment
                 }
             }
 

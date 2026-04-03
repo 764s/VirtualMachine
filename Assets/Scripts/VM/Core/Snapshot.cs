@@ -12,8 +12,7 @@ namespace FFVM
     {
         // Mirror of InstancePool.FreeStack + FreeTop
         public int FreeTop;
-        public int ActiveCount;
-        // O9: ActiveListCount for active instance list
+        // O9: ActiveListCount for active instance list (replaces separate ActiveCount)
         public int ActiveListCount;
         // FreeStack array is snapshotted separately via Buffer.BlockCopy
     }
@@ -71,9 +70,8 @@ namespace FFVM
         {
             ref VMWorldSnapshot snap = ref _ring[_head];
             snap.FrameNumber = frameNumber;
-            snap.ActiveInstanceCount = pool.ActiveCount;
+            snap.ActiveInstanceCount = pool.ActiveListCount;
             snap.FreeStackState.FreeTop = pool.FreeTop;
-            snap.FreeStackState.ActiveCount = pool.ActiveCount;
             snap.FreeStackState.ActiveListCount = pool.ActiveListCount;
 
             // memcpy instances
@@ -98,9 +96,8 @@ namespace FFVM
                 ref VMWorldSnapshot snap = ref _ring[i];
                 if (snap.FrameNumber == frameNumber)
                 {
-                    pool.ActiveCount = snap.ActiveInstanceCount;
-                    pool.FreeTop = snap.FreeStackState.FreeTop;
                     pool.ActiveListCount = snap.FreeStackState.ActiveListCount;
+                    pool.FreeTop = snap.FreeStackState.FreeTop;
 
                     Array.Copy(snap.InstanceSnapshots, pool.Instances, VMConstants.MaxInstances);
                     Array.Copy(snap.FreeStackData, pool.FreeStack, VMConstants.MaxFreeStack);

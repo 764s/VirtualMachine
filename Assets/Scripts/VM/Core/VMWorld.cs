@@ -86,7 +86,7 @@ namespace FFVM
             {
                 int id = Pool.ActiveList[i];
                 ref VMInstanceState inst = ref Pool.Instances[id];
-                if (inst.ErrorFlag != VMError.None)
+                if (!inst.IsAlive || inst.ErrorFlag != VMError.None)
                     continue;
 
                 // 1. Already completed → skip

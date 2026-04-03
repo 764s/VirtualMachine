@@ -18,8 +18,8 @@ namespace FFVM
         public int[] ActiveList;
         public int ActiveListCount;
 
-        // Tracking (kept for backward-compat; equals ActiveListCount)
-        public int ActiveCount;
+        // Legacy alias: always equals ActiveListCount (kept for snapshot compat)
+        public int ActiveCount { get => ActiveListCount; set => ActiveListCount = value; }
 
         public void Init()
         {
@@ -27,7 +27,6 @@ namespace FFVM
             FreeStack = new int[VMConstants.MaxFreeStack];
             ActiveList = new int[VMConstants.MaxInstances];
             FreeTop = VMConstants.MaxInstances;
-            ActiveCount = 0;
             ActiveListCount = 0;
 
             // Fill free stack: 0 at top (first to be allocated)
@@ -47,7 +46,6 @@ namespace FFVM
 
             FreeTop--;
             int slot = FreeStack[FreeTop];
-            ActiveCount++;
 
             ref VMInstanceState inst = ref Instances[slot];
             inst = default;
@@ -58,7 +56,7 @@ namespace FFVM
             inst.StateFlags = VMStateFlags.Active;
             inst.WaitTargetInstanceId = -1;
 
-            // O9: Append to active list
+            // O9: Append to active list (also updates ActiveCount via alias)
             inst.ActiveListIndex = ActiveListCount;
             ActiveList[ActiveListCount] = slot;
             ActiveListCount++;
@@ -78,7 +76,7 @@ namespace FFVM
             if (!inst.IsAlive)
                 return;
 
-            // O9: Swap-remove from active list
+            // O9: Swap-remove from active list (also updates ActiveCount via alias)
             int idx = inst.ActiveListIndex;
             int last = ActiveListCount - 1;
             if (idx != last)
@@ -94,7 +92,6 @@ namespace FFVM
             inst.ErrorFlag = VMError.None;
             FreeStack[FreeTop] = instanceId;
             FreeTop++;
-            ActiveCount--;
         }
     }
 }
