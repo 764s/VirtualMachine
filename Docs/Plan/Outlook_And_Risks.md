@@ -157,7 +157,7 @@ DBG7（DAP 适配器）                ← DBG3-DBG6 的 DAP 协议封装 → �
 | **LSP2** | 语法高亮（Semantic Tokens / TextMate Grammar） | 编辑器 | 低 | 为 16 个关键字 + 运算符 + 字面量 + 注释定义 token 类型；TextMate grammar（.tmLanguage）提供基础着色，Semantic Tokens 提供上下文感知着色 |
 | **LSP3** | 实时诊断（Diagnostics） | 编译器 | 中 | 增量编译 → 错误/警告实时推送（`textDocument/publishDiagnostics`）；复用 `BytecodeCompiler._errors` 列表 + Source Map 定位 |
 | **LSP4** | 符号分析（Go-to-Definition / References / Hover / Document Symbols） | 编译器 | 中 | 基于 AST + Symbol Table 实现 `textDocument/definition`、`textDocument/references`、`textDocument/hover`、`textDocument/documentSymbol` | ✅ 已完成 |
-| **LSP5** | 代码补全（Completion） | 编译器 | 中 | 关键字 + 作用域内变量 + 函数名 + Syscall 名 + struct 字段补全（`textDocument/completion`）；当 LSP6 声明可用时，补全项包含 Syscall 参数签名 |
+| **LSP5** | 代码补全（Completion） | 编译器 | 中 | 关键字 + 作用域内变量 + 函数名 + Syscall 名 + struct 字段补全（`textDocument/completion`）；当 LSP6 声明可用时，补全项包含 Syscall 参数签名 | ✅ 已完成 |
 | **LSP6** | Syscall 声明协议（Declaration Protocol） | 基础设施 | 中 | 允许宿主通过声明文件（`.ffvm.d.json`）或注册 API 声明 Syscall 签名（参数名、参数类型、返回类型、说明文本），为 LSP5/LSP7 提供宿主方法元数据 |
 | **LSP7** | 参数提示（Signature Help） | 编译器 | 中 | 输入 `funcName(` 或 `,` 时显示参数列表与当前参数高亮（`textDocument/signatureHelp`）；覆盖用户函数 + Syscall（需 LSP6 声明） |
 
@@ -652,7 +652,7 @@ Gate 3: Unity Editor 内嵌 DAP（可选）             ← DBG7 Phase C
 | 序号 | 步骤 | 状态 | 子项 |
 |------|------|------|------|
 | B1 | 调试 Phase 3C（可选） | ⏳ | DBG7-C EditorApplication.update 轮询，DR5 主线程永不阻塞 |
-| B2 | 语言服务 Phase 4 | ⏳ | LSP2→LSP1→LSP3→LSP4→LSP5→LSP6→LSP7 + DBG2 Phase 2 |
+| B2 | 语言服务 Phase 4 | ⏳ | LSP2✅→LSP1✅→LSP3✅→LSP4✅→LSP5✅→LSP6⏳→LSP7⏳ + DBG2 Phase 2 |
 | B3 | 调整型优化 | ⏳ | O1→O2, O6, O8+O9-O14+FO1-FO3+SO1; R1/SR1/SR2 理想方案 |
 | B4 | 功能补全 | ⏳ | S4, FF5, FF1-FF4, C5/C6, SN1/SN2, BB1/PR1/DM1, GR3 |
 

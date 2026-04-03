@@ -950,6 +950,8 @@ namespace FFVM.Debug
 
         /// <summary>
         /// Find the function declaration that contains the given AST line.
+        /// Approximation: picks the latest function starting before the cursor.
+        /// Works well for sequential single-file scripts (typical FFVM usage).
         /// </summary>
         private static FuncDecl FindContainingFunction(ModuleNode ast, int astLine)
         {
@@ -1054,7 +1056,7 @@ namespace FFVM.Debug
             {
                 if (stmt is VarDeclStmt vd)
                 {
-                    if (vd.Line <= beforeAstLine)
+                    if (vd.Line < beforeAstLine)
                     {
                         string typeStr = vd.TypeName ?? "int";
                         items.Add(MakeCompletionItem(vd.Name, 6 /* Variable */,
@@ -1086,7 +1088,7 @@ namespace FFVM.Debug
         private static void CollectVariablesInStmt(Stmt stmt, int beforeAstLine, List<object> items)
         {
             if (stmt is BlockStmt bs) CollectVariablesInScope(bs, beforeAstLine, items);
-            else if (stmt is VarDeclStmt vd && vd.Line <= beforeAstLine)
+            else if (stmt is VarDeclStmt vd && vd.Line < beforeAstLine)
             {
                 string typeStr = vd.TypeName ?? "int";
                 items.Add(MakeCompletionItem(vd.Name, 6 /* Variable */, $"var {vd.Name}: {typeStr}"));

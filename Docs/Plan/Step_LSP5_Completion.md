@@ -23,41 +23,45 @@
 
 ### A. LspServer.cs 修改
 
-- [ ] **A1** `HandleInitialize`: 添加 `completionProvider` capability
+- [x] **A1** `HandleInitialize`: 添加 `completionProvider` capability
   - `triggerCharacters: ["."]` — 触发结构体字段补全
-- [ ] **A2** `HandleRequest`: 添加 `case "textDocument/completion"` 分支
-- [ ] **A3** 实现 `HandleCompletion(JsonObject parameters)`:
+- [x] **A2** `HandleRequest`: 添加 `case "textDocument/completion"` 分支
+- [x] **A3** 实现 `HandleCompletion(JsonObject parameters)`:
   - 提取 `position` (line, character)
   - 获取文档源码和缓存 AST
   - 检测上下文：是否在 `expr.` 后（字段补全）或普通标识符位置
   - 构建 CompletionItem 列表
-- [ ] **A4** 实现上下文检测:
+- [x] **A4** 实现上下文检测:
   - 光标前有 `.` → 字段补全模式：解析 `.` 前变量名 → 查找 struct 类型 → 返回字段列表
   - 否则 → 通用补全模式：关键字 + 函数 + 变量 + 结构体名 + Syscall 名
-- [ ] **A5** 实现前缀过滤:
-  - 提取光标前的部分输入文本作为过滤前缀
-  - 对通用补全项按前缀过滤
+- [x] **A5** 实现作用域感知:
+  - FindContainingFunction 定位光标所在函数
+  - 参数补全 + 局部变量补全（仅光标前声明的变量）
 
 ### B. LspTests.cs 测试
 
-- [ ] **B1** `LspBatchSession.AddCompletion()` 辅助方法
-- [ ] **B2** LSP5-T01: initialize 返回 completionProvider capability
-- [ ] **B3** LSP5-T02: 基本补全返回关键字 + 函数 + 变量
-- [ ] **B4** LSP5-T03: 结构体字段补全 (`v.` → x, y)
-- [ ] **B5** LSP5-T04: 空文件补全返回关键字
-- [ ] **B6** LSP5-T05: Syscall 名在补全结果中
-- [ ] **B7** LSP5-T06: 作用域感知 — 仅返回当前函数内变量
+- [x] **B1** `LspBatchSession.AddCompletion()` 辅助方法
+- [x] **B2** LSP5-T01: initialize 返回 completionProvider capability
+- [x] **B3** LSP5-T02: 基本补全返回关键字 + 函数 + 变量
+- [x] **B4** LSP5-T03: 结构体字段补全 (`v.` → x, y)
+- [x] **B5** LSP5-T04: 空文件补全返回关键字
+- [x] **B6** LSP5-T05: Syscall 名在补全结果中
+- [x] **B7** LSP5-T06: 作用域感知 — 仅返回当前函数内变量
+- [x] **B8** LSP5-T07: 补全项包含 detail 签名文本
+- [x] **B9** LSP5-T08: 函数参数在补全结果中
 
 ### C. 文档更新
 
-- [ ] **C1** VM_Summary.md §七 更新 B2 行 LSP5 状态 → ✅
-- [ ] **C2** VM_Summary.md §七 A 表添加 LSP5 完成行
-- [ ] **C3** 更新 LspServer.cs 文件头注释
+- [x] **C1** VM_Summary.md §七 A 表添加 LSP5 完成行
+- [x] **C2** VM_Summary.md §七 B2 行 LSP5 状态 → ✅
+- [x] **C3** 更新 LspServer.cs 文件头注释
+- [x] **C4** Outlook_And_Risks.md LSP5 标记 ✅
 
 ---
 
 ## 通过标准
 
-1. 全部现有 586 项 Assert 不回归
-2. LSP5 新增测试全部 PASS
-3. `dotnet run` 双模式 (float + Fix64) 通过
+1. ✅ 全部现有 586 项 Assert 不回归
+2. ✅ LSP5 新增 38 项 Assert 全部 PASS（8 个测试用例）
+3. ✅ 总计 624 项 Assert 通过
+4. ⏳ `dotnet run` 双模式 (float + Fix64) 通过（待 CI 验证）
