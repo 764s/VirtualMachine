@@ -4,6 +4,7 @@ namespace FFVM
     /// Instance pool manages pre-allocated VM instances.
     /// Zero-allocation: creation = take free slot, destruction = return to free stack.
     /// Free stack order must be deterministic for rollback consistency.
+    /// O9: ActiveList tracks live instance IDs for Tick() — avoids scanning all 128 slots.
     /// </summary>
     public struct InstancePool
     {
@@ -13,15 +14,21 @@ namespace FFVM
         public int[] FreeStack;
         public int FreeTop;
 
-        // Tracking
+        // O9: Active instance list — Tick() iterates only these
+        public int[] ActiveList;
+        public int ActiveListCount;
+
+        // Tracking (kept for backward-compat; equals ActiveListCount)
         public int ActiveCount;
 
         public void Init()
         {
             Instances = new VMInstanceState[VMConstants.MaxInstances];
             FreeStack = new int[VMConstants.MaxFreeStack];
+            ActiveList = new int[VMConstants.MaxInstances];
             FreeTop = VMConstants.MaxInstances;
             ActiveCount = 0;
+            ActiveListCount = 0;
 
             // Fill free stack: 0 at top (first to be allocated)
             for (int i = 0; i < VMConstants.MaxInstances; i++)
@@ -51,6 +58,11 @@ namespace FFVM
             inst.StateFlags = VMStateFlags.Active;
             inst.WaitTargetInstanceId = -1;
 
+            // O9: Append to active list
+            inst.ActiveListIndex = ActiveListCount;
+            ActiveList[ActiveListCount] = slot;
+            ActiveListCount++;
+
             return slot;
         }
 
@@ -65,6 +77,18 @@ namespace FFVM
             ref VMInstanceState inst = ref Instances[instanceId];
             if (!inst.IsAlive)
                 return;
+
+            // O9: Swap-remove from active list
+            int idx = inst.ActiveListIndex;
+            int last = ActiveListCount - 1;
+            if (idx != last)
+            {
+                int movedId = ActiveList[last];
+                ActiveList[idx] = movedId;
+                Instances[movedId].ActiveListIndex = idx;
+            }
+            ActiveListCount--;
+            inst.ActiveListIndex = -1;
 
             inst.IsAlive = false;
             inst.ErrorFlag = VMError.None;

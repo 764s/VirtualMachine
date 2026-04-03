@@ -73,6 +73,7 @@ namespace FFVM
 
         /// <summary>
         /// Advance one frame. Ticks all alive instances through the bytecode interpreter.
+        /// O9: Iterates only active instances via ActiveList instead of scanning all 128 slots.
         /// </summary>
         public void Tick()
         {
@@ -81,10 +82,11 @@ namespace FFVM
             // Reset debugger per-tick state (allows same-line breakpoints to re-trigger next tick)
             Debugger?.ResetTickState();
 
-            for (int i = 0; i < VMConstants.MaxInstances; i++)
+            for (int i = 0; i < Pool.ActiveListCount; i++)
             {
-                ref VMInstanceState inst = ref Pool.Instances[i];
-                if (!inst.IsAlive || inst.ErrorFlag != VMError.None)
+                int id = Pool.ActiveList[i];
+                ref VMInstanceState inst = ref Pool.Instances[id];
+                if (inst.ErrorFlag != VMError.None)
                     continue;
 
                 // 1. Already completed → skip
