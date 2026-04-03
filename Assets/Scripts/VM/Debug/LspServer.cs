@@ -1035,14 +1035,14 @@ namespace FFVM.Debug
                 foreach (var func in ast.Functions)
                 {
                     if (func.Name == funcName)
-                        return MakeSignatureHelp(FormatFuncSignature(func), func.Parameters, activeParam, false);
+                        return MakeSignatureHelp(FormatFuncSignature(func), func.Parameters, activeParam);
                 }
             }
 
             // Syscall with signature metadata (LSP6)
             SyscallSignature sig;
             if (_syscallSignatures.TryGetValue(funcName, out sig))
-                return MakeSignatureHelp(sig.Format(funcName), sig.Parameters, activeParam, true);
+                return MakeSignatureHelp(sig.Format(funcName), sig.Parameters, activeParam);
 
             // Syscall without metadata — no parameter info available
             if (_defaultSyscalls.ContainsKey(funcName))
@@ -1086,11 +1086,22 @@ namespace FFVM.Debug
             {
                 char c = source[i];
 
-                // Skip string literals (scan backwards to matching quote)
+                // Skip string literals (scan backwards to matching quote, handling escapes)
                 if (c == '"')
                 {
                     i--;
-                    while (i >= 0 && source[i] != '"') i--;
+                    while (i >= 0)
+                    {
+                        if (source[i] == '"')
+                        {
+                            // Check if this quote is escaped (count preceding backslashes)
+                            int bs = 0;
+                            int j = i - 1;
+                            while (j >= 0 && source[j] == '\\') { bs++; j--; }
+                            if (bs % 2 == 0) break; // unescaped quote — end of string
+                        }
+                        i--;
+                    }
                     i--;
                     continue;
                 }
@@ -1114,7 +1125,7 @@ namespace FFVM.Debug
                     int nameEnd = i;
                     int nameStart = nameEnd - 1;
                     // Skip whitespace before '('
-                    while (nameStart >= 0 && source[nameStart] == ' ') nameStart--;
+                    while (nameStart >= 0 && char.IsWhiteSpace(source[nameStart])) nameStart--;
                     nameEnd = nameStart + 1;
                     // Read identifier characters
                     while (nameStart >= 0 && (char.IsLetterOrDigit(source[nameStart]) || source[nameStart] == '_'))
@@ -1143,7 +1154,7 @@ namespace FFVM.Debug
         /// <summary>
         /// Build a SignatureHelp response object.
         /// </summary>
-        private static JsonObject MakeSignatureHelp(string label, IReadOnlyList<ParamDecl> funcParams, int activeParam, bool isSyscall)
+        private static JsonObject MakeSignatureHelp(string label, IReadOnlyList<ParamDecl> funcParams, int activeParam)
         {
             var paramInfos = new List<object>();
             foreach (var p in funcParams)
@@ -1155,7 +1166,7 @@ namespace FFVM.Debug
             return BuildSignatureHelpResult(label, paramInfos, activeParam);
         }
 
-        private static JsonObject MakeSignatureHelp(string label, SyscallParamInfo[] syscallParams, int activeParam, bool isSyscall)
+        private static JsonObject MakeSignatureHelp(string label, SyscallParamInfo[] syscallParams, int activeParam)
         {
             var paramInfos = new List<object>();
             foreach (var p in syscallParams)
