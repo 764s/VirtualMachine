@@ -220,6 +220,9 @@ namespace FFVM.Compiler
             if (_errors.Count > 0)
                 return new CompileResult { Errors = _errors };
 
+            // O6: Peephole optimization pass — eliminate redundant instructions
+            PeepholeOptimize(functionEntries);
+
             int maxRegs = VarRegBase; // minimum
             for (int i = 0; i < functionEntries.Count; i++)
             {
@@ -1505,6 +1508,161 @@ namespace FFVM.Compiler
                 default:
                     _errors.Add($"Unknown unary operator: {kind}");
                     return OpCode.NOP;
+            }
+        }
+
+        // ===== O6: Peephole optimization pass =====
+
+        /// <summary>
+        /// Returns true if the opcode writes a computed result to operand A.
+        /// Used by peephole P2 (dest-redirect) to identify instructions whose
+        /// destination register can be safely redirected.
+        /// </summary>
+        private static bool IsResultProducer(OpCode code)
+        {
+            switch (code)
+            {
+                case OpCode.LOAD_CONST:
+                case OpCode.ADD:  case OpCode.SUB: case OpCode.MUL: case OpCode.DIV: case OpCode.MOD:
+                case OpCode.CMP_EQ: case OpCode.CMP_NEQ: case OpCode.CMP_LT:
+                case OpCode.CMP_LTE: case OpCode.CMP_GT: case OpCode.CMP_GTE:
+                case OpCode.AND: case OpCode.OR: case OpCode.NOT: case OpCode.NEG:
+                    return true;
+                default:
+                    return false;
+            }
+        }
+
+        /// <summary>
+        /// Returns true if the opcode uses operand A as an absolute IP target
+        /// that must be remapped when instructions are deleted.
+        /// </summary>
+        private static bool HasJumpTargetInA(OpCode code)
+        {
+            switch (code)
+            {
+                case OpCode.JUMP:
+                case OpCode.JUMP_IF_ZERO:
+                case OpCode.JUMP_IF_NOT_ZERO:
+                case OpCode.CALL:
+                case OpCode.PUSH_CLEANUP:
+                    return true;
+                default:
+                    return false;
+            }
+        }
+
+        /// <summary>
+        /// O6 Peephole optimization: scan emitted instructions and eliminate redundant patterns.
+        /// Runs after backpatching, before VMProgram construction.
+        /// Patterns:
+        ///   P1: MOVE rA, rA          → NOP  (self-move)
+        ///   P2: OP rT,… ; MOVE rV,rT → OP rV,… (dest-redirect, eliminates MOVE)
+        ///   P3: MOVE rA,rB ; MOVE rB,rA → delete second (back-copy)
+        ///   P4: JUMP target where target==IP+1 → NOP (jump-to-next)
+        /// After marking, compacts the instruction stream and rebases all jump targets.
+        /// </summary>
+        private void PeepholeOptimize(List<FunctionEntry> functionEntries)
+        {
+            int count = _instructions.Count;
+            if (count == 0) return;
+
+            // Phase 1: build set of IPs that are jump targets (cannot safely remove these)
+            var jumpTargets = new HashSet<int>();
+            for (int i = 0; i < count; i++)
+            {
+                if (HasJumpTargetInA(_instructions[i].Code))
+                    jumpTargets.Add(_instructions[i].A);
+            }
+
+            // Phase 2: pattern matching — mark eliminated instructions as NOP
+            // Use a bool array to track which instructions are eliminated (turned to NOP).
+            // We keep the original NOP instructions intact (only eliminate optimizer-marked ones).
+            var eliminated = new bool[count];
+
+            for (int i = 0; i < count; i++)
+            {
+                if (eliminated[i]) continue;
+                var ins = _instructions[i];
+
+                // P1: self-MOVE → eliminate
+                if (ins.Code == OpCode.MOVE && ins.A == ins.B)
+                {
+                    eliminated[i] = true;
+                    continue;
+                }
+
+                // P4: unconditional JUMP to next instruction → eliminate
+                if (ins.Code == OpCode.JUMP && ins.A == i + 1)
+                {
+                    eliminated[i] = true;
+                    continue;
+                }
+
+                if (i + 1 >= count || eliminated[i + 1] || jumpTargets.Contains(i + 1))
+                    continue;
+
+                var next = _instructions[i + 1];
+
+                // P2: dest-redirect — OP rT,… ; MOVE rV,rT → OP rV,…
+                // Safety: only redirect when original dest (ins.A) is a temp register (≥ TempRegBase).
+                // Variable registers may be read later; redirecting away from them would break semantics.
+                if (IsResultProducer(ins.Code) && next.Code == OpCode.MOVE
+                    && next.B == ins.A && ins.A >= TempRegBase)
+                {
+                    _instructions[i] = new Instruction(ins.Code, next.A, ins.B, ins.C);
+                    eliminated[i + 1] = true;
+                    continue;
+                }
+
+                // P3: back-copy — MOVE rA,rB ; MOVE rB,rA → delete second
+                if (ins.Code == OpCode.MOVE && next.Code == OpCode.MOVE
+                    && next.A == ins.B && next.B == ins.A)
+                {
+                    eliminated[i + 1] = true;
+                    continue;
+                }
+            }
+
+            // Phase 3: compact — remove eliminated instructions, rebuild jump targets
+            // Build remap table: old IP → new IP
+            int[] remap = new int[count + 1]; // +1 for potential end-of-program targets
+            int newIP = 0;
+            for (int i = 0; i < count; i++)
+            {
+                remap[i] = newIP;
+                if (!eliminated[i]) newIP++;
+            }
+            remap[count] = newIP;
+
+            // Check if any instructions were eliminated
+            if (newIP == count) return; // nothing to compact
+
+            // Build compacted instruction and source line lists
+            var newInstructions = new List<Instruction>(newIP);
+            var newSourceLines = new List<int>(newIP);
+            for (int i = 0; i < count; i++)
+            {
+                if (eliminated[i]) continue;
+
+                var ins = _instructions[i];
+                // Rebase jump targets
+                if (HasJumpTargetInA(ins.Code))
+                    ins = new Instruction(ins.Code, remap[ins.A], ins.B, ins.C);
+
+                newInstructions.Add(ins);
+                newSourceLines.Add(_sourceLines[i]);
+            }
+
+            _instructions = newInstructions;
+            _sourceLines = newSourceLines;
+
+            // Rebase FunctionEntry IPs
+            for (int i = 0; i < functionEntries.Count; i++)
+            {
+                var fe = functionEntries[i];
+                int newEntryIP = remap[fe.EntryIP];
+                functionEntries[i] = new FunctionEntry(fe.Name, newEntryIP, fe.ParamCount, fe.LocalRegCount);
             }
         }
     }
