@@ -2174,14 +2174,14 @@ func main() {
             Assert(innerIsLeaf, "FO1-02: 'inner' IS leaf (no calls)");
 
             // Verify CALL (non-leaf) and CALL_LEAF (leaf) both exist
-            bool hasCAll = false;
+            bool hasCall = false;
             bool hasCallLeaf = false;
             for (int i = 0; i < result.Program.Instructions.Length; i++)
             {
-                if (result.Program.Instructions[i].Code == OpCode.CALL) hasCAll = true;
+                if (result.Program.Instructions[i].Code == OpCode.CALL) hasCall = true;
                 if (result.Program.Instructions[i].Code == OpCode.CALL_LEAF) hasCallLeaf = true;
             }
-            Assert(hasCAll, "FO1-02: CALL emitted for non-leaf 'outer'");
+            Assert(hasCall, "FO1-02: CALL emitted for non-leaf 'outer'");
             Assert(hasCallLeaf, "FO1-02: CALL_LEAF emitted for leaf 'inner'");
 
             // Verify execution
