@@ -540,6 +540,9 @@ skill TracerBullet
 > - ✅ = 已完成，⏳ = 待执行，⚪ = 被外部前置条件阻塞。
 > - 已完成步骤仅保留摘要，详情见各步骤子文档链接。
 > - 展望项（暂无排期）的完整索引见 [Outlook_And_Risks.md](Plan/Outlook_And_Risks.md)。
+> - **推进指令**：使用 `.github/prompts/` 提示模板引导串行推进：
+>   `#check-and-next`（检查+推进）、`#check`（仅检查）、`#requirement`（评估新需求）。
+>   AI 通过 `当前位置 →` 标记定位下一步。
 
 ---
 
@@ -578,16 +581,54 @@ skill TracerBullet
 
 ---
 
-### B. 待执行阶段（脚本引擎侧）
+### B. 待执行阶段（脚本引擎侧 — 细化推进序列）
 
 以下步骤不依赖真实 ECS/Syscall 接入，可在当前独立环境中推进。
+步骤严格按编号顺序串行执行，每步完成后更新状态标记。
 
-| 序号 | 步骤 | 状态 | 内容 | 说明 |
-|------|------|------|------|------|
-| B1 | 调试 Phase 3C | ⏳ 可选 | Unity Editor DAP（EditorApplication.update 轮询，DR5） | 仅在需要 Editor 内调试时实施；VS Code 独立调试已可用 |
-| B2 | 语言服务 Phase 4 | ✅ LSP2+LSP1+LSP3+LSP4+LSP5 | LSP Server：语法高亮(LSP2)✅→核心框架(LSP1)✅→诊断(LSP3)✅→符号(LSP4)✅→补全(LSP5)✅→Syscall声明协议(LSP6)⏳→参数提示(LSP7)⏳ | 复用 DAP 通信层；LSP6/LSP7 待后续增量添加 |
-| B3 | 调整型优化 | ⏳ | Tier 1: O1→O2 ✅（dispatch ~9% .NET JIT；IL2CPP 预期 30-50%），Tier 2: O6（peephole），Tier 3+: O8/O9-O14/FO1-FO3/SO1 | Benchmark 驱动；含 R1/SR1/SR2 风险理想方案 |
-| B4 | 功能补全 | ⏳ | S4 结构体参数、FF5 非 entry defer、FF1-FF4、C5/C6、SN1/SN2、BB1/PR1/DM1 | 业务驱动按需；GR3 文档缺口 D1-D4 也在此批次 |
+> **当前位置 → B-α1**（LSP6 Syscall 声明协议）
+
+#### Phase α: 语言服务收尾
+
+| # | ID | 内容 | 状态 | 完成条件 | 依赖 |
+|---|-----|------|------|----------|------|
+| 1 | B-α1 | LSP6 Syscall 声明协议 | ⏳ | SyscallTable 扩展签名元数据 + .ffvm.d.json 声明文件加载 + 补全增强测试通过 | LSP5 ✅ |
+| 2 | B-α2 | LSP7 参数提示 (signatureHelp) | ⏳ | textDocument/signatureHelp 实现 + 用户函数/Syscall 参数提示测试通过 | B-α1 |
+
+#### Phase β: 优化 Tier 2
+
+| # | ID | 内容 | 状态 | 完成条件 | 依赖 |
+|---|-----|------|------|----------|------|
+| 3 | B-β1 | O6 Peephole 优化 pass | ⏳ | Peephole pass 实现 + 指令数减少 ≥5% + benchmark 验证 | O1+O2 ✅ |
+| 4 | B-β2 | FO1 叶函数优化 | ⏳ | 叶函数跳过 CallFrame push/pop + benchmark 验证开销 -40~60% | F4 ✅ |
+| 5 | B-β3 | O9 活跃实例链表 | ⏳ | 活跃实例链表替代全量遍历 + 稀疏场景性能验证 | 无 |
+
+#### Phase γ: 功能完整性
+
+| # | ID | 内容 | 状态 | 完成条件 | 依赖 |
+|---|-----|------|------|----------|------|
+| 6 | B-γ1 | FO6 自适应寄存器窗口 | ⏳ | 嵌套层数 ~3→~6 + R1/SR1 根本解决 + 测试通过 | F4 ✅ |
+| 7 | B-γ2 | FF5 非 entry 函数 defer | ⏳ | RET_FUNC 与 Cleanup 链正确对齐 + 测试通过 | 函数调用 ✅ |
+| 8 | B-γ3 | S4 结构体作为函数参数 | ⏳ | 结构体参数寄存器传递 + R5 安全限制 + 测试通过 | B-γ1 (FO6) |
+| 9 | B-γ4 | C6 嵌套 using 作用域优化 | ⏳ | 合并相邻 PUSH_CLEANUP 指令 + 性能验证 + 测试通过 | 无 |
+| 10 | B-γ5 | SN1 嵌套结构体 | ⏳ | 递归拍平为连续寄存器 + 编译/运行测试通过 | struct ✅ |
+| 11 | B-γ6 | GR3 文档缺口 D1-D4 | ⏳ | D1-D4 内容补入 VM_Summary.md 对应章节 | 无 |
+
+#### Phase δ: 按需补全
+
+| # | ID | 内容 | 状态 | 完成条件 | 依赖 |
+|---|-----|------|------|----------|------|
+| 12 | B-δ1 | O10 快照只拷贝活跃实例 | ⏳ | 快照数据量减少 80-90% + 性能验证 | B-β3 (O9) |
+| 13 | B-δ2 | SO1 COPY_BLOCK OpCode | ⏳ | 新 OpCode + Buffer.MemoryCopy 实现 + 大 struct 赋值验证 | struct ✅ |
+| 14 | B-δ3 | FF3 可选参数与默认值 | ⏳ | 编译器支持可选参数 + 默认值填充 + 测试通过 | 函数调用 ✅ |
+| 15 | B-δ4 | SN2 结构体字面量构造语法 | ⏳ | 编译器 sugar 实现 + 测试通过 | struct ✅ |
+| 16 | B-δ5 | C5 Cleanup 超时保护 | ⏳ | Cleanup 块执行超时检测 + 实例回收保证 + 测试通过 | 无 |
+| 17 | B-δ6 | B1 Unity Editor DAP (可选) | ⏳ | EditorApplication.update 轮询模式 + DR5 解决 + 测试通过 | DAP ✅ |
+
+> **剩余展望项**（暂无排期，业务驱动激活）：FF1 跨模块调用、FF2 函数回调、FF4 多返回值、
+> O8 指令压缩、O11-O14 运行时优化、FO2 尾调用、FO3 小函数内联、
+> BB1 黑板 Key 编译期 ID、PR1 带参 Paired Syscall、DM1 双轨编排模式。
+> 完整索引见 [Outlook_And_Risks.md](Plan/Outlook_And_Risks.md)。
 
 ---
 
@@ -616,8 +657,10 @@ skill TracerBullet
 | Handle64 批处理 | C4 ✅ 已纳入 | 原为展望项 H1 |
 | 帧同步集成验证 | C5 🆕 新增 | 原计划**未覆盖**。V2 验证了离线快照回滚正确性，但真实网络帧同步场景未验证 |
 | 编辑器流程图 | C6 ✅ 已纳入 | 原步骤 10 |
-| LSP 语言服务 | B2 ✅ 已纳入 | 影响开发效率，非生产阻塞；LSP6 声明协议 + LSP7 参数提示已排期 |
-| 调整型优化 | B3 ✅ 已纳入 | 5-7x → 2-3x，非生产阻塞但影响性能预算 |
+| LSP 语言服务 | B-α ✅ 已纳入 | LSP6 声明协议 + LSP7 参数提示，细化为 B-α1/α2 |
+| 调整型优化 | B-β ✅ 已纳入 | O6 peephole + FO1 叶函数 + O9 活跃链表，细化为 B-β1/β2/β3 |
+| 功能完整性 | B-γ ✅ 已纳入 | FO6 + FF5 + S4 + C6 + SN1 + GR3，细化为 B-γ1~γ6 |
+| 按需补全 | B-δ ✅ 已纳入 | O10 + SO1 + FF3 + SN2 + C5 + B1，细化为 B-δ1~δ6 |
 
 每一步的通过标准都由前一步建立的物理约束决定。任何新能力必须先通过 Architecture Rules 的裁决原则。
 
