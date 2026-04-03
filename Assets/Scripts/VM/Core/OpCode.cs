@@ -57,9 +57,6 @@ namespace FFVM
         // --- FO1: leaf function optimization ---
         CALL_LEAF    = 29,  // A=targetEntryIP, B=callerWindowSize → skip CallFrame, save to inst fields
         RET_LEAF     = 30,  // restore IP + RegisterBase from inst fields (no CallFrame pop)
-
-        // --- Internal sentinel (appended by VMProgram ctor; never emitted by compiler) ---
-        SENTINEL     = 31,  // triggers PanicOutOfBounds — guards against IP overrun
     }
 
     /// <summary>

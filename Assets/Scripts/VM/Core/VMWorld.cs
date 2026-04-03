@@ -1,5 +1,3 @@
-using System.Runtime.CompilerServices;
-
 namespace FFVM
 {
     /// <summary>
@@ -142,7 +140,6 @@ namespace FFVM
             return r < 16 ? r : r + regBase;
         }
 
-        [MethodImpl(MethodImplOptions.AggressiveOptimization)]
         private unsafe void ExecuteInstance(ref VMInstanceState inst)
         {
             VMProgram program = Modules.Get(inst.ModuleSlot);
@@ -165,13 +162,13 @@ namespace FFVM
             // largest per-instruction overhead in the dispatch loop.
             fixed (Number* regs = &inst.Registers.R00)
             {
-                int maxSteps = MaxStepsPerTick; // cache to avoid field read per iteration
-                while (steps < maxSteps)
+                while (steps < MaxStepsPerTick)
                 {
-                    // Per-instruction bounds check removed: VMProgram appends a SENTINEL
-                    // instruction as a safety net against compiler bugs.  All compiler-emitted
-                    // code paths terminate with RETURN/RET_FUNC/RET_LEAF, so IP never
-                    // overruns in correct programs.  If it does, SENTINEL fires PanicOutOfBounds.
+                    if (inst.IP < 0 || inst.IP >= code.Length)
+                    {
+                        inst.ErrorFlag = VMError.PanicOutOfBounds;
+                        return;
+                    }
 
                     // --- Breakpoint check (zero overhead when Debugger is null) ---
                     if (srcMap != null)
@@ -461,11 +458,6 @@ namespace FFVM
                             }
                             break;
                         }
-
-                        case OpCode.SENTINEL:
-                            // IP overran the program — sentinel appended by VMProgram ctor
-                            inst.ErrorFlag = VMError.PanicOutOfBounds;
-                            return;
 
                         default:
                             inst.ErrorFlag = VMError.PanicIllegalInstruction;

@@ -928,3 +928,18 @@ bash benchmarks/update-history.sh bench-raw.txt
 
 > 风险降级详细措施见 [Outlook_And_Risks.md §六](Plan/Outlook_And_Risks.md#六风险降级计划目标全部--低--极低)。
 > Release 模式隔离策略（`FFVM_SCRIPT_DEBUG` 条件编译）见 §6.1。
+
+---
+
+## 十四、实践专区
+
+> **职责说明**：
+> 实践专区记录串行计划之外的探索性实践。每次实践产出独立文档，记录背景、发现的问题、
+> 建议的改进方向。实践本身不直接修改代码——所有代码级改动须经讨论后纳入串行计划（新步骤）、
+> 展望条目或风险点，走正式流程推进。
+>
+> **文件命名**：`Docs/Practice/P{NNN}_{简短英文标题}.md`，编号递增。
+
+| # | 实践文档 | 主题 | 日期 | 产出建议去向 |
+|---|---------|------|------|------------|
+| P001 | [P001_Performance_Baseline_Rebuild.md](Practice/P001_Performance_Baseline_Rebuild.md) | 性能基线重建 + 执行循环优化 | 2026-04-03 | 串行计划新步骤 / 展望 |

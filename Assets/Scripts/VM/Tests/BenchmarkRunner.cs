@@ -20,7 +20,7 @@ using UnityEngine;
 public static class BenchmarkRunner
 {
     // ── configuration ──────────────────────────────────────────────
-    const int WarmupRuns = 100;
+    const int WarmupRuns = 20;
     const int MeasureRuns = 200;
 
     static void Log(string msg) => UnityEngine.Debug.Log(msg);
@@ -35,7 +35,7 @@ public static class BenchmarkRunner
             $"cores={Environment.ProcessorCount} warmup={WarmupRuns} runs={MeasureRuns}");
 
         RunBenchmark("B01_ArithLoop",      B01_Script, B01_CSharp,      10000);
-        RunBenchmark("B02_Fibonacci",       B02_Script, B02_CSharp,      250);
+        RunBenchmark("B02_Fibonacci",       B02_Script, B02_CSharp,      25);
         RunBenchmark("B03_NestedLoop",      B03_Script, B03_CSharp,      100);
         RunBenchmark("B04_Branching",       B04_Script, B04_CSharp,      10000);
         RunBenchmark("B05_Accumulator",     B05_Script, B05_CSharp,      50000);
@@ -86,7 +86,7 @@ public static class BenchmarkRunner
             return;
         }
 
-        int instrCount = result.Program.InstructionCount;
+        int instrCount = result.Program.Instructions.Length;
 
         // ── warmup VM ──
         for (int w = 0; w < WarmupRuns; w++)
