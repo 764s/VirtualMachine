@@ -75,7 +75,12 @@ crashlytics-build.properties
 /[Aa]ssets/[Ss]treamingAssets/aa/*
 
 .vscode/
+!Sandbox/.vscode/
 .idea/
 
 /StandaloneRunner/bin/
 /StandaloneRunner/obj/
+
+/Sandbox/bin/
+/Sandbox/obj/
+/Sandbox/Sandbox.csproj
