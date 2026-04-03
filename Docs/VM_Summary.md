@@ -582,7 +582,7 @@ skill TracerBullet
 | 序号 | 步骤 | 状态 | 内容 | 说明 |
 |------|------|------|------|------|
 | B1 | 调试 Phase 3C | ⏳ 可选 | Unity Editor DAP（EditorApplication.update 轮询，DR5） | 仅在需要 Editor 内调试时实施；VS Code 独立调试已可用 |
-| B2 | 语言服务 Phase 4 | ✅ LSP2+LSP1+LSP3+LSP4 | LSP Server：语法高亮(LSP2)✅→核心框架(LSP1)✅→诊断(LSP3)✅→符号(LSP4)✅→补全(LSP5)⏳ | 复用 DAP 通信层；LSP5 待后续增量添加 |
+| B2 | 语言服务 Phase 4 | ✅ LSP2+LSP1+LSP3+LSP4 | LSP Server：语法高亮(LSP2)✅→核心框架(LSP1)✅→诊断(LSP3)✅→符号(LSP4)✅→补全(LSP5)⏳→Syscall声明协议(LSP6)⏳→参数提示(LSP7)⏳ | 复用 DAP 通信层；LSP5/LSP6/LSP7 待后续增量添加 |
 | B3 | 调整型优化 | ⏳ | Tier 1: O1→O2（dispatch -40~60%），Tier 2: O6（peephole），Tier 3+: O8/O9-O14/FO1-FO3/SO1 | Benchmark 驱动；含 R1/SR1/SR2 风险理想方案 |
 | B4 | 功能补全 | ⏳ | S4 结构体参数、FF5 非 entry defer、FF1-FF4、C5/C6、SN1/SN2、BB1/PR1/DM1 | 业务驱动按需；GR3 文档缺口 D1-D4 也在此批次 |
 
@@ -613,7 +613,7 @@ skill TracerBullet
 | Handle64 批处理 | C4 ✅ 已纳入 | 原为展望项 H1 |
 | 帧同步集成验证 | C5 🆕 新增 | 原计划**未覆盖**。V2 验证了离线快照回滚正确性，但真实网络帧同步场景未验证 |
 | 编辑器流程图 | C6 ✅ 已纳入 | 原步骤 10 |
-| LSP 语言服务 | B2 ✅ 已纳入 | 影响开发效率，非生产阻塞 |
+| LSP 语言服务 | B2 ✅ 已纳入 | 影响开发效率，非生产阻塞；LSP6 声明协议 + LSP7 参数提示已排期 |
 | 调整型优化 | B3 ✅ 已纳入 | 5-7x → 2-3x，非生产阻塞但影响性能预算 |
 
 每一步的通过标准都由前一步建立的物理约束决定。任何新能力必须先通过 Architecture Rules 的裁决原则。
@@ -817,7 +817,7 @@ skill TracerBullet
 | G6 | Cleanup 块内禁止 wait 编译检查 | §11.1 | ✅ |
 | V5 | 帧内 Profiler 验证 | §4.6 | ⏳ |
 
-### 功能展望（15 项 + 脚本调试 7 项 + 语言服务 5 项）
+### 功能展望（15 项 + 脚本调试 7 项 + 语言服务 7 项）
 
 | 分组 | 条目 | 数量 |
 |------|------|------|
@@ -826,7 +826,7 @@ skill TracerBullet
 | 结构体相关 | S4, SN1, SN2 | 3 |
 | 全局 / 跨步骤 | H1, BB1, PR1, FIX1, DM1 | 5 |
 | 脚本调试（真实宿主断点 + DAP） | DBG1-DBG7 | 7 | DBG1-DBG7 全部 ✅（Phase 1-3B 完成），DBG7-C 待 Phase 3C |
-| 语言服务（LSP） | LSP1-LSP5 | 5 |
+| 语言服务（LSP） | LSP1-LSP7 | 7 |
 
 ### 优化展望（22 项 = 自然 7 + 调整型 15）
 

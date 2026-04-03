@@ -157,7 +157,9 @@ DBG7（DAP 适配器）                ← DBG3-DBG6 的 DAP 协议封装 → �
 | **LSP2** | 语法高亮（Semantic Tokens / TextMate Grammar） | 编辑器 | 低 | 为 16 个关键字 + 运算符 + 字面量 + 注释定义 token 类型；TextMate grammar（.tmLanguage）提供基础着色，Semantic Tokens 提供上下文感知着色 |
 | **LSP3** | 实时诊断（Diagnostics） | 编译器 | 中 | 增量编译 → 错误/警告实时推送（`textDocument/publishDiagnostics`）；复用 `BytecodeCompiler._errors` 列表 + Source Map 定位 |
 | **LSP4** | 符号分析（Go-to-Definition / References / Hover / Document Symbols） | 编译器 | 中 | 基于 AST + Symbol Table 实现 `textDocument/definition`、`textDocument/references`、`textDocument/hover`、`textDocument/documentSymbol` | ✅ 已完成 |
-| **LSP5** | 代码补全（Completion） | 编译器 | 中 | 关键字 + 作用域内变量 + 函数名 + Syscall 名 + struct 字段补全（`textDocument/completion`） |
+| **LSP5** | 代码补全（Completion） | 编译器 | 中 | 关键字 + 作用域内变量 + 函数名 + Syscall 名 + struct 字段补全（`textDocument/completion`）；当 LSP6 声明可用时，补全项包含 Syscall 参数签名 |
+| **LSP6** | Syscall 声明协议（Declaration Protocol） | 基础设施 | 中 | 允许宿主通过声明文件（`.ffvm.d.json`）或注册 API 声明 Syscall 签名（参数名、参数类型、返回类型、说明文本），为 LSP5/LSP7 提供宿主方法元数据 |
+| **LSP7** | 参数提示（Signature Help） | 编译器 | 中 | 输入 `funcName(` 或 `,` 时显示参数列表与当前参数高亮（`textDocument/signatureHelp`）；覆盖用户函数 + Syscall（需 LSP6 声明） |
 
 #### 前置任务与依赖关系
 
@@ -173,7 +175,11 @@ LSP1（LSP Server 核心框架）           ← 所有 LSP 功能的通信基础
   │
   ├→ LSP4（符号分析）                ← 依赖 DBG2 符号表
   │
-  └→ LSP5（代码补全）                ← 依赖符号表 + SyscallTable
+  ├→ LSP5（代码补全）                ← 依赖符号表 + SyscallTable；可选依赖 LSP6（增强 Syscall 补全）
+  │
+  ├→ LSP6（Syscall 声明协议）        ← 独立基础设施；SyscallTable 扩展签名元数据
+  │
+  └→ LSP7（参数提示）                ← 依赖 LSP6（Syscall 签名）+ AST（用户函数签名）
 ```
 
 #### 建议实施策略
@@ -181,6 +187,8 @@ LSP1（LSP Server 核心框架）           ← 所有 LSP 功能的通信基础
 1. **LSP2（语法高亮）** 可独立最早实施：仅需编写 TextMate grammar 文件，无需 LSP Server。
 2. **LSP1 + LSP3（核心 + 诊断）** 在 DBG1/DBG2 完成后实施：复用编译器错误列表，最快实现"实时报错"。
 3. **LSP4 + LSP5（符号 + 补全）** 随编译器数据丰富后逐步完善。
+4. **LSP6（声明协议）** 可与 LSP5 并行或在 LSP5 基础补全完成后叠加；核心工作量在 `SyscallTable` 扩展签名元数据 + 声明文件加载。
+5. **LSP7（参数提示）** 在 LSP6 完成后实施：用户函数签名从 AST 获取，Syscall 签名从 LSP6 声明获取。
 
 ---
 
@@ -337,7 +345,7 @@ LSP1（LSP Server 核心框架）           ← 所有 LSP 功能的通信基础
 | **自然优化（随功能实现）** | O3, O4, O5, O7, FO4, FO5, FO7 |
 | **调整型优化（Benchmark 驱动）** | O1, O2, O6, O8, O9, O10, O11, O12, O13, O14, FO1, FO2, FO3, FO6, SO1 |
 | **脚本调试** | DBG1-DBG7（真实宿主断点 + DAP） |
-| **语言服务** | LSP1-LSP5（语法高亮、诊断、符号、补全） |
+| **语言服务** | LSP1-LSP7（语法高亮、诊断、符号、补全、Syscall 声明、参数提示） |
 | **无需消除（设计决策）** | 不支持闭包/高阶函数, 不支持结构体方法 |
 
 ### 按实施复杂度
@@ -345,7 +353,7 @@ LSP1（LSP Server 核心框架）           ← 所有 LSP 功能的通信基础
 | 复杂度 | 条目 |
 |--------|------|
 | 低 | C4, G6, O1, O2, O3, O5, O7, O9, FO4, FO5, FF3, SN2, DBG3, DBG5, DBG6, LSP2 |
-| 中 | F4, S4, O4, O6, O10, O11, O14, FO1, FO6, FO7, FO2, FF1, FF2, FF4, FF5, SO1, SN1, H1, DBG1, DBG2, DBG4, DBG7, LSP1, LSP3, LSP4, LSP5 |
+| 中 | F4, S4, O4, O6, O10, O11, O14, FO1, FO6, FO7, FO2, FF1, FF2, FF4, FF5, SO1, SN1, H1, DBG1, DBG2, DBG4, DBG7, LSP1, LSP3, LSP4, LSP5, LSP6, LSP7 |
 | 高 | O8, O13, FO3 |
 
 ### 按风险等级（§六 降级后）
@@ -353,7 +361,7 @@ LSP1（LSP Server 核心框架）           ← 所有 LSP 功能的通信基础
 | 等级 | 条目 | 数量 |
 |------|------|------|
 | **极低** | R2, R3, R4, R7, SR4, GR1, GR2, DBG3, DBG5, DBG6, LSP2, DR1, DR3, DR4 | 14 |
-| **低** | R1, R5, R6, R8, SR1, SR2, SR3, GR3, DBG1, DBG2, DBG4, DBG7, LSP1, LSP3, LSP4, LSP5, DR2, DR5 | 18 |
+| **低** | R1, R5, R6, R8, SR1, SR2, SR3, GR3, DBG1, DBG2, DBG4, DBG7, LSP1, LSP3, LSP4, LSP5, LSP6, LSP7, DR2, DR5 | 20 |
 | **中 / 高** | — | 0 |
 
 ### 按优化类别
@@ -549,13 +557,15 @@ Gate 3: Unity Editor 内嵌 DAP（可选）             ← DBG7 Phase C
 
 零风险。纯 JSON 文件（TextMate grammar），约 80-100 行，16 个关键字 + 运算符。可立即实施。
 
-#### LSP3-LSP5 — 中 → **低**
+#### LSP3-LSP7 — 中 → **低**
 
 | 措施 | 说明 |
 |------|------|
 | **增量编译不做** | 初版直接全量重编译（当前编译器 ~800 行，编译速度对小脚本文件足够） |
 | **复用编译器错误列表** | `BytecodeCompiler._errors` 已有行号信息（待 DBG1 Source Map 增强） |
 | **延迟实施** | LSP4/LSP5 排在 LSP3 之后，逐步叠加 |
+| **LSP6 声明协议复用 SyscallTable** | 仅扩展现有 `SyscallTable` 加签名元数据 + JSON 声明文件加载，无新通信层 |
+| **LSP7 复用 AST + LSP6** | 用户函数签名从已缓存的 AST 获取，Syscall 签名从 LSP6 声明获取 |
 
 ### 6.5 已有风险项降级汇总
 
@@ -604,11 +614,11 @@ Gate 3: Unity Editor 内嵌 DAP（可选）             ← DBG7 Phase C
 | 等级 | 条目 | 数量 |
 |------|------|------|
 | **极低** | R2, R3, R4, R7, SR4, GR1, GR2, DBG3, DBG5, DBG6, LSP2, DR1, DR3, DR4 | 14 |
-| **低** | R1, R5, R6, R8, SR1, SR2, SR3, GR3, DBG1, DBG2, DBG4, DBG7, LSP1, LSP3, LSP4, LSP5, DR2, DR5 | 18 |
+| **低** | R1, R5, R6, R8, SR1, SR2, SR3, GR3, DBG1, DBG2, DBG4, DBG7, LSP1, LSP3, LSP4, LSP5, LSP6, LSP7, DR2, DR5 | 20 |
 | **中** | — | 0 |
 | **高** | — | 0 |
 
-> ✅ **目标达成**：全部 32 项风险降至低或极低。
+> ✅ **目标达成**：全部 34 项风险降至低或极低。
 
 ---
 
@@ -642,7 +652,7 @@ Gate 3: Unity Editor 内嵌 DAP（可选）             ← DBG7 Phase C
 | 序号 | 步骤 | 状态 | 子项 |
 |------|------|------|------|
 | B1 | 调试 Phase 3C（可选） | ⏳ | DBG7-C EditorApplication.update 轮询，DR5 主线程永不阻塞 |
-| B2 | 语言服务 Phase 4 | ⏳ | LSP2→LSP1→LSP3→LSP4→LSP5 + DBG2 Phase 2 |
+| B2 | 语言服务 Phase 4 | ⏳ | LSP2→LSP1→LSP3→LSP4→LSP5→LSP6→LSP7 + DBG2 Phase 2 |
 | B3 | 调整型优化 | ⏳ | O1→O2, O6, O8+O9-O14+FO1-FO3+SO1; R1/SR1/SR2 理想方案 |
 | B4 | 功能补全 | ⏳ | S4, FF5, FF1-FF4, C5/C6, SN1/SN2, BB1/PR1/DM1, GR3 |
 
