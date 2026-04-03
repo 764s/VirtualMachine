@@ -94,6 +94,9 @@ namespace FFVM
         public int LeafReturnIP;
         public int LeafRegisterBase;
 
+        // O9: Index in InstancePool.ActiveList for O(1) swap-remove
+        public int ActiveListIndex;
+
         // Status flags
         public VMError ErrorFlag;
         public bool IsAlive;

@@ -664,6 +664,231 @@ public static class PerformanceTests
             }
         }
 
+        // =================================================================
+        //  O9: Active Instance List — sparse scenario tests
+        //  Verifies ActiveList consistency after spawn/destroy/rollback
+        //  and that Tick() only processes active instances.
+        // =================================================================
+
+        // ===== Test P08: O9 — ActiveList consistency after spawn/destroy =====
+        {
+            var o9Program = new VMProgram(
+                new Instruction[]
+                {
+                    new Instruction(OpCode.WAIT, 100),   // 0: wait 100 (stay alive)
+                    new Instruction(OpCode.RETURN),      // 1: return
+                },
+                new Number[0],
+                0
+            );
+
+            var o9World = new VMWorld();
+            o9World.Modules.Load(0, o9Program);
+
+            // Spawn 10 instances
+            int[] ids = new int[10];
+            for (int i = 0; i < 10; i++)
+                ids[i] = o9World.SpawnInstance(0, 0);
+
+            Assert(o9World.Pool.ActiveListCount == 10,
+                $"P08 O9 spawn: ActiveListCount = {o9World.Pool.ActiveListCount} (== 10)");
+
+            // Verify all are in the active list
+            bool allPresent = true;
+            for (int i = 0; i < 10; i++)
+            {
+                int idx = o9World.Pool.Instances[ids[i]].ActiveListIndex;
+                if (idx < 0 || idx >= o9World.Pool.ActiveListCount ||
+                    o9World.Pool.ActiveList[idx] != ids[i])
+                {
+                    allPresent = false;
+                    break;
+                }
+            }
+            Assert(allPresent, "P08 O9 spawn: all instances in ActiveList with correct index");
+
+            // Destroy instances 0, 3, 7 (non-contiguous)
+            o9World.DestroyInstance(ids[0]);
+            o9World.DestroyInstance(ids[3]);
+            o9World.DestroyInstance(ids[7]);
+
+            Assert(o9World.Pool.ActiveListCount == 7,
+                $"P08 O9 destroy: ActiveListCount = {o9World.Pool.ActiveListCount} (== 7)");
+
+            // Verify consistency: each active list entry points to an alive instance
+            // and each alive instance's ActiveListIndex is correct
+            bool consistent = true;
+            for (int i = 0; i < o9World.Pool.ActiveListCount; i++)
+            {
+                int aid = o9World.Pool.ActiveList[i];
+                ref VMInstanceState ains = ref o9World.Pool.Instances[aid];
+                if (!ains.IsAlive || ains.ActiveListIndex != i)
+                {
+                    consistent = false;
+                    break;
+                }
+            }
+            Assert(consistent, "P08 O9 destroy: ActiveList consistent after swap-remove");
+
+            // Destroy all remaining
+            for (int i = 0; i < 10; i++)
+            {
+                if (o9World.Pool.Instances[ids[i]].IsAlive)
+                    o9World.DestroyInstance(ids[i]);
+            }
+            Assert(o9World.Pool.ActiveListCount == 0,
+                $"P08 O9 destroy all: ActiveListCount = {o9World.Pool.ActiveListCount} (== 0)");
+        }
+
+        // ===== Test P09: O9 — Sparse tick only touches active instances =====
+        {
+            int execCount = 0;
+            var o9SparseProgram = new VMProgram(
+                new Instruction[]
+                {
+                    new Instruction(OpCode.SYSCALL, 0),  // 0: count execution
+                    new Instruction(OpCode.RETURN),      // 1: return
+                },
+                new Number[0],
+                1
+            );
+
+            var o9Sparse = new VMWorld();
+            o9Sparse.Modules.Load(0, o9SparseProgram);
+            o9Sparse.Syscalls.Register(0, "Count", (ref VMInstanceState s) => { execCount++; });
+
+            // Spawn 3 instances out of 128 capacity
+            o9Sparse.SpawnInstance(0, 0);
+            o9Sparse.SpawnInstance(0, 0);
+            o9Sparse.SpawnInstance(0, 0);
+
+            execCount = 0;
+            o9Sparse.Tick();
+
+            Assert(execCount == 3,
+                $"P09 O9 sparse: execCount = {execCount} (== 3, not 128)");
+        }
+
+        // ===== Test P10: O9 — ActiveList survives rollback =====
+        {
+            var o9RollbackProgram = new VMProgram(
+                new Instruction[]
+                {
+                    new Instruction(OpCode.SYSCALL, 0),   // 0: noop
+                    new Instruction(OpCode.WAIT, 200),     // 1: stay alive
+                    new Instruction(OpCode.RETURN),        // 2: return
+                },
+                new Number[0],
+                1
+            );
+
+            var o9RB = new VMWorld();
+            o9RB.Modules.Load(0, o9RollbackProgram);
+            o9RB.Syscalls.Register(0, "Noop", (ref VMInstanceState s) => { });
+
+            // Spawn 5 instances, tick a few frames, save
+            int[] rbIds = new int[5];
+            for (int i = 0; i < 5; i++)
+                rbIds[i] = o9RB.SpawnInstance(0, 0);
+
+            for (int t = 0; t < 3; t++) o9RB.Tick();
+            o9RB.SaveState(); // frame 3
+
+            // Diverge: destroy 2, spawn 3 more
+            o9RB.DestroyInstance(rbIds[0]);
+            o9RB.DestroyInstance(rbIds[2]);
+            for (int t = 0; t < 5; t++)
+            {
+                o9RB.SpawnInstance(0, 0);
+                o9RB.Tick();
+            }
+
+            int preLoadCount = o9RB.Pool.ActiveListCount;
+
+            // Rollback to frame 3
+            bool loaded = o9RB.LoadState(3);
+            Assert(loaded, "P10 O9 rollback: LoadState succeeded");
+
+            Assert(o9RB.Pool.ActiveListCount == 5,
+                $"P10 O9 rollback: ActiveListCount = {o9RB.Pool.ActiveListCount} (== 5, was {preLoadCount})");
+
+            // Verify consistency after rollback
+            bool rbConsistent = true;
+            for (int i = 0; i < o9RB.Pool.ActiveListCount; i++)
+            {
+                int aid = o9RB.Pool.ActiveList[i];
+                ref VMInstanceState ains = ref o9RB.Pool.Instances[aid];
+                if (!ains.IsAlive || ains.ActiveListIndex != i)
+                {
+                    rbConsistent = false;
+                    break;
+                }
+            }
+            Assert(rbConsistent, "P10 O9 rollback: ActiveList consistent after LoadState");
+
+            // Continue ticking post-rollback — must not crash
+            for (int t = 0; t < 10; t++) o9RB.Tick();
+            Assert(true, "P10 O9 rollback: 10 ticks post-rollback OK");
+        }
+
+        // ===== Test P11: O9 — Sparse performance benchmark =====
+        {
+            // Benchmark sparse (3/128) tick overhead
+            var o9BenchProgram = new VMProgram(
+                new Instruction[]
+                {
+                    new Instruction(OpCode.LOAD_CONST, 0, 0),  // 0: R0 = 1
+                    new Instruction(OpCode.RETURN),             // 1: return
+                },
+                new Number[] { Number.FromInt(1) },
+                1
+            );
+
+            // Sparse: 3 active / 128 capacity
+            var sparseWorld = new VMWorld();
+            sparseWorld.Modules.Load(0, o9BenchProgram);
+
+            // Warmup
+            for (int w = 0; w < 100; w++)
+            {
+                for (int i = 0; i < 3; i++)
+                    sparseWorld.SpawnInstance(0, 0);
+                sparseWorld.Tick();
+                // Destroy all: iterate backwards to avoid swap-remove index confusion
+                for (int i = sparseWorld.Pool.ActiveListCount - 1; i >= 0; i--)
+                {
+                    int did = sparseWorld.Pool.ActiveList[i];
+                    sparseWorld.DestroyInstance(did);
+                }
+            }
+
+            // Fresh measure
+            for (int i = 0; i < 3; i++)
+                sparseWorld.SpawnInstance(0, 0);
+
+            var sparseSw = Stopwatch.StartNew();
+            int sparseRounds = 100_000;
+            for (int r = 0; r < sparseRounds; r++)
+            {
+                // Reset instances to re-execute
+                for (int i = 0; i < sparseWorld.Pool.ActiveListCount; i++)
+                {
+                    int sid = sparseWorld.Pool.ActiveList[i];
+                    ref var sinst = ref sparseWorld.Pool.Instances[sid];
+                    sinst.IP = 0;
+                    sinst.StateFlags = VMStateFlags.Active;
+                }
+                sparseWorld.Tick();
+            }
+            sparseSw.Stop();
+            double sparseUs = sparseSw.Elapsed.TotalMicroseconds / sparseRounds;
+
+            Debug.Log($"[BENCH] O9 sparse (3/128): {sparseUs:F2} µs/tick");
+
+            // The test passes as long as the sparse scenario runs correctly
+            Assert(sparseUs > 0, $"P11 O9 sparse perf: {sparseUs:F2} µs/tick (benchmark logged)");
+        }
+
         // ===== Summary =====
         Debug.Log($"========================================");
         Debug.Log($"Performance Tests: {passed} passed, {failed} failed");

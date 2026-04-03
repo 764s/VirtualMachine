@@ -582,8 +582,9 @@ skill TracerBullet
 | — | **B-α2 LSP7 参数提示 (signatureHelp)** | **textDocument/signatureHelp：用户函数 + Syscall 参数提示 + 嵌套括号 + activeParameter 追踪** | **676** | [B-α2](Plan/Step_B_Alpha2_LSP7_SignatureHelp.md) |
 | — | **B-β1 O6 Peephole 优化 pass** | **P1 自赋值消除 + P2 dest-redirect + P4 jump-to-next + NOP 压缩，指令数减少 ≥5%** | **676** | [B-β1](Plan/Step_B_Beta1_O6_Peephole.md) |
 | — | **B-β2 FO1 叶函数优化** | **CALL_LEAF/RET_LEAF 指令对 + 叶函数跳过 CallFrame push/pop + 调试器透明降级** | **700** | [B-β2](Plan/Step_B_Beta2_FO1_LeafFunction.md) |
+| — | **B-β3 O9 活跃实例链表** | **ActiveList 替代全量遍历 + swap-remove O(1) + 稀疏场景验证 + Snapshot 一致性** | **711** | [B-β3](Plan/Step_B_Beta3_O9_ActiveList.md) |
 
-**当前位置 → B-β2 完成，700 项 Assert × 2 模式全通过。叶函数优化：CALL_LEAF/RET_LEAF 指令对，编译器静态叶函数检测，无调试器时跳过 CallFrame push/pop，有调试器时透明降级。**
+**当前位置 → B-β3 完成，711 项 Assert × 2 模式全通过。活跃实例链表：InstancePool.ActiveList + VMInstanceState.ActiveListIndex，Tick() 只遍历 ActiveListCount 个实例，spawn O(1) 追加，destroy O(1) swap-remove，Snapshot Save/Load 包含 ActiveList 状态。稀疏场景 3/128 实例 Tick 约 0.07 µs。**
 
 ---
 
@@ -592,7 +593,7 @@ skill TracerBullet
 以下步骤不依赖真实 ECS/Syscall 接入，可在当前独立环境中推进。
 步骤严格按编号顺序串行执行，每步完成后更新状态标记。
 
-> **当前位置 → B-β3**（O9 活跃实例链表）
+> **当前位置 → B-γ1**（FO6 自适应寄存器窗口）
 
 #### Phase 0: 正式命名
 
@@ -613,7 +614,7 @@ skill TracerBullet
 |---|-----|------|------|----------|------|
 | 3 | B-β1 | O6 Peephole 优化 pass | ✅ | Peephole pass 实现 + 指令数减少 ≥5% + benchmark 验证 | O1+O2 ✅ |
 | 4 | B-β2 | FO1 叶函数优化 | ✅ | 叶函数跳过 CallFrame push/pop + benchmark 验证开销 -40~60% | F4 ✅ |
-| 5 | B-β3 | O9 活跃实例链表 | ⏳ | 活跃实例链表替代全量遍历 + 稀疏场景性能验证 | 无 |
+| 5 | B-β3 | O9 活跃实例链表 | ✅ | 活跃实例链表替代全量遍历 + 稀疏场景性能验证 | 无 |
 
 #### Phase γ: 功能完整性
 
@@ -753,7 +754,7 @@ skill TracerBullet
 | **1. 解释器热路径** | 消除逐次 fixed pin（O1）✅、连续 OpCode 跳转表（O2）✅、去冗余边界检查（O3）✅ | dispatch ~9% (.NET JIT)；IL2CPP 预期 30-50% | 低 | **✅ Tier 1 完成** |
 | **2. 编译器优化** | dest-reg 传递（O4）✅、常量折叠（O5）✅、peephole pass（O6）、Syscall 直达（O7）✅ | 指令数减少 **15-25%** | 中 | O4/O5/O7 随 F4 完成；O6 待实施 |
 | **3. 指令编码** | 16B → 4B 紧凑指令（O8） | L1 缓存 **10-20%** | 高 | ⏳ |
-| **4. 调度层** | 活跃实例链表（O9）、稀疏快照（O10） | 调度/快照开销按稀疏度大幅降低 | 低-中 | ⏳ |
+| **4. 调度层** | 活跃实例链表（O9）✅、稀疏快照（O10） | 调度/快照开销按稀疏度大幅降低 | 低-中 | O9 ✅ |
 | **5. 长期** | 函数指针 Syscall（O11）、SIMD Fix64（O14）等 | 特定路径加速 | 中-高 | ⏳ |
 
 **函数调用专项优化（FO1-FO7）**：

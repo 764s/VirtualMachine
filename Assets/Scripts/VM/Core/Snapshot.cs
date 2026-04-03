@@ -12,7 +12,8 @@ namespace FFVM
     {
         // Mirror of InstancePool.FreeStack + FreeTop
         public int FreeTop;
-        public int ActiveCount;
+        // O9: ActiveListCount for active instance list (replaces separate ActiveCount)
+        public int ActiveListCount;
         // FreeStack array is snapshotted separately via Buffer.BlockCopy
     }
 
@@ -32,10 +33,14 @@ namespace FFVM
         // Free stack snapshot
         public int[] FreeStackData;
 
+        // O9: Active list snapshot
+        public int[] ActiveListData;
+
         public void Init()
         {
             InstanceSnapshots = new VMInstanceState[VMConstants.MaxInstances];
             FreeStackData = new int[VMConstants.MaxFreeStack];
+            ActiveListData = new int[VMConstants.MaxInstances];
         }
     }
 
@@ -65,15 +70,18 @@ namespace FFVM
         {
             ref VMWorldSnapshot snap = ref _ring[_head];
             snap.FrameNumber = frameNumber;
-            snap.ActiveInstanceCount = pool.ActiveCount;
+            snap.ActiveInstanceCount = pool.ActiveListCount;
             snap.FreeStackState.FreeTop = pool.FreeTop;
-            snap.FreeStackState.ActiveCount = pool.ActiveCount;
+            snap.FreeStackState.ActiveListCount = pool.ActiveListCount;
 
             // memcpy instances
             Array.Copy(pool.Instances, snap.InstanceSnapshots, VMConstants.MaxInstances);
 
             // memcpy free stack
             Array.Copy(pool.FreeStack, snap.FreeStackData, VMConstants.MaxFreeStack);
+
+            // O9: memcpy active list
+            Array.Copy(pool.ActiveList, snap.ActiveListData, VMConstants.MaxInstances);
 
             _head = (_head + 1) % VMConstants.SnapshotRingSize;
         }
@@ -88,11 +96,14 @@ namespace FFVM
                 ref VMWorldSnapshot snap = ref _ring[i];
                 if (snap.FrameNumber == frameNumber)
                 {
-                    pool.ActiveCount = snap.ActiveInstanceCount;
+                    pool.ActiveListCount = snap.FreeStackState.ActiveListCount;
                     pool.FreeTop = snap.FreeStackState.FreeTop;
 
                     Array.Copy(snap.InstanceSnapshots, pool.Instances, VMConstants.MaxInstances);
                     Array.Copy(snap.FreeStackData, pool.FreeStack, VMConstants.MaxFreeStack);
+
+                    // O9: restore active list
+                    Array.Copy(snap.ActiveListData, pool.ActiveList, VMConstants.MaxInstances);
 
                     return true;
                 }
