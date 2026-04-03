@@ -157,6 +157,9 @@ namespace FFVM
             var dbg = Debugger;
             var srcMap = (dbg != null) ? program.SourceMap : null;
 
+            // FF5: saved r0 for preserving return value across non-entry function cleanup
+            Number savedR0 = default;
+
             // O1: Pin registers once for the entire execution burst.
             // Previously each Get/Set call did its own fixed pin/unpin — the single
             // largest per-instruction overhead in the dispatch loop.
@@ -231,16 +234,35 @@ namespace FFVM
                         case OpCode.RETURN:
                             if ((inst.StateFlags & VMStateFlags.InCleanup) != 0)
                             {
+                                // FF5: determine cleanup boundary for current scope
+                                int cleanupBase = 0;
+                                if (inst.CallStackDepth > 0)
+                                    cleanupBase = inst.CallStack.Get(inst.CallStackDepth - 1).CleanupBase;
+
                                 // Finished one cleanup block
-                                if (inst.CleanupDepth > 0)
+                                if (inst.CleanupDepth > cleanupBase)
                                 {
-                                    // More cleanup blocks to run (LIFO)
+                                    // More cleanup blocks to run in this scope (LIFO)
                                     inst.CleanupDepth--;
                                     inst.IP = inst.CleanupStack.Get(inst.CleanupDepth).CleanupEntryIP;
                                 }
+                                else if (inst.CallStackDepth > 0)
+                                {
+                                    // FF5: all function-scoped cleanups done — return to caller
+                                    inst.CallStackDepth--;
+                                    var frame = inst.CallStack.Get(inst.CallStackDepth);
+                                    inst.StateFlags &= ~VMStateFlags.InCleanup;
+                                    inst.IP = frame.ReturnIP;
+                                    inst.RegisterBase = frame.RegisterBase;
+                                    // Restore return value that cleanup may have clobbered
+                                    regs[0] = savedR0;
+                                    // If Killed, stop — let next Tick handle parent-scope cleanup
+                                    if ((inst.StateFlags & VMStateFlags.Killed) != 0)
+                                        return;
+                                }
                                 else
                                 {
-                                    // All cleanups done
+                                    // All cleanups done (entry function)
                                     inst.StateFlags &= ~VMStateFlags.InCleanup;
                                     inst.StateFlags |= VMStateFlags.Completed;
                                     return;
@@ -400,11 +422,26 @@ namespace FFVM
 
                         case OpCode.RET_FUNC:
                         {
-                            inst.CallStackDepth--;
-                            var frame = inst.CallStack.Get(inst.CallStackDepth);
-                            inst.IP = frame.ReturnIP;
-                            inst.RegisterBase = frame.RegisterBase;
-                            break;                     // don't IP++ — ReturnIP is already CALL+1
+                            // FF5: check for pending function-scoped cleanups before returning
+                            var frame = inst.CallStack.Get(inst.CallStackDepth - 1);
+                            if (inst.CleanupDepth > frame.CleanupBase)
+                            {
+                                // Function has pending cleanups — execute them before returning.
+                                // Keep CallStackDepth unchanged so RETURN can pop frame when done.
+                                // Save r0 (return value) before cleanup blocks may clobber it.
+                                savedR0 = regs[0];
+                                inst.StateFlags |= VMStateFlags.InCleanup;
+                                inst.CleanupDepth--;
+                                inst.IP = inst.CleanupStack.Get(inst.CleanupDepth).CleanupEntryIP;
+                            }
+                            else
+                            {
+                                // No pending cleanups — normal return
+                                inst.CallStackDepth--;
+                                inst.IP = frame.ReturnIP;
+                                inst.RegisterBase = frame.RegisterBase;
+                            }
+                            break;                     // don't IP++ — either jumped to cleanup or ReturnIP is CALL+1
                         }
 
                         // --- FO1: Leaf function calls (skip CallFrame push/pop) ---

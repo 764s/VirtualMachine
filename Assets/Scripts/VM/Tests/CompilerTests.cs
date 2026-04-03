@@ -2524,6 +2524,294 @@ func main() {
             Assert(hasWindowError, "FO6-04: error mentions register window overflow");
         }
 
+        // ===== Test FF5-01: Non-entry function with defer =====
+        {
+            string source = @"
+func foo() {
+    defer {
+        Report(1)
+    }
+    Report(2)
+}
+func main() {
+    foo()
+    Report(3)
+}";
+            var syscalls = new Dictionary<string, int> { { "Report", 0 } };
+            var result = compiler.Compile(source, "main", syscalls);
+            Assert(result.Success, "FF5-01 compile success");
+
+            var log = new List<string>();
+            var world = new VMWorld();
+            world.Modules.Load(0, result.Program);
+            world.Syscalls.Register(0, "Report", (ref VMInstanceState s) =>
+            {
+                log.Add($"{s.Registers.Get(0).ToInt()}");
+            });
+
+            int id = world.SpawnInstance(0, 0);
+            world.Tick();
+
+            // Expected order: foo body Report(2), foo defer Report(1), main Report(3)
+            Assert(log.Count >= 1 && log[0] == "2", "FF5-01: foo body Report(2) first");
+            Assert(log.Count >= 2 && log[1] == "1", "FF5-01: foo defer Report(1) second");
+            Assert(log.Count >= 3 && log[2] == "3", "FF5-01: main Report(3) after foo returns");
+            Assert((world.Pool.Instances[id].StateFlags & VMStateFlags.Completed) != 0, "FF5-01: Completed");
+        }
+
+        // ===== Test FF5-02: Entry and non-entry both with defer =====
+        {
+            string source = @"
+func foo() {
+    defer {
+        Report(10)
+    }
+    Report(20)
+}
+func main() {
+    defer {
+        Report(30)
+    }
+    foo()
+    Report(40)
+}";
+            var syscalls = new Dictionary<string, int> { { "Report", 0 } };
+            var result = compiler.Compile(source, "main", syscalls);
+            Assert(result.Success, "FF5-02 compile success");
+
+            var log = new List<string>();
+            var world = new VMWorld();
+            world.Modules.Load(0, result.Program);
+            world.Syscalls.Register(0, "Report", (ref VMInstanceState s) =>
+            {
+                log.Add($"{s.Registers.Get(0).ToInt()}");
+            });
+
+            int id = world.SpawnInstance(0, 0);
+            world.Tick();
+
+            // Expected: foo body(20), foo defer(10), main body(40), main defer(30)
+            Assert(log.Count >= 1 && log[0] == "20", "FF5-02: foo body Report(20)");
+            Assert(log.Count >= 2 && log[1] == "10", "FF5-02: foo defer Report(10)");
+            Assert(log.Count >= 3 && log[2] == "40", "FF5-02: main body Report(40)");
+            Assert(log.Count >= 4 && log[3] == "30", "FF5-02: main defer Report(30)");
+            Assert((world.Pool.Instances[id].StateFlags & VMStateFlags.Completed) != 0, "FF5-02: Completed");
+        }
+
+        // ===== Test FF5-03: Nested function calls with defer at each level =====
+        {
+            string source = @"
+func inner() {
+    defer {
+        Report(1)
+    }
+    Report(2)
+}
+func middle() {
+    defer {
+        Report(3)
+    }
+    inner()
+    Report(4)
+}
+func main() {
+    defer {
+        Report(5)
+    }
+    middle()
+    Report(6)
+}";
+            var syscalls = new Dictionary<string, int> { { "Report", 0 } };
+            var result = compiler.Compile(source, "main", syscalls);
+            Assert(result.Success, "FF5-03 compile success");
+
+            var log = new List<string>();
+            var world = new VMWorld();
+            world.Modules.Load(0, result.Program);
+            world.Syscalls.Register(0, "Report", (ref VMInstanceState s) =>
+            {
+                log.Add($"{s.Registers.Get(0).ToInt()}");
+            });
+
+            int id = world.SpawnInstance(0, 0);
+            world.Tick();
+
+            // Expected: inner body(2), inner defer(1), middle body(4), middle defer(3), main body(6), main defer(5)
+            Assert(log.Count >= 1 && log[0] == "2", "FF5-03: inner body Report(2)");
+            Assert(log.Count >= 2 && log[1] == "1", "FF5-03: inner defer Report(1)");
+            Assert(log.Count >= 3 && log[2] == "4", "FF5-03: middle body Report(4)");
+            Assert(log.Count >= 4 && log[3] == "3", "FF5-03: middle defer Report(3)");
+            Assert(log.Count >= 5 && log[4] == "6", "FF5-03: main body Report(6)");
+            Assert(log.Count >= 6 && log[5] == "5", "FF5-03: main defer Report(5)");
+            Assert((world.Pool.Instances[id].StateFlags & VMStateFlags.Completed) != 0, "FF5-03: Completed");
+        }
+
+        // ===== Test FF5-04: Using (paired syscall) in non-entry function =====
+        {
+            string source = @"
+func foo() {
+    using SetBB(99) {
+        Report(1)
+    }
+    Report(2)
+}
+func main() {
+    foo()
+    Report(3)
+}";
+            var syscalls = new Dictionary<string, int> { { "SetBB", 0 }, { "ResetBB", 1 }, { "Report", 2 } };
+
+            var world = new VMWorld();
+            world.Syscalls.RegisterPaired(
+                0, "SetBB", (ref VMInstanceState s) => { },
+                1, "ResetBB", (ref VMInstanceState s) => { });
+            world.Syscalls.Register(2, "Report", (ref VMInstanceState s) => { });
+
+            var result = compiler.Compile(source, "main", syscalls, world.Syscalls);
+            Assert(result.Success, "FF5-04 compile success");
+
+            var log = new List<string>();
+            // Re-register with logging
+            world.Syscalls.RegisterPaired(
+                0, "SetBB", (ref VMInstanceState s) => { log.Add($"SetBB({s.Registers.Get(0).ToInt()})"); },
+                1, "ResetBB", (ref VMInstanceState s) => { log.Add("ResetBB"); });
+            world.Syscalls.Register(2, "Report", (ref VMInstanceState s) => { log.Add($"Report({s.Registers.Get(0).ToInt()})"); });
+
+            world.Modules.Load(0, result.Program);
+            int id = world.SpawnInstance(0, 0);
+            world.Tick();
+
+            // Normal exit: SetBB(99), Report(1), POP_CLEANUP (removes SetBB cleanup), Report(2), RET_FUNC, Report(3), RETURN → Completed
+            // ResetBB should NOT be called on normal exit (POP_CLEANUP removed the frame)
+            Assert(log.Count >= 1 && log[0] == "SetBB(99)", "FF5-04: SetBB(99) acquired");
+            Assert(log.Count >= 2 && log[1] == "Report(1)", "FF5-04: body Report(1)");
+            Assert(log.Count >= 3 && log[2] == "Report(2)", "FF5-04: after using Report(2)");
+            Assert(log.Count >= 4 && log[3] == "Report(3)", "FF5-04: main Report(3)");
+            bool hasResetBB = false;
+            for (int j = 0; j < log.Count; j++) if (log[j] == "ResetBB") hasResetBB = true;
+            Assert(!hasResetBB, "FF5-04: ResetBB NOT called on normal exit (POP_CLEANUP)");
+            Assert((world.Pool.Instances[id].StateFlags & VMStateFlags.Completed) != 0, "FF5-04: Completed");
+        }
+
+        // ===== Test FF5-05: Kill during non-entry function with defer =====
+        {
+            string source = @"
+func foo() {
+    defer {
+        Report(1)
+    }
+    Report(2)
+    wait 100
+    Report(99)
+}
+func main() {
+    defer {
+        Report(3)
+    }
+    foo()
+    Report(99)
+}";
+            var syscalls = new Dictionary<string, int> { { "Report", 0 } };
+            var result = compiler.Compile(source, "main", syscalls);
+            Assert(result.Success, "FF5-05 compile success");
+
+            var log = new List<string>();
+            var world = new VMWorld();
+            world.Modules.Load(0, result.Program);
+            world.Syscalls.Register(0, "Report", (ref VMInstanceState s) =>
+            {
+                log.Add($"{s.Registers.Get(0).ToInt()}");
+            });
+
+            int id = world.SpawnInstance(0, 0);
+            world.Tick(); // tick 1: main PUSH_CLEANUP(defer 3), CALL foo → foo PUSH_CLEANUP(defer 1), Report(2), WAIT 100
+            Assert(log.Count >= 1 && log[0] == "2", "FF5-05: foo body Report(2)");
+
+            // Kill during wait
+            world.Pool.Instances[id].StateFlags |= VMStateFlags.Killed;
+
+            world.Tick(); // tick 2: kill → foo defer Report(1) → return to main scope
+            world.Tick(); // tick 3: still killed, not in cleanup → main defer Report(3) → Completed
+
+            Assert(log.Contains("1"), "FF5-05: foo defer Report(1) executed");
+            Assert(log.Contains("3"), "FF5-05: main defer Report(3) executed");
+            Assert(!log.Contains("99"), "FF5-05: unreachable Report(99) NOT called");
+            Assert((world.Pool.Instances[id].StateFlags & VMStateFlags.Completed) != 0, "FF5-05: Completed after kill");
+        }
+
+        // ===== Test FF5-06: Multiple defers in non-entry function (LIFO order) =====
+        {
+            string source = @"
+func foo() {
+    defer {
+        Report(1)
+    }
+    defer {
+        Report(2)
+    }
+    Report(3)
+}
+func main() {
+    foo()
+    Report(4)
+}";
+            var syscalls = new Dictionary<string, int> { { "Report", 0 } };
+            var result = compiler.Compile(source, "main", syscalls);
+            Assert(result.Success, "FF5-06 compile success");
+
+            var log = new List<string>();
+            var world = new VMWorld();
+            world.Modules.Load(0, result.Program);
+            world.Syscalls.Register(0, "Report", (ref VMInstanceState s) =>
+            {
+                log.Add($"{s.Registers.Get(0).ToInt()}");
+            });
+
+            int id = world.SpawnInstance(0, 0);
+            world.Tick();
+
+            // Expected: foo body(3), foo defer(2) LIFO, foo defer(1) LIFO, main(4)
+            Assert(log.Count >= 1 && log[0] == "3", "FF5-06: foo body Report(3)");
+            Assert(log.Count >= 2 && log[1] == "2", "FF5-06: foo defer Report(2) LIFO first");
+            Assert(log.Count >= 3 && log[2] == "1", "FF5-06: foo defer Report(1) LIFO second");
+            Assert(log.Count >= 4 && log[3] == "4", "FF5-06: main Report(4) after foo returns");
+            Assert((world.Pool.Instances[id].StateFlags & VMStateFlags.Completed) != 0, "FF5-06: Completed");
+        }
+
+        // ===== Test FF5-07: Non-entry function with defer and return value =====
+        {
+            string source = @"
+func compute(x: int): int {
+    defer {
+        Report(100)
+    }
+    return x * 2
+}
+func main() {
+    var result: int = compute(21)
+    Report(result)
+}";
+            var syscalls = new Dictionary<string, int> { { "Report", 0 } };
+            var result = compiler.Compile(source, "main", syscalls);
+            Assert(result.Success, "FF5-07 compile success");
+
+            var log = new List<string>();
+            var world = new VMWorld();
+            world.Modules.Load(0, result.Program);
+            world.Syscalls.Register(0, "Report", (ref VMInstanceState s) =>
+            {
+                log.Add($"{s.Registers.Get(0).ToInt()}");
+            });
+
+            int id = world.SpawnInstance(0, 0);
+            world.Tick();
+
+            // Expected: compute defer Report(100), then main Report(42)
+            Assert(log.Count >= 1 && log[0] == "100", "FF5-07: compute defer Report(100)");
+            Assert(log.Count >= 2 && log[1] == "42", "FF5-07: main Report(compute(21)=42)");
+            Assert((world.Pool.Instances[id].StateFlags & VMStateFlags.Completed) != 0, "FF5-07: Completed");
+        }
+
         // ===== Summary =====
         Debug.Log($"========================================");
         Debug.Log($"Compiler Tests: {passed} passed, {failed} failed");
