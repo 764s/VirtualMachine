@@ -15,7 +15,8 @@ namespace FFVM.Debug
     /// Messages:
     ///   Requests:       initialize, shutdown,
     ///                   textDocument/documentSymbol, textDocument/hover,
-    ///                   textDocument/definition, textDocument/references
+    ///                   textDocument/definition, textDocument/references,
+    ///                   textDocument/completion
     ///   Notifications:  initialized, exit, textDocument/didOpen, textDocument/didChange
     ///   Server→Client:  textDocument/publishDiagnostics
     ///
@@ -118,6 +119,9 @@ namespace FFVM.Debug
                     case "textDocument/references":
                         result = HandleReferences(parameters);
                         break;
+                    case "textDocument/completion":
+                        result = HandleCompletion(parameters);
+                        break;
                     default:
                         success = false;
                         errorCode = -32601; // MethodNotFound
@@ -176,6 +180,12 @@ namespace FFVM.Debug
             capabilities.Set("hoverProvider", true);
             capabilities.Set("definitionProvider", true);
             capabilities.Set("referencesProvider", true);
+
+            // LSP5: Code completion
+            var completionProvider = new JsonObject();
+            var triggerChars = new List<object> { "." };
+            completionProvider.Set("triggerCharacters", triggerChars);
+            capabilities.Set("completionProvider", completionProvider);
 
             var result = new JsonObject();
             result.Set("capabilities", capabilities);
@@ -784,6 +794,303 @@ namespace FFVM.Debug
             var locations = new List<object>();
             CollectReferences(ast, target.Value.name, target.Value.kind, uri, locations);
             return MakeArrayResult(locations);
+        }
+
+        // ============================================================
+        // LSP5: Code completion
+        // ============================================================
+
+        private JsonObject HandleCompletion(JsonObject parameters)
+        {
+            string uri = GetDocumentUri(parameters);
+            var ast = GetCachedAst(uri);
+            string source = null;
+            if (uri != null) _documents.TryGetValue(uri, out source);
+
+            var position = parameters?.GetObject("position");
+            if (position == null) return MakeArrayResult(new List<object>());
+
+            int lspLine = position.GetInt("line");
+            int lspChar = position.GetInt("character");
+
+            // Detect dot context: check if the character before cursor is '.'
+            string lineText = GetLineText(source, lspLine);
+            bool isDotContext = false;
+            string dotPrefix = null;
+            if (lineText != null && lspChar > 0 && lspChar <= lineText.Length)
+            {
+                // Walk back: if we see '.' possibly preceded by identifier
+                int checkPos = lspChar - 1;
+                // Skip any partial identifier typed after the dot
+                while (checkPos >= 0 && checkPos < lineText.Length && (char.IsLetterOrDigit(lineText[checkPos]) || lineText[checkPos] == '_'))
+                    checkPos--;
+                if (checkPos >= 0 && lineText[checkPos] == '.')
+                {
+                    isDotContext = true;
+                    // Extract variable name before the dot
+                    int nameEnd = checkPos;
+                    int nameStart = nameEnd - 1;
+                    while (nameStart >= 0 && (char.IsLetterOrDigit(lineText[nameStart]) || lineText[nameStart] == '_'))
+                        nameStart--;
+                    nameStart++;
+                    if (nameStart < nameEnd)
+                        dotPrefix = lineText.Substring(nameStart, nameEnd - nameStart);
+                }
+            }
+
+            var items = new List<object>();
+
+            if (isDotContext && dotPrefix != null && ast != null)
+            {
+                // Struct field completion: find what struct type the variable is
+                FuncDecl containingFunc = FindContainingFunction(ast, lspLine + 1);
+                if (containingFunc != null)
+                {
+                    string structType = FindVariableStructType(ast, containingFunc, dotPrefix);
+                    if (structType != null)
+                    {
+                        foreach (var st in ast.Structs)
+                        {
+                            if (st.Name == structType)
+                            {
+                                foreach (var field in st.Fields)
+                                {
+                                    items.Add(MakeCompletionItem(field.Name, 5 /* Field */,
+                                        $"{field.Name}: {field.TypeName}"));
+                                }
+                                break;
+                            }
+                        }
+                    }
+                }
+            }
+            else
+            {
+                // General completion: keywords + functions + variables + structs + syscalls
+                // Keywords
+                foreach (string kw in Lexer.Keywords.Keys)
+                {
+                    items.Add(MakeCompletionItem(kw, 14 /* Keyword */, null));
+                }
+
+                if (ast != null)
+                {
+                    // Functions
+                    foreach (var func in ast.Functions)
+                    {
+                        items.Add(MakeCompletionItem(func.Name, 3 /* Function */,
+                            FormatFuncSignature(func)));
+                    }
+
+                    // Structs
+                    foreach (var st in ast.Structs)
+                    {
+                        items.Add(MakeCompletionItem(st.Name, 22 /* Struct */, null));
+                    }
+
+                    // Scope-aware variables: find which function contains the cursor
+                    FuncDecl containingFunc = FindContainingFunction(ast, lspLine + 1);
+                    if (containingFunc != null)
+                    {
+                        // Parameters
+                        foreach (var param in containingFunc.Parameters)
+                        {
+                            items.Add(MakeCompletionItem(param.Name, 6 /* Variable */,
+                                $"(parameter) {param.Name}: {param.TypeName}"));
+                        }
+                        // Local variables declared before cursor line
+                        CollectVariablesInScope(containingFunc.Body, lspLine + 1, items);
+                    }
+                }
+
+                // Syscall names
+                foreach (string name in _defaultSyscalls.Keys)
+                {
+                    items.Add(MakeCompletionItem(name, 3 /* Function */, $"(syscall) {name}"));
+                }
+            }
+
+            return MakeArrayResult(items);
+        }
+
+        private static JsonObject MakeCompletionItem(string label, int kind, string detail)
+        {
+            var item = new JsonObject();
+            item.Set("label", label);
+            item.Set("kind", kind);
+            if (detail != null)
+                item.Set("detail", detail);
+            return item;
+        }
+
+        /// <summary>
+        /// Get the text of a specific line (0-based) from source.
+        /// </summary>
+        private static string GetLineText(string source, int lspLine)
+        {
+            if (source == null) return null;
+            int lineIdx = 0;
+            int start = 0;
+            for (int i = 0; i <= source.Length; i++)
+            {
+                if (i == source.Length || source[i] == '\n')
+                {
+                    if (lineIdx == lspLine)
+                    {
+                        int end = i;
+                        if (end > start && source[end - 1] == '\r') end--;
+                        return source.Substring(start, end - start);
+                    }
+                    lineIdx++;
+                    start = i + 1;
+                }
+            }
+            return null;
+        }
+
+        /// <summary>
+        /// Find the function declaration that contains the given AST line.
+        /// </summary>
+        private static FuncDecl FindContainingFunction(ModuleNode ast, int astLine)
+        {
+            FuncDecl best = null;
+            foreach (var func in ast.Functions)
+            {
+                if (func.Line <= astLine)
+                {
+                    if (best == null || func.Line > best.Line)
+                        best = func;
+                }
+            }
+            return best;
+        }
+
+        /// <summary>
+        /// Find the struct type name of a local variable or parameter.
+        /// Returns null if not a struct or not found.
+        /// </summary>
+        private static string FindVariableStructType(ModuleNode ast, FuncDecl func, string varName)
+        {
+            // Check parameters
+            foreach (var param in func.Parameters)
+            {
+                if (param.Name == varName)
+                {
+                    // Check if param type is a known struct
+                    foreach (var st in ast.Structs)
+                    {
+                        if (st.Name == param.TypeName)
+                            return param.TypeName;
+                    }
+                    return null;
+                }
+            }
+            // Check local variables
+            return FindVarStructTypeInBlock(ast, func.Body, varName);
+        }
+
+        private static string FindVarStructTypeInBlock(ModuleNode ast, BlockStmt block, string varName)
+        {
+            if (block == null) return null;
+            foreach (var stmt in block.Statements)
+            {
+                if (stmt is VarDeclStmt vd && vd.Name == varName)
+                {
+                    if (vd.TypeName != null)
+                    {
+                        foreach (var st in ast.Structs)
+                        {
+                            if (st.Name == vd.TypeName)
+                                return vd.TypeName;
+                        }
+                    }
+                    return null;
+                }
+                string r = null;
+                if (stmt is BlockStmt bs) r = FindVarStructTypeInBlock(ast, bs, varName);
+                else if (stmt is IfStmt ifs)
+                {
+                    r = FindVarStructTypeInStmt(ast, ifs.ThenBranch, varName);
+                    if (r == null) r = FindVarStructTypeInStmt(ast, ifs.ElseBranch, varName);
+                }
+                else if (stmt is WhileStmt ws) r = FindVarStructTypeInStmt(ast, ws.Body, varName);
+                else if (stmt is ForStmt fs)
+                {
+                    r = FindVarStructTypeInStmt(ast, fs.Initializer, varName);
+                    if (r == null) r = FindVarStructTypeInStmt(ast, fs.Body, varName);
+                }
+                else if (stmt is DeferStmt ds) r = FindVarStructTypeInBlock(ast, ds.Body, varName);
+                else if (stmt is UsingStmt us) r = FindVarStructTypeInBlock(ast, us.Body, varName);
+                if (r != null) return r;
+            }
+            return null;
+        }
+
+        private static string FindVarStructTypeInStmt(ModuleNode ast, Stmt stmt, string varName)
+        {
+            if (stmt is BlockStmt bs) return FindVarStructTypeInBlock(ast, bs, varName);
+            if (stmt is VarDeclStmt vd && vd.Name == varName)
+            {
+                if (vd.TypeName != null)
+                {
+                    foreach (var st in ast.Structs)
+                    {
+                        if (st.Name == vd.TypeName)
+                            return vd.TypeName;
+                    }
+                }
+                return null;
+            }
+            return null;
+        }
+
+        /// <summary>
+        /// Collect all variables declared in a block before the given AST line.
+        /// </summary>
+        private static void CollectVariablesInScope(BlockStmt block, int beforeAstLine, List<object> items)
+        {
+            if (block == null) return;
+            foreach (var stmt in block.Statements)
+            {
+                if (stmt is VarDeclStmt vd)
+                {
+                    if (vd.Line <= beforeAstLine)
+                    {
+                        string typeStr = vd.TypeName ?? "int";
+                        items.Add(MakeCompletionItem(vd.Name, 6 /* Variable */,
+                            $"var {vd.Name}: {typeStr}"));
+                    }
+                }
+                // Recurse into nested blocks that contain the cursor
+                if (stmt is IfStmt ifs)
+                {
+                    CollectVariablesInStmt(ifs.ThenBranch, beforeAstLine, items);
+                    CollectVariablesInStmt(ifs.ElseBranch, beforeAstLine, items);
+                }
+                else if (stmt is WhileStmt ws)
+                    CollectVariablesInStmt(ws.Body, beforeAstLine, items);
+                else if (stmt is ForStmt fs)
+                {
+                    CollectVariablesInStmt(fs.Initializer, beforeAstLine, items);
+                    CollectVariablesInStmt(fs.Body, beforeAstLine, items);
+                }
+                else if (stmt is BlockStmt bs)
+                    CollectVariablesInScope(bs, beforeAstLine, items);
+                else if (stmt is DeferStmt ds)
+                    CollectVariablesInScope(ds.Body, beforeAstLine, items);
+                else if (stmt is UsingStmt us)
+                    CollectVariablesInScope(us.Body, beforeAstLine, items);
+            }
+        }
+
+        private static void CollectVariablesInStmt(Stmt stmt, int beforeAstLine, List<object> items)
+        {
+            if (stmt is BlockStmt bs) CollectVariablesInScope(bs, beforeAstLine, items);
+            else if (stmt is VarDeclStmt vd && vd.Line <= beforeAstLine)
+            {
+                string typeStr = vd.TypeName ?? "int";
+                items.Add(MakeCompletionItem(vd.Name, 6 /* Variable */, $"var {vd.Name}: {typeStr}"));
+            }
         }
 
         // ============================================================

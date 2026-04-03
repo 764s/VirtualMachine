@@ -649,6 +649,314 @@ public static class LspTests
             }
         }
 
+        // ================================================================
+        // E. LSP5 Completion Tests
+        // ================================================================
+
+        // ===== Test LSP5-T01: initialize response includes completionProvider =====
+        {
+            var session = new LspBatchSession();
+            session.AddInitialize();
+            session.AddShutdown();
+            session.AddExit();
+            session.Run();
+
+            var initResp = session.ExpectResponse(0);
+            Assert(initResp != null, "LSP5-T01: initialize response received");
+            if (initResp != null)
+            {
+                var result = initResp.GetObject("result");
+                var caps = result?.GetObject("capabilities");
+                var completionProvider = caps?.GetObject("completionProvider");
+                Assert(completionProvider != null, "LSP5-T01: completionProvider present");
+                if (completionProvider != null)
+                {
+                    var triggers = completionProvider.GetArray("triggerCharacters");
+                    Assert(triggers != null && triggers.Count > 0,
+                        $"LSP5-T01: triggerCharacters not empty, got {triggers?.Count ?? 0}");
+                }
+            }
+        }
+
+        // ===== Test LSP5-T02: basic completion returns keywords + functions + variables =====
+        {
+            string source = "func entry() {\n  var x: int = 10\n  \n}";
+            var session = new LspBatchSession();
+            session.AddInitialize();
+            session.AddInitialized();
+            session.AddDidOpen("file:///comp.vm", source);
+            // Complete at empty line 2, col 2 (inside entry function)
+            session.AddCompletion("file:///comp.vm", 2, 2);
+            session.AddShutdown();
+            session.AddExit();
+            session.Run();
+
+            session.ExpectResponse(0); // initialize
+            var compResp = session.ExpectResponse(1); // completion
+            Assert(compResp != null, "LSP5-T02: completion response received");
+            if (compResp != null)
+            {
+                var items = compResp.GetArray("result");
+                Assert(items != null, "LSP5-T02: result is array");
+                if (items != null)
+                {
+                    // Should have keywords (15) + func entry (1) + var x (1) = at least 17
+                    Assert(items.Count >= 17, $"LSP5-T02: at least 17 items (15 kw + 1 func + 1 var), got {items.Count}");
+
+                    // Check keywords are present
+                    bool hasFunc = false, hasVar = false, hasIf = false, hasWait = false;
+                    // Check function name is present
+                    bool hasEntryFunc = false;
+                    // Check variable is present
+                    bool hasXVar = false;
+                    foreach (var obj in items)
+                    {
+                        var item = obj as JsonObject;
+                        string label = item?.GetString("label");
+                        int kind = item?.GetInt("kind") ?? 0;
+                        if (label == "func" && kind == 14) hasFunc = true;
+                        if (label == "var" && kind == 14) hasVar = true;
+                        if (label == "if" && kind == 14) hasIf = true;
+                        if (label == "wait" && kind == 14) hasWait = true;
+                        if (label == "entry" && kind == 3) hasEntryFunc = true;
+                        if (label == "x" && kind == 6) hasXVar = true;
+                    }
+                    Assert(hasFunc, "LSP5-T02: 'func' keyword present");
+                    Assert(hasVar, "LSP5-T02: 'var' keyword present");
+                    Assert(hasIf, "LSP5-T02: 'if' keyword present");
+                    Assert(hasWait, "LSP5-T02: 'wait' keyword present");
+                    Assert(hasEntryFunc, "LSP5-T02: 'entry' function present");
+                    Assert(hasXVar, "LSP5-T02: 'x' variable present");
+                }
+            }
+        }
+
+        // ===== Test LSP5-T03: struct field completion after dot =====
+        {
+            string source = "struct Vec2 {\n  x: int\n  y: int\n}\nfunc entry() {\n  var v: Vec2\n  v.\n}";
+            var session = new LspBatchSession();
+            session.AddInitialize();
+            session.AddInitialized();
+            session.AddDidOpen("file:///dot.vm", source);
+            // Complete after "v." on line 6, col 4
+            session.AddCompletion("file:///dot.vm", 6, 4);
+            session.AddShutdown();
+            session.AddExit();
+            session.Run();
+
+            session.ExpectResponse(0); // initialize
+            var compResp = session.ExpectResponse(1); // completion
+            Assert(compResp != null, "LSP5-T03: completion response received");
+            if (compResp != null)
+            {
+                var items = compResp.GetArray("result");
+                Assert(items != null, "LSP5-T03: result is array");
+                if (items != null)
+                {
+                    Assert(items.Count == 2, $"LSP5-T03: 2 fields (x, y), got {items.Count}");
+                    bool hasX = false, hasY = false;
+                    foreach (var obj in items)
+                    {
+                        var item = obj as JsonObject;
+                        string label = item?.GetString("label");
+                        int kind = item?.GetInt("kind") ?? 0;
+                        if (label == "x" && kind == 5) hasX = true;
+                        if (label == "y" && kind == 5) hasY = true;
+                    }
+                    Assert(hasX, "LSP5-T03: field 'x' present");
+                    Assert(hasY, "LSP5-T03: field 'y' present");
+                }
+            }
+        }
+
+        // ===== Test LSP5-T04: completion for empty file returns keywords only =====
+        {
+            var session = new LspBatchSession();
+            session.AddInitialize();
+            session.AddInitialized();
+            session.AddDidOpen("file:///empty.vm", "");
+            session.AddCompletion("file:///empty.vm", 0, 0);
+            session.AddShutdown();
+            session.AddExit();
+            session.Run();
+
+            session.ExpectResponse(0); // initialize
+            var compResp = session.ExpectResponse(1); // completion
+            Assert(compResp != null, "LSP5-T04: completion response received");
+            if (compResp != null)
+            {
+                var items = compResp.GetArray("result");
+                Assert(items != null, "LSP5-T04: result is array");
+                if (items != null)
+                {
+                    // Should have keywords (15) only
+                    Assert(items.Count == 15, $"LSP5-T04: 15 keyword items for empty file, got {items.Count}");
+                    // All should be kind=14 (Keyword)
+                    bool allKeywords = true;
+                    foreach (var obj in items)
+                    {
+                        var item = obj as JsonObject;
+                        if (item?.GetInt("kind") != 14) { allKeywords = false; break; }
+                    }
+                    Assert(allKeywords, "LSP5-T04: all items are keywords");
+                }
+            }
+        }
+
+        // ===== Test LSP5-T05: syscall names appear in completion =====
+        {
+            string source = "func entry() {\n  \n}";
+            var session = new LspBatchSession();
+            session.AddInitialize();
+            session.AddInitialized();
+            session.AddDidOpen("file:///sys.vm", source);
+            session.AddCompletion("file:///sys.vm", 1, 2);
+            session.AddShutdown();
+            session.AddExit();
+            session.Run();
+
+            session.ExpectResponse(0);
+            var compResp = session.ExpectResponse(1);
+            Assert(compResp != null, "LSP5-T05: completion response received");
+            if (compResp != null)
+            {
+                var items = compResp.GetArray("result");
+                Assert(items != null, "LSP5-T05: result is array");
+                // Note: default LspServer has empty syscalls dict, so no syscall items
+                // But we verify the mechanism works (no crash, keywords still present)
+                if (items != null)
+                {
+                    bool hasKeywords = items.Count >= 15;
+                    Assert(hasKeywords, $"LSP5-T05: at least keywords present, got {items.Count}");
+                }
+            }
+        }
+
+        // ===== Test LSP5-T06: scope-aware — only variables from current function =====
+        {
+            string source = "func helper(): int {\n  var a: int = 1\n  return a\n}\nfunc entry() {\n  var b: int = 2\n  \n}";
+            var session = new LspBatchSession();
+            session.AddInitialize();
+            session.AddInitialized();
+            session.AddDidOpen("file:///scope.vm", source);
+            // Complete inside entry function at line 6 (the empty line)
+            session.AddCompletion("file:///scope.vm", 6, 2);
+            session.AddShutdown();
+            session.AddExit();
+            session.Run();
+
+            session.ExpectResponse(0);
+            var compResp = session.ExpectResponse(1);
+            Assert(compResp != null, "LSP5-T06: completion response received");
+            if (compResp != null)
+            {
+                var items = compResp.GetArray("result");
+                Assert(items != null, "LSP5-T06: result is array");
+                if (items != null)
+                {
+                    // Should have 'b' but not 'a' as variable (a is in helper, not entry)
+                    bool hasB = false, hasA = false;
+                    foreach (var obj in items)
+                    {
+                        var item = obj as JsonObject;
+                        string label = item?.GetString("label");
+                        int kind = item?.GetInt("kind") ?? 0;
+                        if (label == "b" && kind == 6) hasB = true;
+                        if (label == "a" && kind == 6) hasA = true;
+                    }
+                    Assert(hasB, "LSP5-T06: variable 'b' in scope");
+                    Assert(!hasA, "LSP5-T06: variable 'a' NOT in scope (belongs to helper)");
+                    // Both function names should appear
+                    bool hasHelper = false, hasEntry = false;
+                    foreach (var obj in items)
+                    {
+                        var item = obj as JsonObject;
+                        string label = item?.GetString("label");
+                        int kind = item?.GetInt("kind") ?? 0;
+                        if (label == "helper" && kind == 3) hasHelper = true;
+                        if (label == "entry" && kind == 3) hasEntry = true;
+                    }
+                    Assert(hasHelper, "LSP5-T06: function 'helper' present");
+                    Assert(hasEntry, "LSP5-T06: function 'entry' present");
+                }
+            }
+        }
+
+        // ===== Test LSP5-T07: completion items have correct detail text =====
+        {
+            string source = "func add(a: int, b: int): int {\n  return a + b\n}\nfunc entry() {\n  \n}";
+            var session = new LspBatchSession();
+            session.AddInitialize();
+            session.AddInitialized();
+            session.AddDidOpen("file:///detail.vm", source);
+            session.AddCompletion("file:///detail.vm", 4, 2);
+            session.AddShutdown();
+            session.AddExit();
+            session.Run();
+
+            session.ExpectResponse(0);
+            var compResp = session.ExpectResponse(1);
+            Assert(compResp != null, "LSP5-T07: completion response received");
+            if (compResp != null)
+            {
+                var items = compResp.GetArray("result");
+                Assert(items != null, "LSP5-T07: result is array");
+                if (items != null)
+                {
+                    // Find 'add' function item and check its detail
+                    string addDetail = null;
+                    foreach (var obj in items)
+                    {
+                        var item = obj as JsonObject;
+                        if (item?.GetString("label") == "add" && item?.GetInt("kind") == 3)
+                        {
+                            addDetail = item.GetString("detail");
+                            break;
+                        }
+                    }
+                    Assert(addDetail != null, "LSP5-T07: 'add' function has detail");
+                    Assert(addDetail != null && addDetail.Contains("a: int"),
+                        $"LSP5-T07: detail contains param info, got '{addDetail}'");
+                }
+            }
+        }
+
+        // ===== Test LSP5-T08: parameter completion inside function with params =====
+        {
+            string source = "func calc(x: int, y: int): int {\n  \n}";
+            var session = new LspBatchSession();
+            session.AddInitialize();
+            session.AddInitialized();
+            session.AddDidOpen("file:///params.vm", source);
+            session.AddCompletion("file:///params.vm", 1, 2);
+            session.AddShutdown();
+            session.AddExit();
+            session.Run();
+
+            session.ExpectResponse(0);
+            var compResp = session.ExpectResponse(1);
+            Assert(compResp != null, "LSP5-T08: completion response received");
+            if (compResp != null)
+            {
+                var items = compResp.GetArray("result");
+                Assert(items != null, "LSP5-T08: result is array");
+                if (items != null)
+                {
+                    bool hasX = false, hasY = false;
+                    foreach (var obj in items)
+                    {
+                        var item = obj as JsonObject;
+                        string label = item?.GetString("label");
+                        int kind = item?.GetInt("kind") ?? 0;
+                        if (label == "x" && kind == 6) hasX = true;
+                        if (label == "y" && kind == 6) hasY = true;
+                    }
+                    Assert(hasX, "LSP5-T08: parameter 'x' present");
+                    Assert(hasY, "LSP5-T08: parameter 'y' present");
+                }
+            }
+        }
+
         Debug.Log($"\n===== LspTests: {passed} passed, {failed} failed =====");
     }
 
@@ -789,6 +1097,19 @@ public static class LspTests
             context.Set("includeDeclaration", true);
             parameters.Set("context", context);
             AddRequest("textDocument/references", parameters);
+        }
+
+        public void AddCompletion(string uri, int line, int character)
+        {
+            var parameters = new JsonObject();
+            var textDoc = new JsonObject();
+            textDoc.Set("uri", uri);
+            parameters.Set("textDocument", textDoc);
+            var pos = new JsonObject();
+            pos.Set("line", line);
+            pos.Set("character", character);
+            parameters.Set("position", pos);
+            AddRequest("textDocument/completion", parameters);
         }
 
         public void Run()
