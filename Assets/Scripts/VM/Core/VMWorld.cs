@@ -168,9 +168,10 @@ namespace FFVM
                 int maxSteps = MaxStepsPerTick; // cache to avoid field read per iteration
                 while (steps < maxSteps)
                 {
-                    // Bounds check removed: VMProgram appends a SENTINEL instruction
-                    // that triggers PanicOutOfBounds if IP overruns. All compiler-emitted
-                    // code paths terminate with RETURN/RET_FUNC/RET_LEAF.
+                    // Per-instruction bounds check removed: VMProgram appends a SENTINEL
+                    // instruction as a safety net against compiler bugs.  All compiler-emitted
+                    // code paths terminate with RETURN/RET_FUNC/RET_LEAF, so IP never
+                    // overruns in correct programs.  If it does, SENTINEL fires PanicOutOfBounds.
 
                     // --- Breakpoint check (zero overhead when Debugger is null) ---
                     if (srcMap != null)
