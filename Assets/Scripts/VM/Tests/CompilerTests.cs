@@ -2330,6 +2330,7 @@ func main() {
             // Verify execution
             int capturedFO7 = -1;
             var worldFO7 = new VMWorld();
+            worldFO7.MaxStepsPerTick = 20000; // 1000 iterations × ~15 instr/iter > default 1024
             worldFO7.Modules.Load(0, leafResult.Program);
             worldFO7.Syscalls.Register(0, "SetValue", (ref VMInstanceState s) => { capturedFO7 = s.Registers.Get(0).ToInt(); });
             worldFO7.SpawnInstance(0, 0);

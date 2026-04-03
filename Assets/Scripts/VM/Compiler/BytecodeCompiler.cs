@@ -1568,14 +1568,23 @@ namespace FFVM.Compiler
         }
 
         /// <summary>
-        /// Returns true if the expression subtree contains a CallExpr (user function call).
-        /// SyscallExpr is not disqualifying — syscalls don't use the call stack.
+        /// Returns true if the expression subtree contains a CallExpr to a user function.
+        /// SyscallExpr and calls to names not in _funcDecls are not disqualifying.
         /// </summary>
-        private static bool ContainsNonLeafExpr(Expr expr)
+        private bool ContainsNonLeafExpr(Expr expr)
         {
             if (expr == null) return false;
 
-            if (expr is CallExpr) return true;
+            if (expr is CallExpr call)
+            {
+                // Only user function calls disqualify; syscalls don't use the call stack
+                if (_funcDecls.ContainsKey(call.FunctionName))
+                    return true;
+                // Check arguments even for syscall-like calls
+                for (int i = 0; i < call.Arguments.Count; i++)
+                    if (ContainsNonLeafExpr(call.Arguments[i])) return true;
+                return false;
+            }
 
             if (expr is BinaryExpr bin)
                 return ContainsNonLeafExpr(bin.Left) || ContainsNonLeafExpr(bin.Right);
@@ -1787,7 +1796,7 @@ namespace FFVM.Compiler
             {
                 var fe = functionEntries[i];
                 int newEntryIP = remap[fe.EntryIP];
-                functionEntries[i] = new FunctionEntry(fe.Name, newEntryIP, fe.ParamCount, fe.LocalRegCount);
+                functionEntries[i] = new FunctionEntry(fe.Name, newEntryIP, fe.ParamCount, fe.LocalRegCount, fe.IsLeaf);
             }
         }
     }
