@@ -931,10 +931,16 @@ bash benchmarks/update-history.sh bench-raw.txt
 
 ---
 
-### 实践专区
+## 十四、实践专区
 
-实际构建过程中发现的问题、阻碍和改进建议。经讨论后将纳入串行计划、展望计划或风险点。
+> **职责说明**：
+> 实践专区记录串行计划之外的探索性实践。每次实践产出独立文档，记录背景、发现的问题、
+> 建议的改进方向。实践本身不直接修改代码——所有代码级改动须经讨论后纳入串行计划（新步骤）、
+> 展望条目或风险点，走正式流程推进。
+>
+> **文件命名**：`Docs/Practice/P{NNN}_{简短英文标题}.md`，编号递增。
 
-| 来源 | 文件 | 关键发现 |
-|------|------|----------|
-| Sandbox 构建 | [Practice_Sandbox.md](Plan/Practice_Sandbox.md) | P1 寄存器生命周期 Bug（高优先），P3 Syscall 约定文档化，P4 DapServer Syscall 支持，P8 .vscode gitignore |
+| # | 实践文档 | 主题 | 日期 | 产出建议去向 |
+|---|---------|------|------|------------|
+| P001 | [P001_Performance_Baseline_Rebuild.md](Practice/P001_Performance_Baseline_Rebuild.md) | 性能基线重建 + 执行循环优化 | 2026-04-03 | 串行计划新步骤 / 展望 |
+// | Sandbox 构建 | [Practice_Sandbox.md](Plan/Practice_Sandbox.md) | P1 寄存器生命周期 Bug（高优先），P3 Syscall 约定文档化，P4 DapServer Syscall 支持，P8 .vscode gitignore |
