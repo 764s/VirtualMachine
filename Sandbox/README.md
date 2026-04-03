@@ -2,7 +2,31 @@
 
 独立于 Unity 的 FFScript 脚本测试环境。用于验证脚本功能完整性和性能。
 
-## 快速开始
+## 一键初始化（推荐）
+
+首次检出仓库后，只需两步即可运行沙盒：
+
+**Windows:**
+1. 双击仓库根目录的 `sandbox-init.cmd`（自动完成全部初始化）
+2. 双击新生成的 `run-sandbox.cmd`，输入 `R` 回车即可编译运行
+
+**macOS / Linux:**
+1. 在仓库根目录执行 `bash sandbox-init.sh`
+2. 执行 `./run-sandbox.sh`，输入 `R` 回车即可编译运行
+
+初始化脚本会自动完成以下工作：
+- 从模板生成 `Sandbox.csproj`
+- 编译 Sandbox 项目（Release）
+- 生成 `run-sandbox` 可执行脚本
+- 配置 `.vscode/` 目录（launch.json + tasks.json）
+- 构建 StandaloneRunner（DAP/LSP 调试服务器）
+- 安装 VS Code 调试插件（需要 npm + code CLI，可选）
+
+---
+
+## 手动初始化
+
+如果一键初始化不适用，可手动完成：
 
 ### 1. 生成项目文件
 
@@ -18,27 +42,6 @@ copy Sandbox.csproj.template Sandbox.csproj
 ```bash
 cd Sandbox
 cp Sandbox.csproj.template Sandbox.csproj
-```
-
-或者手动创建 `Sandbox/Sandbox.csproj`：
-
-```xml
-<Project Sdk="Microsoft.NET.Sdk">
-  <PropertyGroup>
-    <OutputType>Exe</OutputType>
-    <TargetFramework>net8.0</TargetFramework>
-    <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
-    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
-  </PropertyGroup>
-  <ItemGroup>
-    <Compile Include="**/*.cs" />
-    <Compile Include="../StandaloneRunner/UnityStub.cs" />
-    <Compile Include="../Assets/Scripts/VM/**/*.cs" />
-    <None Include="sandbox.json" CopyToOutputDirectory="PreserveNewest" />
-    <None Include="sandbox.ffvm.d.json" CopyToOutputDirectory="PreserveNewest" />
-    <None Include="scripts/**" CopyToOutputDirectory="PreserveNewest" LinkBase="scripts" />
-  </ItemGroup>
-</Project>
 ```
 
 ### 2. 编译运行
