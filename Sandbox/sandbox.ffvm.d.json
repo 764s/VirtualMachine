@@ -1,0 +1,85 @@
+{
+    "syscalls": {
+        "print": {
+            "params": [
+                { "name": "value", "type": "number" }
+            ],
+            "returnType": "void",
+            "description": "Print a numeric value to the console"
+        },
+        "print_str": {
+            "params": [
+                { "name": "labelId", "type": "int" },
+                { "name": "value", "type": "number" }
+            ],
+            "returnType": "void",
+            "description": "Print a labeled value (labelId: 0=result, 1=value, 2=count, 3=time, 4=delta, 5=frame, 6=error, 7=debug, 8=x, 9=y, 10=sum)"
+        },
+        "time": {
+            "params": [],
+            "returnType": "int",
+            "description": "Get elapsed milliseconds since run start"
+        },
+        "delta_time": {
+            "params": [],
+            "returnType": "int",
+            "description": "Get milliseconds since last tick"
+        },
+        "random": {
+            "params": [
+                { "name": "upperBound", "type": "int" }
+            ],
+            "returnType": "int",
+            "description": "Return a random integer in [0, upperBound)"
+        },
+        "abs": {
+            "params": [
+                { "name": "value", "type": "number" }
+            ],
+            "returnType": "number",
+            "description": "Return the absolute value"
+        },
+        "min": {
+            "params": [
+                { "name": "a", "type": "number" },
+                { "name": "b", "type": "number" }
+            ],
+            "returnType": "number",
+            "description": "Return the smaller of two values"
+        },
+        "max": {
+            "params": [
+                { "name": "a", "type": "number" },
+                { "name": "b", "type": "number" }
+            ],
+            "returnType": "number",
+            "description": "Return the larger of two values"
+        },
+        "clamp": {
+            "params": [
+                { "name": "value", "type": "number" },
+                { "name": "lo", "type": "number" },
+                { "name": "hi", "type": "number" }
+            ],
+            "returnType": "number",
+            "description": "Clamp value between lo and hi"
+        },
+        "sqrt": {
+            "params": [
+                { "name": "value", "type": "number" }
+            ],
+            "returnType": "number",
+            "description": "Return the approximate square root"
+        },
+        "frame_count": {
+            "params": [],
+            "returnType": "int",
+            "description": "Get the current frame number"
+        },
+        "exit": {
+            "params": [],
+            "returnType": "void",
+            "description": "Request the sandbox to stop running"
+        }
+    }
+}

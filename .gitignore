@@ -79,3 +79,7 @@ crashlytics-build.properties
 
 /StandaloneRunner/bin/
 /StandaloneRunner/obj/
+
+/Sandbox/bin/
+/Sandbox/obj/
+/Sandbox/Sandbox.csproj

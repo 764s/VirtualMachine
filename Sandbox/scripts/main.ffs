@@ -1,0 +1,68 @@
+// ============================================================
+// FFScript Sandbox — Demo Script
+// ============================================================
+// This script demonstrates all predefined sandbox syscalls.
+// Run with: dotnet run -- --run
+// Debug with: F5 in VSCode (see README.md)
+
+func main() {
+    // --- Basic printing ---
+    print(42)
+    print(3.14)
+
+    // --- Labeled printing ---
+    // Label IDs: 0=result, 1=value, 2=count, 3=time, 8=x, 9=y, 10=sum
+    print_str(0, 100)
+    print_str(8, 25)
+    print_str(9, 50)
+
+    // --- Math syscalls ---
+    var a: int = -7
+    var b: int = abs(a)
+    print_str(0, b)
+
+    var x: int = 10
+    var y: int = 20
+    var lo: int = min(x, y)
+    var hi: int = max(x, y)
+    print_str(14, lo)
+    print_str(15, hi)
+
+    var clamped: int = clamp(50, 0, 30)
+    print_str(0, clamped)
+
+    var s: int = sqrt(144)
+    print_str(0, s)
+
+    // --- Random ---
+    var r: int = random(100)
+    print_str(0, r)
+
+    // --- Time ---
+    var t: int = time()
+    print_str(3, t)
+
+    // --- Frame count ---
+    var f: int = frame_count()
+    print_str(5, f)
+
+    // --- Computation example: sum 1..100 ---
+    var sum: int = 0
+    var i: int = 1
+    while i <= 100 {
+        sum = sum + i
+        i = i + 1
+    }
+    print_str(10, sum)
+
+    // --- Function call example ---
+    var added: int = add(17, 25)
+    print_str(0, added)
+
+    print(0)
+}
+
+// Simple function call (demonstrates leaf function optimization)
+func add(a: int, b: int): int {
+    return a + b
+}

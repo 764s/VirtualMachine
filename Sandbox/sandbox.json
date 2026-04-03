@@ -1,0 +1,4 @@
+{
+    "entryScript": "scripts/main.ffs",
+    "entryFunction": "main"
+}
