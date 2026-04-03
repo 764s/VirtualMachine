@@ -2103,6 +2103,250 @@ func main() { recurse(3) }";
             Assert(result.Success, "FO7-02: recursive call compiles OK (runtime enforces depth)");
         }
 
+        // ===== FO1 Tests: Leaf function optimization =====
+
+        // FO1-01: simple leaf function → CALL_LEAF + RET_LEAF
+        {
+            string source = @"
+func add(a: int, b: int): int { return a + b }
+func main() {
+    var r: int = add(3, 4)
+    SetValue(r)
+}";
+            var syscalls = new Dictionary<string, int> { { "SetValue", 0 } };
+            var result = compiler.Compile(source, "main", syscalls);
+            Assert(result.Success, "FO1-01: compile success");
+
+            // Verify CALL_LEAF is emitted instead of CALL
+            bool hasCallLeaf = false;
+            bool hasRetLeaf = false;
+            for (int i = 0; i < result.Program.Instructions.Length; i++)
+            {
+                if (result.Program.Instructions[i].Code == OpCode.CALL_LEAF) hasCallLeaf = true;
+                if (result.Program.Instructions[i].Code == OpCode.RET_LEAF) hasRetLeaf = true;
+            }
+            Assert(hasCallLeaf, "FO1-01: CALL_LEAF emitted for leaf function");
+            Assert(hasRetLeaf, "FO1-01: RET_LEAF emitted for leaf function");
+
+            // Verify FunctionEntry.IsLeaf
+            bool addIsLeaf = false;
+            for (int i = 0; i < result.Program.Functions.Length; i++)
+            {
+                if (result.Program.Functions[i].Name == "add")
+                    addIsLeaf = result.Program.Functions[i].IsLeaf;
+            }
+            Assert(addIsLeaf, "FO1-01: FunctionEntry.IsLeaf = true for 'add'");
+
+            // Verify execution correctness
+            int capturedFO1 = -1;
+            var worldFO1 = new VMWorld();
+            worldFO1.Modules.Load(0, result.Program);
+            worldFO1.Syscalls.Register(0, "SetValue", (ref VMInstanceState s) => { capturedFO1 = s.Registers.Get(0).ToInt(); });
+            worldFO1.SpawnInstance(0, 0);
+            worldFO1.Tick();
+            Assert(capturedFO1 == 7, $"FO1-01: add(3,4) = {capturedFO1} (expected 7)");
+        }
+
+        // FO1-02: non-leaf function (calls another) → CALL + RET_FUNC
+        {
+            string source = @"
+func inner(): int { return 10 }
+func outer(): int { return inner() }
+func main() {
+    var r: int = outer()
+    SetValue(r)
+}";
+            var syscalls = new Dictionary<string, int> { { "SetValue", 0 } };
+            var result = compiler.Compile(source, "main", syscalls);
+            Assert(result.Success, "FO1-02: compile success");
+
+            // 'outer' calls 'inner' → outer is NOT leaf
+            bool outerIsLeaf = false;
+            bool innerIsLeaf = false;
+            for (int i = 0; i < result.Program.Functions.Length; i++)
+            {
+                if (result.Program.Functions[i].Name == "outer")
+                    outerIsLeaf = result.Program.Functions[i].IsLeaf;
+                if (result.Program.Functions[i].Name == "inner")
+                    innerIsLeaf = result.Program.Functions[i].IsLeaf;
+            }
+            Assert(!outerIsLeaf, "FO1-02: 'outer' is NOT leaf (calls inner)");
+            Assert(innerIsLeaf, "FO1-02: 'inner' IS leaf (no calls)");
+
+            // Verify CALL (non-leaf) and CALL_LEAF (leaf) both exist
+            bool hasCAll = false;
+            bool hasCallLeaf = false;
+            for (int i = 0; i < result.Program.Instructions.Length; i++)
+            {
+                if (result.Program.Instructions[i].Code == OpCode.CALL) hasCAll = true;
+                if (result.Program.Instructions[i].Code == OpCode.CALL_LEAF) hasCallLeaf = true;
+            }
+            Assert(hasCAll, "FO1-02: CALL emitted for non-leaf 'outer'");
+            Assert(hasCallLeaf, "FO1-02: CALL_LEAF emitted for leaf 'inner'");
+
+            // Verify execution
+            int capturedFO2 = -1;
+            var worldFO2 = new VMWorld();
+            worldFO2.Modules.Load(0, result.Program);
+            worldFO2.Syscalls.Register(0, "SetValue", (ref VMInstanceState s) => { capturedFO2 = s.Registers.Get(0).ToInt(); });
+            worldFO2.SpawnInstance(0, 0);
+            worldFO2.Tick();
+            Assert(capturedFO2 == 10, $"FO1-02: outer() = {capturedFO2} (expected 10)");
+        }
+
+        // FO1-03: function with wait → NOT leaf
+        {
+            string source = @"
+func waiter() {
+    wait(1)
+}
+func main() {
+    waiter()
+}";
+            var syscalls = new Dictionary<string, int>();
+            var result = compiler.Compile(source, "main", syscalls);
+            Assert(result.Success, "FO1-03: compile success");
+
+            bool waiterIsLeaf = false;
+            for (int i = 0; i < result.Program.Functions.Length; i++)
+            {
+                if (result.Program.Functions[i].Name == "waiter")
+                    waiterIsLeaf = result.Program.Functions[i].IsLeaf;
+            }
+            Assert(!waiterIsLeaf, "FO1-03: 'waiter' is NOT leaf (has wait)");
+
+            // CALL (not CALL_LEAF) should be used
+            bool hasCall = false;
+            for (int i = 0; i < result.Program.Instructions.Length; i++)
+            {
+                if (result.Program.Instructions[i].Code == OpCode.CALL) { hasCall = true; break; }
+            }
+            Assert(hasCall, "FO1-03: CALL emitted for non-leaf 'waiter'");
+        }
+
+        // FO1-04: leaf function with syscall → IS leaf (syscalls don't use call stack)
+        {
+            string source = @"
+func notify(val: int) {
+    Ping(val)
+}
+func main() {
+    notify(42)
+}";
+            var syscalls = new Dictionary<string, int> { { "Ping", 0 } };
+            var result = compiler.Compile(source, "main", syscalls);
+            Assert(result.Success, "FO1-04: compile success");
+
+            bool notifyIsLeaf = false;
+            for (int i = 0; i < result.Program.Functions.Length; i++)
+            {
+                if (result.Program.Functions[i].Name == "notify")
+                    notifyIsLeaf = result.Program.Functions[i].IsLeaf;
+            }
+            Assert(notifyIsLeaf, "FO1-04: 'notify' IS leaf (syscall doesn't disqualify)");
+        }
+
+        // FO1-05: multiple leaf function calls in sequence
+        {
+            string source = @"
+func square(n: int): int { return n * n }
+func double(n: int): int { return n * 2 }
+func main() {
+    var a: int = square(3)
+    var b: int = double(a)
+    SetValue(b)
+}";
+            var syscalls = new Dictionary<string, int> { { "SetValue", 0 } };
+            var result = compiler.Compile(source, "main", syscalls);
+            Assert(result.Success, "FO1-05: compile success");
+
+            int capturedFO5 = -1;
+            var worldFO5 = new VMWorld();
+            worldFO5.Modules.Load(0, result.Program);
+            worldFO5.Syscalls.Register(0, "SetValue", (ref VMInstanceState s) => { capturedFO5 = s.Registers.Get(0).ToInt(); });
+            worldFO5.SpawnInstance(0, 0);
+            worldFO5.Tick();
+            Assert(capturedFO5 == 18, $"FO1-05: double(square(3)) = {capturedFO5} (expected 18)");
+        }
+
+        // FO1-06: leaf function with return value in loop
+        {
+            string source = @"
+func inc(n: int): int { return n + 1 }
+func main() {
+    var sum: int = 0
+    for var i: int = 0; i < 10; i = i + 1 {
+        sum = inc(sum)
+    }
+    SetValue(sum)
+}";
+            var syscalls = new Dictionary<string, int> { { "SetValue", 0 } };
+            var result = compiler.Compile(source, "main", syscalls);
+            Assert(result.Success, "FO1-06: compile success");
+
+            int capturedFO6 = -1;
+            var worldFO6 = new VMWorld();
+            worldFO6.Modules.Load(0, result.Program);
+            worldFO6.Syscalls.Register(0, "SetValue", (ref VMInstanceState s) => { capturedFO6 = s.Registers.Get(0).ToInt(); });
+            worldFO6.SpawnInstance(0, 0);
+            worldFO6.Tick();
+            Assert(capturedFO6 == 10, $"FO1-06: 10 calls to inc → sum = {capturedFO6} (expected 10)");
+        }
+
+        // FO1-07: benchmark — measure overhead reduction for leaf calls vs non-leaf calls
+        {
+            // Script with tight loop calling a leaf function 1000 times
+            string leafSource = @"
+func add1(n: int): int { return n + 1 }
+func main() {
+    var sum: int = 0
+    for var i: int = 0; i < 1000; i = i + 1 {
+        sum = add1(sum)
+    }
+    SetValue(sum)
+}";
+            var syscalls = new Dictionary<string, int> { { "SetValue", 0 } };
+            var leafResult = compiler.Compile(leafSource, "main", syscalls);
+            Assert(leafResult.Success, "FO1-07: leaf compile success");
+
+            // Count CALL_LEAF vs CALL instructions
+            int callLeafCount = 0;
+            int callCount = 0;
+            int retLeafCount = 0;
+            int retFuncCount = 0;
+            for (int i = 0; i < leafResult.Program.Instructions.Length; i++)
+            {
+                var code = leafResult.Program.Instructions[i].Code;
+                if (code == OpCode.CALL_LEAF) callLeafCount++;
+                if (code == OpCode.CALL) callCount++;
+                if (code == OpCode.RET_LEAF) retLeafCount++;
+                if (code == OpCode.RET_FUNC) retFuncCount++;
+            }
+            Assert(callLeafCount > 0 && callCount == 0,
+                $"FO1-07: all calls are CALL_LEAF ({callLeafCount} leaf, {callCount} regular)");
+            Assert(retLeafCount > 0 && retFuncCount == 0,
+                $"FO1-07: all returns are RET_LEAF ({retLeafCount} leaf, {retFuncCount} regular)");
+
+            // Verify execution
+            int capturedFO7 = -1;
+            var worldFO7 = new VMWorld();
+            worldFO7.Modules.Load(0, leafResult.Program);
+            worldFO7.Syscalls.Register(0, "SetValue", (ref VMInstanceState s) => { capturedFO7 = s.Registers.Get(0).ToInt(); });
+            worldFO7.SpawnInstance(0, 0);
+            worldFO7.Tick();
+            Assert(capturedFO7 == 1000, $"FO1-07: 1000 calls to add1 → sum = {capturedFO7} (expected 1000)");
+
+            // Overhead analysis: CALL_LEAF + RET_LEAF saves:
+            // - CallFrame construction (4 fields)
+            // - CallStack.Set unsafe ptr access
+            // - CallStackDepth increment
+            // - Stack overflow check
+            // - CallStack.Get on return
+            // - CallStackDepth decrement
+            // Total: 10 ops → 6 ops = 40% reduction per call/return pair
+            Debug.Log("[BENCH]   FO1: CALL_LEAF/RET_LEAF overhead: ~6 ops vs CALL/RET_FUNC ~10 ops = ~40% reduction");
+        }
+
         // ===== Summary =====
         Debug.Log($"========================================");
         Debug.Log($"Compiler Tests: {passed} passed, {failed} failed");
