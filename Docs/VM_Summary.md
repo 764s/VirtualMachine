@@ -27,8 +27,8 @@ Docs/
     Outlook_And_Risks.md             功能展望 + 优化展望 + 风险点 + 扩展串行计划
     Step_B3_Optimization_Tier1.md    B3 调整型优化 Tier 1（O1 fixed pin + O2 连续 OpCode）
   Skills/                    ← 技能脚本复现示例
-    skill_114feiyanxuanfengtui.vm    飞燕旋风腿（56 帧攻击技能）
-    skill_25shangpanbeijizhong.vm    上盘被击中（30 帧受击技能）
+    skill_114feiyanxuanfengtui.ffs    飞燕旋风腿（56 帧攻击技能）
+    skill_25shangpanbeijizhong.ffs    上盘被击中（30 帧受击技能）
     README.md                        Syscall 协议 + 能力评估
   Archive/                   ← 归档：早期讨论稿（已被本文压缩替代）
     VMScript.md ~ VMScript4.md   初期需求与设计讨论
@@ -478,7 +478,7 @@ skill TracerBullet
 | 运行时调试 | `ScriptDebugger`（DBG3 断点桥接 + DBG5 变量查看适配器 + DBG6 调用栈查看，Gate 0 命令行调试能力，HaltOnBreakpoint + SkipNextCheck DAP 暂停支持，DBG4 单步映射：临时断点 + FindNextLineIP/FindStepIntoIP/FindStepOutIP） | ✅ 完成 |
 | DAP 适配器 | `DapServer`（DBG7-A：12 消息 DAP 最小协议 + DBG7-B：next/stepIn/stepOut handler，stdin/stdout JSON-RPC + ContentLengthStream 分帧 + JsonHelper 手写 JSON），`StandaloneRunner --dap` 模式，Gate 1 + Gate 2 自动化验证通过 | ✅ Phase 3B 完成 |
 | VS Code 扩展 | `vscode-ffvm-debug/`（package.json + TextMate grammar + language-configuration.json + launch.json 模板） | ✅ 完成 |
-| 测试 | 505 项 Assert 全部通过（112 TreeWalker + 214 Compiler + 17 Performance + 18 SkillScript + 51 Debug + 93 DAP），另有 5 项自动化性能基准 | ✅ Phase 3B 通过 |
+| 测试 | 505 项 Assert 全部通过（112 TreeWalker + 214 Compiler + 17 Performance + 18 FFScript + 51 Debug + 93 DAP），另有 5 项自动化性能基准 | ✅ Phase 3B 通过 |
 | 性能基准 | `BenchmarkRunner`（5 组 VM vs C# 对比基准）+ `run-benchmarks.cmd` 自动化管线 → `benchmark_results.md` | ✅ 完成 |
 
 ### 5.2 未完成（按优先级排列）
@@ -586,7 +586,13 @@ skill TracerBullet
 以下步骤不依赖真实 ECS/Syscall 接入，可在当前独立环境中推进。
 步骤严格按编号顺序串行执行，每步完成后更新状态标记。
 
-> **当前位置 → B-α1**（LSP6 Syscall 声明协议）
+> **当前位置 → B-R1**（FFScript 正式命名 + `.ffs` 后缀统一）
+
+#### Phase 0: 正式命名
+
+| # | ID | 内容 | 状态 | 完成条件 | 依赖 |
+|---|-----|------|------|----------|------|
+| 0 | B-R1 | FFScript 正式命名 + `.ffs` 后缀统一 | ⏳ | ① 脚本源文件后缀 `.vm` → `.ffs` 全局替换（测试 URI、VSCode 扩展、文档、技能示例文件） ② `SkillScriptTests` → `FFScriptTests` 类名/引用更新 ③ DAP 测试临时文件后缀 `.ffvm` → `.ffs`（源文件场景） ④ VSCode 扩展 package.json + tmLanguage 注册 `.ffs` ⑤ 全部现有测试通过 | 无 |
 
 #### Phase α: 语言服务收尾
 
@@ -640,7 +646,7 @@ skill TracerBullet
 |------|------|------|------|----------|------|
 | C1 | 真实 Syscall 接入 ECS | ⚪ | 将 stub Syscall 替换为真实宿主实现（碰撞检测、伤害、击退、特效、黑板读写等） | 宿主 ECS 框架就绪 | **最关键的生产差距**：当前全部 Syscall 均为 mock，技能脚本无法与真实游戏世界交互 |
 | C2 | V5 帧内 Profiler 验证 | ⚪ | 含真实 ECS 交互开销的 Tick 耗时测量，确认帧预算可行 | C1 完成 | Unity Profiler Timeline 观察 VM Tick marker，GC.Alloc = 0 |
-| C3 | 技能资源管线 | ⚪ | .vm 文件加载/编译/缓存/热更新策略 | C1 完成 | 编译后 VMProgram 的序列化与缓存，运行时按需加载 |
+| C3 | 技能资源管线 | ⚪ | .ffs 文件加载/编译/缓存/热更新策略 | C1 完成 | 编译后 VMProgram 的序列化与缓存，运行时按需加载 |
 | C4 | Handle64 批处理协议 | ⏳ | H1：句柄化多目标数据流转 | C1 完成 | 最晚于真实多目标业务（AOE 技能）接入前实现 |
 | C5 | 帧同步集成验证 | ⚪ | 真实网络环境下快照/回滚正确性验证 | C1+C2 完成 | V2 已验证离线正确性，此处验证网络帧同步场景 |
 | C6 | 编辑器流程图投影 | ⏳ | 步骤 10：AST → 结构化流程图主视图 | C2 通过 | 依赖 V5 + 真实 Syscall/ECS 接入 |
@@ -821,7 +827,7 @@ skill TracerBullet
 
 | Job | 触发 | 内容 |
 |-----|------|------|
-| **test** | push / PR | 构建 StandaloneRunner → 运行全部 315 个测试断言（TreeWalker 112 + Compiler 168 + Performance 17 + SkillScript 18） |
+| **test** | push / PR | 构建 StandaloneRunner → 运行全部 315 个测试断言（TreeWalker 112 + Compiler 168 + Performance 17 + FFScript 18） |
 | **benchmark** | test 通过后 | 运行 B01-B05 VM vs C# 基准，生成 `benchmark_ci.md` artifact |
 | **cross-lang** | test 通过后 | 运行 Lua / Python / Node.js 同源基准，生成 `cross_lang_results.md` artifact |
 

@@ -31,7 +31,7 @@ public static class Program
         TreeWalkerTests.RunAll();
         CompilerTests.RunAll();
         PerformanceTests.RunAll();
-        SkillScriptTests.RunAll();
+        FFScriptTests.RunAll();
         DebugTests.RunAll();
         DapTests.RunAll();
         LspTests.RunAll();

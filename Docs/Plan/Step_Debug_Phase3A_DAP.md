@@ -1,7 +1,7 @@
 # 调试 Phase 3A：DAP 最小协议（DBG7-A）
 
 > **在整体计划中的位置**：本文档对应 VM_Summary.md §七 推进顺序中 GR1 ✅ 之后的**调试 Phase 3A**。
-> **状态**：✅ 已完成。470 项 Assert（112 TW + 214 Compiler + 17 Perf + 18 SkillScript + 51 Debug + 58 DAP），float + Fix64 双模式通过。
+> **状态**：✅ 已完成。470 项 Assert（112 TW + 214 Compiler + 17 Perf + 18 FFScript + 51 Debug + 58 DAP），float + Fix64 双模式通过。
 > **前置**：
 > - Debug Phase 2（Gate 0）✅ 已完成 — ScriptDebugger 核心（断点桥接 + 变量查看 + 调用栈）
 > - GR1 CI 构建矩阵 ✅ 已完成 — 412 项 Assert 双模式通过

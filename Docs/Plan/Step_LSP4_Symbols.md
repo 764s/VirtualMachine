@@ -1,7 +1,7 @@
 # 语言服务 LSP4：符号分析（Document Symbols / Hover / Definition / References）
 
 > **在整体计划中的位置**：本文档对应 VM_Summary.md §七 B2 中 LSP4 子项。
-> **状态**：✅ 完成。586 项 Assert（112 TW + 214 Compiler + 17 Perf + 18 SkillScript + 51 Debug + 93 DAP + 81 LSP），float + Fix64 双模式通过。
+> **状态**：✅ 完成。586 项 Assert（112 TW + 214 Compiler + 17 Perf + 18 FFScript + 51 Debug + 93 DAP + 81 LSP），float + Fix64 双模式通过。
 > **前置**：
 > - LSP Phase 4 (LSP2+LSP1+LSP3) ✅ — LSP Server 核心 + TextMate Grammar + 实时诊断，546 项 Assert
 > - VMProgram.SymbolTable ✅ — 变量符号表（DBG2）

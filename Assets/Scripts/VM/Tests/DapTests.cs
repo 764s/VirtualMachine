@@ -117,7 +117,7 @@ public static class DapTests
         {
             var inner = new JsonObject();
             inner.Set("line", 42);
-            inner.Set("path", "/test/file.ffvm");
+            inner.Set("path", "/test/file.ffs");
 
             var outer = new JsonObject();
             outer.Set("source", inner);
@@ -130,7 +130,7 @@ public static class DapTests
             var source = parsed.GetObject("source");
             Assert(source != null, "DAP-B02: nested object exists");
             Assert(source.GetInt("line") == 42, "DAP-B02: nested int");
-            Assert(source.GetString("path") == "/test/file.ffvm", "DAP-B02: nested string");
+            Assert(source.GetString("path") == "/test/file.ffs", "DAP-B02: nested string");
         }
 
         // ===== Test DAP-B03: Array roundtrip =====
@@ -204,7 +204,7 @@ public static class DapTests
 
         // ===== Test DAP-D01: Full session — breakpoint + stackTrace + variables =====
         {
-            string scriptPath = Path.Combine(Path.GetTempPath(), "dap_test_d01.ffvm");
+            string scriptPath = Path.Combine(Path.GetTempPath(), "dap_test_d01.ffs");
             File.WriteAllText(scriptPath, @"
 func main() {
     var x: int = 42
@@ -294,7 +294,7 @@ func main() {
 
         // ===== Test DAP-D02: Breakpoint in function — 2-frame call stack =====
         {
-            string scriptPath = Path.Combine(Path.GetTempPath(), "dap_test_d02.ffvm");
+            string scriptPath = Path.Combine(Path.GetTempPath(), "dap_test_d02.ffs");
             File.WriteAllText(scriptPath, @"
 func helper(): int {
     var val: int = 100
@@ -343,7 +343,7 @@ func main() {
 
         // ===== Test DAP-D03: Struct variable expansion =====
         {
-            string scriptPath = Path.Combine(Path.GetTempPath(), "dap_test_d03.ffvm");
+            string scriptPath = Path.Combine(Path.GetTempPath(), "dap_test_d03.ffs");
             File.WriteAllText(scriptPath, @"
 struct Vec2 {
     x: int
@@ -420,7 +420,7 @@ func main() {
 
         // ===== Test DAP-D04: No breakpoints → terminated event =====
         {
-            string scriptPath = Path.Combine(Path.GetTempPath(), "dap_test_d04.ffvm");
+            string scriptPath = Path.Combine(Path.GetTempPath(), "dap_test_d04.ffs");
             File.WriteAllText(scriptPath, "func main() {\n    var x: int = 1\n}\n");
 
             try
@@ -446,7 +446,7 @@ func main() {
 
         // ===== Test DAP-D05: Threads returns single thread =====
         {
-            string scriptPath = Path.Combine(Path.GetTempPath(), "dap_test_d05.ffvm");
+            string scriptPath = Path.Combine(Path.GetTempPath(), "dap_test_d05.ffs");
             File.WriteAllText(scriptPath, "func main() {\n    var x: int = 1\n}\n");
 
             try
@@ -474,7 +474,7 @@ func main() {
 
         // ===== Test DAP-D06: Continue after breakpoint → second continue completes =====
         {
-            string scriptPath = Path.Combine(Path.GetTempPath(), "dap_test_d06.ffvm");
+            string scriptPath = Path.Combine(Path.GetTempPath(), "dap_test_d06.ffs");
             File.WriteAllText(scriptPath, @"
 func main() {
     var a: int = 10
@@ -674,7 +674,7 @@ func main() {
 
         // ===== Test DAP-S06: Full DAP session — next (Step Over) =====
         {
-            string scriptPath = Path.Combine(Path.GetTempPath(), "dap_test_s06.ffvm");
+            string scriptPath = Path.Combine(Path.GetTempPath(), "dap_test_s06.ffs");
             File.WriteAllText(scriptPath, @"
 func main() {
     var a: int = 10
@@ -730,7 +730,7 @@ func main() {
 
         // ===== Test DAP-S07: Full DAP session — stepIn enters function =====
         {
-            string scriptPath = Path.Combine(Path.GetTempPath(), "dap_test_s07.ffvm");
+            string scriptPath = Path.Combine(Path.GetTempPath(), "dap_test_s07.ffs");
             File.WriteAllText(scriptPath, @"
 func helper(): int {
     var val: int = 42
@@ -792,7 +792,7 @@ func main() {
 
         // ===== Test DAP-S08: Full DAP session — stepOut returns to caller =====
         {
-            string scriptPath = Path.Combine(Path.GetTempPath(), "dap_test_s08.ffvm");
+            string scriptPath = Path.Combine(Path.GetTempPath(), "dap_test_s08.ffs");
             File.WriteAllText(scriptPath, @"
 func helper(): int {
     var val: int = 42

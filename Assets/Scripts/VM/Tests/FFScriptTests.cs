@@ -5,13 +5,13 @@ using UnityEditor;
 using UnityEngine;
 
 /// <summary>
-/// Skill script compilation and execution verification.
+/// FFScript compilation and execution verification.
 /// Validates that skill_114feiyanxuanfengtui and skill_25shangpanbeijizhong
 /// can be compiled and executed by the current VM pipeline.
 /// </summary>
-public static class SkillScriptTests
+public static class FFScriptTests
 {
-    [MenuItem("TestVM/RunSkillScriptTests")]
+    [MenuItem("TestVM/RunFFScriptTests")]
     public static void RunAll()
     {
         int passed = 0;
@@ -653,6 +653,6 @@ func main() {
                    "S05: self hitstun on hit");
         }
 
-        Debug.Log($"\n===== SkillScriptTests: {passed} passed, {failed} failed =====");
+        Debug.Log($"\n===== FFScriptTests: {passed} passed, {failed} failed =====");
     }
 }

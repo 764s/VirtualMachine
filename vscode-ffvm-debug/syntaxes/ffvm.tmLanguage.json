@@ -1,7 +1,7 @@
 {
     "name": "FFVM Script",
     "scopeName": "source.ffvm",
-    "fileTypes": ["ffvm", "vm"],
+    "fileTypes": ["ffs", "ffvm"],
     "patterns": [
         { "include": "#comments" },
         { "include": "#keywords" },

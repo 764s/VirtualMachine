@@ -99,7 +99,7 @@ public static class LspTests
             var session = new LspBatchSession();
             session.AddInitialize();
             session.AddInitialized();
-            session.AddDidOpen("file:///test.vm", "func entry() { wait 1 }");
+            session.AddDidOpen("file:///test.ffs", "func entry() { wait 1 }");
             session.AddShutdown();
             session.AddExit();
             session.Run();
@@ -114,8 +114,8 @@ public static class LspTests
             var session = new LspBatchSession();
             session.AddInitialize();
             session.AddInitialized();
-            session.AddDidOpen("file:///test.vm", "func entry() { wait 1 }");
-            session.AddDidChange("file:///test.vm", "func entry() { wait 2 }");
+            session.AddDidOpen("file:///test.ffs", "func entry() { wait 1 }");
+            session.AddDidChange("file:///test.ffs", "func entry() { wait 2 }");
             session.AddShutdown();
             session.AddExit();
             session.Run();
@@ -135,7 +135,7 @@ public static class LspTests
             session.AddInitialize();
             session.AddInitialized();
             // Missing closing brace — parse error
-            session.AddDidOpen("file:///err.vm", "func entry() { var x: int = ");
+            session.AddDidOpen("file:///err.ffs", "func entry() { var x: int = ");
             session.AddShutdown();
             session.AddExit();
             session.Run();
@@ -149,7 +149,7 @@ public static class LspTests
                 if (parameters != null)
                 {
                     string uri = parameters.GetString("uri");
-                    Assert(uri == "file:///err.vm", $"LSP-T05: uri = file:///err.vm, got {uri}");
+                    Assert(uri == "file:///err.ffs", $"LSP-T05: uri = file:///err.ffs, got {uri}");
                     var diagList = parameters.GetArray("diagnostics");
                     Assert(diagList != null && diagList.Count > 0, "LSP-T05: diagnostics list non-empty");
 
@@ -175,9 +175,9 @@ public static class LspTests
             session.AddInitialize();
             session.AddInitialized();
             // First open with error
-            session.AddDidOpen("file:///fix.vm", "func entry() { var x: int = }");
+            session.AddDidOpen("file:///fix.ffs", "func entry() { var x: int = }");
             // Then fix it
-            session.AddDidChange("file:///fix.vm", "func entry() {\n    var x: int = 42\n}");
+            session.AddDidChange("file:///fix.ffs", "func entry() {\n    var x: int = 42\n}");
             session.AddShutdown();
             session.AddExit();
             session.Run();
@@ -204,7 +204,7 @@ public static class LspTests
             var session = new LspBatchSession();
             session.AddInitialize();
             session.AddInitialized();
-            session.AddDidOpen("file:///ok.vm", "func entry() {\n    var x: int = 42\n    wait 1\n}");
+            session.AddDidOpen("file:///ok.ffs", "func entry() {\n    var x: int = 42\n    wait 1\n}");
             session.AddShutdown();
             session.AddExit();
             session.Run();
@@ -289,8 +289,8 @@ public static class LspTests
             var session = new LspBatchSession();
             session.AddInitialize();
             session.AddInitialized();
-            session.AddDidOpen("file:///a.vm", "func entry() { wait 1 }");
-            session.AddDidOpen("file:///b.vm", "func entry() { invalid syntax }");
+            session.AddDidOpen("file:///a.ffs", "func entry() { wait 1 }");
+            session.AddDidOpen("file:///b.ffs", "func entry() { invalid syntax }");
             session.AddShutdown();
             session.AddExit();
             session.Run();
@@ -303,12 +303,12 @@ public static class LspTests
             foreach (var d in diags)
             {
                 var p = d.GetObject("params");
-                if (p?.GetString("uri") == "file:///a.vm") diagA = d;
-                if (p?.GetString("uri") == "file:///b.vm") diagB = d;
+                if (p?.GetString("uri") == "file:///a.ffs") diagA = d;
+                if (p?.GetString("uri") == "file:///b.ffs") diagB = d;
             }
 
-            Assert(diagA != null, "LSP-T12: diagnostics for a.vm");
-            Assert(diagB != null, "LSP-T12: diagnostics for b.vm");
+            Assert(diagA != null, "LSP-T12: diagnostics for a.ffs");
+            Assert(diagB != null, "LSP-T12: diagnostics for b.ffs");
 
             if (diagA != null)
             {
@@ -352,8 +352,8 @@ public static class LspTests
             var session = new LspBatchSession();
             session.AddInitialize();
             session.AddInitialized();
-            session.AddDidOpen("file:///sym.vm", source);
-            session.AddDocumentSymbol("file:///sym.vm");
+            session.AddDidOpen("file:///sym.ffs", source);
+            session.AddDocumentSymbol("file:///sym.ffs");
             session.AddShutdown();
             session.AddExit();
             session.Run();
@@ -400,8 +400,8 @@ public static class LspTests
             var session = new LspBatchSession();
             session.AddInitialize();
             session.AddInitialized();
-            session.AddDidOpen("file:///empty.vm", "");
-            session.AddDocumentSymbol("file:///empty.vm");
+            session.AddDidOpen("file:///empty.ffs", "");
+            session.AddDocumentSymbol("file:///empty.ffs");
             session.AddShutdown();
             session.AddExit();
             session.Run();
@@ -422,9 +422,9 @@ public static class LspTests
             var session = new LspBatchSession();
             session.AddInitialize();
             session.AddInitialized();
-            session.AddDidOpen("file:///hover.vm", source);
+            session.AddDidOpen("file:///hover.ffs", source);
             // Hover on "add" — line 0 (0-based), character 5 (0-based: "func " = 5 chars, 'a' of 'add' is at col 5)
-            session.AddHover("file:///hover.vm", 0, 5);
+            session.AddHover("file:///hover.ffs", 0, 5);
             session.AddShutdown();
             session.AddExit();
             session.Run();
@@ -453,9 +453,9 @@ public static class LspTests
             var session = new LspBatchSession();
             session.AddInitialize();
             session.AddInitialized();
-            session.AddDidOpen("file:///hvar.vm", source);
+            session.AddDidOpen("file:///hvar.ffs", source);
             // Hover on "x" in "wait x" — line 2 (0-based), character 7 (0-based: "  wait " = 7 chars)
-            session.AddHover("file:///hvar.vm", 2, 7);
+            session.AddHover("file:///hvar.ffs", 2, 7);
             session.AddShutdown();
             session.AddExit();
             session.Run();
@@ -483,9 +483,9 @@ public static class LspTests
             var session = new LspBatchSession();
             session.AddInitialize();
             session.AddInitialized();
-            session.AddDidOpen("file:///hnull.vm", source);
+            session.AddDidOpen("file:///hnull.ffs", source);
             // Hover on line 1, char 0 (whitespace before "wait")
-            session.AddHover("file:///hnull.vm", 1, 0);
+            session.AddHover("file:///hnull.ffs", 1, 0);
             session.AddShutdown();
             session.AddExit();
             session.Run();
@@ -507,10 +507,10 @@ public static class LspTests
             var session = new LspBatchSession();
             session.AddInitialize();
             session.AddInitialized();
-            session.AddDidOpen("file:///def.vm", source);
+            session.AddDidOpen("file:///def.ffs", source);
             // Go to definition on "helper()" call in entry — line 4 (0-based), character 16 (0-based)
             // "  var x: int = helper()" → "helper" starts at col 15
-            session.AddDefinition("file:///def.vm", 4, 16);
+            session.AddDefinition("file:///def.ffs", 4, 16);
             session.AddShutdown();
             session.AddExit();
             session.Run();
@@ -542,10 +542,10 @@ public static class LspTests
             var session = new LspBatchSession();
             session.AddInitialize();
             session.AddInitialized();
-            session.AddDidOpen("file:///defvar.vm", source);
+            session.AddDidOpen("file:///defvar.ffs", source);
             // Go to definition on "counter" in "wait counter" — line 2 (0-based)
             // "  wait counter" → "counter" starts at col 7
-            session.AddDefinition("file:///defvar.vm", 2, 7);
+            session.AddDefinition("file:///defvar.ffs", 2, 7);
             session.AddShutdown();
             session.AddExit();
             session.Run();
@@ -576,9 +576,9 @@ public static class LspTests
             var session = new LspBatchSession();
             session.AddInitialize();
             session.AddInitialized();
-            session.AddDidOpen("file:///defnull.vm", source);
+            session.AddDidOpen("file:///defnull.ffs", source);
             // Position on "1" literal — no definition
-            session.AddDefinition("file:///defnull.vm", 1, 7);
+            session.AddDefinition("file:///defnull.ffs", 1, 7);
             session.AddShutdown();
             session.AddExit();
             session.Run();
@@ -599,9 +599,9 @@ public static class LspTests
             var session = new LspBatchSession();
             session.AddInitialize();
             session.AddInitialized();
-            session.AddDidOpen("file:///ref.vm", source);
+            session.AddDidOpen("file:///ref.ffs", source);
             // References on "helper" function name in declaration — line 0, col 5
-            session.AddReferences("file:///ref.vm", 0, 5);
+            session.AddReferences("file:///ref.ffs", 0, 5);
             session.AddShutdown();
             session.AddExit();
             session.Run();
@@ -627,9 +627,9 @@ public static class LspTests
             var session = new LspBatchSession();
             session.AddInitialize();
             session.AddInitialized();
-            session.AddDidOpen("file:///refvar.vm", source);
+            session.AddDidOpen("file:///refvar.ffs", source);
             // References on "x" in "wait x" — line 3, col 7
-            session.AddReferences("file:///refvar.vm", 3, 7);
+            session.AddReferences("file:///refvar.ffs", 3, 7);
             session.AddShutdown();
             session.AddExit();
             session.Run();
@@ -684,9 +684,9 @@ public static class LspTests
             var session = new LspBatchSession();
             session.AddInitialize();
             session.AddInitialized();
-            session.AddDidOpen("file:///comp.vm", source);
+            session.AddDidOpen("file:///comp.ffs", source);
             // Complete at empty line 2, col 2 (inside entry function)
-            session.AddCompletion("file:///comp.vm", 2, 2);
+            session.AddCompletion("file:///comp.ffs", 2, 2);
             session.AddShutdown();
             session.AddExit();
             session.Run();
@@ -737,9 +737,9 @@ public static class LspTests
             var session = new LspBatchSession();
             session.AddInitialize();
             session.AddInitialized();
-            session.AddDidOpen("file:///dot.vm", source);
+            session.AddDidOpen("file:///dot.ffs", source);
             // Complete after "v." on line 6, col 4
-            session.AddCompletion("file:///dot.vm", 6, 4);
+            session.AddCompletion("file:///dot.ffs", 6, 4);
             session.AddShutdown();
             session.AddExit();
             session.Run();
@@ -774,8 +774,8 @@ public static class LspTests
             var session = new LspBatchSession();
             session.AddInitialize();
             session.AddInitialized();
-            session.AddDidOpen("file:///empty.vm", "");
-            session.AddCompletion("file:///empty.vm", 0, 0);
+            session.AddDidOpen("file:///empty.ffs", "");
+            session.AddCompletion("file:///empty.ffs", 0, 0);
             session.AddShutdown();
             session.AddExit();
             session.Run();
@@ -809,8 +809,8 @@ public static class LspTests
             var session = new LspBatchSession();
             session.AddInitialize();
             session.AddInitialized();
-            session.AddDidOpen("file:///sys.vm", source);
-            session.AddCompletion("file:///sys.vm", 1, 2);
+            session.AddDidOpen("file:///sys.ffs", source);
+            session.AddCompletion("file:///sys.ffs", 1, 2);
             session.AddShutdown();
             session.AddExit();
             session.Run();
@@ -838,9 +838,9 @@ public static class LspTests
             var session = new LspBatchSession();
             session.AddInitialize();
             session.AddInitialized();
-            session.AddDidOpen("file:///scope.vm", source);
+            session.AddDidOpen("file:///scope.ffs", source);
             // Complete inside entry function at line 6 (the empty line)
-            session.AddCompletion("file:///scope.vm", 6, 2);
+            session.AddCompletion("file:///scope.ffs", 6, 2);
             session.AddShutdown();
             session.AddExit();
             session.Run();
@@ -888,8 +888,8 @@ public static class LspTests
             var session = new LspBatchSession();
             session.AddInitialize();
             session.AddInitialized();
-            session.AddDidOpen("file:///detail.vm", source);
-            session.AddCompletion("file:///detail.vm", 4, 2);
+            session.AddDidOpen("file:///detail.ffs", source);
+            session.AddCompletion("file:///detail.ffs", 4, 2);
             session.AddShutdown();
             session.AddExit();
             session.Run();
@@ -927,8 +927,8 @@ public static class LspTests
             var session = new LspBatchSession();
             session.AddInitialize();
             session.AddInitialized();
-            session.AddDidOpen("file:///params.vm", source);
-            session.AddCompletion("file:///params.vm", 1, 2);
+            session.AddDidOpen("file:///params.ffs", source);
+            session.AddCompletion("file:///params.ffs", 1, 2);
             session.AddShutdown();
             session.AddExit();
             session.Run();
