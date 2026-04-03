@@ -156,7 +156,7 @@ DBG7（DAP 适配器）                ← DBG3-DBG6 的 DAP 协议封装 → �
 | **LSP1** | LSP Server 核心框架 | 基础设施 | 中 | 实现 LSP 协议的 JSON-RPC 通信、生命周期管理（initialize/shutdown）、文档同步（didOpen/didChange） |
 | **LSP2** | 语法高亮（Semantic Tokens / TextMate Grammar） | 编辑器 | 低 | 为 16 个关键字 + 运算符 + 字面量 + 注释定义 token 类型；TextMate grammar（.tmLanguage）提供基础着色，Semantic Tokens 提供上下文感知着色 |
 | **LSP3** | 实时诊断（Diagnostics） | 编译器 | 中 | 增量编译 → 错误/警告实时推送（`textDocument/publishDiagnostics`）；复用 `BytecodeCompiler._errors` 列表 + Source Map 定位 |
-| **LSP4** | 符号分析（Go-to-Definition / References / Hover） | 编译器 | 中 | 基于 Symbol Table（DBG2）实现 `textDocument/definition`、`textDocument/references`、`textDocument/hover`（类型信息 + 文档） |
+| **LSP4** | 符号分析（Go-to-Definition / References / Hover / Document Symbols） | 编译器 | 中 | 基于 AST + Symbol Table 实现 `textDocument/definition`、`textDocument/references`、`textDocument/hover`、`textDocument/documentSymbol` | ✅ 已完成 |
 | **LSP5** | 代码补全（Completion） | 编译器 | 中 | 关键字 + 作用域内变量 + 函数名 + Syscall 名 + struct 字段补全（`textDocument/completion`） |
 
 #### 前置任务与依赖关系

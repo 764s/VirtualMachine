@@ -1,7 +1,7 @@
 # 语言服务 LSP4：符号分析（Document Symbols / Hover / Definition / References）
 
 > **在整体计划中的位置**：本文档对应 VM_Summary.md §七 B2 中 LSP4 子项。
-> **状态**：⏳ 进行中
+> **状态**：✅ 完成。586 项 Assert（112 TW + 214 Compiler + 17 Perf + 18 SkillScript + 51 Debug + 93 DAP + 81 LSP），float + Fix64 双模式通过。
 > **前置**：
 > - LSP Phase 4 (LSP2+LSP1+LSP3) ✅ — LSP Server 核心 + TextMate Grammar + 实时诊断，546 项 Assert
 > - VMProgram.SymbolTable ✅ — 变量符号表（DBG2）
@@ -48,11 +48,11 @@ LSP4 仅处理单文件作用域（当前无跨模块引用机制）：
 
 ### 实现清单
 
-- [ ] **LSP4-01a** 新增文档缓存结构：`_documentData[uri]` 存储 `(string content, ModuleNode ast, CompileResult result)`
-- [ ] **LSP4-01b** didOpen/didChange 中调用 `Parser.Parse()` 缓存 AST；解析失败时保留旧 AST
-- [ ] **LSP4-01c** initialize 响应中添加 `documentSymbolProvider: true`
-- [ ] **LSP4-01d** HandleRequest 分发 `textDocument/documentSymbol`
-- [ ] **LSP4-01e** 实现 documentSymbol handler：遍历 AST 返回函数（Function）和结构体（Struct）符号列表
+- [x] **LSP4-01a** 新增文档缓存结构：`_documentData[uri]` 存储 `(string content, ModuleNode ast, CompileResult result)`
+- [x] **LSP4-01b** didOpen/didChange 中调用 `Parser.Parse()` 缓存 AST；解析失败时保留旧 AST
+- [x] **LSP4-01c** initialize 响应中添加 `documentSymbolProvider: true`
+- [x] **LSP4-01d** HandleRequest 分发 `textDocument/documentSymbol`
+- [x] **LSP4-01e** 实现 documentSymbol handler：遍历 AST 返回函数（Function）和结构体（Struct）符号列表
   - SymbolKind: Function = 12, Struct = 23, Variable = 13
   - 每个符号包含 name, kind, range, selectionRange
 
@@ -69,15 +69,15 @@ LSP4 仅处理单文件作用域（当前无跨模块引用机制）：
 
 ### 实现清单
 
-- [ ] **LSP4-02a** initialize 响应中添加 `hoverProvider: true`
-- [ ] **LSP4-02b** HandleRequest 分发 `textDocument/hover`
-- [ ] **LSP4-02c** 实现 hover handler：
+- [x] **LSP4-02a** initialize 响应中添加 `hoverProvider: true`
+- [x] **LSP4-02b** HandleRequest 分发 `textDocument/hover`
+- [x] **LSP4-02c** 实现 hover handler：
   - 在缓存的 AST 中查找光标位置对应的标识符
   - 函数名 → 显示 `func name(params): returnType`
   - 变量名 → 显示 `var name: type`（从 VarDeclStmt.TypeName 或推断）
   - 结构体名 → 显示 `struct name { fields... }`
   - Syscall 名 → 显示 `syscall name(argCount)`
-- [ ] **LSP4-02d** 未找到符号时返回 null（LSP 规范）
+- [x] **LSP4-02d** 未找到符号时返回 null（LSP 规范）
 
 ### 验收标准
 
@@ -93,15 +93,15 @@ LSP4 仅处理单文件作用域（当前无跨模块引用机制）：
 
 ### 实现清单
 
-- [ ] **LSP4-03a** initialize 响应中添加 `definitionProvider: true`
-- [ ] **LSP4-03b** HandleRequest 分发 `textDocument/definition`
-- [ ] **LSP4-03c** 实现 definition handler：
+- [x] **LSP4-03a** initialize 响应中添加 `definitionProvider: true`
+- [x] **LSP4-03b** HandleRequest 分发 `textDocument/definition`
+- [x] **LSP4-03c** 实现 definition handler：
   - 在 AST 中查找光标位置的标识符
   - 如果是函数调用（CallExpr.FunctionName）→ 找到对应 FuncDecl 的位置
   - 如果是变量引用（IdentifierExpr）→ 找到对应 VarDeclStmt 或参数声明的位置
   - 如果是字段访问（FieldAccessExpr）→ 找到对应 StructDecl 中的字段位置
   - 返回 Location { uri, range }
-- [ ] **LSP4-03d** 符号未找到时返回 null
+- [x] **LSP4-03d** 符号未找到时返回 null
 
 ### 验收标准
 
@@ -117,16 +117,16 @@ LSP4 仅处理单文件作用域（当前无跨模块引用机制）：
 
 ### 实现清单
 
-- [ ] **LSP4-04a** initialize 响应中添加 `referencesProvider: true`
-- [ ] **LSP4-04b** HandleRequest 分发 `textDocument/references`
-- [ ] **LSP4-04c** 实现 references handler：
+- [x] **LSP4-04a** initialize 响应中添加 `referencesProvider: true`
+- [x] **LSP4-04b** HandleRequest 分发 `textDocument/references`
+- [x] **LSP4-04c** 实现 references handler：
   - 确定光标位置的符号名称和类型（函数/变量/结构体）
   - 遍历 AST 收集所有引用位置：
     - 函数引用：所有 CallExpr.FunctionName == name 的位置 + FuncDecl 声明位置
     - 变量引用：所有 IdentifierExpr.Name == name（同作用域）+ VarDeclStmt 声明位置
     - 结构体引用：所有 VarDeclStmt.TypeName == name 的位置 + StructDecl 声明位置
   - 返回 Location[] 数组
-- [ ] **LSP4-04d** 未找到引用时返回空数组
+- [x] **LSP4-04d** 未找到引用时返回空数组
 
 ### 验收标准
 

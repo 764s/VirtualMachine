@@ -382,7 +382,12 @@ namespace FFVM.Debug
             var sym = new JsonObject();
             sym.Set("name", name);
             sym.Set("kind", kind);
-            sym.Set("location", MakeLocation(null, line, col, nameLength));
+
+            int lspLine = Math.Max(0, line - 1);
+            int lspChar = Math.Max(0, col - 1);
+            // DocumentSymbol uses "range" (full declaration) and "selectionRange" (name only)
+            sym.Set("range", MakeRange(lspLine, lspChar, lspLine, lspChar + Math.Max(1, nameLength)));
+            sym.Set("selectionRange", MakeRange(lspLine, lspChar, lspLine, lspChar + Math.Max(1, nameLength)));
             return sym;
         }
 
