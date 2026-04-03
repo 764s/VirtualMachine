@@ -1,7 +1,7 @@
 # 语言服务 Phase 4：LSP Server + TextMate Grammar（B2）
 
 > **在整体计划中的位置**：本文档对应 VM_Summary.md §七 推进顺序中 Phase 3B ✅ 之后的 **B2 语言服务 Phase 4**。
-> **状态**：✅ LSP2+LSP1+LSP3 完成。546 项 Assert（112 TW + 214 Compiler + 17 Perf + 18 SkillScript + 51 Debug + 93 DAP + 41 LSP），float + Fix64 双模式通过。
+> **状态**：✅ LSP2+LSP1+LSP3 完成。LSP4 (符号分析) 也已完成，见 [Step_LSP4_Symbols.md](Step_LSP4_Symbols.md)。586 项 Assert（112 TW + 214 Compiler + 17 Perf + 18 SkillScript + 51 Debug + 93 DAP + 81 LSP），float + Fix64 双模式通过。
 > **前置**：
 > - Debug Phase 3B（Gate 2）✅ — DAP Server 完整单步调试，505 项 Assert
 > - ContentLengthStream.cs ✅ — Content-Length 分帧 I/O（与 LSP 共享）

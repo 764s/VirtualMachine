@@ -322,6 +322,333 @@ public static class LspTests
             }
         }
 
+        // ================================================================
+        // D. LSP4 Symbol Analysis Tests
+        // ================================================================
+
+        // ===== Test LSP4-T01: initialize response contains LSP4 capabilities =====
+        {
+            var session = new LspBatchSession();
+            session.AddInitialize();
+            session.AddShutdown();
+            session.AddExit();
+            session.Run();
+
+            var initResp = session.ExpectResponse(0);
+            var caps = initResp?.GetObject("result")?.GetObject("capabilities");
+            Assert(caps != null, "LSP4-T01: capabilities present");
+            if (caps != null)
+            {
+                Assert(caps.GetBool("documentSymbolProvider") == true, "LSP4-T01: documentSymbolProvider = true");
+                Assert(caps.GetBool("hoverProvider") == true, "LSP4-T01: hoverProvider = true");
+                Assert(caps.GetBool("definitionProvider") == true, "LSP4-T01: definitionProvider = true");
+                Assert(caps.GetBool("referencesProvider") == true, "LSP4-T01: referencesProvider = true");
+            }
+        }
+
+        // ===== Test LSP4-T02: documentSymbol returns functions and structs =====
+        {
+            string source = "struct Vec2 {\n  x: int\n  y: int\n}\nfunc entry() {\n  wait 1\n}\nfunc helper(): int {\n  return 42\n}";
+            var session = new LspBatchSession();
+            session.AddInitialize();
+            session.AddInitialized();
+            session.AddDidOpen("file:///sym.vm", source);
+            session.AddDocumentSymbol("file:///sym.vm");
+            session.AddShutdown();
+            session.AddExit();
+            session.Run();
+
+            // Skip initialize response (id=0), find documentSymbol response (id=2, after shutdown=1... wait)
+            // IDs: 0=initialize, 1=documentSymbol, 2=shutdown
+            session.ExpectResponse(0); // initialize
+            var symResp = session.ExpectResponse(1); // documentSymbol
+            Assert(symResp != null, "LSP4-T02: documentSymbol response received");
+            if (symResp != null)
+            {
+                var symbols = symResp.GetArray("result");
+                Assert(symbols != null, "LSP4-T02: result is array");
+                if (symbols != null)
+                {
+                    Assert(symbols.Count == 3, $"LSP4-T02: 3 symbols (1 struct + 2 funcs), got {symbols.Count}");
+
+                    // Check first symbol (struct Vec2)
+                    if (symbols.Count > 0)
+                    {
+                        var s0 = symbols[0] as JsonObject;
+                        Assert(s0?.GetString("name") == "Vec2", $"LSP4-T02: first symbol = Vec2, got {s0?.GetString("name")}");
+                        Assert(s0?.GetInt("kind") == 23, $"LSP4-T02: Vec2 kind = Struct (23), got {s0?.GetInt("kind")}");
+                    }
+                    // Check second symbol (func entry)
+                    if (symbols.Count > 1)
+                    {
+                        var s1 = symbols[1] as JsonObject;
+                        Assert(s1?.GetString("name") == "entry", $"LSP4-T02: second symbol = entry, got {s1?.GetString("name")}");
+                        Assert(s1?.GetInt("kind") == 12, $"LSP4-T02: entry kind = Function (12), got {s1?.GetInt("kind")}");
+                    }
+                    // Check third symbol (func helper)
+                    if (symbols.Count > 2)
+                    {
+                        var s2 = symbols[2] as JsonObject;
+                        Assert(s2?.GetString("name") == "helper", $"LSP4-T02: third symbol = helper, got {s2?.GetString("name")}");
+                    }
+                }
+            }
+        }
+
+        // ===== Test LSP4-T03: documentSymbol for empty/minimal file returns empty =====
+        {
+            var session = new LspBatchSession();
+            session.AddInitialize();
+            session.AddInitialized();
+            session.AddDidOpen("file:///empty.vm", "");
+            session.AddDocumentSymbol("file:///empty.vm");
+            session.AddShutdown();
+            session.AddExit();
+            session.Run();
+
+            session.ExpectResponse(0); // initialize
+            var symResp = session.ExpectResponse(1); // documentSymbol
+            Assert(symResp != null, "LSP4-T03: response received");
+            if (symResp != null)
+            {
+                var symbols = symResp.GetArray("result");
+                Assert(symbols != null && symbols.Count == 0, $"LSP4-T03: empty result for empty file, got {symbols?.Count ?? -1}");
+            }
+        }
+
+        // ===== Test LSP4-T04: hover on function name returns signature =====
+        {
+            string source = "func add(a: int, b: int): int {\n  return a + b\n}";
+            var session = new LspBatchSession();
+            session.AddInitialize();
+            session.AddInitialized();
+            session.AddDidOpen("file:///hover.vm", source);
+            // Hover on "add" — line 0 (0-based), character 5 (0-based: "func " = 5 chars, 'a' of 'add' is at col 5)
+            session.AddHover("file:///hover.vm", 0, 5);
+            session.AddShutdown();
+            session.AddExit();
+            session.Run();
+
+            session.ExpectResponse(0); // initialize
+            var hoverResp = session.ExpectResponse(1); // hover
+            Assert(hoverResp != null, "LSP4-T04: hover response received");
+            if (hoverResp != null)
+            {
+                var result = hoverResp.GetObject("result");
+                Assert(result != null, "LSP4-T04: result not null");
+                if (result != null)
+                {
+                    var contents = result.GetObject("contents");
+                    Assert(contents != null, "LSP4-T04: contents present");
+                    string value = contents?.GetString("value");
+                    Assert(value != null && value.Contains("add"), $"LSP4-T04: hover shows 'add', got '{value}'");
+                    Assert(value != null && value.Contains("a: int"), $"LSP4-T04: hover shows param info, got '{value}'");
+                }
+            }
+        }
+
+        // ===== Test LSP4-T05: hover on variable returns type =====
+        {
+            string source = "func entry() {\n  var x: int = 42\n  wait x\n}";
+            var session = new LspBatchSession();
+            session.AddInitialize();
+            session.AddInitialized();
+            session.AddDidOpen("file:///hvar.vm", source);
+            // Hover on "x" in "wait x" — line 2 (0-based), character 7 (0-based: "  wait " = 7 chars)
+            session.AddHover("file:///hvar.vm", 2, 7);
+            session.AddShutdown();
+            session.AddExit();
+            session.Run();
+
+            session.ExpectResponse(0);
+            var hoverResp = session.ExpectResponse(1);
+            Assert(hoverResp != null, "LSP4-T05: hover response received");
+            if (hoverResp != null)
+            {
+                var result = hoverResp.GetObject("result");
+                Assert(result != null, "LSP4-T05: result not null (variable hover)");
+                if (result != null)
+                {
+                    var contents = result.GetObject("contents");
+                    string value = contents?.GetString("value");
+                    Assert(value != null && value.Contains("x") && value.Contains("int"),
+                        $"LSP4-T05: hover shows 'x: int', got '{value}'");
+                }
+            }
+        }
+
+        // ===== Test LSP4-T06: hover on empty position returns null =====
+        {
+            string source = "func entry() {\n  wait 1\n}";
+            var session = new LspBatchSession();
+            session.AddInitialize();
+            session.AddInitialized();
+            session.AddDidOpen("file:///hnull.vm", source);
+            // Hover on line 1, char 0 (whitespace before "wait")
+            session.AddHover("file:///hnull.vm", 1, 0);
+            session.AddShutdown();
+            session.AddExit();
+            session.Run();
+
+            session.ExpectResponse(0);
+            var hoverResp = session.ExpectResponse(1);
+            Assert(hoverResp != null, "LSP4-T06: hover response received");
+            if (hoverResp != null)
+            {
+                // result should be null for no symbol
+                var result = hoverResp.GetObject("result");
+                Assert(result == null, "LSP4-T06: null result for empty position");
+            }
+        }
+
+        // ===== Test LSP4-T07: definition on function call jumps to FuncDecl =====
+        {
+            string source = "func helper(): int {\n  return 42\n}\nfunc entry() {\n  var x: int = helper()\n  wait x\n}";
+            var session = new LspBatchSession();
+            session.AddInitialize();
+            session.AddInitialized();
+            session.AddDidOpen("file:///def.vm", source);
+            // Go to definition on "helper()" call in entry — line 4 (0-based), character 16 (0-based)
+            // "  var x: int = helper()" → "helper" starts at col 15
+            session.AddDefinition("file:///def.vm", 4, 16);
+            session.AddShutdown();
+            session.AddExit();
+            session.Run();
+
+            session.ExpectResponse(0);
+            var defResp = session.ExpectResponse(1);
+            Assert(defResp != null, "LSP4-T07: definition response received");
+            if (defResp != null)
+            {
+                var result = defResp.GetObject("result");
+                Assert(result != null, "LSP4-T07: result not null");
+                if (result != null)
+                {
+                    var range = result.GetObject("range");
+                    var start = range?.GetObject("start");
+                    Assert(start != null, "LSP4-T07: start position present");
+                    if (start != null)
+                    {
+                        // helper function is defined on line 0 (0-based)
+                        Assert(start.GetInt("line") == 0, $"LSP4-T07: definition on line 0, got {start.GetInt("line")}");
+                    }
+                }
+            }
+        }
+
+        // ===== Test LSP4-T08: definition on variable reference jumps to VarDeclStmt =====
+        {
+            string source = "func entry() {\n  var counter: int = 0\n  wait counter\n}";
+            var session = new LspBatchSession();
+            session.AddInitialize();
+            session.AddInitialized();
+            session.AddDidOpen("file:///defvar.vm", source);
+            // Go to definition on "counter" in "wait counter" — line 2 (0-based)
+            // "  wait counter" → "counter" starts at col 7
+            session.AddDefinition("file:///defvar.vm", 2, 7);
+            session.AddShutdown();
+            session.AddExit();
+            session.Run();
+
+            session.ExpectResponse(0);
+            var defResp = session.ExpectResponse(1);
+            Assert(defResp != null, "LSP4-T08: definition response received");
+            if (defResp != null)
+            {
+                var result = defResp.GetObject("result");
+                Assert(result != null, "LSP4-T08: result not null (variable definition)");
+                if (result != null)
+                {
+                    var range = result.GetObject("range");
+                    var start = range?.GetObject("start");
+                    if (start != null)
+                    {
+                        // var counter is declared on line 1 (0-based)
+                        Assert(start.GetInt("line") == 1, $"LSP4-T08: definition on line 1, got {start.GetInt("line")}");
+                    }
+                }
+            }
+        }
+
+        // ===== Test LSP4-T09: definition on unknown symbol returns null =====
+        {
+            string source = "func entry() {\n  wait 1\n}";
+            var session = new LspBatchSession();
+            session.AddInitialize();
+            session.AddInitialized();
+            session.AddDidOpen("file:///defnull.vm", source);
+            // Position on "1" literal — no definition
+            session.AddDefinition("file:///defnull.vm", 1, 7);
+            session.AddShutdown();
+            session.AddExit();
+            session.Run();
+
+            session.ExpectResponse(0);
+            var defResp = session.ExpectResponse(1);
+            Assert(defResp != null, "LSP4-T09: definition response received");
+            if (defResp != null)
+            {
+                var result = defResp.GetObject("result");
+                Assert(result == null, "LSP4-T09: null result for no definition");
+            }
+        }
+
+        // ===== Test LSP4-T10: references for function returns decl + all call sites =====
+        {
+            string source = "func helper(): int {\n  return 42\n}\nfunc entry() {\n  var a: int = helper()\n  var b: int = helper()\n  wait a\n}";
+            var session = new LspBatchSession();
+            session.AddInitialize();
+            session.AddInitialized();
+            session.AddDidOpen("file:///ref.vm", source);
+            // References on "helper" function name in declaration — line 0, col 5
+            session.AddReferences("file:///ref.vm", 0, 5);
+            session.AddShutdown();
+            session.AddExit();
+            session.Run();
+
+            session.ExpectResponse(0);
+            var refResp = session.ExpectResponse(1);
+            Assert(refResp != null, "LSP4-T10: references response received");
+            if (refResp != null)
+            {
+                var result = refResp.GetArray("result");
+                Assert(result != null, "LSP4-T10: result is array");
+                if (result != null)
+                {
+                    // 1 declaration + 2 call sites = 3 references
+                    Assert(result.Count == 3, $"LSP4-T10: 3 references (1 decl + 2 calls), got {result.Count}");
+                }
+            }
+        }
+
+        // ===== Test LSP4-T11: references for variable returns decl + all usages =====
+        {
+            string source = "func entry() {\n  var x: int = 10\n  x = x + 1\n  wait x\n}";
+            var session = new LspBatchSession();
+            session.AddInitialize();
+            session.AddInitialized();
+            session.AddDidOpen("file:///refvar.vm", source);
+            // References on "x" in "wait x" — line 3, col 7
+            session.AddReferences("file:///refvar.vm", 3, 7);
+            session.AddShutdown();
+            session.AddExit();
+            session.Run();
+
+            session.ExpectResponse(0);
+            var refResp = session.ExpectResponse(1);
+            Assert(refResp != null, "LSP4-T11: references response received");
+            if (refResp != null)
+            {
+                var result = refResp.GetArray("result");
+                Assert(result != null, "LSP4-T11: result is array");
+                if (result != null)
+                {
+                    // var x declaration + x = ... + ... x + 1 + wait x = at least 4
+                    Assert(result.Count >= 4, $"LSP4-T11: ≥ 4 references for 'x', got {result.Count}");
+                }
+            }
+        }
+
         Debug.Log($"\n===== LspTests: {passed} passed, {failed} failed =====");
     }
 
@@ -411,6 +738,57 @@ public static class LspTests
             parameters.Set("contentChanges", changes);
 
             AddNotification("textDocument/didChange", parameters);
+        }
+
+        public void AddDocumentSymbol(string uri)
+        {
+            var parameters = new JsonObject();
+            var textDoc = new JsonObject();
+            textDoc.Set("uri", uri);
+            parameters.Set("textDocument", textDoc);
+            AddRequest("textDocument/documentSymbol", parameters);
+        }
+
+        public void AddHover(string uri, int line, int character)
+        {
+            var parameters = new JsonObject();
+            var textDoc = new JsonObject();
+            textDoc.Set("uri", uri);
+            parameters.Set("textDocument", textDoc);
+            var pos = new JsonObject();
+            pos.Set("line", line);
+            pos.Set("character", character);
+            parameters.Set("position", pos);
+            AddRequest("textDocument/hover", parameters);
+        }
+
+        public void AddDefinition(string uri, int line, int character)
+        {
+            var parameters = new JsonObject();
+            var textDoc = new JsonObject();
+            textDoc.Set("uri", uri);
+            parameters.Set("textDocument", textDoc);
+            var pos = new JsonObject();
+            pos.Set("line", line);
+            pos.Set("character", character);
+            parameters.Set("position", pos);
+            AddRequest("textDocument/definition", parameters);
+        }
+
+        public void AddReferences(string uri, int line, int character)
+        {
+            var parameters = new JsonObject();
+            var textDoc = new JsonObject();
+            textDoc.Set("uri", uri);
+            parameters.Set("textDocument", textDoc);
+            var pos = new JsonObject();
+            pos.Set("line", line);
+            pos.Set("character", character);
+            parameters.Set("position", pos);
+            var context = new JsonObject();
+            context.Set("includeDeclaration", true);
+            parameters.Set("context", context);
+            AddRequest("textDocument/references", parameters);
         }
 
         public void Run()
