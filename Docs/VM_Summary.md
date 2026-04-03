@@ -26,6 +26,7 @@ Docs/
     Step_Debug_Decisions.md          脚本调试决策文档（全部决策理由 + 方案对比）
     Outlook_And_Risks.md             功能展望 + 优化展望 + 风险点 + 扩展串行计划
     Step_B3_Optimization_Tier1.md    B3 调整型优化 Tier 1（O1 fixed pin + O2 连续 OpCode）
+    Step_R1_FFScript_Rename.md       B-R1 FFScript 正式命名 + .ffs 后缀统一
   Skills/                    ← 技能脚本复现示例
     skill_114feiyanxuanfengtui.ffs    飞燕旋风腿（56 帧攻击技能）
     skill_25shangpanbeijizhong.ffs    上盘被击中（30 帧受击技能）
@@ -576,8 +577,9 @@ skill TracerBullet
 | — | **语言服务 LSP4 (符号分析)** | **documentSymbol + hover + definition + references** | **586** | [LSP4](Plan/Step_LSP4_Symbols.md) |
 | — | **语言服务 LSP5 (代码补全)** | **textDocument/completion：关键字+函数+变量+结构体+Syscall+字段补全** | **624** | [LSP5](Plan/Step_LSP5_Completion.md) |
 | — | **B3 Tier 1 (O1+O2)** | **OpCode 连续编号 0-28 + ExecuteInstance unsafe fixed 寄存器钉住** | **624** | [B3-T1](Plan/Step_B3_Optimization_Tier1.md) |
+| — | **B-R1 FFScript 正式命名** | **脚本正式命名 FFScript + 源文件后缀 `.vm` → `.ffs` 全局统一** | **624** | [B-R1](Plan/Step_R1_FFScript_Rename.md) |
 
-**当前位置 → B3 Tier 1 (O1+O2) 完成，624 项 Assert × 2 模式全通过。.NET JIT dispatch ~9% 加速。**
+**当前位置 → B-R1 完成，624 项 Assert × 2 模式全通过。脚本正式命名 FFScript，源文件后缀 `.ffs`。**
 
 ---
 
@@ -586,13 +588,13 @@ skill TracerBullet
 以下步骤不依赖真实 ECS/Syscall 接入，可在当前独立环境中推进。
 步骤严格按编号顺序串行执行，每步完成后更新状态标记。
 
-> **当前位置 → B-R1**（FFScript 正式命名 + `.ffs` 后缀统一）
+> **当前位置 → B-α1**（LSP6 Syscall 声明协议）
 
 #### Phase 0: 正式命名
 
 | # | ID | 内容 | 状态 | 完成条件 | 依赖 |
 |---|-----|------|------|----------|------|
-| 0 | B-R1 | FFScript 正式命名 + `.ffs` 后缀统一 | ⏳ | ① 脚本源文件后缀 `.vm` → `.ffs` 全局替换（测试 URI、VSCode 扩展、文档、技能示例文件） ② `SkillScriptTests` → `FFScriptTests` 类名/引用更新 ③ DAP 测试临时文件后缀 `.ffvm` → `.ffs`（源文件场景） ④ VSCode 扩展 package.json + tmLanguage 注册 `.ffs` ⑤ 全部现有测试通过 | 无 |
+| 0 | B-R1 | FFScript 正式命名 + `.ffs` 后缀统一 | ✅ | ① `.vm` → `.ffs` 全局替换 ② `SkillScriptTests` → `FFScriptTests` ③ DAP `.ffvm` → `.ffs` ④ VSCode 扩展注册 `.ffs` ⑤ 624 项 Assert 全通过 | 无 |
 
 #### Phase α: 语言服务收尾
 
