@@ -87,6 +87,7 @@ namespace FFVM.Compiler
         private Dictionary<string, LiveRange> _liveRanges;  // per-function analysis result
         private List<int> _freeVarRegs;                     // free list for register reuse
         private int _maxVarRegUsed;                         // track max register for precise LocalRegCount
+        private int _maxTempUsed;                           // FO6: peak temp register used per function
         private int _stmtOrder;                             // current statement order counter for release tracking
 
         /// <summary>
@@ -156,11 +157,15 @@ namespace FFVM.Compiler
             AnalyzeLeafFunctions(module, entryFunc);
 
             // --- Pass 2: compile entry function first, then all other functions ---
+            // FO6: after each function, remap temps to pack right after locals and patch CALL window sizes.
             var functionEntries = new List<FunctionEntry>();
 
+            int funcStartIP = 0;
             _functionTable[entryDecl.Name] = 0;
             CompileFunction(entryDecl, isEntry: true);
-            functionEntries.Add(new FunctionEntry(entryDecl.Name, 0, entryDecl.Parameters.Count, _callerWindowSize, false));
+            int funcEndIP = CurrentIP();
+            int entryWindow = ComputeAndRemapFunctionWindow(funcStartIP, funcEndIP);
+            functionEntries.Add(new FunctionEntry(entryDecl.Name, 0, entryDecl.Parameters.Count, entryWindow, false));
 
             for (int i = 0; i < module.Functions.Count; i++)
             {
@@ -168,10 +173,12 @@ namespace FFVM.Compiler
                 if (f.Name == entryFunc) continue;
 
                 bool isLeaf = _leafFunctions.TryGetValue(f.Name, out bool lf) && lf;
-                int ip = CurrentIP();
-                _functionTable[f.Name] = ip;
+                funcStartIP = CurrentIP();
+                _functionTable[f.Name] = funcStartIP;
                 CompileFunction(f, isEntry: false);
-                functionEntries.Add(new FunctionEntry(f.Name, ip, f.Parameters.Count, _callerWindowSize, isLeaf));
+                funcEndIP = CurrentIP();
+                int window = ComputeAndRemapFunctionWindow(funcStartIP, funcEndIP);
+                functionEntries.Add(new FunctionEntry(f.Name, funcStartIP, f.Parameters.Count, window, isLeaf));
             }
 
             // --- Backpatch forward references: CALL instructions whose target was -1 at emit time ---
@@ -223,7 +230,8 @@ namespace FFVM.Compiler
             }
 
             // FO7: Static call depth analysis — check for excessive call depth or recursion
-            AnalyzeCallDepth(module, entryFunc);
+            // FO6: also validates cumulative register window doesn't overflow
+            AnalyzeCallDepth(module, entryFunc, functionEntries);
 
             if (_errors.Count > 0)
                 return new CompileResult { Errors = _errors };
@@ -268,6 +276,7 @@ namespace FFVM.Compiler
             _inCleanupBlock = false;
             _freeVarRegs = new List<int>();
             _maxVarRegUsed = VarRegBase - 1;
+            _maxTempUsed = TempRegBase - 1;  // FO6: no temps used yet
             _stmtOrder = 0;
             _currentFunctionName = func.Name;
 
@@ -315,6 +324,89 @@ namespace FFVM.Compiler
 
             // A.6: Record precise window size using max register actually allocated
             _callerWindowSize = (_maxVarRegUsed >= VarRegBase) ? (_maxVarRegUsed - VarRegBase + 1) : 0;
+        }
+
+        // ===== FO6: Adaptive register window — pack temps after locals =====
+
+        /// <summary>
+        /// FO6: Compute the total window size (locals + temps) for a compiled function,
+        /// remap temp registers in instructions to pack right after locals, and patch
+        /// all CALL/CALL_LEAF window sizes to use the function-level total.
+        /// Returns the function's total window size.
+        /// </summary>
+        private int ComputeAndRemapFunctionWindow(int startIP, int endIP)
+        {
+            int localCount = _callerWindowSize; // locals-only window (already computed)
+            int numTemps = (_maxTempUsed >= TempRegBase) ? (_maxTempUsed - TempRegBase + 1) : 0;
+            int totalWindow = localCount + numTemps;
+            if (totalWindow < 1) totalWindow = 1; // minimum 1 to prevent zero-offset stacking
+
+            int tempRemapBase = (_maxVarRegUsed >= VarRegBase) ? (_maxVarRegUsed + 1) : VarRegBase;
+            int shift = tempRemapBase - TempRegBase; // typically negative: moves temps closer to locals
+
+            for (int ip = startIP; ip < endIP; ip++)
+            {
+                var instr = _instructions[ip];
+
+                // Patch CALL/CALL_LEAF window sizes to use function-level total
+                if (instr.Code == OpCode.CALL || instr.Code == OpCode.CALL_LEAF)
+                {
+                    _instructions[ip] = new Instruction(instr.Code, instr.A, totalWindow, instr.C);
+                    continue;
+                }
+
+                if (numTemps == 0 || shift == 0) continue; // no temps to remap
+
+                // Remap temp register operands
+                int a = instr.A, b = instr.B, c = instr.C;
+                bool changed = false;
+
+                byte mask = GetRegisterMask(instr.Code);
+                if ((mask & 1) != 0 && a >= TempRegBase) { a += shift; changed = true; }
+                if ((mask & 2) != 0 && b >= TempRegBase) { b += shift; changed = true; }
+                if ((mask & 4) != 0 && c >= TempRegBase) { c += shift; changed = true; }
+
+                if (changed)
+                    _instructions[ip] = new Instruction(instr.Code, a, b, c);
+            }
+
+            return totalWindow;
+        }
+
+        /// <summary>
+        /// FO6: Returns a bitmask indicating which instruction operands are register references.
+        /// Bit 0 = A is register, Bit 1 = B is register, Bit 2 = C is register.
+        /// </summary>
+        private static byte GetRegisterMask(OpCode code)
+        {
+            switch (code)
+            {
+                // A = register
+                case OpCode.LOAD_CONST: return 1;    // A=destReg, B=constIndex
+                case OpCode.WAIT_FOR:   return 1;    // A=srcReg
+
+                // A and B = registers
+                case OpCode.MOVE: return 3;           // A=dest, B=src
+                case OpCode.NOT:  return 3;           // A=dest, B=src
+                case OpCode.NEG:  return 3;           // A=dest, B=src
+
+                // B = register
+                case OpCode.JUMP_IF_ZERO:     return 2;  // A=targetIP, B=testReg
+                case OpCode.JUMP_IF_NOT_ZERO: return 2;  // A=targetIP, B=testReg
+
+                // A, B, C = registers
+                case OpCode.ADD: case OpCode.SUB:
+                case OpCode.MUL: case OpCode.DIV: case OpCode.MOD:
+                case OpCode.CMP_EQ:  case OpCode.CMP_NEQ:
+                case OpCode.CMP_LT:  case OpCode.CMP_LTE:
+                case OpCode.CMP_GT:  case OpCode.CMP_GTE:
+                case OpCode.AND: case OpCode.OR:
+                    return 7; // A=dest, B=lhs, C=rhs
+
+                // No register operands: NOP, SYSCALL(slot,start,count), WAIT, PUSH_CLEANUP,
+                // POP_CLEANUP, RETURN, JUMP, CALL, CALL_LEAF, RET_FUNC, RET_LEAF, SENTINEL
+                default: return 0;
+            }
         }
 
         // ===== F4: Variable lifetime analysis =====
@@ -628,7 +720,9 @@ namespace FFVM.Compiler
                 _errors.Add("Expression too complex (out of temp registers)");
                 return TempRegBase;
             }
-            return _tempTop++;
+            int reg = _tempTop++;
+            if (reg > _maxTempUsed) _maxTempUsed = reg;  // FO6: track peak temp
+            return reg;
         }
 
         private void ResetTemps()
@@ -1323,14 +1417,15 @@ namespace FFVM.Compiler
             }
         }
 
-        // ===== FO7: Static call depth analysis =====
+        // ===== FO7: Static call depth analysis + FO6: register window overflow =====
 
         /// <summary>
         /// Build a call graph from the AST and compute max call depth.
         /// If max depth exceeds MaxCallDepth, report a compile error.
         /// Detects recursion (cycles) and marks as "dynamic depth — requires runtime check".
+        /// FO6: also validates that cumulative register window sizes don't exceed available slots.
         /// </summary>
-        private void AnalyzeCallDepth(ModuleNode module, string entryFunc)
+        private void AnalyzeCallDepth(ModuleNode module, string entryFunc, List<FunctionEntry> functionEntries)
         {
             // Build call graph: funcName → set of called function names
             var callGraph = new Dictionary<string, HashSet<string>>();
@@ -1395,6 +1490,50 @@ namespace FFVM.Compiler
             if (entryDepth > VMConstants.MaxCallDepth)
             {
                 _errors.Add($"Static call depth from '{entryFunc}' is {entryDepth}, exceeding MaxCallDepth ({VMConstants.MaxCallDepth}). Reduce function nesting or increase limit.");
+            }
+
+            // FO6: validate cumulative register window doesn't overflow available slots
+            var funcWindows = new Dictionary<string, int>();
+            for (int i = 0; i < functionEntries.Count; i++)
+                funcWindows[functionEntries[i].Name] = functionEntries[i].LocalRegCount;
+
+            var windowVisited = new Dictionary<string, int>(); // funcName → max cumulative window (-1 = in progress)
+            int availableSlots = VMConstants.MaxRegisters - VarRegBase; // 64 - 16 = 48
+
+            int ComputeMaxWindow(string funcName)
+            {
+                if (windowVisited.TryGetValue(funcName, out int cached))
+                {
+                    if (cached == -1) return 0; // cycle (recursion) — skip for static analysis
+                    return cached;
+                }
+                windowVisited[funcName] = -1; // mark in progress
+
+                int myWindow = funcWindows.TryGetValue(funcName, out int w) ? w : 0;
+
+                if (!callGraph.TryGetValue(funcName, out var callees) || callees.Count == 0)
+                {
+                    windowVisited[funcName] = myWindow;
+                    return myWindow;
+                }
+
+                int maxTotal = myWindow; // leaf case: just this function
+                foreach (var callee in callees)
+                {
+                    if (!callGraph.ContainsKey(callee)) continue;
+                    int calleeWindow = ComputeMaxWindow(callee);
+                    int total = myWindow + calleeWindow;
+                    if (total > maxTotal) maxTotal = total;
+                }
+
+                windowVisited[funcName] = maxTotal;
+                return maxTotal;
+            }
+
+            int maxWindow = callGraph.ContainsKey(entryFunc) ? ComputeMaxWindow(entryFunc) : 0;
+            if (maxWindow > availableSlots)
+            {
+                _errors.Add($"Static register window depth from '{entryFunc}' requires {maxWindow} registers, exceeding available {availableSlots} slots (MaxRegisters={VMConstants.MaxRegisters}). Reduce local variable usage or function nesting depth.");
             }
         }
 

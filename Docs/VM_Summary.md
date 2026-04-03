@@ -583,8 +583,9 @@ skill TracerBullet
 | — | **B-β1 O6 Peephole 优化 pass** | **P1 自赋值消除 + P2 dest-redirect + P4 jump-to-next + NOP 压缩，指令数减少 ≥5%** | **676** | [B-β1](Plan/Step_B_Beta1_O6_Peephole.md) |
 | — | **B-β2 FO1 叶函数优化** | **CALL_LEAF/RET_LEAF 指令对 + 叶函数跳过 CallFrame push/pop + 调试器透明降级** | **700** | [B-β2](Plan/Step_B_Beta2_FO1_LeafFunction.md) |
 | — | **B-β3 O9 活跃实例链表** | **ActiveList 替代全量遍历 + swap-remove O(1) + 稀疏场景验证 + Snapshot 一致性** | **711** | [B-β3](Plan/Step_B_Beta3_O9_ActiveList.md) |
+| — | **B-γ1 FO6 自适应寄存器窗口** | **编译后 temp 重映射紧接 locals + CALL 窗口 = locals+temps + 累计窗口溢出检测 + 嵌套 ~3→~6** | **721** | [B-γ1](Plan/Step_B_Gamma1_FO6_AdaptiveWindow.md) |
 
-**当前位置 → B-β3 完成，711 项 Assert × 2 模式全通过。活跃实例链表：InstancePool.ActiveList + VMInstanceState.ActiveListIndex，Tick() 只遍历 ActiveListCount 个实例，spawn O(1) 追加，destroy O(1) swap-remove，Snapshot Save/Load 包含 ActiveList 状态。稀疏场景 3/128 实例 Tick 约 0.07 µs。**
+**当前位置 → B-γ1 完成，721 项 Assert × 2 模式全通过。自适应寄存器窗口：ComputeAndRemapFunctionWindow 将 temp 寄存器重映射到紧接 locals 之后，CALL.B = locals+temps 总窗口，AnalyzeCallDepth 扩展累计窗口溢出检测。嵌套层数从 ~3 扩展到 ~6+，R1/SR1 根本解决。**
 
 ---
 
@@ -593,7 +594,7 @@ skill TracerBullet
 以下步骤不依赖真实 ECS/Syscall 接入，可在当前独立环境中推进。
 步骤严格按编号顺序串行执行，每步完成后更新状态标记。
 
-> **当前位置 → B-γ1**（FO6 自适应寄存器窗口）
+> **当前位置 → B-γ2**（FF5 非 entry 函数 defer）
 
 #### Phase 0: 正式命名
 
@@ -620,7 +621,7 @@ skill TracerBullet
 
 | # | ID | 内容 | 状态 | 完成条件 | 依赖 |
 |---|-----|------|------|----------|------|
-| 6 | B-γ1 | FO6 自适应寄存器窗口 | ⏳ | 嵌套层数 ~3→~6 + R1/SR1 根本解决 + 测试通过 | F4 ✅ |
+| 6 | B-γ1 | FO6 自适应寄存器窗口 | ✅ | 嵌套层数 ~3→~6 + R1/SR1 根本解决 + 测试通过 | F4 ✅ |
 | 7 | B-γ2 | FF5 非 entry 函数 defer | ⏳ | RET_FUNC 与 Cleanup 链正确对齐 + 测试通过 | 函数调用 ✅ |
 | 8 | B-γ3 | S4 结构体作为函数参数 | ⏳ | 结构体参数寄存器传递 + R5 安全限制 + 测试通过 | B-γ1 (FO6) |
 | 9 | B-γ4 | C6 嵌套 using 作用域优化 | ⏳ | 合并相邻 PUSH_CLEANUP 指令 + 性能验证 + 测试通过 | 无 |
