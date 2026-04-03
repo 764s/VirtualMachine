@@ -60,7 +60,7 @@ namespace FFVM.Compiler
         private int _line;
         private int _col;
 
-        private static readonly Dictionary<string, TokenType> Keywords = new Dictionary<string, TokenType>
+        internal static readonly Dictionary<string, TokenType> Keywords = new Dictionary<string, TokenType>
         {
             { "func",     TokenType.Func },
             { "var",      TokenType.Var },

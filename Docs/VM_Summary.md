@@ -570,8 +570,9 @@ skill TracerBullet
 | — | **调试 Phase 3B (Gate 2)** | **DAP 单步 next/stepIn/stepOut** | **505** | [Phase3B](Plan/Step_Debug_Phase3B_DAP_SingleStep.md) |
 | — | **语言服务 Phase 4 (LSP2+LSP1+LSP3)** | **TextMate Grammar 修复 + LSP Server 核心 + 实时诊断** | **546** | [Phase4](Plan/Step_LSP_Phase4.md) |
 | — | **语言服务 LSP4 (符号分析)** | **documentSymbol + hover + definition + references** | **586** | [LSP4](Plan/Step_LSP4_Symbols.md) |
+| — | **语言服务 LSP5 (代码补全)** | **textDocument/completion：关键字+函数+变量+结构体+Syscall+字段补全** | **624** | [LSP5](Plan/Step_LSP5_Completion.md) |
 
-**当前位置 → LSP4 (符号分析) 完成，586 项 Assert × 2 模式全通过。**
+**当前位置 → LSP5 (代码补全) 完成，624 项 Assert × 2 模式全通过。**
 
 ---
 
@@ -582,7 +583,7 @@ skill TracerBullet
 | 序号 | 步骤 | 状态 | 内容 | 说明 |
 |------|------|------|------|------|
 | B1 | 调试 Phase 3C | ⏳ 可选 | Unity Editor DAP（EditorApplication.update 轮询，DR5） | 仅在需要 Editor 内调试时实施；VS Code 独立调试已可用 |
-| B2 | 语言服务 Phase 4 | ✅ LSP2+LSP1+LSP3+LSP4 | LSP Server：语法高亮(LSP2)✅→核心框架(LSP1)✅→诊断(LSP3)✅→符号(LSP4)✅→补全(LSP5)⏳→Syscall声明协议(LSP6)⏳→参数提示(LSP7)⏳ | 复用 DAP 通信层；LSP5/LSP6/LSP7 待后续增量添加 |
+| B2 | 语言服务 Phase 4 | ✅ LSP2+LSP1+LSP3+LSP4+LSP5 | LSP Server：语法高亮(LSP2)✅→核心框架(LSP1)✅→诊断(LSP3)✅→符号(LSP4)✅→补全(LSP5)✅→Syscall声明协议(LSP6)⏳→参数提示(LSP7)⏳ | 复用 DAP 通信层；LSP6/LSP7 待后续增量添加 |
 | B3 | 调整型优化 | ⏳ | Tier 1: O1→O2（dispatch -40~60%），Tier 2: O6（peephole），Tier 3+: O8/O9-O14/FO1-FO3/SO1 | Benchmark 驱动；含 R1/SR1/SR2 风险理想方案 |
 | B4 | 功能补全 | ⏳ | S4 结构体参数、FF5 非 entry defer、FF1-FF4、C5/C6、SN1/SN2、BB1/PR1/DM1 | 业务驱动按需；GR3 文档缺口 D1-D4 也在此批次 |
 
