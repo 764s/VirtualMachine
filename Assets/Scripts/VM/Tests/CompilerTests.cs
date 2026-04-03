@@ -2348,6 +2348,182 @@ func main() {
             Debug.Log("[BENCH]   FO1: CALL_LEAF/RET_LEAF overhead: ~6 ops vs CALL/RET_FUNC ~10 ops = ~40% reduction");
         }
 
+        // ===== FO6: Adaptive register window tests =====
+
+        // FO6-01: 4-level nesting with local vars → correct result
+        {
+            string source = @"
+func d(x: int): int { return x + 1 }
+func c(x: int): int {
+    var a: int = d(x)
+    var b: int = a + 2
+    return b
+}
+func b(x: int): int {
+    var a: int = c(x)
+    var b: int = a + 3
+    return b
+}
+func a(x: int): int {
+    var a: int = b(x)
+    var b: int = a + 4
+    return b
+}
+func main() {
+    var result: int = a(10)
+    SetValue(result)
+}";
+            var syscalls = new Dictionary<string, int> { { "SetValue", 0 } };
+            var result = compiler.Compile(source, "main", syscalls);
+            Assert(result.Success, "FO6-01: 4-level nesting compiles");
+
+            int captured = -1;
+            var world = new VMWorld();
+            world.Modules.Load(0, result.Program);
+            world.Syscalls.Register(0, "SetValue", (ref VMInstanceState s) => { captured = s.Registers.Get(0).ToInt(); });
+            world.SpawnInstance(0, 0);
+            world.Tick();
+            // d(10)=11, c(10)=11+2=13, b(10)=13+3=16, a(10)=16+4=20
+            Assert(captured == 20, $"FO6-01: 4-level nesting result = {captured} (expected 20)");
+        }
+
+        // FO6-02: 6-level nesting with many locals per function → correct result
+        {
+            string source = @"
+func f6(x: int): int {
+    var a: int = x + 1
+    var b: int = a + 1
+    var c: int = b + 1
+    return c
+}
+func f5(x: int): int {
+    var a: int = x + 1
+    var b: int = a + 1
+    var c: int = b + 1
+    return f6(c) + a
+}
+func f4(x: int): int {
+    var a: int = x + 1
+    var b: int = a + 1
+    var c: int = b + 1
+    return f5(c) + a
+}
+func f3(x: int): int {
+    var a: int = x + 1
+    var b: int = a + 1
+    var c: int = b + 1
+    return f4(c) + a
+}
+func f2(x: int): int {
+    var a: int = x + 1
+    var b: int = a + 1
+    var c: int = b + 1
+    return f3(c) + a
+}
+func main() {
+    var result: int = f2(0)
+    SetValue(result)
+}";
+            var syscalls = new Dictionary<string, int> { { "SetValue", 0 } };
+            var result = compiler.Compile(source, "main", syscalls);
+            Assert(result.Success, "FO6-02: 6-level nesting compiles");
+
+            // Compute expected: main→f2(0)→f3(3+0+1=...)→f4→f5→f6
+            // f2(0): a=1,b=2,c=3 → f3(3)+1
+            // f3(3): a=4,b=5,c=6 → f4(6)+4
+            // f4(6): a=7,b=8,c=9 → f5(9)+7
+            // f5(9): a=10,b=11,c=12 → f6(12)+10
+            // f6(12): a=13,b=14,c=15 → 15
+            // f5=15+10=25, f4=25+7=32, f3=32+4=36, f2=36+1=37
+            int captured = -1;
+            var world = new VMWorld();
+            world.Modules.Load(0, result.Program);
+            world.Syscalls.Register(0, "SetValue", (ref VMInstanceState s) => { captured = s.Registers.Get(0).ToInt(); });
+            world.SpawnInstance(0, 0);
+            world.Tick();
+            Assert(captured == 37, $"FO6-02: 6-level nesting result = {captured} (expected 37)");
+        }
+
+        // FO6-03: window size includes temps — LocalRegCount > pure local count
+        {
+            string source = @"
+func helper(x: int): int { return x + 1 }
+func caller(x: int): int {
+    var a: int = x + 1
+    return helper(a) + a
+}
+func main() {
+    var r: int = caller(5)
+    SetValue(r)
+}";
+            var syscalls = new Dictionary<string, int> { { "SetValue", 0 } };
+            var result = compiler.Compile(source, "main", syscalls);
+            Assert(result.Success, "FO6-03: compile success");
+
+            // caller uses 1 local (a) + temps for expression → LocalRegCount should be > 1
+            bool found = false;
+            for (int i = 0; i < result.Program.Functions.Length; i++)
+            {
+                if (result.Program.Functions[i].Name == "caller")
+                {
+                    int lr = result.Program.Functions[i].LocalRegCount;
+                    Assert(lr > 1, $"FO6-03: caller LocalRegCount = {lr} > 1 (includes temps)");
+                    found = true;
+                    break;
+                }
+            }
+            Assert(found, "FO6-03: caller function found in function table");
+
+            int captured = -1;
+            var world = new VMWorld();
+            world.Modules.Load(0, result.Program);
+            world.Syscalls.Register(0, "SetValue", (ref VMInstanceState s) => { captured = s.Registers.Get(0).ToInt(); });
+            world.SpawnInstance(0, 0);
+            world.Tick();
+            // helper(6)+6 = 7+6 = 13
+            Assert(captured == 13, $"FO6-03: result = {captured} (expected 13)");
+        }
+
+        // FO6-04: register window overflow → compile error
+        {
+            // Generate deeply nested functions with many locals to exceed 48 slots
+            var sb = new StringBuilder();
+            int depth = 10;
+            for (int i = depth; i >= 1; i--)
+            {
+                sb.AppendLine($"func f{i}(x: int): int {{");
+                // Each function uses 6 locals to consume registers quickly
+                for (int v = 1; v <= 6; v++)
+                {
+                    if (v == 1) sb.AppendLine($"    var v{v}: int = x + {v}");
+                    else sb.AppendLine($"    var v{v}: int = v{v-1} + {v}");
+                }
+                if (i < depth)
+                    sb.AppendLine($"    return f{i+1}(v6) + v1");
+                else
+                    sb.AppendLine($"    return v6");
+                sb.AppendLine("}");
+            }
+            sb.AppendLine("func main() { f1(0) }");
+
+            var syscalls = new Dictionary<string, int>();
+            var result = compiler.Compile(sb.ToString(), "main", syscalls);
+            Assert(!result.Success, "FO6-04: overflow detected at compile time");
+            bool hasWindowError = false;
+            if (result.Errors != null)
+            {
+                for (int i = 0; i < result.Errors.Count; i++)
+                {
+                    if (result.Errors[i].Contains("register window"))
+                    {
+                        hasWindowError = true;
+                        break;
+                    }
+                }
+            }
+            Assert(hasWindowError, "FO6-04: error mentions register window overflow");
+        }
+
         // ===== Summary =====
         Debug.Log($"========================================");
         Debug.Log($"Compiler Tests: {passed} passed, {failed} failed");
