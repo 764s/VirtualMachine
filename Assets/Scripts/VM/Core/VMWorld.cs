@@ -157,7 +157,9 @@ namespace FFVM
             var dbg = Debugger;
             var srcMap = (dbg != null) ? program.SourceMap : null;
 
-            // FF5: saved r0 for preserving return value across non-entry function cleanup
+            // FF5: saved r0 for preserving return value across non-entry function cleanup.
+            // Safe as a single local: cleanup blocks can't WAIT (R8/G6), so each
+            // RET_FUNC→cleanup→RETURN cycle completes before the next RET_FUNC.
             Number savedR0 = default;
 
             // O1: Pin registers once for the entire execution burst.

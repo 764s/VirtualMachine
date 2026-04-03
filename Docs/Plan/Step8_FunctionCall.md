@@ -179,11 +179,9 @@
 
 ### FF5. defer 在非 entry 函数中的正确执行
 
-**现状**：RET_FUNC 弹出 CallFrame 时需确保函数内 defer 块已执行。当前 Cleanup 链由 RETURN 触发，RET_FUNC 路径尚未与 Cleanup 机制完全对齐。
+> ✅ **已在 B-γ2 实现** — 详见 [Step_B_Gamma2_FF5_NonEntryDefer.md](Step_B_Gamma2_FF5_NonEntryDefer.md)
 
-**方向**：RET_FUNC 执行前检查当前函数的 CleanupDepth > CleanupBase → 执行 Cleanup 直到 CleanupBase → 恢复 CallFrame。或编译器在函数返回前显式 emit POP_CLEANUP / Cleanup 执行序列。
-
-**触发时机**：非 entry 函数中使用 defer/using 时（步骤 8 测试 CF07 仅覆盖单函数 defer）。
+**方案**：RET_FUNC 检测 CleanupDepth > CleanupBase → InCleanup + savedR0 → RETURN 按 CleanupBase 边界弹出 CallFrame。含 defer/using 的函数排除 leaf 优化。763 项 Assert 通过。
 
 ---
 
