@@ -1,7 +1,7 @@
 # 语言服务 Phase 4：LSP Server + TextMate Grammar（B2）
 
 > **在整体计划中的位置**：本文档对应 VM_Summary.md §七 推进顺序中 Phase 3B ✅ 之后的 **B2 语言服务 Phase 4**。
-> **状态**：✅ LSP2+LSP1+LSP3 完成。LSP4 (符号分析) 也已完成，见 [Step_LSP4_Symbols.md](Step_LSP4_Symbols.md)。586 项 Assert（112 TW + 214 Compiler + 17 Perf + 18 SkillScript + 51 Debug + 93 DAP + 81 LSP），float + Fix64 双模式通过。
+> **状态**：✅ LSP2+LSP1+LSP3 完成。LSP4 (符号分析) 也已完成，见 [Step_LSP4_Symbols.md](Step_LSP4_Symbols.md)。586 项 Assert（112 TW + 214 Compiler + 17 Perf + 18 FFScript + 51 Debug + 93 DAP + 81 LSP），float + Fix64 双模式通过。
 > **前置**：
 > - Debug Phase 3B（Gate 2）✅ — DAP Server 完整单步调试，505 项 Assert
 > - ContentLengthStream.cs ✅ — Content-Length 分帧 I/O（与 LSP 共享）
@@ -15,7 +15,7 @@
 > - [Outlook_And_Risks.md §八](Outlook_And_Risks.md#81-总览时间线) — 串行计划 B2 位置
 > - [VM_Summary.md §七-B](../VM_Summary.md#b-待执行阶段脚本引擎侧) — B2 定义
 >
-> **核心目标**：实现 LSP Server 核心 + TextMate 语法高亮 + 实时诊断，使 VS Code 可在编辑 .vm/.ffvm 文件时获得语法着色和实时编译错误提示。
+> **核心目标**：实现 LSP Server 核心 + TextMate 语法高亮 + 实时诊断，使 VS Code 可在编辑 .ffs/.ffvm 文件时获得语法着色和实时编译错误提示。
 
 ---
 
@@ -55,7 +55,7 @@ LSP 使用与 DAP 完全相同的 Content-Length 分帧协议和 JSON-RPC 消息
 
 - [x] **LSP2-01** 移除 `break`/`continue`：Lexer 中不存在这两个关键字，从 grammar 中删除
 - [x] **LSP2-02** 添加 `float` 类型：types 模式中补充 `float`（Lexer 支持 FloatLiteral，类型标注中使用 `float`）
-- [x] **LSP2-03** 支持 `.vm` 扩展名：在 package.json 的 `extensions` 中同时注册 `[".ffvm", ".vm"]`
+- [x] **LSP2-03** 支持 `.ffs` 扩展名：在 package.json 的 `extensions` 中同时注册 `[".ffs", ".ffvm"]`
 - [x] **LSP2-04** 移除 string 高亮规则：语言无字符串字面量类型，移除 `strings` 模式避免误导
 - [x] **LSP2-05** 优化关键字匹配顺序：将 `wait_for` 放在 `wait` 之前确保正确匹配
 - [ ] **LSP2-06** 添加 `entry` 注释高亮（可选）：`entry` 不是关键字，但脚本中的 `func entry()` 是入口函数
@@ -63,7 +63,7 @@ LSP 使用与 DAP 完全相同的 Content-Length 分帧协议和 JSON-RPC 消息
 ### 验收标准
 
 - TextMate grammar 正确匹配 Lexer.cs 的 15 个关键字
-- `.vm` 和 `.ffvm` 文件均触发语法高亮
+- `.ffs` 和 `.ffvm` 文件均触发语法高亮
 - float 类型标注获得正确着色
 
 ---
@@ -141,7 +141,7 @@ LSP 使用与 DAP 完全相同的 Content-Length 分帧协议和 JSON-RPC 消息
 
 | 文件 | 修改 |
 |------|------|
-| `vscode-ffvm-debug/package.json` | 添加 LSP 客户端配置 + `.vm` 扩展名 |
+| `vscode-ffvm-debug/package.json` | 添加 LSP 客户端配置 + `.ffs` 扩展名 |
 
 ### 实现清单
 

@@ -1,7 +1,7 @@
 # 调试 Phase 3B：DAP 单步 + 完整调试体验（DBG4 + DBG7-B）
 
 > **在整体计划中的位置**：本文档对应 VM_Summary.md §七 推进顺序中 Phase 3A ✅ 之后的**调试 Phase 3B**。
-> **状态**：✅ 完成。505 项 Assert（112 TW + 214 Compiler + 17 Perf + 18 SkillScript + 51 Debug + 93 DAP），float + Fix64 双模式通过。
+> **状态**：✅ 完成。505 项 Assert（112 TW + 214 Compiler + 17 Perf + 18 FFScript + 51 Debug + 93 DAP），float + Fix64 双模式通过。
 > **前置**：
 > - Debug Phase 3A（Gate 1）✅ 已完成 — DAP Server 核心（12 消息 handler + HaltOnBreakpoint + SkipNextCheck）
 > - ScriptDebugger ✅ 已有 — 断点桥接 + 变量查看 + 调用栈

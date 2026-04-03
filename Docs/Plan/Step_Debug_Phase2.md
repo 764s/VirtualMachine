@@ -1,7 +1,7 @@
 # 调试 Phase 2：运行时调试基础能力（DBG3 + DBG5 + DBG6）
 
 > **在整体计划中的位置**：本文档对应 VM_Summary.md §七 推进顺序中 F4 之后的**脚本调试 · Phase 2**。
-> **状态**：✅ 已完成。412 项 Assert（112 TW + 214 Compiler + 17 Perf + 18 SkillScript + 51 Debug）。
+> **状态**：✅ 已完成。412 项 Assert（112 TW + 214 Compiler + 17 Perf + 18 FFScript + 51 Debug）。
 > **前置**：F4 ✅ 已完成（361 项 Assert 通过）。DBG1（SourceMap）✅、DBG2 Phase 1（SymbolTable）✅ 已就位。
 > **来源**：
 > - [Outlook_And_Risks.md §二.5](Outlook_And_Risks.md#25-脚本调试dbg-系列) — DBG3/DBG5/DBG6 定义

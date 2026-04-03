@@ -3,7 +3,7 @@
 > **在整体计划中的位置**：本文档对应 VM_Summary.md §七 推进顺序中 Debug Phase 2 ✅ 之后的 **GR1 CI 构建矩阵**。
 > **状态**：✅ 已完成。CI 矩阵双模式（float + Fix64）自动验证。412 项 Assert 在两种模式下均通过。
 > **修复**：Fix64 除法溢出（Number.cs `operator /` 原实现 `a.Raw << 32` 溢出 64 位 → 改为迭代长除法）。
-> **前置**：Debug Phase 2 ✅ 已完成（412 项 Assert：112 TW + 214 Compiler + 17 Perf + 18 SkillScript + 51 Debug）
+> **前置**：Debug Phase 2 ✅ 已完成（412 项 Assert：112 TW + 214 Compiler + 17 Perf + 18 FFScript + 51 Debug）
 > **来源**：
 > - [Outlook_And_Risks.md §八.1](Outlook_And_Risks.md#81-总览时间线) — 串行计划中 GR1 位置
 > - [Outlook_And_Risks.md §四.3](Outlook_And_Risks.md#43-全局风险) — GR1 风险定义

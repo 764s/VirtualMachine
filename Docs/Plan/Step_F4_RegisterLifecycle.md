@@ -1,7 +1,7 @@
 # F4：编译器寄存器生命周期分析 + 自然优化 + 调试 Phase 1 + 风险理想方案
 
 > **在整体计划中的位置**：本文档对应 VM_Summary.md §七 推进顺序中 Step 10 Pre 之后、Step 10（编辑器流程图投影）之前的**核心编译器升级阶段**。
-> **状态**：✅ 已完成。361 项 Assert（112 TW + 214 Compiler + 17 Perf + 18 SkillScript）。
+> **状态**：✅ 已完成。361 项 Assert（112 TW + 214 Compiler + 17 Perf + 18 FFScript）。
 > **前置**：Step 10 Pre（C4 + G6）✅ 已完成（315 项 Assert 通过）。
 > **来源**：
 > - F4：VM_Tracer_Bullet.md §十二 第 2 项"寄存器复用"

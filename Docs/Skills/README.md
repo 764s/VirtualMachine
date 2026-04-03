@@ -176,8 +176,8 @@ FX_CGH_SHOUZHONGJI = 4001 // 受击特效
 
 | 文件 | 说明 |
 |------|------|
-| `skill_114feiyanxuanfengtui.vm` | 飞燕旋风腿 — 56帧攻击技能脚本 |
-| `skill_25shangpanbeijizhong.vm` | 上盘被击中 — 30帧受击技能脚本 |
+| `skill_114feiyanxuanfengtui.ffs` | 飞燕旋风腿 — 56帧攻击技能脚本 |
+| `skill_25shangpanbeijizhong.ffs` | 上盘被击中 — 30帧受击技能脚本 |
 | `README.md` | 本文档: 执行流程分析 + 能力评估 + Syscall协议 |
 
 ---
