@@ -8,6 +8,7 @@ namespace FFVM.Compiler
         // Literals
         IntLiteral,
         FloatLiteral,
+        StringLiteral,
 
         // Identifier
         Identifier,
@@ -146,6 +147,10 @@ namespace FFVM.Compiler
             if (char.IsDigit(c))
                 return ScanNumber(startLine, startCol);
 
+            // String literals
+            if (c == '"')
+                return ScanString(startLine, startCol);
+
             // Identifiers and keywords
             if (char.IsLetter(c) || c == '_')
                 return ScanIdentifier(startLine, startCol);
@@ -225,6 +230,44 @@ namespace FFVM.Compiler
                 return new Token(kwType, text, line, col);
 
             return new Token(TokenType.Identifier, text, line, col);
+        }
+
+        private Token ScanString(int line, int col)
+        {
+            Advance(); // skip opening '"'
+            var sb = new System.Text.StringBuilder();
+            while (_pos < _source.Length && Peek() != '"')
+            {
+                char ch = Peek();
+                if (ch == '\n')
+                    return new Token(TokenType.Error, $"Unterminated string literal at {line}:{col}", line, col);
+                if (ch == '\\')
+                {
+                    Advance();
+                    if (_pos >= _source.Length)
+                        return new Token(TokenType.Error, $"Unterminated string literal at {line}:{col}", line, col);
+                    char esc = Peek();
+                    switch (esc)
+                    {
+                        case 'n': sb.Append('\n'); break;
+                        case 't': sb.Append('\t'); break;
+                        case '\\': sb.Append('\\'); break;
+                        case '"': sb.Append('"'); break;
+                        default:
+                            return new Token(TokenType.Error, $"Unknown escape sequence '\\{esc}' at {_line}:{_col}", _line, _col);
+                    }
+                    Advance();
+                }
+                else
+                {
+                    sb.Append(ch);
+                    Advance();
+                }
+            }
+            if (_pos >= _source.Length)
+                return new Token(TokenType.Error, $"Unterminated string literal at {line}:{col}", line, col);
+            Advance(); // skip closing '"'
+            return new Token(TokenType.StringLiteral, sb.ToString(), line, col);
         }
     }
 }

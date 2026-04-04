@@ -965,14 +965,14 @@ namespace FFVM.Debug
                 if (checkPos >= 0 && lineText[checkPos] == '.')
                 {
                     isDotContext = true;
-                    // Extract variable name before the dot
-                    int nameEnd = checkPos;
-                    int nameStart = nameEnd - 1;
-                    while (nameStart >= 0 && (char.IsLetterOrDigit(lineText[nameStart]) || lineText[nameStart] == '_'))
-                        nameStart--;
-                    nameStart++;
-                    if (nameStart < nameEnd)
-                        dotPrefix = lineText.Substring(nameStart, nameEnd - nameStart);
+                    // SN1: Extract the full dot-chain before the dot (e.g. "a.inner" from "a.inner.|")
+                    int chainEnd = checkPos;
+                    int chainStart = chainEnd - 1;
+                    while (chainStart >= 0 && (char.IsLetterOrDigit(lineText[chainStart]) || lineText[chainStart] == '_' || lineText[chainStart] == '.'))
+                        chainStart--;
+                    chainStart++;
+                    if (chainStart < chainEnd)
+                        dotPrefix = lineText.Substring(chainStart, chainEnd - chainStart);
                 }
             }
 
@@ -980,16 +980,64 @@ namespace FFVM.Debug
 
             if (isDotContext && dotPrefix != null && ast != null)
             {
-                // Struct field completion: find what struct type the variable is
+                // SN1: Struct field completion with nested dot-chain support
+                // dotPrefix can be "a" or "a.inner" etc.
                 FuncDecl containingFunc = FindContainingFunction(ast, lspLine + 1);
                 if (containingFunc != null)
                 {
-                    string structType = FindVariableStructType(ast, containingFunc, dotPrefix);
-                    if (structType != null)
+                    string resolvedStructType = null;
+                    int dotIdx = dotPrefix.IndexOf('.');
+                    if (dotIdx < 0)
+                    {
+                        // Simple case: "varName."
+                        resolvedStructType = FindVariableStructType(ast, containingFunc, dotPrefix);
+                    }
+                    else
+                    {
+                        // Chained case: "varName.field1.field2." — resolve through struct types
+                        string rootVar = dotPrefix.Substring(0, dotIdx);
+                        string fieldChain = dotPrefix.Substring(dotIdx + 1);
+                        string currentType = FindVariableStructType(ast, containingFunc, rootVar);
+                        if (currentType != null)
+                        {
+                            string[] parts = fieldChain.Split('.');
+                            for (int pi = 0; pi < parts.Length && currentType != null; pi++)
+                            {
+                                string nextType = null;
+                                foreach (var st in ast.Structs)
+                                {
+                                    if (st.Name == currentType)
+                                    {
+                                        foreach (var field in st.Fields)
+                                        {
+                                            if (field.Name == parts[pi])
+                                            {
+                                                // Check if this field's type is a struct
+                                                foreach (var st2 in ast.Structs)
+                                                {
+                                                    if (st2.Name == field.TypeName)
+                                                    {
+                                                        nextType = field.TypeName;
+                                                        break;
+                                                    }
+                                                }
+                                                break;
+                                            }
+                                        }
+                                        break;
+                                    }
+                                }
+                                currentType = nextType;
+                            }
+                            resolvedStructType = currentType;
+                        }
+                    }
+
+                    if (resolvedStructType != null)
                     {
                         foreach (var st in ast.Structs)
                         {
-                            if (st.Name == structType)
+                            if (st.Name == resolvedStructType)
                             {
                                 foreach (var field in st.Fields)
                                 {

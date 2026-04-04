@@ -51,6 +51,7 @@ namespace FFVM
     {
         public readonly Instruction[] Instructions;
         public readonly Number[] Constants;
+        public readonly string[] StringConstants;
         public readonly int RequiredRegisters;
         public readonly FunctionEntry[] Functions;
 
@@ -64,7 +65,8 @@ namespace FFVM
         public int InstructionCount => Instructions.Length - 1;
 
         public VMProgram(Instruction[] instructions, Number[] constants, int requiredRegisters,
-            FunctionEntry[] functions = null, int[] sourceMap = null, SymbolEntry[] symbolTable = null)
+            FunctionEntry[] functions = null, int[] sourceMap = null, SymbolEntry[] symbolTable = null,
+            string[] stringConstants = null)
         {
             // O15: append SENTINEL — allows removing per-instruction boundary check in ExecuteInstance.
             var withSentinel = new Instruction[instructions.Length + 1];
@@ -90,6 +92,7 @@ namespace FFVM
             }
 
             SymbolTable = symbolTable;
+            StringConstants = stringConstants ?? System.Array.Empty<string>();
         }
 
         /// <summary>

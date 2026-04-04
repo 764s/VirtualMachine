@@ -11,6 +11,7 @@ namespace FFVM.AST
         IntLiteral,
         BoolLiteral,
         StringIdLiteral,
+        StringLiteral,
 
         // Identifiers
         Identifier,
@@ -102,6 +103,12 @@ namespace FFVM.AST
             HashId = hashId;
             DebugText = debugText;
         }
+    }
+
+    public class StringLiteralExpr : Expr
+    {
+        public string Value { get; }
+        public StringLiteralExpr(string value) : base(NodeKind.StringLiteral) { Value = value; }
     }
 
     public class IdentifierExpr : Expr

@@ -27,6 +27,7 @@ Docs/
     Outlook_And_Risks.md             功能展望 + 优化展望 + 风险点 + 扩展串行计划
     Step_B3_Optimization_Tier1.md    B3 调整型优化 Tier 1（O1 fixed pin + O2 连续 OpCode）
     Step_R1_FFScript_Rename.md       B-R1 FFScript 正式命名 + .ffs 后缀统一
+    Step_B_Gamma7_SN1_NestedStruct.md  B-γ7 SN1 嵌套结构体（递归拍平 + 循环引用检测）
   Skills/                    ← 技能脚本复现示例
     skill_114feiyanxuanfengtui.ffs    飞燕旋风腿（56 帧攻击技能）
     skill_25shangpanbeijizhong.ffs    上盘被击中（30 帧受击技能）
@@ -70,6 +71,26 @@ Docs/
 - 快照/回滚没有被统一到同一种执行模型中；
 - 难以在一个地方完整阅读一个业务；
 - 难以稳定映射为编辑器 UI。
+
+#### 技能效果器流水线模式
+
+> 来源：Archive/VMScript.md §7.1
+
+现有技能系统的内层已经形成了一条稳定的**效果器执行流水线**：
+
+`SkillBehaviour → Skill → SubSkill → SubskillEffectProcessor → EffectProcessor`
+
+其中 `EffectProcessor` 执行的标准三段流水为：
+
+> **条件检查 → 目标生成 → 数据效果 → 视觉效果**
+
+- **条件**：普通条件 + 潜在目标筛选，最终组装为 `ConditionAnd<EffectContext>`。
+- **数据效果**：`IDataEffect[]`，包含伤害/能量/治疗等默认效果及资源定义的附加效果。
+- **视觉效果**：`VisualEffectDefault`，内部为条件任务树，运行上下文为 `VisualEffectContext`。
+
+这说明战斗主流程和局部效果结算本来就是两种不同粒度的逻辑。新 VM 保留了这一事实：
+- **外层**（技能流程调度）→ FFScript 的 `entry`/`wait`/阶段切换；
+- **内层**（效果器流水线）→ FFScript 的 Syscall 调用链（`sys_damage`、`sys_vfx` 等）。
 
 ### 1.3 不做什么
 
@@ -552,6 +573,30 @@ skill TracerBullet
 
 ---
 
+### 7.0 成功标准与验收维度
+
+> 来源：Archive/VMScript4.md §1.4
+
+新系统如果要被认为是成功的，至少应满足以下五个维度：
+
+1. **业务覆盖**：能同时覆盖技能主流程、子弹持续行为、Buff 事件反应三类核心业务；能表达生命周期入口、等待、阶段切换、嵌套效果调用与局部逻辑计算。
+2. **执行模型**：`wait`/`await` 成为一等语义；挂起被压缩为显式状态，而不是宿主栈残留或行为树 `Running`。
+3. **性能模型**：战斗中零运行时 GC；快照/回滚接近纯内存拷贝；宿主 + VM 综合效率不低于纯 Lua 封闭逻辑方案。
+4. **工具链**：编辑器能稳定显示流程、阶段、当前执行位置；支持断点、单步、变量查看、源码映射。
+5. **工程落地**：可以渐进替换旧系统，而不是必须一次性重写；前端语法可演进，但核心 AST/VM 模型尽量稳定。
+
+### 7.0b 设计验证递进轴线
+
+> 来源：Archive/VMScript4.md §六 → 实际执行见下方 A/B 区间
+
+项目按 **曳光弹 → 编辑器/工具链 → 实战接入** 三阶段递进验证：
+
+1. **曳光弹阶段**（Steps 1–4）：VMInstanceState → TreeWalker defer/Kill → 7 指令字节码解释循环 → Phase A+B 全验证（GC=0，rollback bit-exact）。目的：用最小实现证明执行模型可行。
+2. **编译器 + 工具链阶段**（Steps 5–9 + Debug + LSP）：完整编译器 → using/defer → 函数调用 → struct → DAP 调试器 → LSP 语言服务。目的：验证从源码到调试的全链路工具链。
+3. **优化 + 实战接入阶段**（B 区间 → C 区间）：性能 Tier 1-2 优化 → 功能完整性（嵌套 struct、常量字符串等）→ 真实 Syscall 接入 ECS → 帧同步集成。目的：在真实业务中验证性能与工程可行性。
+
+---
+
 ### A. 已完成阶段（Steps 1–9 + 调试 + CI）
 
 下表按实际执行顺序列出所有已完成步骤。
@@ -592,8 +637,11 @@ skill TracerBullet
 | — | **B-γ2 FF5 非 entry 函数 defer** | **RET_FUNC cleanup 链对齐 + CleanupBase 作用域边界 + r0 返回值保护 + Kill 逐层展开** | **763** | [B-γ2](Plan/Step_B_Gamma2_FF5_NonEntryDefer.md) |
 | — | **B-γ3 BM1 Benchmark 基础设施改进** | **WarmupRuns=100 + B02 fib(250) + B05 dispatch 说明 + B06 FuncCall 基准 + 环境指纹对比 + CI 自我基线** | **795** | [B-γ3](Plan/Step_B_Gamma3_BM1_Benchmark.md) |
 | — | **B-γ4 O15 ExecuteInstance 热循环优化** | **SENTINEL 哨兵操作码 + AggressiveOptimization + MaxStepsPerTick 局部缓存，VM 时间 -32%~-80%** | **795** | [B-γ4](Plan/Step_B_Gamma4_O15_HotLoop.md) |
+| — | **B-γ7 SN1 嵌套结构体** | **递归拍平为连续寄存器 + 循环引用检测 + 子 struct 赋值 + LSP 嵌套补全** | **884** | [B-γ7](Plan/Step_B_Gamma7_SN1_NestedStruct.md) |
+| — | **B-γ8 GR3 文档缺口 D1-D4** | **D1 技能流水线→§1.2 + D2 失败教训→§9.2 + D3 成功标准→§7.0 + D4 递进轴线→§7.0b** | **884** | — |
+| — | **B-γ9 STR1 常量字符串** | **Lexer StringLiteral + StringConstants ROM + LOAD_CONST 索引 + SyscallArgs.GetString + 不支持拼接 + 转义序列 + 快照安全** | **913** | — |
 
-**当前位置 → B-γ6 完成，850 项 Assert × 2 模式全通过。C6 合并相邻 PUSH_CLEANUP：连续 defer 合并为单个 compound cleanup block，减少 cleanup stack 深度 + 指令数。S4 结构体函数参数同步完成。**
+**当前位置 → B-γ9 完成（Phase γ 全部完成）。913 项 Assert × 2 模式全通过。**
 
 ---
 
@@ -602,8 +650,8 @@ skill TracerBullet
 以下步骤不依赖真实 ECS/Syscall 接入，可在当前独立环境中推进。
 步骤严格按编号顺序串行执行，每步完成后更新状态标记。
 
-> **当前位置 → B-γ7**（SN1 嵌套结构体）
-> ✅ **紧急任务区已清空**。850 项 Assert 全通过。
+> **当前位置 → B-δ1**（O10 快照只拷贝活跃实例）
+> ✅ **紧急任务区已清空**。913 项 Assert × 2 模式全通过。
 > 📌 **P001 建议提前排入**：BM1（B-γ3 ✅）+ O15（B-γ4 ✅）从展望提升为串行步骤，确保性能基线和热循环优化在后续功能开发前就位，持续观察性能变化。
 
 #### Phase 0: 正式命名
@@ -637,9 +685,9 @@ skill TracerBullet
 | 9 | B-γ4 | O15 ExecuteInstance 热循环优化 | ✅ | SENTINEL 哨兵操作码 + InstructionCount 属性 + 移除逐指令边界检查 + AggressiveOptimization + MaxStepsPerTick 局部缓存 + benchmark 验证 VM 时间 ≥30% 下降 + Assert 全通过 | 无 |
 | 10 | B-γ5 | S4 结构体作为函数参数 | ✅ | 结构体参数寄存器传递（scratch zone 多寄存器展开）+ R5 安全限制（≤16 scratch regs）+ CS12-CS21 测试通过 | B-γ1 (FO6) |
 | 11 | B-γ6 | C6 嵌套 using 作用域优化 | ✅ | 合并相邻 PUSH_CLEANUP（连续 defer compound merge）+ benchmark 无回退 + C6-01~C6-05 测试通过 | 无 |
-| 12 | B-γ7 | SN1 嵌套结构体 | ⏳ | 递归拍平为连续寄存器 + 编译/运行测试通过 | struct ✅ |
-| 13 | B-γ8 | GR3 文档缺口 D1-D4 | ⏳ | D1-D4 内容补入 VM_Summary.md 对应章节 | 无 |
-| 14 | B-γ9 | STR1 常量字符串（最小化） | ⏳ | Lexer StringLiteral + VMProgram.StringConstants ROM + LOAD_CONST 索引 + Syscall 日志/宿主传递验证 + 不支持拼接 + 测试通过 | 无 |
+| 12 | B-γ7 | SN1 嵌套结构体 | ✅ | 递归拍平为连续寄存器 + 循环引用检测 + 子struct赋值 + LSP嵌套补全 + CS22-CS30 测试通过 | struct ✅ |
+| 13 | B-γ8 | GR3 文档缺口 D1-D4 | ✅ | D1-D4 内容补入 VM_Summary.md 对应章节 | 无 |
+| 14 | B-γ9 | STR1 常量字符串（最小化） | ✅ | Lexer StringLiteral + VMProgram.StringConstants ROM + LOAD_CONST 索引 + Syscall 日志/宿主传递验证 + 不支持拼接 + 测试通过 | 无 |
 
 #### Phase δ: 按需补全
 
@@ -750,6 +798,24 @@ skill TracerBullet
 
 **淘汰方案**：Lua 子集、TypeScript 子集、Python 子集（AI 误用率极高，均需禁用大量原生特性）；Go 超小子集（次优，编译器稍复杂）。详细对比矩阵见引用文件。
 
+### 9.2 历史失败教训与约束推导
+
+> 来源：Archive/VMScript2.md §五
+
+以下历史失败尝试直接推导出了本项目的设计约束：
+
+| 失败尝试 | 核心教训 | 对本项目的约束 |
+|----------|----------|---------------|
+| XSLT | 复杂的转换语言不可维护 | 禁止为 Logic 设计独立子语言，必须与 Flow 共享表达式语法 |
+| XBL / HTC | 隐式绑定导致调试困难 | 所有组件组合必须显式调用，禁止隐式"魔法" |
+| ASP.NET ViewState | 自动序列化导致性能灾难 | 状态快照必须由作者显式触发，且仅拷贝连续值类型 |
+| Flash 可视化脚本 | 可视化与代码混合导致混乱 | UI 严格分离：主视图为结构化流程图，复杂逻辑降级为黑盒 |
+| AMD/CMD 模块 | 冗余语法增加心智负担 | 直接采用宿主语言的模块系统 |
+| GWT | 抽象泄漏 + 调试困难 | 保留源码映射，VM 支持调试信息，不隐藏宿主特性 |
+| Web Components v0 | 单一实现 + 生态不足 | VM 设计必须跨平台（C# / C++ / 其他），不依赖特定引擎 API |
+
+这些约束直接体现在当前设计中：FFScript 使用单一表达式语法（无子语言分裂）、显式 `wait`/`defer`/`using` 而非隐式挂起、值类型寄存器快照（无 GC 序列化）、AST 到流程图的稳定投影、以及完全受控的 12 关键字语法空间。
+
 ---
 
 ## 十、性能优化展望
@@ -829,14 +895,14 @@ skill TracerBullet
 
 ### 11.3 文档缺口（来自档案交叉审查）
 
-以下内容存在于 Archive 早期讨论稿中，但尚未合并入本文：
+以下内容存在于 Archive 早期讨论稿中，已全部合并入本文（B-γ8 完成）：
 
-| # | 来源 | 内容 | 是否需要补充 |
-|---|------|------|-------------|
-| D1 | VMScript.md | "条件→目标→数据效果→视觉效果"技能流水线模式 | 建议补入 §1.2 或 §2 |
-| D2 | VMScript2.md | 历史失败教训表（XSLT/XBL/ASP.NET/Flash/AMD/GWT/WebComponents → 设计约束推导） | 建议补入 §9 选型理由 |
-| D3 | VMScript4.md | 项目级成功标准（5 类验收维度） | 建议补入 §7 或新增验收标准节 |
-| D4 | VMScript4.md | 设计验证递进轴线（曳光弹 → 编辑器 → 实战接入） | 已隐含在 §7 推进顺序中，可补充显式描述 |
+| # | 来源 | 内容 | 合并位置 |
+|---|------|------|---------|
+| D1 | VMScript.md | "条件→目标→数据效果→视觉效果"技能流水线模式 | ✅ §1.2「技能效果器流水线模式」 |
+| D2 | VMScript2.md | 历史失败教训表（XSLT/XBL/ASP.NET/Flash/AMD/GWT/WebComponents → 设计约束推导） | ✅ §9.2「历史失败教训与约束推导」 |
+| D3 | VMScript4.md | 项目级成功标准（5 类验收维度） | ✅ §7.0「成功标准与验收维度」 |
+| D4 | VMScript4.md | 设计验证递进轴线（曳光弹 → 编辑器 → 实战接入） | ✅ §7.0b「设计验证递进轴线」 |
 
 ---
 

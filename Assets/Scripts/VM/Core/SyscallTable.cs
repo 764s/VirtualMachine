@@ -28,6 +28,7 @@ namespace FFVM
         public int GetInt(int index) => _state.Registers.Get(index).ToInt();
         public float GetFloat(int index) => _state.Registers.Get(index).ToFloat();
         public Number GetNumber(int index) => _state.Registers.Get(index);
+        public string GetString(int index, string[] stringTable) => stringTable[_state.Registers.Get(index).ToInt()];
         public void SetReturn(Number value) => _state.Registers.Set(0, value);
         public void SetReturnInt(int value) => _state.Registers.Set(0, Number.FromInt(value));
         public void SetReturnFloat(float value) => _state.Registers.Set(0, Number.FromFloat(value));
@@ -46,6 +47,7 @@ namespace FFVM
         public int GetInt(int index) => _state->Registers.Get(index).ToInt();
         public float GetFloat(int index) => _state->Registers.Get(index).ToFloat();
         public Number GetNumber(int index) => _state->Registers.Get(index);
+        public string GetString(int index, string[] stringTable) => stringTable[_state->Registers.Get(index).ToInt()];
         public void SetReturn(Number value) => _state->Registers.Set(0, value);
         public void SetReturnInt(int value) => _state->Registers.Set(0, Number.FromInt(value));
         public void SetReturnFloat(float value) => _state->Registers.Set(0, Number.FromFloat(value));

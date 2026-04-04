@@ -20,6 +20,14 @@ namespace FFVM.Compiler
 
             var module = new ModuleNode("script");
 
+            // Check for lexer errors
+            if (_tokens.Length > 0 && _tokens[_tokens.Length - 1].Type == TokenType.Error)
+            {
+                _errors.Add(_tokens[_tokens.Length - 1].Text);
+                errors = _errors;
+                return module;
+            }
+
             while (!IsAtEnd())
             {
                 if (Check(TokenType.Func))
@@ -43,12 +51,13 @@ namespace FFVM.Compiler
 
         // ===== Token helpers =====
 
-        private Token Current() => _tokens[_pos];
-        private bool IsAtEnd() => _tokens[_pos].Type == TokenType.EOF;
-        private bool Check(TokenType type) => _tokens[_pos].Type == type;
+        private Token Current() => _pos < _tokens.Length ? _tokens[_pos] : _tokens[_tokens.Length - 1];
+        private bool IsAtEnd() => _pos >= _tokens.Length || _tokens[_pos].Type == TokenType.EOF || _tokens[_pos].Type == TokenType.Error;
+        private bool Check(TokenType type) => _pos < _tokens.Length && _tokens[_pos].Type == type;
 
         private bool Check(params TokenType[] types)
         {
+            if (_pos >= _tokens.Length) return false;
             var cur = _tokens[_pos].Type;
             for (int i = 0; i < types.Length; i++)
                 if (cur == types[i]) return true;
@@ -602,6 +611,16 @@ namespace FFVM.Compiler
             {
                 Advance();
                 var expr = new NumberLiteralExpr((float)tok.FloatValue);
+                expr.Line = tok.Line;
+                expr.Column = tok.Column;
+                return expr;
+            }
+
+            // String literal
+            if (tok.Type == TokenType.StringLiteral)
+            {
+                Advance();
+                var expr = new StringLiteralExpr(tok.Text);
                 expr.Line = tok.Line;
                 expr.Column = tok.Column;
                 return expr;

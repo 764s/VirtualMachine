@@ -2058,6 +2058,384 @@ func main() {
             Assert(log.Count == 1 && log[0] == "55", $"CS21: sumN({{1,10}}) = 55, got {(log.Count > 0 ? log[0] : "?")}");
         }
 
+        // ===== Test CS22: SN1 — basic nested struct declaration + field access =====
+        {
+            string source = @"
+struct Vec2 {
+    x: int
+    y: int
+}
+struct Rect {
+    min: Vec2
+    max: Vec2
+}
+func main() {
+    var r: Rect
+    r.min.x = 1
+    r.min.y = 2
+    r.max.x = 10
+    r.max.y = 20
+    Report(r.min.x)
+    Report(r.min.y)
+    Report(r.max.x)
+    Report(r.max.y)
+}";
+            var syscalls = new Dictionary<string, int> { { "Report", 0 } };
+            var result = compiler.Compile(source, "main", syscalls);
+            Assert(result.Success, "CS22 compile success");
+
+            var log = new List<string>();
+            var world = new VMWorld();
+            world.Modules.Load(0, result.Program);
+            world.Syscalls.Register(0, "Report", (ref VMInstanceState s) =>
+            {
+                log.Add($"{s.Registers.Get(0).ToInt()}");
+            });
+
+            world.SpawnInstance(0, 0);
+            world.Tick();
+            Assert(log.Count == 4, $"CS22: expected 4 reports, got {log.Count}");
+            Assert(log[0] == "1", $"CS22: min.x=1, got {log[0]}");
+            Assert(log[1] == "2", $"CS22: min.y=2, got {log[1]}");
+            Assert(log[2] == "10", $"CS22: max.x=10, got {log[2]}");
+            Assert(log[3] == "20", $"CS22: max.y=20, got {log[3]}");
+        }
+
+        // ===== Test CS23: SN1 — nested struct whole copy =====
+        {
+            string source = @"
+struct Vec2 {
+    x: int
+    y: int
+}
+struct Rect {
+    min: Vec2
+    max: Vec2
+}
+func main() {
+    var a: Rect
+    a.min.x = 1
+    a.min.y = 2
+    a.max.x = 3
+    a.max.y = 4
+    var b: Rect = a
+    Report(b.min.x)
+    Report(b.min.y)
+    Report(b.max.x)
+    Report(b.max.y)
+}";
+            var syscalls = new Dictionary<string, int> { { "Report", 0 } };
+            var result = compiler.Compile(source, "main", syscalls);
+            Assert(result.Success, "CS23 compile success");
+
+            var log = new List<string>();
+            var world = new VMWorld();
+            world.Modules.Load(0, result.Program);
+            world.Syscalls.Register(0, "Report", (ref VMInstanceState s) =>
+            {
+                log.Add($"{s.Registers.Get(0).ToInt()}");
+            });
+
+            world.SpawnInstance(0, 0);
+            world.Tick();
+            Assert(log.Count == 4, $"CS23: expected 4 reports, got {log.Count}");
+            Assert(log[0] == "1", $"CS23: b.min.x=1, got {log[0]}");
+            Assert(log[1] == "2", $"CS23: b.min.y=2, got {log[1]}");
+            Assert(log[2] == "3", $"CS23: b.max.x=3, got {log[2]}");
+            Assert(log[3] == "4", $"CS23: b.max.y=4, got {log[3]}");
+        }
+
+        // ===== Test CS24: SN1 — nested struct as function parameter =====
+        {
+            string source = @"
+struct Vec2 {
+    x: int
+    y: int
+}
+struct Rect {
+    min: Vec2
+    max: Vec2
+}
+func area(r: Rect) {
+    var w: int = r.max.x - r.min.x
+    var h: int = r.max.y - r.min.y
+    return w * h
+}
+func main() {
+    var r: Rect
+    r.min.x = 2
+    r.min.y = 3
+    r.max.x = 7
+    r.max.y = 8
+    Report(area(r))
+}";
+            var syscalls = new Dictionary<string, int> { { "Report", 0 } };
+            var result = compiler.Compile(source, "main", syscalls);
+            Assert(result.Success, "CS24 compile success");
+
+            var log = new List<string>();
+            var world = new VMWorld();
+            world.Modules.Load(0, result.Program);
+            world.Syscalls.Register(0, "Report", (ref VMInstanceState s) =>
+            {
+                log.Add($"{s.Registers.Get(0).ToInt()}");
+            });
+
+            world.SpawnInstance(0, 0);
+            world.Tick();
+            Assert(log.Count == 1 && log[0] == "25", $"CS24: area({{2,3,7,8}})=25, got {(log.Count > 0 ? log[0] : "?")}");
+        }
+
+        // ===== Test CS25: SN1 — three-level nested struct =====
+        {
+            string source = @"
+struct Vec2 {
+    x: int
+    y: int
+}
+struct Rect {
+    min: Vec2
+    max: Vec2
+}
+struct Scene {
+    bounds: Rect
+    id: int
+}
+func main() {
+    var s: Scene
+    s.bounds.min.x = 10
+    s.bounds.min.y = 20
+    s.bounds.max.x = 100
+    s.bounds.max.y = 200
+    s.id = 42
+    Report(s.bounds.min.x)
+    Report(s.bounds.max.y)
+    Report(s.id)
+}";
+            var syscalls = new Dictionary<string, int> { { "Report", 0 } };
+            var result = compiler.Compile(source, "main", syscalls);
+            Assert(result.Success, "CS25 compile success");
+
+            var log = new List<string>();
+            var world = new VMWorld();
+            world.Modules.Load(0, result.Program);
+            world.Syscalls.Register(0, "Report", (ref VMInstanceState s) =>
+            {
+                log.Add($"{s.Registers.Get(0).ToInt()}");
+            });
+
+            world.SpawnInstance(0, 0);
+            world.Tick();
+            Assert(log.Count == 3, $"CS25: expected 3 reports, got {log.Count}");
+            Assert(log[0] == "10", $"CS25: bounds.min.x=10, got {log[0]}");
+            Assert(log[1] == "200", $"CS25: bounds.max.y=200, got {log[1]}");
+            Assert(log[2] == "42", $"CS25: id=42, got {log[2]}");
+        }
+
+        // ===== Test CS26: SN1 — circular struct reference → compile error =====
+        {
+            string source = @"
+struct A {
+    f: B
+}
+struct B {
+    g: A
+}
+func main() {
+    var a: A
+}";
+            var syscalls = new Dictionary<string, int>();
+            var result = compiler.Compile(source, "main", syscalls);
+            Assert(!result.Success, "CS26: circular struct → compile error");
+        }
+
+        // ===== Test CS27: SN1 — nested struct field used in syscall =====
+        {
+            string source = @"
+struct Vec2 {
+    x: int
+    y: int
+}
+struct Rect {
+    min: Vec2
+    max: Vec2
+}
+func main() {
+    var r: Rect
+    r.min.x = 5
+    r.min.y = 6
+    r.max.x = 15
+    r.max.y = 16
+    Report(r.min.x + r.max.y)
+}";
+            var syscalls = new Dictionary<string, int> { { "Report", 0 } };
+            var result = compiler.Compile(source, "main", syscalls);
+            Assert(result.Success, "CS27 compile success");
+
+            var log = new List<string>();
+            var world = new VMWorld();
+            world.Modules.Load(0, result.Program);
+            world.Syscalls.Register(0, "Report", (ref VMInstanceState s) =>
+            {
+                log.Add($"{s.Registers.Get(0).ToInt()}");
+            });
+
+            world.SpawnInstance(0, 0);
+            world.Tick();
+            Assert(log.Count == 1 && log[0] == "21", $"CS27: min.x + max.y = 21, got {(log.Count > 0 ? log[0] : "?")}");
+        }
+
+        // ===== Test CS28: SN1 — nested struct + wait + snapshot/rollback =====
+        {
+            string source = @"
+struct Vec2 {
+    x: int
+    y: int
+}
+struct Rect {
+    min: Vec2
+    max: Vec2
+}
+func main() {
+    var r: Rect
+    r.min.x = 1
+    r.max.y = 2
+    Report(r.min.x)
+    wait 1
+    r.min.x = 99
+    r.max.y = 88
+    Report(r.min.x)
+    Report(r.max.y)
+}";
+            var syscalls = new Dictionary<string, int> { { "Report", 0 } };
+            var result = compiler.Compile(source, "main", syscalls);
+            Assert(result.Success, "CS28 compile success");
+
+            var log = new List<string>();
+            var world = new VMWorld();
+            world.Modules.Load(0, result.Program);
+            world.Syscalls.Register(0, "Report", (ref VMInstanceState s) =>
+            {
+                log.Add($"{s.Registers.Get(0).ToInt()}");
+            });
+
+            world.SpawnInstance(0, 0);
+
+            // Tick 1 (frame=1): reports r.min.x=1, then hits wait 1 (WaitCounter=1)
+            world.Tick();
+            Assert(log.Count == 1 && log[0] == "1", $"CS28 tick1: min.x=1, got {(log.Count > 0 ? log[0] : "?")}");
+
+            // Save state after tick 1
+            world.SaveState();
+            int savedFrame = world.FrameNumber;
+
+            // Tick 2 (frame=2): WaitCounter decrements 1→0, does not execute
+            world.Tick();
+
+            // Tick 3 (frame=3): resumes, reports r.min.x=99, r.max.y=88
+            log.Clear();
+            world.Tick();
+            Assert(log.Count == 2, $"CS28 tick3: expected 2 reports, got {log.Count}");
+            Assert(log.Count >= 2 && log[0] == "99" && log[1] == "88",
+                $"CS28 tick3: min.x=99, max.y=88, got {string.Join(",", log)}");
+
+            // Rollback to saved frame and replay
+            log.Clear();
+            world.LoadState(savedFrame);
+            world.Tick(); // wait decrement
+            world.Tick(); // actual execution
+            Assert(log.Count == 2, $"CS28 rollback: expected 2 reports, got {log.Count}");
+            Assert(log.Count >= 2 && log[0] == "99" && log[1] == "88",
+                $"CS28 rollback: min.x=99, max.y=88, got {string.Join(",", log)}");
+        }
+
+        // ===== Test CS29: SN1 — whole-struct assignment between nested struct vars =====
+        {
+            string source = @"
+struct Vec2 {
+    x: int
+    y: int
+}
+struct Rect {
+    min: Vec2
+    max: Vec2
+}
+func main() {
+    var a: Rect
+    a.min.x = 1
+    a.min.y = 2
+    a.max.x = 3
+    a.max.y = 4
+    var b: Rect
+    b = a
+    Report(b.min.x)
+    Report(b.min.y)
+    Report(b.max.x)
+    Report(b.max.y)
+}";
+            var syscalls = new Dictionary<string, int> { { "Report", 0 } };
+            var result = compiler.Compile(source, "main", syscalls);
+            Assert(result.Success, "CS29 compile success");
+
+            var log = new List<string>();
+            var world = new VMWorld();
+            world.Modules.Load(0, result.Program);
+            world.Syscalls.Register(0, "Report", (ref VMInstanceState s) =>
+            {
+                log.Add($"{s.Registers.Get(0).ToInt()}");
+            });
+
+            world.SpawnInstance(0, 0);
+            world.Tick();
+            Assert(log.Count == 4, $"CS29: expected 4 reports, got {log.Count}");
+            Assert(log[0] == "1" && log[1] == "2" && log[2] == "3" && log[3] == "4",
+                $"CS29: b = a copy, got {string.Join(",", log)}");
+        }
+
+        // ===== Test CS30: SN1 — sub-struct field assignment (a.min = b.min) =====
+        {
+            string source = @"
+struct Vec2 {
+    x: int
+    y: int
+}
+struct Rect {
+    min: Vec2
+    max: Vec2
+}
+func main() {
+    var a: Rect
+    a.min.x = 10
+    a.min.y = 20
+    a.max.x = 30
+    a.max.y = 40
+    var b: Rect
+    b.min = a.min
+    b.max = a.max
+    Report(b.min.x)
+    Report(b.min.y)
+    Report(b.max.x)
+    Report(b.max.y)
+}";
+            var syscalls = new Dictionary<string, int> { { "Report", 0 } };
+            var result = compiler.Compile(source, "main", syscalls);
+            Assert(result.Success, "CS30 compile success");
+
+            var log = new List<string>();
+            var world = new VMWorld();
+            world.Modules.Load(0, result.Program);
+            world.Syscalls.Register(0, "Report", (ref VMInstanceState s) =>
+            {
+                log.Add($"{s.Registers.Get(0).ToInt()}");
+            });
+
+            world.SpawnInstance(0, 0);
+            world.Tick();
+            Assert(log.Count == 4, $"CS30: expected 4 reports, got {log.Count}");
+            Assert(log[0] == "10" && log[1] == "20" && log[2] == "30" && log[3] == "40",
+                $"CS30: sub-struct copy, got {string.Join(",", log)}");
+        }
+
         // ===== Test C4-01: Direct call to requires_cleanup syscall → compile error =====
         {
             string source = @"
@@ -3688,6 +4066,246 @@ func main() {
             world.SpawnInstance(0, 0);
             world.Tick();
             Assert(reported == 42, $"E002-06: declaration-loaded syscall works at runtime, got {reported}");
+        }
+
+        // ===== Test STR1-01: Basic string literal — compile + syscall receives string =====
+        {
+            string source = @"
+func main() {
+    Report(""hello"")
+}";
+            var syscalls = new Dictionary<string, int> { { "Report", 0 } };
+            var result = compiler.Compile(source, "main", syscalls);
+            Assert(result.Success, "STR1-01 compile success");
+            Assert(result.Program.StringConstants.Length == 1, "STR1-01: one string constant");
+            Assert(result.Program.StringConstants[0] == "hello", "STR1-01: string constant is 'hello'");
+
+            string received = null;
+            var world = new VMWorld();
+            world.Modules.Load(0, result.Program);
+            var strTable = result.Program.StringConstants;
+            world.Syscalls.Register(0, "Report", (ref VMInstanceState s) =>
+            {
+                var args = new SyscallArgs(ref s);
+                received = args.GetString(0, strTable);
+            });
+            world.SpawnInstance(0, 0);
+            world.Tick();
+            Assert(received == "hello", $"STR1-01: syscall received 'hello', got '{received}'");
+        }
+
+        // ===== Test STR1-02: Multiple distinct strings — deduplication =====
+        {
+            string source = @"
+func main() {
+    A(""foo"")
+    B(""bar"")
+    A(""foo"")
+}";
+            var syscalls = new Dictionary<string, int> { { "A", 0 }, { "B", 1 } };
+            var result = compiler.Compile(source, "main", syscalls);
+            Assert(result.Success, "STR1-02 compile success");
+            Assert(result.Program.StringConstants.Length == 2, $"STR1-02: 2 unique strings, got {result.Program.StringConstants.Length}");
+
+            var log = new List<string>();
+            var world = new VMWorld();
+            world.Modules.Load(0, result.Program);
+            var strTable = result.Program.StringConstants;
+            world.Syscalls.Register(0, "A", (ref VMInstanceState s) =>
+            {
+                log.Add("A:" + new SyscallArgs(ref s).GetString(0, strTable));
+            });
+            world.Syscalls.Register(1, "B", (ref VMInstanceState s) =>
+            {
+                log.Add("B:" + new SyscallArgs(ref s).GetString(0, strTable));
+            });
+            world.SpawnInstance(0, 0);
+            world.Tick();
+            Assert(log.Count == 3, $"STR1-02: 3 calls, got {log.Count}");
+            Assert(log[0] == "A:foo" && log[1] == "B:bar" && log[2] == "A:foo",
+                $"STR1-02: log={string.Join(",", log)}");
+        }
+
+        // ===== Test STR1-03: String in variable — register carries index =====
+        {
+            string source = @"
+func main() {
+    var msg: string = ""world""
+    Report(msg)
+}";
+            var syscalls = new Dictionary<string, int> { { "Report", 0 } };
+            var result = compiler.Compile(source, "main", syscalls);
+            Assert(result.Success, "STR1-03 compile success");
+
+            string received = null;
+            var world = new VMWorld();
+            world.Modules.Load(0, result.Program);
+            var strTable = result.Program.StringConstants;
+            world.Syscalls.Register(0, "Report", (ref VMInstanceState s) =>
+            {
+                received = new SyscallArgs(ref s).GetString(0, strTable);
+            });
+            world.SpawnInstance(0, 0);
+            world.Tick();
+            Assert(received == "world", $"STR1-03: variable stores string index, syscall received '{received}'");
+        }
+
+        // ===== Test STR1-04: String concatenation is a compile error =====
+        {
+            string source = @"
+func main() {
+    var x: int = ""a"" + ""b""
+}";
+            var result = compiler.Compile(source, "main", new Dictionary<string, int>());
+            Assert(!result.Success, "STR1-04: string concatenation is compile error");
+            Assert(result.Errors.Count > 0 && result.Errors[0].Contains("String literals"),
+                "STR1-04: error mentions 'String literals'");
+        }
+
+        // ===== Test STR1-05: String in unary expression is a compile error =====
+        {
+            string source = @"
+func main() {
+    var x: int = -""a""
+}";
+            var result = compiler.Compile(source, "main", new Dictionary<string, int>());
+            Assert(!result.Success, "STR1-05: string in unary expression is compile error");
+        }
+
+        // ===== Test STR1-06: String in arithmetic is a compile error =====
+        {
+            string source = @"
+func main() {
+    var n: int = 1
+    var x: int = n + ""a""
+}";
+            var result = compiler.Compile(source, "main", new Dictionary<string, int>());
+            Assert(!result.Success, "STR1-06: string + number is compile error");
+        }
+
+        // ===== Test STR1-07: String as function argument =====
+        {
+            string source = @"
+func greet(msg: string) {
+    Report(msg)
+}
+func main() {
+    greet(""hi"")
+}";
+            var syscalls = new Dictionary<string, int> { { "Report", 0 } };
+            var result = compiler.Compile(source, "main", syscalls);
+            Assert(result.Success, "STR1-07 compile success");
+
+            string received = null;
+            var world = new VMWorld();
+            world.Modules.Load(0, result.Program);
+            var strTable = result.Program.StringConstants;
+            world.Syscalls.Register(0, "Report", (ref VMInstanceState s) =>
+            {
+                received = new SyscallArgs(ref s).GetString(0, strTable);
+            });
+            world.SpawnInstance(0, 0);
+            world.Tick();
+            Assert(received == "hi", $"STR1-07: function forwards string to syscall, got '{received}'");
+        }
+
+        // ===== Test STR1-08: Escape sequences in strings =====
+        {
+            string source = @"
+func main() {
+    Report(""line1\nline2"")
+    Report(""tab\there"")
+    Report(""quote\""\\"")
+}";
+            var syscalls = new Dictionary<string, int> { { "Report", 0 } };
+            var result = compiler.Compile(source, "main", syscalls);
+            Assert(result.Success, "STR1-08 compile success");
+            Assert(result.Program.StringConstants.Length == 3, "STR1-08: 3 distinct strings");
+            Assert(result.Program.StringConstants[0] == "line1\nline2", "STR1-08: newline escape");
+            Assert(result.Program.StringConstants[1] == "tab\there", "STR1-08: tab escape");
+            Assert(result.Program.StringConstants[2] == "quote\"\\", "STR1-08: quote+backslash escape");
+        }
+
+        // ===== Test STR1-09: Empty string =====
+        {
+            string source = @"
+func main() {
+    Report("""")
+}";
+            var syscalls = new Dictionary<string, int> { { "Report", 0 } };
+            var result = compiler.Compile(source, "main", syscalls);
+            Assert(result.Success, "STR1-09 compile success");
+            Assert(result.Program.StringConstants[0] == "", "STR1-09: empty string constant");
+
+            string received = null;
+            var world = new VMWorld();
+            world.Modules.Load(0, result.Program);
+            var strTable = result.Program.StringConstants;
+            world.Syscalls.Register(0, "Report", (ref VMInstanceState s) =>
+            {
+                received = new SyscallArgs(ref s).GetString(0, strTable);
+            });
+            world.SpawnInstance(0, 0);
+            world.Tick();
+            Assert(received == "", $"STR1-09: empty string passed through, got '{received}'");
+        }
+
+        // ===== Test STR1-10: Unterminated string is a lexer error =====
+        {
+            string source = @"
+func main() {
+    Report(""hello)
+}";
+            var result = compiler.Compile(source, "main", new Dictionary<string, int>());
+            Assert(!result.Success, "STR1-10: unterminated string is compile error");
+        }
+
+        // ===== Test STR1-11: String survives snapshot/rollback (ROM) =====
+        {
+            string source = @"
+func main() {
+    Report(""snapshot_test"")
+    wait 1
+    Report(""after_wait"")
+}";
+            var syscalls = new Dictionary<string, int> { { "Report", 0 } };
+            var result = compiler.Compile(source, "main", syscalls);
+            Assert(result.Success, "STR1-11 compile success");
+
+            var log = new List<string>();
+            var world = new VMWorld();
+            world.Modules.Load(0, result.Program);
+            var strTable = result.Program.StringConstants;
+            world.Syscalls.Register(0, "Report", (ref VMInstanceState s) =>
+            {
+                log.Add(new SyscallArgs(ref s).GetString(0, strTable));
+            });
+            world.SpawnInstance(0, 0);
+            world.Tick(); // executes Report("snapshot_test") + wait 1
+
+            // Save + rollback
+            int frame = world.FrameNumber;
+            world.SaveState();
+            world.Tick(); // decrement wait
+            world.Tick(); // executes Report("after_wait")
+            world.LoadState(frame);
+            log.Clear();
+            world.Tick(); // decrement wait (replayed)
+            world.Tick(); // executes Report("after_wait") again
+            Assert(log.Count == 1 && log[0] == "after_wait",
+                $"STR1-11: string survives rollback, got [{string.Join(",", log)}]");
+        }
+
+        // ===== Test STR1-12: No StringConstants when no string literals =====
+        {
+            string source = @"
+func main() {
+    var x: int = 42
+}";
+            var result = compiler.Compile(source, "main", new Dictionary<string, int>());
+            Assert(result.Success, "STR1-12 compile success");
+            Assert(result.Program.StringConstants.Length == 0,
+                $"STR1-12: no string constants when none used, got {result.Program.StringConstants.Length}");
         }
 
         // ===== Summary =====

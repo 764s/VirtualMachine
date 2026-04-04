@@ -44,12 +44,28 @@ namespace FFVM.Compiler
         private Dictionary<string, StructDecl> _structTypes;    // typeName → struct declaration
         private Dictionary<string, string> _structVarTypes;     // varName → struct typeName
 
+        // SN1: Nested struct — flattened struct info (computed once at compile start)
+        private struct FlatFieldEntry
+        {
+            public string DotPath;   // e.g. "inner.x" (dot-separated from struct root)
+            public int Offset;       // register offset from struct base
+        }
+        private struct FlatStructInfo
+        {
+            public int FlatFieldCount;          // total scalar registers after recursive flattening
+            public FlatFieldEntry[] FlatFields;  // ordered flat field entries
+        }
+        private Dictionary<string, FlatStructInfo> _flatStructInfo;  // typeName → flattened info
+
         // Multi-function support
         private Dictionary<string, int> _functionTable;  // funcName → entryIP (-1 = not yet compiled)
         private Dictionary<string, FuncDecl> _funcDecls; // funcName → AST for param count lookup
         private bool _isEntryFunction;                   // true when compiling the entry func
         private bool _isLeafFunction;                    // FO1: true when compiling a leaf func
         private int _callerWindowSize;                   // localVarCount for current function
+
+        // STR1: String constant pool (ROM)
+        private List<string> _stringConstants;
 
         // FO1: Leaf function analysis — funcName → isLeaf
         private Dictionary<string, bool> _leafFunctions;
@@ -117,6 +133,7 @@ namespace FFVM.Compiler
         {
             _instructions = new List<Instruction>();
             _constants = new List<Number>();
+            _stringConstants = new List<string>();
             _syscalls = syscalls ?? new Dictionary<string, int>();
             _syscallTable = syscallTable;
             _errors = new List<string>();
@@ -135,6 +152,11 @@ namespace FFVM.Compiler
                 else
                     _structTypes[s.Name] = s;
             }
+
+            // SN1: Build flattened struct info (recursive expansion + cycle detection)
+            BuildFlatStructInfo();
+            if (_errors.Count > 0)
+                return new CompileResult { Errors = _errors };
 
             // --- Pass 1: build function table (name → placeholder IP) ---
             _functionTable = new Dictionary<string, int>();
@@ -254,7 +276,8 @@ namespace FFVM.Compiler
                     maxRegs,
                     functionEntries.ToArray(),
                     _sourceLines.ToArray(),
-                    _symbolEntries.ToArray()
+                    _symbolEntries.ToArray(),
+                    _stringConstants.Count > 0 ? _stringConstants.ToArray() : null
                 ),
                 Errors = _errors
             };
@@ -290,23 +313,24 @@ namespace FFVM.Compiler
             _liveRanges = AnalyzeVariableLifetimes(func);
 
             // Bind parameters: copy from scratch zone r0..rN into local registers r16+
-            // S4: struct parameters occupy multiple consecutive registers
+            // S4/SN1: struct parameters use flattened field count for nested struct support
             {
                 int scratchReg = 0;
                 for (int i = 0; i < func.Parameters.Count; i++)
                 {
                     var param = func.Parameters[i];
-                    if (_structTypes.TryGetValue(param.TypeName, out var paramSD))
+                    if (_structTypes.ContainsKey(param.TypeName))
                     {
                         // Struct parameter: allocate consecutive locals, copy multi-reg from scratch
-                        int baseReg = DeclareStructVar(param.Name, paramSD.Fields.Count);
+                        int flatCount = _flatStructInfo[param.TypeName].FlatFieldCount;
+                        int baseReg = DeclareStructVar(param.Name, flatCount);
                         _structVarTypes[param.Name] = param.TypeName;
-                        for (int j = 0; j < paramSD.Fields.Count; j++)
+                        for (int j = 0; j < flatCount; j++)
                         {
                             if (baseReg + j != scratchReg + j)
                                 Emit(OpCode.MOVE, baseReg + j, scratchReg + j);
                         }
-                        scratchReg += paramSD.Fields.Count;
+                        scratchReg += flatCount;
                     }
                     else
                     {
@@ -613,8 +637,9 @@ namespace FFVM.Compiler
                 {
                     order++;
                     int fieldCount = 0;
-                    if (_structTypes.TryGetValue(varDecl.TypeName, out var sd))
-                        fieldCount = sd.Fields.Count;
+                    // SN1: use flattened field count for nested struct support
+                    int fc = GetFlatFieldCount(varDecl.TypeName);
+                    if (fc > 0) fieldCount = fc;
 
                     ranges[varDecl.Name] = new LiveRange
                     {
@@ -681,10 +706,10 @@ namespace FFVM.Compiler
             for (int i = 0; i < func.Parameters.Count; i++)
             {
                 order++;
-                // S4: struct parameters need correct FieldCount for register release
+                // S4/SN1: struct parameters need correct FieldCount (flattened) for register release
                 int fieldCount = 0;
-                if (_structTypes.TryGetValue(func.Parameters[i].TypeName, out var paramStructDecl))
-                    fieldCount = paramStructDecl.Fields.Count;
+                int fc = GetFlatFieldCount(func.Parameters[i].TypeName);
+                if (fc > 0) fieldCount = fc;
                 ranges[func.Parameters[i].Name] = new LiveRange
                 {
                     Name = func.Parameters[i].Name,
@@ -712,6 +737,175 @@ namespace FFVM.Compiler
             }
 
             return ranges;
+        }
+
+        // ===== SN1: Nested struct flattening =====
+
+        /// <summary>
+        /// Build _flatStructInfo for all struct types by recursively expanding nested struct fields.
+        /// Detects circular references via a visiting set.
+        /// </summary>
+        private void BuildFlatStructInfo()
+        {
+            _flatStructInfo = new Dictionary<string, FlatStructInfo>();
+            var visiting = new HashSet<string>(); // cycle detection
+
+            foreach (var kv in _structTypes)
+            {
+                if (!_flatStructInfo.ContainsKey(kv.Key))
+                    FlattenStruct(kv.Key, visiting);
+            }
+        }
+
+        private FlatStructInfo FlattenStruct(string typeName, HashSet<string> visiting)
+        {
+            if (_flatStructInfo.TryGetValue(typeName, out var cached))
+                return cached;
+
+            if (!visiting.Add(typeName))
+            {
+                _errors.Add($"Circular struct reference detected: '{typeName}'");
+                var empty = new FlatStructInfo { FlatFieldCount = 0, FlatFields = System.Array.Empty<FlatFieldEntry>() };
+                _flatStructInfo[typeName] = empty;
+                return empty;
+            }
+
+            var sd = _structTypes[typeName];
+            var flatFields = new List<FlatFieldEntry>();
+            int offset = 0;
+
+            for (int i = 0; i < sd.Fields.Count; i++)
+            {
+                var field = sd.Fields[i];
+                if (_structTypes.ContainsKey(field.TypeName))
+                {
+                    // Nested struct field — recursively flatten
+                    var inner = FlattenStruct(field.TypeName, visiting);
+                    for (int j = 0; j < inner.FlatFields.Length; j++)
+                    {
+                        flatFields.Add(new FlatFieldEntry
+                        {
+                            DotPath = field.Name + "." + inner.FlatFields[j].DotPath,
+                            Offset = offset + inner.FlatFields[j].Offset
+                        });
+                    }
+                    offset += inner.FlatFieldCount;
+                }
+                else
+                {
+                    // Scalar field
+                    flatFields.Add(new FlatFieldEntry { DotPath = field.Name, Offset = offset });
+                    offset++;
+                }
+            }
+
+            visiting.Remove(typeName);
+
+            var info = new FlatStructInfo
+            {
+                FlatFieldCount = offset,
+                FlatFields = flatFields.ToArray()
+            };
+            _flatStructInfo[typeName] = info;
+            return info;
+        }
+
+        /// <summary>
+        /// Get the flattened field count for a struct type. Returns -1 if not a struct.
+        /// </summary>
+        private int GetFlatFieldCount(string typeName)
+        {
+            if (_flatStructInfo != null && _flatStructInfo.TryGetValue(typeName, out var info))
+                return info.FlatFieldCount;
+            return -1;
+        }
+
+        /// <summary>
+        /// Resolve a dot-path (e.g. "inner.x") to a register offset within a flattened struct.
+        /// Also supports sub-struct prefix paths (e.g. "min" in Rect → offset of "min.x").
+        /// Returns -1 if not found.
+        /// </summary>
+        private int ResolveFlatFieldOffset(string typeName, string dotPath)
+        {
+            if (_flatStructInfo == null || !_flatStructInfo.TryGetValue(typeName, out var info))
+                return -1;
+            // First: exact match (scalar leaf field)
+            for (int i = 0; i < info.FlatFields.Length; i++)
+            {
+                if (info.FlatFields[i].DotPath == dotPath)
+                    return info.FlatFields[i].Offset;
+            }
+            // Second: prefix match (sub-struct field — return offset of first child)
+            string prefix = dotPath + ".";
+            for (int i = 0; i < info.FlatFields.Length; i++)
+            {
+                if (info.FlatFields[i].DotPath.StartsWith(prefix))
+                    return info.FlatFields[i].Offset;
+            }
+            return -1;
+        }
+
+        /// <summary>
+        /// Get the flattened field count for a sub-field within a struct (for sub-struct assignment).
+        /// E.g. for Rect.min where min is Vec2, returns 2.
+        /// Returns -1 if the field is a scalar.
+        /// </summary>
+        private int GetSubFieldFlatCount(string typeName, string fieldName)
+        {
+            if (!_structTypes.TryGetValue(typeName, out var sd))
+                return -1;
+            for (int i = 0; i < sd.Fields.Count; i++)
+            {
+                if (sd.Fields[i].Name == fieldName)
+                {
+                    int fc = GetFlatFieldCount(sd.Fields[i].TypeName);
+                    return fc > 0 ? fc : -1;
+                }
+            }
+            return -1;
+        }
+
+        /// <summary>
+        /// Get the struct type name of a specific field. Returns null if scalar.
+        /// </summary>
+        private string GetFieldStructType(string parentTypeName, string fieldName)
+        {
+            if (!_structTypes.TryGetValue(parentTypeName, out var sd))
+                return null;
+            for (int i = 0; i < sd.Fields.Count; i++)
+            {
+                if (sd.Fields[i].Name == fieldName && _structTypes.ContainsKey(sd.Fields[i].TypeName))
+                    return sd.Fields[i].TypeName;
+            }
+            return null;
+        }
+
+        /// <summary>
+        /// SN1: Resolve a dot-path (e.g. "inner.x") to the type name of the final field.
+        /// Returns struct type name if the leaf is a struct, the scalar type name if scalar,
+        /// or null if the path is invalid.
+        /// </summary>
+        private string ResolveFieldChainType(string rootTypeName, string dotPath)
+        {
+            string currentType = rootTypeName;
+            string[] parts = dotPath.Split('.');
+            for (int i = 0; i < parts.Length; i++)
+            {
+                if (!_structTypes.TryGetValue(currentType, out var sd))
+                    return null;
+                bool found = false;
+                for (int j = 0; j < sd.Fields.Count; j++)
+                {
+                    if (sd.Fields[j].Name == parts[i])
+                    {
+                        currentType = sd.Fields[j].TypeName;
+                        found = true;
+                        break;
+                    }
+                }
+                if (!found) return null;
+            }
+            return currentType;
         }
 
         // ===== Variable management =====
@@ -815,33 +1009,58 @@ namespace FFVM.Compiler
         }
 
         /// <summary>
-        /// Resolve a field access (e.g., d.level) to a register number: baseReg + fieldIndex.
+        /// Resolve a field access (e.g., d.level or d.inner.x) to a register number.
+        /// SN1: supports recursive field chains via dot-path lookup in flat struct info.
         /// </summary>
         private int ResolveFieldAccess(FieldAccessExpr fa)
         {
-            if (fa.Target is IdentifierExpr ident)
+            // Collect the field chain: e.g. a.inner.x → varName="a", dotPath="inner.x"
+            string varName;
+            string dotPath;
+            CollectFieldChain(fa, out varName, out dotPath);
+
+            if (varName == null)
             {
-                if (!_structVarTypes.TryGetValue(ident.Name, out var typeName))
-                {
-                    _errors.Add($"Variable '{ident.Name}' is not a struct (line {fa.Line})");
-                    return VarRegBase;
-                }
-                if (!_structTypes.TryGetValue(typeName, out var sd))
-                {
-                    _errors.Add($"Unknown struct type '{typeName}' (line {fa.Line})");
-                    return VarRegBase;
-                }
-                int baseReg = _variables[ident.Name];
-                for (int i = 0; i < sd.Fields.Count; i++)
-                {
-                    if (sd.Fields[i].Name == fa.FieldName)
-                        return baseReg + i;
-                }
-                _errors.Add($"Struct '{typeName}' has no field '{fa.FieldName}' (line {fa.Line})");
+                _errors.Add($"Unsupported field access target (line {fa.Line})");
+                return VarRegBase;
+            }
+
+            if (!_structVarTypes.TryGetValue(varName, out var typeName))
+            {
+                _errors.Add($"Variable '{varName}' is not a struct (line {fa.Line})");
+                return VarRegBase;
+            }
+
+            int baseReg = _variables[varName];
+            int offset = ResolveFlatFieldOffset(typeName, dotPath);
+            if (offset < 0)
+            {
+                _errors.Add($"Struct '{typeName}' has no field '{dotPath}' (line {fa.Line})");
                 return baseReg;
             }
-            _errors.Add($"Unsupported field access target (line {fa.Line})");
-            return VarRegBase;
+            return baseReg + offset;
+        }
+
+        /// <summary>
+        /// Collect field access chain into (varName, dotPath).
+        /// e.g. FieldAccess(FieldAccess(Ident("a"), "inner"), "x") → ("a", "inner.x")
+        /// </summary>
+        private void CollectFieldChain(FieldAccessExpr fa, out string varName, out string dotPath)
+        {
+            if (fa.Target is IdentifierExpr ident)
+            {
+                varName = ident.Name;
+                dotPath = fa.FieldName;
+                return;
+            }
+            if (fa.Target is FieldAccessExpr parentFa)
+            {
+                CollectFieldChain(parentFa, out varName, out string parentDotPath);
+                dotPath = parentDotPath + "." + fa.FieldName;
+                return;
+            }
+            varName = null;
+            dotPath = null;
         }
 
         // ===== Temp management =====
@@ -875,6 +1094,26 @@ namespace FFVM.Compiler
             int idx = _constants.Count;
             _constants.Add(value);
             return idx;
+        }
+
+        private int AddStringConst(string value)
+        {
+            for (int i = 0; i < _stringConstants.Count; i++)
+            {
+                if (_stringConstants[i] == value)
+                    return i;
+            }
+            int idx = _stringConstants.Count;
+            _stringConstants.Add(value);
+            return idx;
+        }
+
+        private static bool ContainsStringLiteral(Expr expr)
+        {
+            if (expr is StringLiteralExpr) return true;
+            if (expr is BinaryExpr b) return ContainsStringLiteral(b.Left) || ContainsStringLiteral(b.Right);
+            if (expr is UnaryExpr u) return ContainsStringLiteral(u.Operand);
+            return false;
         }
 
         // ===== Instruction emission =====
@@ -972,15 +1211,19 @@ namespace FFVM.Compiler
             // Check if this is a struct variable
             if (_structTypes.TryGetValue(stmt.TypeName, out var structDecl))
             {
+                // SN1: use flattened field count for nested struct support
+                var flatInfo = _flatStructInfo[stmt.TypeName];
+                int flatCount = flatInfo.FlatFieldCount;
+
                 // F4: use DeclareStructVar for register reuse of consecutive slots
-                int baseReg = DeclareStructVar(stmt.Name, structDecl.Fields.Count);
+                int baseReg = DeclareStructVar(stmt.Name, flatCount);
                 _structVarTypes[stmt.Name] = stmt.TypeName;
 
-                // DBG2: record symbol entry for struct variable with field names
-                var fieldNames = new string[structDecl.Fields.Count];
-                for (int fi = 0; fi < structDecl.Fields.Count; fi++)
-                    fieldNames[fi] = structDecl.Fields[fi].Name;
-                _symbolEntries.Add(new SymbolEntry(stmt.Name, baseReg, structDecl.Fields.Count, fieldNames, _currentFunctionName));
+                // DBG2: record symbol entry for struct variable with flattened field names
+                var fieldNames = new string[flatCount];
+                for (int fi = 0; fi < flatCount; fi++)
+                    fieldNames[fi] = flatInfo.FlatFields[fi].DotPath;
+                _symbolEntries.Add(new SymbolEntry(stmt.Name, baseReg, flatCount, fieldNames, _currentFunctionName));
 
                 // Initialize: if initializer is another struct var of same type, emit N × MOVE
                 if (stmt.Initializer != null)
@@ -990,7 +1233,7 @@ namespace FFVM.Compiler
                         srcType == stmt.TypeName)
                     {
                         int srcBase = _variables[srcIdent.Name];
-                        for (int i = 0; i < structDecl.Fields.Count; i++)
+                        for (int i = 0; i < flatCount; i++)
                             Emit(OpCode.MOVE, baseReg + i, srcBase + i);
                     }
                     else
@@ -1002,7 +1245,7 @@ namespace FFVM.Compiler
                 {
                     // Default initialize all fields to 0
                     int ci = AddConst(Number.Zero);
-                    for (int i = 0; i < structDecl.Fields.Count; i++)
+                    for (int i = 0; i < flatCount; i++)
                         Emit(OpCode.LOAD_CONST, baseReg + i, ci);
                 }
                 return;
@@ -1318,6 +1561,15 @@ namespace FFVM.Compiler
                 return reg;
             }
 
+            // STR1: String literal → store index into string constant pool as numeric constant
+            if (expr is StringLiteralExpr strLit)
+            {
+                int strIdx = AddStringConst(strLit.Value);
+                int reg = destReg >= 0 ? destReg : AllocTemp();
+                Emit(OpCode.LOAD_CONST, reg, AddConst(Number.FromInt(strIdx)));
+                return reg;
+            }
+
             if (expr is IdentifierExpr ident)
             {
                 return ResolveVar(ident.Name);
@@ -1330,6 +1582,11 @@ namespace FFVM.Compiler
 
             if (expr is BinaryExpr bin)
             {
+                if (ContainsStringLiteral(bin.Left) || ContainsStringLiteral(bin.Right))
+                {
+                    _errors.Add($"String literals cannot be used in arithmetic/comparison expressions (line {bin.Line})");
+                    return destReg >= 0 ? destReg : AllocTemp();
+                }
                 int left = CompileExpr(bin.Left);
                 int right = CompileExpr(bin.Right);
                 int dest = destReg >= 0 ? destReg : AllocTemp();
@@ -1339,6 +1596,11 @@ namespace FFVM.Compiler
 
             if (expr is UnaryExpr un)
             {
+                if (ContainsStringLiteral(un.Operand))
+                {
+                    _errors.Add($"String literals cannot be used in unary expressions (line {un.Line})");
+                    return destReg >= 0 ? destReg : AllocTemp();
+                }
                 int operand = CompileExpr(un.Operand);
                 int dest = destReg >= 0 ? destReg : AllocTemp();
                 Emit(UnOpCode(un.Kind), dest, operand);
@@ -1355,10 +1617,11 @@ namespace FFVM.Compiler
                         _structVarTypes.TryGetValue(srcIdent.Name, out var srcStructType) &&
                         srcStructType == targetStructType)
                     {
-                        var sd = _structTypes[targetStructType];
+                        // SN1: use flat field count for nested struct whole-copy
+                        int flatCount = _flatStructInfo[targetStructType].FlatFieldCount;
                         int destBase = _variables[targetIdent.Name];
                         int srcBase = _variables[srcIdent.Name];
-                        for (int i = 0; i < sd.Fields.Count; i++)
+                        for (int i = 0; i < flatCount; i++)
                             Emit(OpCode.MOVE, destBase + i, srcBase + i);
                         return destBase;
                     }
@@ -1366,9 +1629,59 @@ namespace FFVM.Compiler
                     return ResolveVar(targetIdent.Name);
                 }
 
-                // Field assignment: d.field = expr
+                // Field assignment: d.field = expr  OR  d.inner = other.inner (sub-struct copy)
                 if (assign.Target is FieldAccessExpr fieldTarget)
                 {
+                    // SN1: check if target field is a sub-struct → whole sub-struct copy
+                    if (assign.Value is FieldAccessExpr srcFieldAccess)
+                    {
+                        string targetVar, targetDotPath, srcVar, srcDotPath;
+                        CollectFieldChain(fieldTarget, out targetVar, out targetDotPath);
+                        CollectFieldChain(srcFieldAccess, out srcVar, out srcDotPath);
+
+                        if (targetVar != null && srcVar != null &&
+                            _structVarTypes.TryGetValue(targetVar, out var tType) &&
+                            _structVarTypes.TryGetValue(srcVar, out var sType))
+                        {
+                            // Check if both dot-paths resolve to the same struct field type
+                            string targetFieldType = ResolveFieldChainType(tType, targetDotPath);
+                            string srcFieldType = ResolveFieldChainType(sType, srcDotPath);
+                            if (targetFieldType != null && srcFieldType != null &&
+                                targetFieldType == srcFieldType &&
+                                _structTypes.ContainsKey(targetFieldType))
+                            {
+                                int subCount = _flatStructInfo[targetFieldType].FlatFieldCount;
+                                int tBaseReg = _variables[targetVar] + ResolveFlatFieldOffset(tType, targetDotPath);
+                                int sBaseReg = _variables[srcVar] + ResolveFlatFieldOffset(sType, srcDotPath);
+                                for (int i = 0; i < subCount; i++)
+                                    Emit(OpCode.MOVE, tBaseReg + i, sBaseReg + i);
+                                return tBaseReg;
+                            }
+                        }
+                    }
+                    // SN1: check if target field resolves to a sub-struct and value is an identifier (var copy)
+                    if (assign.Value is IdentifierExpr subSrcIdent &&
+                        _structVarTypes.TryGetValue(subSrcIdent.Name, out var subSrcType))
+                    {
+                        string tgtVar2, tgtDotPath2;
+                        CollectFieldChain(fieldTarget, out tgtVar2, out tgtDotPath2);
+                        if (tgtVar2 != null && _structVarTypes.TryGetValue(tgtVar2, out var tType2))
+                        {
+                            string targetFieldType2 = ResolveFieldChainType(tType2, tgtDotPath2);
+                            if (targetFieldType2 != null && targetFieldType2 == subSrcType &&
+                                _structTypes.ContainsKey(targetFieldType2))
+                            {
+                                int subCount = _flatStructInfo[targetFieldType2].FlatFieldCount;
+                                int tBaseReg = _variables[tgtVar2] + ResolveFlatFieldOffset(tType2, tgtDotPath2);
+                                int sBaseReg = _variables[subSrcIdent.Name];
+                                for (int i = 0; i < subCount; i++)
+                                    Emit(OpCode.MOVE, tBaseReg + i, sBaseReg + i);
+                                return tBaseReg;
+                            }
+                        }
+                    }
+
+                    // Scalar field assignment (original path)
                     int fieldReg = ResolveFieldAccess(fieldTarget);
                     // O4: pass dest-reg hint for field assignment
                     int valueReg = CompileExpr(assign.Value, destReg: fieldReg);
@@ -1529,14 +1842,12 @@ namespace FFVM.Compiler
                     return;
                 }
 
-                // S4/R5: validate total scratch registers needed for all parameters
+                // S4/R5/SN1: validate total scratch registers using flat field count
                 int totalScratchRegs = 0;
                 for (int i = 0; i < funcDecl.Parameters.Count; i++)
                 {
-                    if (_structTypes.TryGetValue(funcDecl.Parameters[i].TypeName, out var psd))
-                        totalScratchRegs += psd.Fields.Count;
-                    else
-                        totalScratchRegs += 1;
+                    int fc = GetFlatFieldCount(funcDecl.Parameters[i].TypeName);
+                    totalScratchRegs += fc > 0 ? fc : 1;
                 }
                 if (totalScratchRegs > VarRegBase)
                 {
@@ -1551,7 +1862,7 @@ namespace FFVM.Compiler
                 argRegs[i] = CompileExpr(call.Arguments[i]);
 
             // Phase 2: move args to scratch zone r0, r1, ... (shared, not windowed)
-            // S4: struct arguments expand to N consecutive scratch registers
+            // S4/SN1: struct arguments expand to N consecutive scratch registers (flat count)
             {
                 int scratchReg = 0;
                 for (int i = 0; i < call.Arguments.Count; i++)
@@ -1560,16 +1871,16 @@ namespace FFVM.Compiler
                     bool isStructArg = false;
                     if (call.Arguments[i] is IdentifierExpr argIdent &&
                         _structVarTypes.TryGetValue(argIdent.Name, out var argTypeName) &&
-                        _structTypes.TryGetValue(argTypeName, out var argSD))
+                        _flatStructInfo.TryGetValue(argTypeName, out var argFlatInfo))
                     {
                         isStructArg = true;
                         int srcBase = argRegs[i]; // base register of the struct
-                        for (int j = 0; j < argSD.Fields.Count; j++)
+                        for (int j = 0; j < argFlatInfo.FlatFieldCount; j++)
                         {
                             if (srcBase + j != scratchReg + j)
                                 Emit(OpCode.MOVE, scratchReg + j, srcBase + j);
                         }
-                        scratchReg += argSD.Fields.Count;
+                        scratchReg += argFlatInfo.FlatFieldCount;
                     }
 
                     if (!isStructArg)
