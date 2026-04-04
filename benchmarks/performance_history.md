@@ -1,4 +1,4 @@
-# FFVM Performance History
+﻿# FFVM Performance History
 
 > 性能历史记录 — 由 CI 自动追加，记录每次提交的 Benchmark 结果变化。
 > 手动运行：`bash benchmarks/update-history.sh <bench-raw.txt> [cross-lang-raw.txt]`
@@ -25,6 +25,22 @@
 ## History
 
 <!-- HISTORY_START — CI 自动追加区域，请勿手动编辑此标记 -->
+
+### 2026-04-04 15:55 UTC — `ddb8bb0dc2348c3c42a9939d21b28c2dc49ebadf`
+
+> .NET 10.0.5 | Microsoft | 20 cores
+
+| Benchmark | VM (μs) | C# (μs) | Ratio | Δ VM | Δ Ratio |
+|-----------|---------|---------|-------|------|---------|
+| B01_ArithLoop | 295.8 | 57.7 | 5.13x | — (env changed) | — (env changed) |
+| B02_Fibonacci | 3.6 | 1.8 | 1.94x | — (env changed) | — (env changed) |
+| B03_NestedLoop | 119.8 | 13.3 | 8.99x | — (env changed) | — (env changed) |
+| B04_Branching | 311.7 | 61.9 | 5.03x | — (env changed) | — (env changed) |
+| B05_Accumulator | 464.6 | 25.6 | 18.16x | — (env changed) | — (env changed) |
+| B06_FuncCall | 127.1 | 11.9 | 10.72x | — (env changed) | — (env changed) |
+
+📌 **New environment baseline**: environment changed from `8.0.25|Unix|2` to `10.0.5|Microsoft|20`. Deltas reset.
+
 
 ### 2026-04-04 07:30 UTC — `3e659ffe8ab2d49fef22996847509dcb6a5ce49d`
 

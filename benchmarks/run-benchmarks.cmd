@@ -15,18 +15,20 @@ for %%F in ("%OUTPUT%") do (
     if not exist "%%~dpF" mkdir "%%~dpF"
 )
 
+:: Resolve root directory (parent of benchmarks/)
+for %%D in ("%~dp0..") do set "ROOT=%%~fD"
 set "RUNNER=StandaloneRunner"
 set "RAW=%TEMP%\ffvm_bench_raw.txt"
 
-echo [*] Building StandaloneRunner (Release)...
-dotnet build "%~dp0%RUNNER%\StandaloneRunner.csproj" -c Release -v q --nologo >nul 2>&1
-if errorlevel 1 (
-    echo [!] Build failed.
-    exit /b 1
-)
+:: Work from root so relative OUTPUT path is correct
+cd /d "%ROOT%"
 
-echo [*] Running benchmarks...
-dotnet run --project "%~dp0%RUNNER%" -c Release --no-build -- --bench > "%RAW%" 2>&1
+echo [*] Building and running benchmarks...
+
+:: Build to a temp directory to avoid file lock from running LSP server
+:: (VS Code LanguageClient keeps StandaloneRunner running as --lsp)
+set "BENCH_ARTIFACTS=%TEMP%\ffvm_bench_build"
+dotnet run --project "%ROOT%\%RUNNER%\StandaloneRunner.csproj" -c Release --artifacts-path "%BENCH_ARTIFACTS%" -- --bench > "%RAW%" 2>&1
 
 :: ?? parse environment line ??
 set "ENV_LINE="
