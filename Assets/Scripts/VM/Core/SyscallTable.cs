@@ -17,30 +17,40 @@ namespace FFVM
     /// Abstracts the absolute register convention so handlers don't need to know register details.
     /// Usage: var args = new SyscallArgs(ref s); int val = args.GetInt(0);
     /// </summary>
+#if FFVM_REF_FIELD || (!UNITY_5_3_OR_NEWER && !FFVM_LEGACY_CSHARP)
+    // Modern path: C# 11 ref field (net7+ / standalone toolchain)
     public ref struct SyscallArgs
     {
         private ref VMInstanceState _state;
 
         public SyscallArgs(ref VMInstanceState state) { _state = ref state; }
 
-        /// <summary>Get the Nth argument as an integer (reads absolute register N).</summary>
         public int GetInt(int index) => _state.Registers.Get(index).ToInt();
-
-        /// <summary>Get the Nth argument as a float (reads absolute register N).</summary>
         public float GetFloat(int index) => _state.Registers.Get(index).ToFloat();
-
-        /// <summary>Get the Nth argument as a raw Number value (reads absolute register N).</summary>
         public Number GetNumber(int index) => _state.Registers.Get(index);
-
-        /// <summary>Set the return value (writes absolute register 0).</summary>
         public void SetReturn(Number value) => _state.Registers.Set(0, value);
-
-        /// <summary>Set the return value as an integer (writes absolute register 0).</summary>
         public void SetReturnInt(int value) => _state.Registers.Set(0, Number.FromInt(value));
-
-        /// <summary>Set the return value as a float (writes absolute register 0).</summary>
         public void SetReturnFloat(float value) => _state.Registers.Set(0, Number.FromFloat(value));
     }
+#else
+    // Legacy path: C# 9 compatible (Unity 2022 / netstandard2.1)
+    public unsafe ref struct SyscallArgs
+    {
+        private VMInstanceState* _state;
+
+        public SyscallArgs(ref VMInstanceState state)
+        {
+            fixed (VMInstanceState* p = &state) { _state = p; }
+        }
+
+        public int GetInt(int index) => _state->Registers.Get(index).ToInt();
+        public float GetFloat(int index) => _state->Registers.Get(index).ToFloat();
+        public Number GetNumber(int index) => _state->Registers.Get(index);
+        public void SetReturn(Number value) => _state->Registers.Set(0, value);
+        public void SetReturnInt(int value) => _state->Registers.Set(0, Number.FromInt(value));
+        public void SetReturnFloat(float value) => _state->Registers.Set(0, Number.FromFloat(value));
+    }
+#endif
 
     /// <summary>
     /// Describes a single syscall parameter (name + type).

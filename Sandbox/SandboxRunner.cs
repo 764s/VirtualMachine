@@ -36,6 +36,9 @@ namespace Sandbox
         private volatile bool _stopRequested;
         private int _frameCount;
 
+        // Debug state
+        private EmbeddedDapServer _dapServer;
+
         /// <summary>Target frames per second for the run loop (default: 60).</summary>
         public int TargetFps = 60;
 
@@ -50,6 +53,24 @@ namespace Sandbox
         public SandboxRunner(string baseDir)
         {
             _baseDir = baseDir;
+        }
+
+        /// <summary>
+        /// Enable embedded DAP server for VS Code attach debugging.
+        /// </summary>
+        public void EnableDebug(int port = 4711)
+        {
+            _dapServer = new EmbeddedDapServer(port);
+            _dapServer.StartListening();
+            Console.WriteLine($"[DEBUG] DAP server listening on port {port}");
+            Console.WriteLine("[DEBUG] In VS Code: F5 → \"Attach to Sandbox\" to connect.");
+        }
+
+        /// <summary>Shut down the DAP server if running.</summary>
+        public void StopDebug()
+        {
+            _dapServer?.Dispose();
+            _dapServer = null;
         }
 
         /// <summary>
@@ -154,6 +175,18 @@ namespace Sandbox
                 return false;
             }
 
+            // Attach debugger if enabled
+            string scriptPath = Path.Combine(_baseDir, _config.EntryScript);
+            _dapServer?.AttachToWorld(_world, _program, _instanceId, scriptPath);
+
+            // In debug mode: wait for VS Code to connect, then pause at entry
+            if (_dapServer != null)
+            {
+                if (!_dapServer.IsConnected)
+                    _dapServer.WaitForConnection();
+                _dapServer.StopOnEntry();
+            }
+
             int tickIntervalMs = 1000 / TargetFps;
             var runStart = DateTimeOffset.UtcNow;
             bool completed = false;
@@ -169,6 +202,9 @@ namespace Sandbox
                     _frameCount++;
                     SandboxSyscalls.BeginTick(_frameCount);
                     _world.Tick();
+
+                    // Check for debugger breakpoint — blocks if hit
+                    _dapServer?.CheckBreakpointAndWait();
 
                     ref VMInstanceState inst = ref _world.Pool.Instances[_instanceId];
 
@@ -201,6 +237,7 @@ namespace Sandbox
             finally
             {
                 Console.CancelKeyPress -= OnCancelKey;
+                _dapServer?.DetachFromWorld();
             }
 
             var runElapsed = DateTimeOffset.UtcNow - runStart;
@@ -223,6 +260,75 @@ namespace Sandbox
         public void RequestStop()
         {
             _stopRequested = true;
+        }
+
+        /// <summary>
+        /// Continuous mode: compile → run → watch → repeat.
+        /// Auto-reloads when ffs source changes. Ctrl+C during execution returns to watching.
+        /// Ctrl+C during watching exits.
+        /// </summary>
+        public void RunContinuous()
+        {
+            if (_config == null && !LoadConfig())
+                return;
+
+            string scriptPath = Path.Combine(_baseDir, _config.EntryScript);
+            _stopRequested = false;
+            Console.CancelKeyPress += OnCancelKey;
+
+            try
+            {
+                while (!_stopRequested)
+                {
+                    if (!Compile())
+                    {
+                        Console.WriteLine("[SANDBOX] Watching for source changes (fix errors and save)...");
+                        WaitForSourceChange(scriptPath);
+                        continue;
+                    }
+
+                    Run();
+
+                    if (_stopRequested)
+                    {
+                        // Ctrl+C during script — reset and watch for changes
+                        _stopRequested = false;
+                        Console.WriteLine("[SANDBOX] Script interrupted. Watching for changes... (Ctrl+C to exit)");
+                    }
+                    else
+                    {
+                        Console.WriteLine("[SANDBOX] Script finished. Watching for changes... (Ctrl+C to exit)");
+                    }
+
+                    WaitForSourceChange(scriptPath);
+                }
+            }
+            finally
+            {
+                Console.CancelKeyPress -= OnCancelKey;
+            }
+
+            Console.WriteLine("[SANDBOX] Exiting.");
+        }
+
+        /// <summary>
+        /// Block until the ffs source file is modified, or Ctrl+C is pressed.
+        /// </summary>
+        private void WaitForSourceChange(string scriptPath)
+        {
+            if (!File.Exists(scriptPath)) return;
+            var lastTime = File.GetLastWriteTimeUtc(scriptPath);
+
+            while (!_stopRequested)
+            {
+                Thread.Sleep(500);
+                if (!File.Exists(scriptPath)) continue;
+                if (File.GetLastWriteTimeUtc(scriptPath) != lastTime)
+                {
+                    Console.WriteLine("[SANDBOX] Source changed, reloading...");
+                    break;
+                }
+            }
         }
 
         private void OnCancelKey(object sender, ConsoleCancelEventArgs e)

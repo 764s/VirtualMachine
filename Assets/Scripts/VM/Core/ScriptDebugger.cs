@@ -113,6 +113,12 @@ namespace FFVM
                 return true;
             }
 
+            // --- When a temp breakpoint is active (step in progress), skip line breakpoints ---
+            // Otherwise the user's line breakpoint on the current line re-fires before
+            // the VM reaches the step target (e.g., re-hits line 47 before entering add()).
+            if (_tempBreakpointIP >= 0)
+                return false;
+
             // --- Line breakpoint check ---
             if (sourceMap == null || _breakpointLines.Count == 0)
                 return false;

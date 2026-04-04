@@ -280,6 +280,12 @@ namespace FFVM.Compiler
             _stmtOrder = 0;
             _currentFunctionName = func.Name;
 
+            // Reset source line to the function declaration line so that
+            // parameter-binding MOVEs (emitted before the body) map to the
+            // correct source location instead of carrying the previous
+            // function's last line.
+            _currentLine = func.Line;
+
             // F4: analyze variable lifetimes before compilation
             _liveRanges = AnalyzeVariableLifetimes(func);
 

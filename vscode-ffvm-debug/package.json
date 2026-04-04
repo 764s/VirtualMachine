@@ -13,7 +13,8 @@
     ],
     "main": "./extension.js",
     "activationEvents": [
-        "onLanguage:ffvm"
+        "onLanguage:ffvm",
+        "onDebugResolve:ffvm"
     ],
     "dependencies": {
         "vscode-languageclient": "^9.0.1"
@@ -23,7 +24,7 @@
             {
                 "type": "ffvm",
                 "label": "FFVM Script",
-                "program": "${workspaceFolder}/StandaloneRunner/bin/Release/net8.0/StandaloneRunner",
+                "program": "${workspaceFolder}/StandaloneRunner/bin/Release/net10.0/StandaloneRunner",
                 "args": ["--dap"],
                 "runtime": "",
                 "languages": ["ffvm"],
@@ -37,14 +38,23 @@
                                 "default": "${workspaceFolder}/script.ffs"
                             }
                         }
+                    },
+                    "attach": {
+                        "properties": {
+                            "port": {
+                                "type": "number",
+                                "description": "TCP port of the embedded DAP server in Sandbox",
+                                "default": 4711
+                            }
+                        }
                     }
                 },
                 "initialConfigurations": [
                     {
                         "type": "ffvm",
-                        "request": "launch",
-                        "name": "Debug FFVM Script",
-                        "program": "${workspaceFolder}/script.ffs"
+                        "request": "attach",
+                        "name": "Attach to Sandbox",
+                        "port": 4711
                     }
                 ]
             }

@@ -4,7 +4,7 @@
 #
 #  First-time setup after checkout:
 #    1. Run this script:  bash Sandbox/sandbox-init.sh
-#    2. Run the generated: ./run-sandbox.sh
+#    2. Run the generated: ./Sandbox/run-sandbox.sh
 #    3. (Optional) Open VS Code — debug extension auto-installed
 # ============================================================
 
@@ -48,16 +48,20 @@ echo "[OK] Sandbox build succeeded."
 
 # ─── Step 4: Generate run-sandbox.sh ─────────────────────────
 
-cat > run-sandbox.sh << 'RUNEOF'
+cat > Sandbox/run-sandbox.sh << 'RUNEOF'
 #!/usr/bin/env bash
-cd "$(dirname "$0")"
+cd "$(dirname "$0")/.."
 echo
-echo " Starting FFScript Sandbox ..."
+echo " [1/2] Building Sandbox (C#) ..."
 echo
-dotnet run --project Sandbox/Sandbox.csproj -c Release
+dotnet build Sandbox/Sandbox.csproj -c Release --nologo -v q || { echo " [ERROR] C# build failed!"; exit 1; }
+echo
+echo " [2/2] Starting Sandbox ..."
+echo
+Sandbox/bin/Release/net10.0/Sandbox --debug
 RUNEOF
-chmod +x run-sandbox.sh
-echo "[OK] Generated run-sandbox.sh"
+chmod +x Sandbox/run-sandbox.sh
+echo "[OK] Generated Sandbox/run-sandbox.sh"
 
 # ─── Step 5: Set up root .vscode/ ───────────────────────────
 
@@ -83,7 +87,7 @@ if [ ! -f "StandaloneRunner/StandaloneRunner.csproj" ]; then
 <Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
     <OutputType>Exe</OutputType>
-    <TargetFramework>net8.0</TargetFramework>
+    <TargetFramework>net10.0</TargetFramework>
     <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
   </PropertyGroup>
@@ -158,8 +162,10 @@ echo " ========================================================"
 echo "  Initialization complete!"
 echo " ========================================================"
 echo
+echo "  \033[92m[Generated]\033[0m  Sandbox/run-sandbox.sh"
+echo
 echo "  Next steps:"
-echo "    1. Run  ./run-sandbox.sh  to launch the sandbox"
+echo "    1. Run  \033[93m./Sandbox/run-sandbox.sh\033[0m  to launch the sandbox"
 echo "    2. Type [R] then Enter to compile and run your script"
 echo "    3. Edit  Sandbox/scripts/main.ffs  to write your code"
 echo

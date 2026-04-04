@@ -7,7 +7,7 @@ namespace Sandbox
         public static void Main(string[] args)
         {
             string baseDir = AppDomain.CurrentDomain.BaseDirectory;
-            // When running from bin/Release/net8.0, resolve back to project root
+            // When running from bin/Release/net10.0, resolve back to project root
             // Look for sandbox.json to find the correct base directory
             string projectDir = FindProjectDir(baseDir);
             if (projectDir == null)
@@ -18,13 +18,39 @@ namespace Sandbox
 
             var runner = new SandboxRunner(projectDir);
 
-            if (args.Length > 0)
+            // Check for --debug flag (can appear anywhere in args)
+            bool debugMode = false;
+            for (int i = 0; i < args.Length; i++)
             {
-                switch (args[0])
+                if (args[i] == "--debug")
+                {
+                    debugMode = true;
+                    break;
+                }
+            }
+
+            if (debugMode)
+                runner.EnableDebug();
+
+            // Find the first non-debug arg to determine mode
+            string modeArg = null;
+            for (int i = 0; i < args.Length; i++)
+            {
+                if (args[i] != "--debug")
+                {
+                    modeArg = args[i];
+                    break;
+                }
+            }
+
+            if (modeArg != null)
+            {
+                switch (modeArg)
                 {
                     case "--compile":
                         if (!runner.Compile(force: true))
                             Environment.Exit(1);
+                        runner.StopDebug();
                         return;
 
                     case "--run":
@@ -32,6 +58,7 @@ namespace Sandbox
                             Environment.Exit(1);
                         if (!runner.Run())
                             Environment.Exit(1);
+                        runner.StopDebug();
                         return;
 
                     case "--help":
@@ -39,24 +66,30 @@ namespace Sandbox
                         return;
 
                     default:
-                        Console.Error.WriteLine($"Unknown option: {args[0]}");
+                        Console.Error.WriteLine($"Unknown option: {modeArg}");
                         PrintHelp();
                         Environment.Exit(1);
                         return;
                 }
             }
 
-            // Interactive mode
+            // Default: interactive mode (compile FFS → menu → play mode → menu)
             RunInteractive(runner);
+            runner.StopDebug();
         }
 
         private static void RunInteractive(SandboxRunner runner)
         {
-            Console.WriteLine("╔══════════════════════════════════════╗");
-            Console.WriteLine("║     FFScript Sandbox v1.0           ║");
-            Console.WriteLine("╠══════════════════════════════════════╣");
-            Console.WriteLine("║  [C] Compile    [R] Run    [Q] Quit ║");
-            Console.WriteLine("╚══════════════════════════════════════╝");
+            Console.WriteLine("╔════════════════════════════════════════════╗");
+            Console.WriteLine("║     FFScript Sandbox v1.0                 ║");
+            Console.WriteLine("╠════════════════════════════════════════════╣");
+            Console.WriteLine("║  [R] Run (play mode)    [Q] Quit          ║");
+            Console.WriteLine("║  [C] Compile            [H] Help          ║");
+            Console.WriteLine("╚════════════════════════════════════════════╝");
+            Console.WriteLine();
+
+            // Auto-compile FFS on startup
+            runner.Compile();
             Console.WriteLine();
 
             while (true)
@@ -76,13 +109,9 @@ namespace Sandbox
 
                     case "r":
                     case "run":
-                        if (!runner.Compile())
-                        {
-                            Console.WriteLine("  Fix compilation errors first.");
-                            break;
-                        }
-                        Console.WriteLine("  (Press Ctrl+C to stop a running script)");
-                        runner.Run();
+                        Console.WriteLine("  ► Play mode: Ctrl+C = stop script, Ctrl+C again = exit play mode");
+                        runner.RunContinuous();
+                        Console.WriteLine("  ■ Play mode ended.");
                         break;
 
                     case "q":
@@ -92,8 +121,8 @@ namespace Sandbox
 
                     case "h":
                     case "help":
+                        Console.WriteLine("  [R]un      — Enter play mode (continuous execution, auto-reload on save)");
                         Console.WriteLine("  [C]ompile  — Compile the entry script");
-                        Console.WriteLine("  [R]un      — Compile (if needed) and run");
                         Console.WriteLine("  [Q]uit     — Exit the sandbox");
                         Console.WriteLine("  [H]elp     — Show this help");
                         break;
@@ -113,10 +142,11 @@ namespace Sandbox
             Console.WriteLine("FFScript Sandbox — Script testing and debugging environment");
             Console.WriteLine();
             Console.WriteLine("Usage:");
-            Console.WriteLine("  dotnet run                   Interactive mode (compile/run menu)");
-            Console.WriteLine("  dotnet run -- --compile      Compile the entry script");
-            Console.WriteLine("  dotnet run -- --run          Compile and run the entry script");
-            Console.WriteLine("  dotnet run -- --help         Show this help");
+            Console.WriteLine("  Sandbox.exe                  Interactive mode (compile → menu → play)");
+            Console.WriteLine("  Sandbox.exe --debug          Interactive mode + DAP debugger (port 4711)");
+            Console.WriteLine("  Sandbox.exe --compile        Compile the entry script once");
+            Console.WriteLine("  Sandbox.exe --run            Compile and run once, then exit");
+            Console.WriteLine("  Sandbox.exe --help           Show this help");
         }
 
         private static string FindProjectDir(string startDir)

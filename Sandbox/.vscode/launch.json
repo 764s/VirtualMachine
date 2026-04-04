@@ -2,17 +2,17 @@
     "version": "0.2.0",
     "configurations": [
         {
-            "name": "Debug FFScript (Sandbox)",
+            "name": "Attach to Sandbox",
             "type": "ffvm",
-            "request": "launch",
-            "program": "${workspaceFolder}/Sandbox/scripts/main.ffs"
+            "request": "attach",
+            "port": 4711
         },
         {
             "name": "Run Sandbox (Console)",
             "type": "coreclr",
             "request": "launch",
-            "program": "${workspaceFolder}/Sandbox/bin/Release/net8.0/Sandbox",
-            "args": ["--run"],
+            "program": "${workspaceFolder}/Sandbox/bin/Release/net10.0/Sandbox",
+            "args": ["--debug"],
             "cwd": "${workspaceFolder}/Sandbox",
             "console": "integratedTerminal",
             "preLaunchTask": "build-sandbox"

@@ -6,7 +6,7 @@ setlocal enabledelayedexpansion
 ::
 ::  First-time setup after checkout:
 ::    1. Double-click Sandbox\sandbox-init.cmd
-::    2. Double-click the generated  run-sandbox.cmd
+::    2. Double-click the generated  Sandbox\run-sandbox.cmd
 ::    3. (Optional) Open VS Code — debug extension auto-installed
 :: ============================================================
 
@@ -64,15 +64,26 @@ echo [OK] Sandbox build succeeded.
 
 (
     echo @echo off
-    echo cd /d "%%~dp0"
+    echo cd /d "%%~dp0.."
     echo echo.
-    echo echo  Starting FFScript Sandbox ...
+    echo echo  [1/2] Building Sandbox (C#^) ...
     echo echo.
-    echo dotnet run --project Sandbox\Sandbox.csproj -c Release
+    echo dotnet build Sandbox\Sandbox.csproj -c Release --nologo -v q
+    echo if errorlevel 1 (
+    echo     echo.
+    echo     echo  [ERROR] C# build failed!
+    echo     echo.
+    echo     pause
+    echo     exit /b 1
+    echo ^)
+    echo echo.
+    echo echo  [2/2] Starting Sandbox ...
+    echo echo.
+    echo Sandbox\bin\Release\net10.0\Sandbox.exe --debug
     echo echo.
     echo pause
-) > run-sandbox.cmd
-echo [OK] Generated run-sandbox.cmd
+) > Sandbox\run-sandbox.cmd
+echo [OK] Generated Sandbox\run-sandbox.cmd
 
 :: ─── Step 5: Set up root .vscode/ ───────────────────────────
 
@@ -99,7 +110,7 @@ if not exist "StandaloneRunner\StandaloneRunner.csproj" (
         echo ^<Project Sdk="Microsoft.NET.Sdk"^>
         echo   ^<PropertyGroup^>
         echo     ^<OutputType^>Exe^</OutputType^>
-        echo     ^<TargetFramework^>net8.0^</TargetFramework^>
+        echo     ^<TargetFramework^>net10.0^</TargetFramework^>
         echo     ^<EnableDefaultCompileItems^>false^</EnableDefaultCompileItems^>
         echo     ^<AllowUnsafeBlocks^>true^</AllowUnsafeBlocks^>
         echo   ^</PropertyGroup^>
@@ -178,8 +189,10 @@ echo  ========================================================
 echo   Initialization complete!
 echo  ========================================================
 echo.
+echo   [92m[Generated][0m  Sandbox\run-sandbox.cmd
+echo.
 echo   Next steps:
-echo     1. Double-click  run-sandbox.cmd  to launch the sandbox
+echo     1. Double-click  [93mSandbox\run-sandbox.cmd[0m  to launch the sandbox
 echo     2. Type [R] then Enter to compile and run your script
 echo     3. Edit  Sandbox\scripts\main.ffs  to write your code
 echo.
