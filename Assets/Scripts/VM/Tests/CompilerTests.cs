@@ -1505,6 +1505,345 @@ func main() {
             Assert(log.Count == 1 && log[0] == "14", $"CS11: 3*2 + 4*2 = 14, got {(log.Count > 0 ? log[0] : "?")}");
         }
 
+        // ===== Test CS12: S4 — basic struct parameter passing =====
+        {
+            string source = @"
+struct Vec2 {
+    x: int
+    y: int
+}
+func sum(v: Vec2) {
+    return v.x + v.y
+}
+func main() {
+    var a: Vec2
+    a.x = 10
+    a.y = 20
+    Report(sum(a))
+}";
+            var syscalls = new Dictionary<string, int> { { "Report", 0 } };
+            var result = compiler.Compile(source, "main", syscalls);
+            Assert(result.Success, "CS12 compile success");
+
+            var log = new List<string>();
+            var world = new VMWorld();
+            world.Modules.Load(0, result.Program);
+            world.Syscalls.Register(0, "Report", (ref VMInstanceState s) =>
+            {
+                log.Add($"{s.Registers.Get(0).ToInt()}");
+            });
+
+            world.SpawnInstance(0, 0);
+            world.Tick();
+            Assert(log.Count == 1 && log[0] == "30", $"CS12: sum({{10,20}}) = 30, got {(log.Count > 0 ? log[0] : "?")}");
+        }
+
+        // ===== Test CS13: S4 — multiple struct parameters =====
+        {
+            string source = @"
+struct Vec2 {
+    x: int
+    y: int
+}
+func add(a: Vec2, b: Vec2) {
+    return a.x + a.y + b.x + b.y
+}
+func main() {
+    var p: Vec2
+    p.x = 1
+    p.y = 2
+    var q: Vec2
+    q.x = 10
+    q.y = 20
+    Report(add(p, q))
+}";
+            var syscalls = new Dictionary<string, int> { { "Report", 0 } };
+            var result = compiler.Compile(source, "main", syscalls);
+            Assert(result.Success, "CS13 compile success");
+
+            var log = new List<string>();
+            var world = new VMWorld();
+            world.Modules.Load(0, result.Program);
+            world.Syscalls.Register(0, "Report", (ref VMInstanceState s) =>
+            {
+                log.Add($"{s.Registers.Get(0).ToInt()}");
+            });
+
+            world.SpawnInstance(0, 0);
+            world.Tick();
+            Assert(log.Count == 1 && log[0] == "33", $"CS13: add({{1,2}},{{10,20}}) = 33, got {(log.Count > 0 ? log[0] : "?")}");
+        }
+
+        // ===== Test CS14: S4 — mixed scalar and struct parameters =====
+        {
+            string source = @"
+struct Vec2 {
+    x: int
+    y: int
+}
+func scale(v: Vec2, factor: int) {
+    return (v.x + v.y) * factor
+}
+func main() {
+    var a: Vec2
+    a.x = 3
+    a.y = 7
+    Report(scale(a, 5))
+}";
+            var syscalls = new Dictionary<string, int> { { "Report", 0 } };
+            var result = compiler.Compile(source, "main", syscalls);
+            Assert(result.Success, "CS14 compile success");
+
+            var log = new List<string>();
+            var world = new VMWorld();
+            world.Modules.Load(0, result.Program);
+            world.Syscalls.Register(0, "Report", (ref VMInstanceState s) =>
+            {
+                log.Add($"{s.Registers.Get(0).ToInt()}");
+            });
+
+            world.SpawnInstance(0, 0);
+            world.Tick();
+            Assert(log.Count == 1 && log[0] == "50", $"CS14: scale({{3,7}}, 5) = 50, got {(log.Count > 0 ? log[0] : "?")}");
+        }
+
+        // ===== Test CS15: S4 — struct parameter isolation (caller unchanged) =====
+        {
+            string source = @"
+struct Vec2 {
+    x: int
+    y: int
+}
+func process(v: Vec2) {
+    return v.x + 100
+}
+func main() {
+    var a: Vec2
+    a.x = 5
+    a.y = 15
+    var result: int = process(a)
+    Report(a.x)
+    Report(result)
+}";
+            var syscalls = new Dictionary<string, int> { { "Report", 0 } };
+            var result = compiler.Compile(source, "main", syscalls);
+            Assert(result.Success, "CS15 compile success");
+
+            var log = new List<string>();
+            var world = new VMWorld();
+            world.Modules.Load(0, result.Program);
+            world.Syscalls.Register(0, "Report", (ref VMInstanceState s) =>
+            {
+                log.Add($"{s.Registers.Get(0).ToInt()}");
+            });
+
+            world.SpawnInstance(0, 0);
+            world.Tick();
+            Assert(log.Count >= 1 && log[0] == "5", $"CS15: caller a.x unchanged = 5, got {(log.Count > 0 ? log[0] : "?")}");
+            Assert(log.Count >= 2 && log[1] == "105", $"CS15: process result = 105, got {(log.Count > 1 ? log[1] : "?")}");
+        }
+
+        // ===== Test CS16: S4 — struct parameter in call chain =====
+        {
+            string source = @"
+struct Vec2 {
+    x: int
+    y: int
+}
+func inner(v: Vec2) {
+    return v.x + v.y
+}
+func outer(v: Vec2) {
+    return inner(v) + 1000
+}
+func main() {
+    var a: Vec2
+    a.x = 5
+    a.y = 3
+    Report(outer(a))
+}";
+            var syscalls = new Dictionary<string, int> { { "Report", 0 } };
+            var result = compiler.Compile(source, "main", syscalls);
+            Assert(result.Success, "CS16 compile success");
+
+            var log = new List<string>();
+            var world = new VMWorld();
+            world.Modules.Load(0, result.Program);
+            world.Syscalls.Register(0, "Report", (ref VMInstanceState s) =>
+            {
+                log.Add($"{s.Registers.Get(0).ToInt()}");
+            });
+
+            world.SpawnInstance(0, 0);
+            world.Tick();
+            Assert(log.Count == 1 && log[0] == "1008", $"CS16: outer({{5,3}}) = 5+3+1000 = 1008, got {(log.Count > 0 ? log[0] : "?")}");
+        }
+
+        // ===== Test CS17: S4 — struct parameter with leaf function =====
+        {
+            string source = @"
+struct Vec2 {
+    x: int
+    y: int
+}
+func dot(a: Vec2, b: Vec2) {
+    return a.x * b.x + a.y * b.y
+}
+func main() {
+    var p: Vec2
+    p.x = 3
+    p.y = 4
+    var q: Vec2
+    q.x = 5
+    q.y = 6
+    Report(dot(p, q))
+}";
+            var syscalls = new Dictionary<string, int> { { "Report", 0 } };
+            var result = compiler.Compile(source, "main", syscalls);
+            Assert(result.Success, "CS17 compile success");
+
+            var log = new List<string>();
+            var world = new VMWorld();
+            world.Modules.Load(0, result.Program);
+            world.Syscalls.Register(0, "Report", (ref VMInstanceState s) =>
+            {
+                log.Add($"{s.Registers.Get(0).ToInt()}");
+            });
+
+            world.SpawnInstance(0, 0);
+            world.Tick();
+            Assert(log.Count == 1 && log[0] == "39", $"CS17: dot({{3,4}},{{5,6}}) = 15+24 = 39, got {(log.Count > 0 ? log[0] : "?")}");
+        }
+
+        // ===== Test CS18: S4/R5 — error: too many scratch registers =====
+        {
+            string source = @"
+struct Big5 {
+    a: int
+    b: int
+    c: int
+    d: int
+    e: int
+}
+func bad(x: Big5, y: Big5, z: Big5, w: int, v: int) {
+    return w
+}
+func main() {
+    var s: Big5
+    bad(s, s, s, 1, 2)
+}";
+            var syscalls = new Dictionary<string, int>();
+            var result = compiler.Compile(source, "main", syscalls);
+            Assert(!result.Success, "CS18: compile error — too many scratch registers (5+5+5+1+1=17 > 16)");
+        }
+
+        // ===== Test CS19: S4 — scalar before struct parameter =====
+        {
+            string source = @"
+struct Vec2 {
+    x: int
+    y: int
+}
+func compute(factor: int, v: Vec2) {
+    return factor * (v.x + v.y)
+}
+func main() {
+    var a: Vec2
+    a.x = 4
+    a.y = 6
+    Report(compute(3, a))
+}";
+            var syscalls = new Dictionary<string, int> { { "Report", 0 } };
+            var result = compiler.Compile(source, "main", syscalls);
+            Assert(result.Success, "CS19 compile success");
+
+            var log = new List<string>();
+            var world = new VMWorld();
+            world.Modules.Load(0, result.Program);
+            world.Syscalls.Register(0, "Report", (ref VMInstanceState s) =>
+            {
+                log.Add($"{s.Registers.Get(0).ToInt()}");
+            });
+
+            world.SpawnInstance(0, 0);
+            world.Tick();
+            Assert(log.Count == 1 && log[0] == "30", $"CS19: compute(3, {{4,6}}) = 3*10 = 30, got {(log.Count > 0 ? log[0] : "?")}");
+        }
+
+        // ===== Test CS20: S4 — struct parameter with 3 fields =====
+        {
+            string source = @"
+struct DamageInfo {
+    base_dmg: int
+    multiplier: int
+    bonus: int
+}
+func totalDamage(d: DamageInfo) {
+    return d.base_dmg * d.multiplier + d.bonus
+}
+func main() {
+    var d: DamageInfo
+    d.base_dmg = 10
+    d.multiplier = 3
+    d.bonus = 5
+    Report(totalDamage(d))
+}";
+            var syscalls = new Dictionary<string, int> { { "Report", 0 } };
+            var result = compiler.Compile(source, "main", syscalls);
+            Assert(result.Success, "CS20 compile success");
+
+            var log = new List<string>();
+            var world = new VMWorld();
+            world.Modules.Load(0, result.Program);
+            world.Syscalls.Register(0, "Report", (ref VMInstanceState s) =>
+            {
+                log.Add($"{s.Registers.Get(0).ToInt()}");
+            });
+
+            world.SpawnInstance(0, 0);
+            world.Tick();
+            Assert(log.Count == 1 && log[0] == "35", $"CS20: totalDamage({{10,3,5}}) = 35, got {(log.Count > 0 ? log[0] : "?")}");
+        }
+
+        // ===== Test CS21: S4 — struct parameter in while loop =====
+        {
+            string source = @"
+struct Pair {
+    a: int
+    b: int
+}
+func sumN(p: Pair) {
+    var total: int = 0
+    var i: int = p.a
+    while i <= p.b {
+        total = total + i
+        i = i + 1
+    }
+    return total
+}
+func main() {
+    var r: Pair
+    r.a = 1
+    r.b = 10
+    Report(sumN(r))
+}";
+            var syscalls = new Dictionary<string, int> { { "Report", 0 } };
+            var result = compiler.Compile(source, "main", syscalls);
+            Assert(result.Success, "CS21 compile success");
+
+            var log = new List<string>();
+            var world = new VMWorld();
+            world.Modules.Load(0, result.Program);
+            world.Syscalls.Register(0, "Report", (ref VMInstanceState s) =>
+            {
+                log.Add($"{s.Registers.Get(0).ToInt()}");
+            });
+
+            world.SpawnInstance(0, 0);
+            world.Tick();
+            Assert(log.Count == 1 && log[0] == "55", $"CS21: sumN({{1,10}}) = 55, got {(log.Count > 0 ? log[0] : "?")}");
+        }
+
         // ===== Test C4-01: Direct call to requires_cleanup syscall → compile error =====
         {
             string source = @"

@@ -284,12 +284,33 @@ namespace FFVM.Compiler
             _liveRanges = AnalyzeVariableLifetimes(func);
 
             // Bind parameters: copy from scratch zone r0..rN into local registers r16+
-            for (int i = 0; i < func.Parameters.Count; i++)
+            // S4: struct parameters occupy multiple consecutive registers
             {
-                int localReg = DeclareVar(func.Parameters[i].Name);
-                // Emit MOVE to copy param from scratch r[i] to local r[localReg]
-                if (localReg != i)
-                    Emit(OpCode.MOVE, localReg, i);
+                int scratchReg = 0;
+                for (int i = 0; i < func.Parameters.Count; i++)
+                {
+                    var param = func.Parameters[i];
+                    if (_structTypes.TryGetValue(param.TypeName, out var paramSD))
+                    {
+                        // Struct parameter: allocate consecutive locals, copy multi-reg from scratch
+                        int baseReg = DeclareStructVar(param.Name, paramSD.Fields.Count);
+                        _structVarTypes[param.Name] = param.TypeName;
+                        for (int j = 0; j < paramSD.Fields.Count; j++)
+                        {
+                            if (baseReg + j != scratchReg + j)
+                                Emit(OpCode.MOVE, baseReg + j, scratchReg + j);
+                        }
+                        scratchReg += paramSD.Fields.Count;
+                    }
+                    else
+                    {
+                        // Scalar parameter (original behavior)
+                        int localReg = DeclareVar(param.Name);
+                        if (localReg != scratchReg)
+                            Emit(OpCode.MOVE, localReg, scratchReg);
+                        scratchReg++;
+                    }
+                }
             }
 
             // Compile function body
@@ -552,13 +573,17 @@ namespace FFVM.Compiler
             for (int i = 0; i < func.Parameters.Count; i++)
             {
                 order++;
+                // S4: struct parameters need correct FieldCount for register release
+                int fieldCount = 0;
+                if (_structTypes.TryGetValue(func.Parameters[i].TypeName, out var paramStructDecl))
+                    fieldCount = paramStructDecl.Fields.Count;
                 ranges[func.Parameters[i].Name] = new LiveRange
                 {
                     Name = func.Parameters[i].Name,
                     DefOrder = order,
                     LastUseOrder = order,
                     CrossesAwait = false,
-                    FieldCount = 0
+                    FieldCount = fieldCount
                 };
                 declaredBeforeAwait.Add(func.Parameters[i].Name);
             }
@@ -1373,6 +1398,7 @@ namespace FFVM.Compiler
 
         /// <summary>
         /// Core: compile args → scratch zone, emit CALL instruction.
+        /// S4: struct arguments expand to multiple consecutive scratch registers.
         /// callerWindowSize = VarRegBase(16) + localVarCount for register window offset.
         /// </summary>
         private void EmitUserCall(CallExpr call)
@@ -1394,6 +1420,21 @@ namespace FFVM.Compiler
                     _errors.Add($"Function '{call.FunctionName}' expects {funcDecl.Parameters.Count} arguments but got {call.Arguments.Count} (line {call.Line})");
                     return;
                 }
+
+                // S4/R5: validate total scratch registers needed for all parameters
+                int totalScratchRegs = 0;
+                for (int i = 0; i < funcDecl.Parameters.Count; i++)
+                {
+                    if (_structTypes.TryGetValue(funcDecl.Parameters[i].TypeName, out var psd))
+                        totalScratchRegs += psd.Fields.Count;
+                    else
+                        totalScratchRegs += 1;
+                }
+                if (totalScratchRegs > VarRegBase)
+                {
+                    _errors.Add($"Function '{call.FunctionName}' requires {totalScratchRegs} scratch registers for parameters (max {VarRegBase}) (line {call.Line})");
+                    return;
+                }
             }
 
             // Phase 1: compile all args into temp registers
@@ -1401,11 +1442,35 @@ namespace FFVM.Compiler
             for (int i = 0; i < call.Arguments.Count; i++)
                 argRegs[i] = CompileExpr(call.Arguments[i]);
 
-            // Phase 2: move args to r0, r1, ... (scratch zone — shared, not windowed)
-            for (int i = 0; i < call.Arguments.Count; i++)
+            // Phase 2: move args to scratch zone r0, r1, ... (shared, not windowed)
+            // S4: struct arguments expand to N consecutive scratch registers
             {
-                if (argRegs[i] != i)
-                    Emit(OpCode.MOVE, i, argRegs[i]);
+                int scratchReg = 0;
+                for (int i = 0; i < call.Arguments.Count; i++)
+                {
+                    // Check if this argument is a struct variable
+                    bool isStructArg = false;
+                    if (call.Arguments[i] is IdentifierExpr argIdent &&
+                        _structVarTypes.TryGetValue(argIdent.Name, out var argTypeName) &&
+                        _structTypes.TryGetValue(argTypeName, out var argSD))
+                    {
+                        isStructArg = true;
+                        int srcBase = argRegs[i]; // base register of the struct
+                        for (int j = 0; j < argSD.Fields.Count; j++)
+                        {
+                            if (srcBase + j != scratchReg + j)
+                                Emit(OpCode.MOVE, scratchReg + j, srcBase + j);
+                        }
+                        scratchReg += argSD.Fields.Count;
+                    }
+
+                    if (!isStructArg)
+                    {
+                        if (argRegs[i] != scratchReg)
+                            Emit(OpCode.MOVE, scratchReg, argRegs[i]);
+                        scratchReg++;
+                    }
+                }
             }
 
             // callerWindowSize = number of local var registers currently in use
