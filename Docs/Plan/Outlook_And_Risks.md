@@ -201,24 +201,13 @@ LSP1（LSP Server 核心框架）           ← 所有 LSP 功能的通信基础
 
 ### 2.8 Benchmark 基础设施（来源：P001）
 
-| ID | 内容 | 触发时机 | 复杂度 |
-|----|------|----------|--------|
-| **BM1** | Benchmark 基础设施改进 | CI 性能跟踪需要可靠对比时 | 低~中 |
+| ID | 内容 | 触发时机 | 复杂度 | 状态 |
+|----|------|----------|--------|------|
+| **BM1** | Benchmark 基础设施改进 | CI 性能跟踪需要可靠对比时 | 低~中 | ✅ B-γ3 完成 |
 
-> **已排入串行计划 B-γ3**（2026-04-04）。理由：后续功能开发过程中需要持续观察性能变化，Benchmark 基础设施应尽早就位。
-
-> **来源**：[P001_Performance_Baseline_Rebuild.md §4.1 + §4.3](../Practice/P001_Performance_Baseline_Rebuild.md)
->
-> **背景**：CI benchmark 历史的 Δ 列直接拿跨环境数值做差，产生误导性退化报警。B02 计时低于精度阈值，B05 受 dispatch overhead 放大效应影响。
->
-> **具体内容**：
-> 1. `update-history.sh` 环境指纹对比，环境变化时 Δ 列标记 `(env changed)`
-> 2. `performance_history.md` 开头注明基线环境与 CI 环境差异说明
-> 3. WarmupRuns 20 → ≥100（确保 Dynamic PGO 充分生效）
-> 4. B02 fib(25) → fib(250)（避免亚微秒精度噪声）
-> 5. CI 自我基线：首次运行记录为该环境基线，后续仅同环境对比
-> 6. B05 Accumulator 增加循环体复杂度说明或调整
-> 7. 新增 B06 函数调用密集型基准（CALL/RET + CALL_LEAF/RET_LEAF）
+> **已完成** — 串行计划 B-γ3（2026-04-04）。
+> 实现内容：WarmupRuns=100、B02 fib(250)、B05 dispatch 开销说明、B06 FuncCall 基准、update-history.sh 环境指纹 + CI 自我基线、performance_history.md 跨环境说明。
+> 详见 [Step_B_Gamma3_BM1_Benchmark.md](Step_B_Gamma3_BM1_Benchmark.md)。
 
 ---
 

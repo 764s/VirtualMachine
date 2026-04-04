@@ -3,6 +3,13 @@
 > 性能历史记录 — 由 CI 自动追加，记录每次提交的 Benchmark 结果变化。
 > 手动运行：`bash benchmarks/update-history.sh <bench-raw.txt> [cross-lang-raw.txt]`
 
+## ⚠️ 跨环境对比说明
+
+> **初始基线**捕获于 **Windows / .NET 6.0 / 20 核**（开发机），CI 运行于 **Unix / .NET 8.0 / 2 核**（GitHub Actions runner）。
+> 由于 CPU 核数、JIT 版本、OS 调度策略差异，**跨环境 Δ 值不可直接比较**。
+> 自 BM1 (B-γ3) 起，`update-history.sh` 使用环境指纹检测：环境变化时 Δ 列标记 `(env changed)` 并重置为新环境基线。
+> 仅同环境内的趋势比较具有可信度。
+
 ## Baseline (Initial)
 
 > 初始基线来自 `benchmarks/benchmark_results.md`（.NET 6.0, Windows, 20 核）

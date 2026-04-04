@@ -590,8 +590,9 @@ skill TracerBullet
 | — | **B-β3 O9 活跃实例链表** | **ActiveList 替代全量遍历 + swap-remove O(1) + 稀疏场景验证 + Snapshot 一致性** | **711** | [B-β3](Plan/Step_B_Beta3_O9_ActiveList.md) |
 | — | **B-γ1 FO6 自适应寄存器窗口** | **编译后 temp 重映射紧接 locals + CALL 窗口 = locals+temps + 累计窗口溢出检测 + 嵌套 ~3→~6** | **721** | [B-γ1](Plan/Step_B_Gamma1_FO6_AdaptiveWindow.md) |
 | — | **B-γ2 FF5 非 entry 函数 defer** | **RET_FUNC cleanup 链对齐 + CleanupBase 作用域边界 + r0 返回值保护 + Kill 逐层展开** | **763** | [B-γ2](Plan/Step_B_Gamma2_FF5_NonEntryDefer.md) |
+| — | **B-γ3 BM1 Benchmark 基础设施改进** | **WarmupRuns=100 + B02 fib(250) + B05 dispatch 说明 + B06 FuncCall 基准 + 环境指纹对比 + CI 自我基线** | **795** | [B-γ3](Plan/Step_B_Gamma3_BM1_Benchmark.md) |
 
-**当前位置 → B-γ2 完成，763 项 Assert × 2 模式全通过。非 entry 函数 defer/using：RET_FUNC 检测 CleanupDepth > CleanupBase 进入 InCleanup，RETURN 按 CleanupBase 边界逐层退出，savedR0 保护返回值，Kill 路径跨函数正确清理。含 defer/using 的函数排除 leaf 优化。**
+**当前位置 → B-γ3 完成，795 项 Assert × 2 模式全通过。Benchmark 基础设施：WarmupRuns 20→100（Dynamic PGO 充分生效）、B02 fib(25)→fib(250) 消除亚微秒噪声、B05 dispatch 开销说明、新增 B06 函数调用密集基准、update-history.sh 环境指纹检测与自我基线重置、performance_history.md 跨环境对比说明。**
 
 ---
 
@@ -600,9 +601,9 @@ skill TracerBullet
 以下步骤不依赖真实 ECS/Syscall 接入，可在当前独立环境中推进。
 步骤严格按编号顺序串行执行，每步完成后更新状态标记。
 
-> **当前位置 → B-γ3**（BM1 Benchmark 基础设施改进）
+> **当前位置 → B-γ4**（O15 ExecuteInstance 热循环优化）
 > ✅ **紧急任务区已清空**：E001（🔴 寄存器生命周期）+ E002（🟠 Syscall 约定）已修复。串行计划恢复推进。795 项 Assert 全通过。
-> 📌 **P001 建议提前排入**：BM1（B-γ3）+ O15（B-γ4）从展望提升为串行步骤，确保性能基线和热循环优化在后续功能开发前就位，持续观察性能变化。
+> 📌 **P001 建议提前排入**：BM1（B-γ3 ✅）+ O15（B-γ4）从展望提升为串行步骤，确保性能基线和热循环优化在后续功能开发前就位，持续观察性能变化。
 
 #### Phase 0: 正式命名
 
@@ -631,7 +632,7 @@ skill TracerBullet
 |---|-----|------|------|----------|------|
 | 6 | B-γ1 | FO6 自适应寄存器窗口 | ✅ | 嵌套层数 ~3→~6 + R1/SR1 根本解决 + 测试通过 | F4 ✅ |
 | 7 | B-γ2 | FF5 非 entry 函数 defer | ✅ | RET_FUNC 与 Cleanup 链正确对齐 + 测试通过 | 函数调用 ✅ |
-| 8 | B-γ3 | BM1 Benchmark 基础设施改进 | ⏳ | update-history.sh 环境指纹 + performance_history.md 基线说明 + WarmupRuns≥100 + B02 scale 调整 + B05 说明 + B06 新增基准 + CI 自我基线 + benchmark 历史对比正确 | 无 |
+| 8 | B-γ3 | BM1 Benchmark 基础设施改进 | ✅ | update-history.sh 环境指纹 + performance_history.md 基线说明 + WarmupRuns≥100 + B02 scale 调整 + B05 说明 + B06 新增基准 + CI 自我基线 + benchmark 历史对比正确 | 无 |
 | 9 | B-γ4 | O15 ExecuteInstance 热循环优化 | ⏳ | SENTINEL 哨兵操作码 + InstructionCount 属性 + 移除逐指令边界检查 + AggressiveOptimization + MaxStepsPerTick 局部缓存 + benchmark 验证 VM 时间 ≥30% 下降 + Assert 全通过 | 无 |
 | 10 | B-γ5 | S4 结构体作为函数参数 | ⏳ | 结构体参数寄存器传递 + R5 安全限制 + 测试通过 | B-γ1 (FO6) |
 | 11 | B-γ6 | C6 嵌套 using 作用域优化 | ⏳ | 合并相邻 PUSH_CLEANUP 指令 + 性能验证 + 测试通过 | 无 |

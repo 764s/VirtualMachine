@@ -20,7 +20,7 @@ using UnityEngine;
 public static class BenchmarkRunner
 {
     // ── configuration ──────────────────────────────────────────────
-    const int WarmupRuns = 20;
+    const int WarmupRuns = 100;
     const int MeasureRuns = 200;
 
     static void Log(string msg) => UnityEngine.Debug.Log(msg);
@@ -35,10 +35,11 @@ public static class BenchmarkRunner
             $"cores={Environment.ProcessorCount} warmup={WarmupRuns} runs={MeasureRuns}");
 
         RunBenchmark("B01_ArithLoop",      B01_Script, B01_CSharp,      10000);
-        RunBenchmark("B02_Fibonacci",       B02_Script, B02_CSharp,      25);
+        RunBenchmark("B02_Fibonacci",       B02_Script, B02_CSharp,      250);
         RunBenchmark("B03_NestedLoop",      B03_Script, B03_CSharp,      100);
         RunBenchmark("B04_Branching",       B04_Script, B04_CSharp,      10000);
         RunBenchmark("B05_Accumulator",     B05_Script, B05_CSharp,      50000);
+        RunBenchmark("B06_FuncCall",        B06_Script, B06_CSharp,      5000);
 
         Log("[BENCHMARK_END]");
     }
@@ -322,6 +323,11 @@ func main() {{
 
     // ========================================================================
     //  B05: Simple Accumulator — minimal overhead, pure ADD loop
+    //  NOTE: B05 is intentionally minimal (only ADD + compare + jump).
+    //  The VM/C# ratio is amplified because C# JIT optimizes the tight
+    //  loop aggressively while the VM pays per-instruction dispatch overhead
+    //  on every iteration.  This makes B05 a worst-case dispatch-overhead
+    //  indicator rather than a typical workload benchmark.
     // ========================================================================
 
     static BenchCase B05_Script(int n) => new BenchCase
@@ -356,4 +362,51 @@ func main() {{
         }
         return sum.ToInt();
     }
+
+    // ========================================================================
+    //  B06: Function Call Intensive — measures CALL/RET overhead
+    //  Calls a helper function on every loop iteration. The compiler may
+    //  optimize the helper as a leaf function (CALL_LEAF/RET_LEAF).
+    // ========================================================================
+
+    static BenchCase B06_Script(int n) => new BenchCase
+    {
+        Script = $@"
+func add_one(x: int): int {{
+    return x + 1
+}}
+
+func main() {{
+    var sum: int = 0
+    var i: int = 0
+    while (i < {n}) {{
+        sum = sum + add_one(i)
+        i = i + 1
+    }}
+    Result(sum)
+}}",
+        Entry = "main",
+        Syscalls = new Dictionary<string, int> { { "Result", 0 } },
+        RegisterSyscalls = (s, cb) =>
+            s.Register(0, "Result", (ref VMInstanceState st) => cb(st.Registers.Get(0).ToInt())),
+        MaxSteps = n * 30,
+    };
+
+    static int B06_CSharp(int n)
+    {
+        Number limit = Number.FromInt(n);
+        Number step = Number.One;
+        Number sum = Number.Zero;
+        Number i = Number.Zero;
+        while (i < limit)
+        {
+            sum = sum + B06_Helper(i);
+            i = i + step;
+        }
+        return sum.ToInt();
+    }
+
+    [System.Runtime.CompilerServices.MethodImpl(
+        System.Runtime.CompilerServices.MethodImplOptions.NoInlining)]
+    static Number B06_Helper(Number x) => x + Number.One;
 }

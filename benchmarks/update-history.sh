@@ -28,6 +28,9 @@ RUNTIME=$(echo "$ENV_LINE" | grep -oP 'runtime=\K[^ ]+' || echo "unknown")
 OS_NAME=$(echo "$ENV_LINE" | grep -oP 'os=\K\S+' || echo "unknown")
 CORES=$(echo "$ENV_LINE" | grep -oP 'cores=\K[^ ]+' || echo "?")
 
+# Environment fingerprint for cross-run comparison
+ENV_FINGERPRINT="${RUNTIME}|${OS_NAME}|${CORES}"
+
 # ── Parse current benchmark results ────────────────────────
 declare -A CUR_VM CUR_CS CUR_RATIO
 BENCHMARKS=()
@@ -54,7 +57,18 @@ fi
 
 # ── Parse previous entry from history for delta calculation ─
 declare -A PREV_VM PREV_RATIO
+PREV_ENV_FINGERPRINT=""
 if [ -f "$HISTORY" ]; then
+    # Extract previous environment fingerprint from the most recent entry
+    # Format: "> .NET {runtime} | {os} | {cores} cores"
+    PREV_ENV_LINE=$(grep -m1 '^> \.NET ' "$HISTORY" || echo "")
+    if [ -n "$PREV_ENV_LINE" ]; then
+        prev_rt=$(echo "$PREV_ENV_LINE" | grep -oP '\.NET \K[^ ]+' || echo "")
+        prev_os=$(echo "$PREV_ENV_LINE" | sed -n 's/.*| \([^ ]*\) |.*/\1/p' || echo "")
+        prev_cores=$(echo "$PREV_ENV_LINE" | grep -oP '\K[0-9]+(?= cores)' || echo "")
+        PREV_ENV_FINGERPRINT="${prev_rt}|${prev_os}|${prev_cores}"
+    fi
+
     # Find the last table entry block before HISTORY_END
     # Look for lines like "| B01_ArithLoop | 540.7 | 78.7 | 6.87x |"
     LAST_BLOCK=""
@@ -80,6 +94,12 @@ if [ -f "$HISTORY" ]; then
     fi
 fi
 
+# ── Determine if environment has changed ────────────────────
+ENV_CHANGED=false
+if [ -n "$PREV_ENV_FINGERPRINT" ] && [ "$ENV_FINGERPRINT" != "$PREV_ENV_FINGERPRINT" ]; then
+    ENV_CHANGED=true
+fi
+
 # ── Build the new history entry ─────────────────────────────
 ENTRY=""
 ENTRY+="### ${DATE} — \`${COMMIT}\`"$'\n'
@@ -96,10 +116,13 @@ for b in "${BENCHMARKS[@]}"; do
     cs="${CUR_CS[$b]}"
     ratio="${CUR_RATIO[$b]}"
 
-    # Calculate deltas
+    # Calculate deltas — skip if environment changed (self-baseline)
     delta_vm="—"
     delta_ratio="—"
-    if [ -n "${PREV_VM[$b]:-}" ]; then
+    if $ENV_CHANGED; then
+        delta_vm="— (env changed)"
+        delta_ratio="— (env changed)"
+    elif [ -n "${PREV_VM[$b]:-}" ]; then
         delta_vm=$(awk "BEGIN {
             d = $vm - ${PREV_VM[$b]};
             pct = (${PREV_VM[$b]} > 0) ? (d / ${PREV_VM[$b]}) * 100 : 0;
@@ -108,7 +131,7 @@ for b in "${BENCHMARKS[@]}"; do
             else printf \"0 (=)\";
         }")
     fi
-    if [ -n "${PREV_RATIO[$b]:-}" ]; then
+    if ! $ENV_CHANGED && [ -n "${PREV_RATIO[$b]:-}" ]; then
         delta_ratio=$(awk -v thresh="$REGRESSION_THRESHOLD" "BEGIN {
             d = $ratio - ${PREV_RATIO[$b]};
             if (d > thresh) printf \"+%.2fx ⚠️\", d;
@@ -163,7 +186,10 @@ fi
 ENTRY+=""$'\n'
 
 # ── Regression summary ──────────────────────────────────────
-if $ANY_REGRESSION; then
+if $ENV_CHANGED; then
+    ENTRY+="📌 **New environment baseline**: environment changed from \`${PREV_ENV_FINGERPRINT}\` → \`${ENV_FINGERPRINT}\`. Deltas reset."$'\n'
+    ENTRY+=""$'\n'
+elif $ANY_REGRESSION; then
     ENTRY+="⚠️ **Regression detected**: VM/C# ratio increased >10% on one or more benchmarks."$'\n'
     ENTRY+=""$'\n'
 fi
@@ -190,6 +216,8 @@ mv "$TMPFILE" "$HISTORY"
 echo "[*] History updated: ${#BENCHMARKS[@]} benchmarks recorded"
 echo "    Commit: ${COMMIT}"
 echo "    Date: ${DATE}"
-if $ANY_REGRESSION; then
+if $ENV_CHANGED; then
+    echo "    📌 NEW ENVIRONMENT BASELINE (deltas reset)"
+elif $ANY_REGRESSION; then
     echo "    ⚠️  REGRESSION DETECTED"
 fi
