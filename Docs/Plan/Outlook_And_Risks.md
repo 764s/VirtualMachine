@@ -199,6 +199,25 @@ LSP1（LSP Server 核心框架）           ← 所有 LSP 功能的通信基础
 > **设计原则**：最小化实现以保证最大化性能。字符串字面量编译为整数索引，存入 `VMProgram.StringConstants`（只读 ROM）。
 > 寄存器仅携带索引；Syscall 通过闭包访问字符串表解析实际文本。不引入字符串拼接、比较等运行时操作。
 
+### 2.8 Benchmark 基础设施（来源：P001）
+
+| ID | 内容 | 触发时机 | 复杂度 |
+|----|------|----------|--------|
+| **BM1** | Benchmark 基础设施改进 | CI 性能跟踪需要可靠对比时 | 低~中 |
+
+> **来源**：[P001_Performance_Baseline_Rebuild.md §4.1 + §4.3](../Practice/P001_Performance_Baseline_Rebuild.md)
+>
+> **背景**：CI benchmark 历史的 Δ 列直接拿跨环境数值做差，产生误导性退化报警。B02 计时低于精度阈值，B05 受 dispatch overhead 放大效应影响。
+>
+> **具体内容**：
+> 1. `update-history.sh` 环境指纹对比，环境变化时 Δ 列标记 `(env changed)`
+> 2. `performance_history.md` 开头注明基线环境与 CI 环境差异说明
+> 3. WarmupRuns 20 → ≥100（确保 Dynamic PGO 充分生效）
+> 4. B02 fib(25) → fib(250)（避免亚微秒精度噪声）
+> 5. CI 自我基线：首次运行记录为该环境基线，后续仅同环境对比
+> 6. B05 Accumulator 增加循环体复杂度说明或调整
+> 7. 新增 B06 函数调用密集型基准（CALL/RET + CALL_LEAF/RET_LEAF）
+
 ---
 
 ## 三、优化展望
@@ -242,8 +261,14 @@ LSP1（LSP Server 核心框架）           ← 所有 LSP 功能的通信基础
 | **1** | **O2** | OpCode 连续编号 → 强制跳转表 | dispatch ~20% 加速 | 低 | ✅ |
 | **2** | **O6** | Peephole 优化 pass | ~5-10% 指令数减少 | 中 | ⏳ |
 | **3** | **O8** | 指令压缩 16B → 4B | L1 缓存 10-20% 加速 | 高 | ⏳ |
+| **3** | **O15** | ExecuteInstance 热循环优化（哨兵指令 + JIT 提示 + 局部缓存） | 本地实测 VM 时间 -31~65% | 低~中 | ⏳ |
 
-**推荐顺序**：O1 ✅ → O2 ✅ → O6 → 视需要 O8。B3 Tier 1 详情见 [Step_B3_Optimization_Tier1.md](Step_B3_Optimization_Tier1.md)。
+**推荐顺序**：O1 ✅ → O2 ✅ → O6 → 视需要 O8/O15。B3 Tier 1 详情见 [Step_B3_Optimization_Tier1.md](Step_B3_Optimization_Tier1.md)。
+
+> **O15 详情**（来源：[P001 §4.2](../Practice/P001_Performance_Baseline_Rebuild.md)）：
+> 1. **哨兵指令**：VMProgram 构造函数追加 SENTINEL 操作码，switch-case 中触发 PanicOutOfBounds，安全移除逐指令边界检查。需同步 SourceMap + InstructionCount 属性。
+> 2. **AggressiveOptimization**：为 ExecuteInstance 添加 `[MethodImpl(MethodImplOptions.AggressiveOptimization)]`，跳过 Tier-0 直接 Tier-1 编译。
+> 3. **局部变量缓存**：MaxStepsPerTick 缓存到循环前局部变量，避免每次循环读取字段。
 
 ### 3.3 调整型优化 — 调度 / 快照 / 运行时
 
@@ -366,7 +391,8 @@ LSP1（LSP Server 核心框架）           ← 所有 LSP 功能的通信基础
 | **步骤 10 前如需** | S4 |
 | **业务驱动** | FF1-FF5, H1, BB1, PR1, FIX1, DM1 |
 | **自然优化（随功能实现）** | O3, O4, O5, O7, FO4, FO5, FO7 |
-| **调整型优化（Benchmark 驱动）** | O1, O2, O6, O8, O9, O10, O11, O12, O13, O14, FO1, FO2, FO3, FO6, SO1 |
+| **调整型优化（Benchmark 驱动）** | O1, O2, O6, O8, O9, O10, O11, O12, O13, O14, O15, FO1, FO2, FO3, FO6, SO1 |
+| **CI / Benchmark 基础设施** | BM1 |
 | **脚本调试** | DBG1-DBG7（真实宿主断点 + DAP） |
 | **语言服务** | LSP1-LSP7（语法高亮、诊断、符号、补全、Syscall 声明、参数提示） |
 | **无需消除（设计决策）** | 不支持闭包/高阶函数, 不支持结构体方法 |
@@ -376,6 +402,7 @@ LSP1（LSP Server 核心框架）           ← 所有 LSP 功能的通信基础
 | 复杂度 | 条目 |
 |--------|------|
 | 低 | C4, G6, O1, O2, O3, O5, O7, O9, FO4, FO5, FF3, SN2, DBG3, DBG5, DBG6, LSP2 |
+| 低~中 | O15, BM1 |
 | 中 | F4, S4, O4, O6, O10, O11, O14, FO1, FO6, FO7, FO2, FF1, FF2, FF4, FF5, SO1, SN1, H1, DBG1, DBG2, DBG4, DBG7, LSP1, LSP3, LSP4, LSP5, LSP6, LSP7 |
 | 高 | O8, O13, FO3 |
 
@@ -392,7 +419,8 @@ LSP1（LSP Server 核心框架）           ← 所有 LSP 功能的通信基础
 | 类别 | 条目 | 数量 | 说明 |
 |------|------|------|------|
 | 自然优化 | O3, O4, O5, O7, FO4, FO5, FO7 | 7 | 随 F4 / 编译器成熟化顺带完成 |
-| 调整型优化 | O1, O2, O6, O8, O9-O14, FO1-FO3, FO6, SO1 | 15 | Benchmark 驱动，专项投入 |
+| 调整型优化 | O1, O2, O6, O8, O9-O15, FO1-FO3, FO6, SO1 | 16 | Benchmark 驱动，专项投入 |
+| CI / Benchmark 基础设施 | BM1 | 1 | Benchmark 可靠性改进 |
 
 ---
 
@@ -712,6 +740,8 @@ Gate 3: Unity Editor 内嵌 DAP（可选）             ← DBG7 Phase C
 | BB1 | 黑板 Key 编译期自动分配 ID | 编译器成熟后 |
 | PR1 | Paired Syscall 支持带参反向调用 | 需要带参释放场景 |
 | DM1 | VM 编排表现脚本（双轨模式） | 需要复杂镜头/特效序列 |
+| O15 | ExecuteInstance 热循环优化（哨兵 + JIT 提示 + 局部缓存） | Benchmark 驱动 |
+| BM1 | Benchmark 基础设施改进（环境感知 + 调参 + CI 自我基线） | CI 性能跟踪需要可靠对比 |
 
 ### 8.2 风险理想方案速查
 

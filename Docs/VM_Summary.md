@@ -648,8 +648,8 @@ skill TracerBullet
 | 18 | B-δ6 | B1 Unity Editor DAP (可选) | ⏳ | EditorApplication.update 轮询模式 + DR5 解决 + 测试通过 | DAP ✅ |
 
 > **剩余展望项**（暂无排期，业务驱动激活）：FF1 跨模块调用、FF2 函数回调、FF4 多返回值、
-> O8 指令压缩、O11-O14 运行时优化、FO2 尾调用、FO3 小函数内联、
-> BB1 黑板 Key 编译期 ID、PR1 带参 Paired Syscall、DM1 双轨编排模式。
+> O8 指令压缩、O11-O14 运行时优化、O15 热循环优化、FO2 尾调用、FO3 小函数内联、
+> BB1 黑板 Key 编译期 ID、PR1 带参 Paired Syscall、DM1 双轨编排模式、BM1 Benchmark 基础设施改进。
 > 完整索引见 [Outlook_And_Risks.md](Plan/Outlook_And_Risks.md)。
 
 ---
@@ -972,7 +972,7 @@ bash benchmarks/update-history.sh bench-raw.txt
 
 | # | 实践文档 | 主题 | 日期 | 产出建议去向 | 状态 |
 |---|---------|------|------|------------|------|
-| P001 | [P001_Performance_Baseline_Rebuild.md](Practice/P001_Performance_Baseline_Rebuild.md) | 性能基线重建 + 执行循环优化 | 2026-04-03 | 串行计划新步骤 / 展望 | 待讨论 |
+| P001 | [P001_Performance_Baseline_Rebuild.md](Practice/P001_Performance_Baseline_Rebuild.md) | 性能基线重建 + 执行循环优化 | 2026-04-03 | → 展望 BM1（Benchmark 基础设施）、O15（热循环优化） | ✅ 已处理 |
 | P002 | [P002_Sandbox_Build.md](Practice/P002_Sandbox_Build.md) | Sandbox 构建实践 | 2026-04-03 | → 紧急独立任务区 E001, E002；次优先级 T001-T003 | ✅ 已处理 |
 
 ---
