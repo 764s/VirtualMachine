@@ -1,8 +1,12 @@
-# 实践建议：Sandbox 构建过程中发现的问题与改进方向
+# P002: Sandbox 构建实践
 
+> **状态**：✅ 已处理（2026-04-04）
 > **来源**：Sandbox（FFScript 沙盒区）实际构建过程中遇到的阻碍和观察。
 > **目的**：提出可纳入串行计划、展望计划或风险点的建议项。
 > **日期**：2026-04-03
+> **结论**：本实践提出的 8 项问题/建议已全部分流处理。其中 2 项恶性/深远缺陷经紧急独立任务区（E001、E002）修复完成；
+> 2 项在实践过程中直接解决；3 项次优先级任务回收至紧急任务区待评估后分流；1 项待依赖解除后重新评估。
+> 详见各条目的「**处理结果**」标注。
 
 ---
 
@@ -39,6 +43,9 @@ func main() {
 - **归属**：寄存器生命周期分析（F4）或窥孔优化 pass（B-β1）
 - **行动**：添加寄存器分配后的 bytecode 验证测试；逐条审计 `FreeTemp` / `AllocTemp` 的调用时机与 while 循环的 back-edge 交互
 
+> **处理结果**：✅ **完全处理** — 升级为紧急任务 [E001](../Emergency/E001_Register_Lifecycle_Bug.md)（🔴 恶性缺陷）并已修复。
+> 根因：CompileBlock 变量释放后未从 `_liveRanges` 移除导致重复释放。新增 6 个回归测试。
+
 ---
 
 ## 二、Sandbox 构建过程中的技术阻碍
@@ -54,6 +61,8 @@ func main() {
 - 或者将独立于 Unity 的 `.csproj`（StandaloneRunner、Sandbox）移出 `.gitignore`
 - **优先级**：低（但影响新用户体验）
 
+> **处理结果**：⏭️ **已跳过** — 已单独为 Sandbox 加了一键初始化功能，暂不需要全局脚本。
+
 ### P3. Syscall 参数寄存器约定需要文档化
 
 **现象**：Syscall handler 从绝对寄存器 r0/r1/r2 读写参数，而非 `RegisterBase` 相对寻址。此约定在代码中通过示例隐含传递（CompilerTests 中 `s.Registers.Get(0)`），但缺少集中说明文档。
@@ -65,6 +74,9 @@ func main() {
 - 在 `sandbox.ffvm.d.json` 或 `SyscallSignature` 中增加参数寄存器映射的元数据
 - **优先级**：中（影响所有 syscall 实现者）
 
+> **处理结果**：✅ **完全处理** — 与 P4 合并升级为紧急任务 [E002](../Emergency/E002_Syscall_Register_Convention.md)（🟠 影响深远缺陷）并已修复。
+> 引入 `SyscallArgs` 类型安全 API + 冲突检测 + 文档修正。新增 8 个测试。
+
 ### P4. DapServer 不注册 Syscall
 
 **现象**：`DapServer.HandleLaunch()` 创建空的 `Dictionary<string, int>()` 传给编译器，不注册任何 syscall。这意味着 DAP 调试模式下，包含 syscall 调用的脚本会编译失败。
@@ -75,6 +87,9 @@ func main() {
 - 允许 `DapServer` 接收外部传入的 syscall 映射（通过 launch.json 的 `syscallDecl` 参数指定 `.ffvm.d.json` 文件路径）
 - 或实现 no-op 占位 syscall handler 自动注册
 - **优先级**：中（影响 Sandbox 脚本的断点调试）
+
+> **处理结果**：✅ **完全处理** — 与 P3 合并升级为紧急任务 [E002](../Emergency/E002_Syscall_Register_Convention.md)（🟠 影响深远缺陷）并已修复。
+> DapServer 现支持通过 `syscallDecl` 参数加载 syscall 声明文件。
 
 ---
 
@@ -88,6 +103,8 @@ func main() {
 - 为 `Number` 添加智能格式化方法：整数值显示为 `42`，非整数显示为 `3.14`
 - **优先级**：低（美化输出，不影响功能）
 
+> **处理结果**：🔵 **回收至次优先级** — 记为紧急任务区 T001，待紧急缺陷清除后评估分流至展望计划。
+
 ### P6. 深度递归函数导致步数限制
 
 **现象**：前一 session 发现 `fibonacci(10)` 使用递归实现时，即使 `MaxStepsPerTick = 10_000_000` 也报 `PanicStepLimitExceeded`。经调查，这不一定是步数不够，而可能与 P1 寄存器 bug 导致的无限循环有关。
@@ -96,6 +113,8 @@ func main() {
 - 修复 P1 后重新测试递归场景
 - 考虑为 Sandbox 增加 `--max-steps` 命令行参数
 - **优先级**：待 P1 修复后再评估
+
+> **处理结果**：🔵 **回收至次优先级** — 记为紧急任务区 T002，依赖 E001 修复（已完成）。待重新评估递归场景后决定去向。
 
 ---
 
@@ -110,6 +129,8 @@ func main() {
 - 添加断言检查脚本输出（如 `sum = 5050`）
 - **优先级**：中
 
+> **处理结果**：🔵 **回收至次优先级** — 记为紧急任务区 T003，沙盒定位为微型 Unity 自由测试场景；如有必要单独提出纳入工作流优化。
+
 ### P8. .vscode 目录被全局 gitignore 排除
 
 **现象**：仓库 `.gitignore` 中有 `.vscode/` 规则，导致 `Sandbox/.vscode/launch.json` 和 `tasks.json` 无法被 git 追踪。这些文件对于开箱即用的调试体验是必要的。
@@ -119,17 +140,19 @@ func main() {
 - 或将调试配置文件以不同名称（如 `launch.json.template`）提供
 - **优先级**：中（影响调试体验的开箱即用性）
 
+> **处理结果**：⏭️ **已跳过（实践中直接解决）** — 已在实践过程中提交 `.gitignore` 的 `!Sandbox/.vscode/` 例外规则。
+
 ---
 
-## 五、总结与优先级排序
+## 五、总结与处理状态
 
-| ID | 建议 | 类型 | 优先级 | 建议归属 |
+| ID | 建议 | 类型 | 优先级 | 处理结果 |
 |----|------|------|--------|---------|
-| P1 | 寄存器生命周期 Bug | Bug 修复 | **高** | 串行计划（新步骤 or B-γ1 前置） |
-| P2 | .csproj 管理脚本 | 工程改进 | 低 | 展望计划 |
-| P3 | Syscall 寄存器约定文档 | 文档 | 中 | 当前可执行 |
-| P4 | DapServer + Syscall 支持 | 功能增强 | 中 | 串行计划候选 |
-| P5 | Number 显示精度 | 美化 | 低 | 展望计划 |
-| P6 | 深度递归验证 | 验证 | 待定 | 依赖 P1 |
-| P7 | Sandbox 回归测试 | CI 增强 | 中 | 展望计划 |
-| P8 | .vscode gitignore 例外 | 工程改进 | 中 | 当前可执行 |
+| P1 | 寄存器生命周期 Bug | Bug 修复 | **高** | ✅ 完全处理 → [E001](../Emergency/E001_Register_Lifecycle_Bug.md) |
+| P2 | .csproj 管理脚本 | 工程改进 | 低 | ⏭️ 已跳过（Sandbox 已有一键初始化） |
+| P3 | Syscall 寄存器约定文档 | 文档 | 中 | ✅ 完全处理 → [E002](../Emergency/E002_Syscall_Register_Convention.md) |
+| P4 | DapServer + Syscall 支持 | 功能增强 | 中 | ✅ 完全处理 → [E002](../Emergency/E002_Syscall_Register_Convention.md) |
+| P5 | Number 显示精度 | 美化 | 低 | 🔵 回收 → 紧急任务区 T001 |
+| P6 | 深度递归验证 | 验证 | 待定 | 🔵 回收 → 紧急任务区 T002（依赖 E001 已解除） |
+| P7 | Sandbox 回归测试 | CI 增强 | 中 | 🔵 回收 → 紧急任务区 T003 |
+| P8 | .vscode gitignore 例外 | 工程改进 | 中 | ⏭️ 已跳过（实践中直接解决） |
