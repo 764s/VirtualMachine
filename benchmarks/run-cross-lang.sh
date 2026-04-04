@@ -120,21 +120,22 @@ cat > "$OUTPUT" << HEADER
 > Auto-generated on $(date -u '+%Y-%m-%d %H:%M:%S UTC')
 > All times in microseconds (μs). Lower is better.
 > Each benchmark runs 200 iterations after 20 warmup rounds.
-> All languages execute **identical algorithms** with integer arithmetic.
+> Each benchmark naturally mixes int (loop control) and float (computation).
+> B02 is pure integer (classic Fibonacci). Each language uses its own type system.
 
 ## Benchmark Descriptions
 
-| ID | Name | Description | Scale |
-|---|---|---|---|
-| B01 | ArithLoop | ADD/MUL/SUB/MOD + conditional branch | 10,000 |
-| B02 | Fibonacci | Iterative fib(N): swap loop | 25 |
-| B03 | NestedLoop | N×N nested loop with multiply-accumulate | 100 |
-| B04 | Branching | 4-way if/else-if chain per iteration | 10,000 |
-| B05 | Accumulator | Pure ADD loop (minimal overhead) | 50,000 |
+| ID | Name | Int vars | Float vars | Scale |
+|---|---|---|---|---|
+| B01 | ArithLoop | i, limit | acc, x, temp (+0.5, ×2.0, −1.0) | 10,000 |
+| B02 | Fibonacci | i, a, b (pure int) | — | 46 |
+| B03 | NestedLoop | i, j | acc ((i+0.5)×(j+0.5)) | 100 |
+| B04 | Branching | i, m=i%4 | acc, x=i×0.5 | 10,000 |
+| B05 | Accumulator | i | sum (i×0.5) | 50,000 |
 
 ## Results
 
-| Benchmark | FFVM (μs) | C# Number (μs) | Lua (μs) | Python (μs) | Node.js (μs) | FFVM/C# | FFVM/Lua | FFVM/Python | FFVM/JS |
+| Benchmark | FFVM (μs) | C# (μs) | Lua (μs) | Python (μs) | Node.js (μs) | FFVM/C# | FFVM/Lua | FFVM/Python | FFVM/JS |
 |-----------|-----------|----------------|----------|-------------|--------------|---------|----------|-------------|---------|
 HEADER
 
@@ -172,20 +173,20 @@ cat >> "$OUTPUT" << 'FOOTER'
 
 ## How to Read
 
-- **FFVM/C#** — overhead of VM interpretation vs native C# (both use `Number` struct).
+- **FFVM/C#** — overhead of VM interpretation vs C# (int loops + Number float).
   Target: < 10x.
-- **FFVM/Lua** — FFVM vs Lua 5.4 (standard interpreter).
+- **FFVM/Lua** — FFVM vs Lua (PUC-Rio interpreter, all number=double).
   Ratio < 1.0 means FFVM is faster than Lua.
-- **FFVM/Python** — FFVM vs CPython 3.12.
+- **FFVM/Python** — FFVM vs CPython (boxed int + boxed float).
   FFVM should be significantly faster than CPython for numeric loops.
-- **FFVM/JS** — FFVM vs Node.js V8 (JIT-compiled).
+- **FFVM/JS** — FFVM vs Node.js V8 (JIT-compiled, Smi + HeapNumber).
   V8 JIT will typically be faster; this shows the JIT advantage gap.
 
 ## Notes
 
 - FFVM runs as a **bytecode interpreter** (no JIT), so it's expected to be:
-  - ~5-10x slower than native C# (same data type)
-  - Competitive with or faster than Lua 5.4 (both are bytecode interpreters)
+  - ~5-10x slower than native C# (int loops + Number/double for float)
+  - Competitive with or faster than Lua (both are bytecode interpreters)
   - Faster than CPython for tight numeric loops
   - Slower than V8 (which has a multi-tier JIT compiler)
 - The comparison is **not** about raw language speed but about **where FFVM sits

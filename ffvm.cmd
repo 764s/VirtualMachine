@@ -11,6 +11,7 @@ cd /d "%~dp0"
 ::    test       Run VM unit tests
 ::    bench      Run benchmarks (results only)
 ::    bench-all  Run benchmarks + update performance history
+::    cross-lang Cross-language performance comparison
 ::    init       First-time Sandbox initialization
 ::    help       Show this menu
 ::
@@ -24,9 +25,10 @@ set "INTERACTIVE=0"
 if "%CMD%"=="sandbox"   goto :do_sandbox
 if "%CMD%"=="test"      goto :do_test
 if "%CMD%"=="bench"     goto :do_bench
-if "%CMD%"=="bench-all" goto :do_bench_all
-if "%CMD%"=="init"      goto :do_init
-if "%CMD%"=="help"      goto :show_help
+if "%CMD%"=="bench-all"   goto :do_bench_all
+if "%CMD%"=="cross-lang"  goto :do_cross_lang
+if "%CMD%"=="init"        goto :do_init
+if "%CMD%"=="help"        goto :show_help
 if "%CMD%"==""          goto :menu
 
 echo [!] Unknown command: %CMD%
@@ -45,6 +47,7 @@ echo   ffvm sandbox     Build ^& run Sandbox (with DAP debug)
 echo   ffvm test        Run VM unit tests (StandaloneRunner)
 echo   ffvm bench       Run benchmarks (update results only)
 echo   ffvm bench-all   Run benchmarks + update perf history
+echo   ffvm cross-lang  Cross-language performance comparison
 echo   ffvm init        First-time Sandbox initialization
 echo.
 goto :done
@@ -62,16 +65,18 @@ echo   [1]  sandbox     Build ^& run Sandbox (with DAP debug)
 echo   [2]  test        Run VM unit tests (StandaloneRunner)
 echo   [3]  bench       Run benchmarks (update results only)
 echo   [4]  bench-all   Run benchmarks + update perf history
-echo   [5]  init        First-time Sandbox initialization
+echo   [5]  cross-lang  Cross-language performance comparison
+echo   [6]  init        First-time Sandbox initialization
 echo   [Q]  quit
 echo.
-set /p "CHOICE=  Select [1-5, Q]: "
+set /p "CHOICE=  Select [1-6, Q]: "
 
 if "%CHOICE%"=="1" goto :do_sandbox
 if "%CHOICE%"=="2" goto :do_test
 if "%CHOICE%"=="3" goto :do_bench
 if "%CHOICE%"=="4" goto :do_bench_all
-if "%CHOICE%"=="5" goto :do_init
+if "%CHOICE%"=="5" goto :do_cross_lang
+if "%CHOICE%"=="6" goto :do_init
 if /i "%CHOICE%"=="Q" goto :done
 echo.
 echo  [!] Invalid choice.
@@ -111,6 +116,13 @@ echo.
 echo  [FFVM] Running benchmarks + updating history...
 echo.
 call benchmarks\run-all.cmd
+goto :after_cmd
+
+:do_cross_lang
+echo.
+echo  [FFVM] Running cross-language benchmarks...
+echo.
+call benchmarks\run-cross-lang.cmd
 goto :after_cmd
 
 :do_init

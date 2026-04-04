@@ -34,12 +34,12 @@ public static class BenchmarkRunner
         Log($"[BENCHMARK_ENV] runtime={Environment.Version} os={Environment.OSVersion} " +
             $"cores={Environment.ProcessorCount} warmup={WarmupRuns} runs={MeasureRuns}");
 
-        RunBenchmark("B01_ArithLoop",      B01_Script, B01_CSharp,      10000);
-        RunBenchmark("B02_Fibonacci",       B02_Script, B02_CSharp,      250);
-        RunBenchmark("B03_NestedLoop",      B03_Script, B03_CSharp,      100);
-        RunBenchmark("B04_Branching",       B04_Script, B04_CSharp,      10000);
-        RunBenchmark("B05_Accumulator",     B05_Script, B05_CSharp,      50000);
-        RunBenchmark("B06_FuncCall",        B06_Script, B06_CSharp,      5000);
+        _currentRawFn = B01_CSharpRaw; RunBenchmark("B01_ArithLoop",      B01_Script, B01_CSharp,      10000);
+        _currentRawFn = B02_CSharpRaw; RunBenchmark("B02_Fibonacci",       B02_Script, B02_CSharp,      46);
+        _currentRawFn = B03_CSharpRaw; RunBenchmark("B03_NestedLoop",      B03_Script, B03_CSharp,      100);
+        _currentRawFn = B04_CSharpRaw; RunBenchmark("B04_Branching",       B04_Script, B04_CSharp,      10000);
+        _currentRawFn = B05_CSharpRaw; RunBenchmark("B05_Accumulator",     B05_Script, B05_CSharp,      50000);
+        _currentRawFn = B06_CSharpRaw; RunBenchmark("B06_FuncCall",        B06_Script, B06_CSharp,      5000);
 
         Log("[BENCHMARK_END]");
     }
@@ -57,6 +57,9 @@ public static class BenchmarkRunner
 
     delegate BenchCase ScriptFactory(int scale);
     delegate int CSharpFunc(int scale);
+    delegate double CSharpRawFunc(int scale);
+
+    static CSharpRawFunc _currentRawFn;
 
     static void RunBenchmark(string name, ScriptFactory scriptFn, CSharpFunc csharpFn, int scale)
     {
@@ -122,11 +125,24 @@ public static class BenchmarkRunner
         double ratio = csUs > 0 ? vmUs / csUs : 0;
 
         Log($"[BENCHMARK] {name} | {vmUs:F1} | {csUs:F1} | {ratio:F2} | {scale} | {instrCount}");
+
+        // ── C# raw baseline ──
+        if (_currentRawFn != null)
+        {
+            var rawFn = _currentRawFn;
+            for (int w = 0; w < WarmupRuns; w++)
+                rawFn(scale);
+            sw.Restart();
+            for (int r = 0; r < MeasureRuns; r++)
+                rawFn(r == 0 ? scale : scale);
+            sw.Stop();
+            double rawUs = (sw.Elapsed.TotalMilliseconds / MeasureRuns) * 1000.0;
+            Log($"[BENCHMARK_RAW] {name} | {rawUs:F1}");
+        }
     }
 
     // ========================================================================
-    //  B01: Arithmetic Loop — sum + multiply + modulo + branch
-    //  Same as V3 benchmark but in script form
+    //  B01: ArithLoop — int loop, float arithmetic (add/mul/sub)
     // ========================================================================
 
     static BenchCase B01_Script(int n) => new BenchCase
@@ -136,45 +152,36 @@ func main() {{
     var i: int = 0
     var limit: int = {n}
     var acc: int = 0
-    var divisor: int = 3
     while (i < limit) {{
-        acc = acc + i
-        var temp: int = i * 1
-        temp = temp - 1
+        var x: int = i + 0.5
+        acc = acc + x
+        var temp: int = x * 2.0
+        temp = temp - 1.0
         acc = acc + temp
-        if (i % divisor == 0) {{
-            Noop()
-        }}
         i = i + 1
     }}
     Result(acc)
 }}",
         Entry = "main",
-        Syscalls = new Dictionary<string, int> { { "Noop", 0 }, { "Result", 1 } },
+        Syscalls = new Dictionary<string, int> { { "Result", 0 } },
         RegisterSyscalls = (s, cb) =>
-        {
-            s.Register(0, "Noop", (ref VMInstanceState _) => { });
-            s.Register(1, "Result", (ref VMInstanceState st) => cb(st.Registers.Get(0).ToInt()));
-        },
-        MaxSteps = n * 50,
+            s.Register(0, "Result", (ref VMInstanceState st) => cb(st.Registers.Get(0).ToInt())),
+        MaxSteps = n * 30,
     };
 
     static int B01_CSharp(int n)
     {
-        Number limit = Number.FromInt(n);
-        Number step = Number.FromInt(1);
-        Number divisor = Number.FromInt(3);
-        Number i = Number.Zero;
+        Number half = Number.Half;
+        Number two = Number.FromInt(2);
+        Number one = Number.One;
         Number acc = Number.Zero;
-        int sc = 0;
-        while (i < limit)
+        for (int i = 0; i < n; i++)
         {
-            acc = acc + i;
-            Number temp = i * step;
-            temp = temp - step;
+            Number x = Number.FromInt(i) + half;
+            acc = acc + x;
+            Number temp = x * two;
+            temp = temp - one;
             acc = acc + temp;
-            if (i % divisor == Number.Zero) sc++;
-            i = i + step;
         }
         return acc.ToInt();
     }
@@ -207,23 +214,18 @@ func main() {{
 
     static int B02_CSharp(int n)
     {
-        Number a = Number.Zero;
-        Number b = Number.One;
-        Number step = Number.One;
-        Number i = Number.Zero;
-        Number limit = Number.FromInt(n);
-        while (i < limit)
+        int a = 0, b = 1;
+        for (int i = 0; i < n; i++)
         {
-            Number temp = b;
+            int temp = b;
             b = a + b;
             a = temp;
-            i = i + step;
         }
-        return a.ToInt();
+        return a;
     }
 
     // ========================================================================
-    //  B03: Nested Loop — O(n^2) iterations with inner accumulator
+    //  B03: NestedLoop — int loops, float multiply-accumulate
     // ========================================================================
 
     static BenchCase B03_Script(int n) => new BenchCase
@@ -235,7 +237,7 @@ func main() {{
     while (i < {n}) {{
         var j: int = 0
         while (j < {n}) {{
-            acc = acc + i * j
+            acc = acc + (i + 0.5) * (j + 0.5)
             j = j + 1
         }}
         i = i + 1
@@ -251,47 +253,39 @@ func main() {{
 
     static int B03_CSharp(int n)
     {
-        Number limit = Number.FromInt(n);
-        Number step = Number.One;
+        Number half = Number.Half;
         Number acc = Number.Zero;
-        Number i = Number.Zero;
-        while (i < limit)
-        {
-            Number j = Number.Zero;
-            while (j < limit)
-            {
-                acc = acc + i * j;
-                j = j + step;
-            }
-            i = i + step;
-        }
+        for (int i = 0; i < n; i++)
+            for (int j = 0; j < n; j++)
+                acc = acc + (Number.FromInt(i) + half) * (Number.FromInt(j) + half);
         return acc.ToInt();
     }
 
     // ========================================================================
-    //  B04: Heavy Branching — if/else chain every iteration
+    //  B04: Branching — int loop+branch, float accumulate
     // ========================================================================
 
     static BenchCase B04_Script(int n) => new BenchCase
     {
         Script = $@"
 func main() {{
-    var count: int = 0
+    var acc: int = 0
     var i: int = 0
     while (i < {n}) {{
+        var x: int = i * 0.5
         var m: int = i % 4
         if (m == 0) {{
-            count = count + 1
+            acc = acc + x
         }} else if (m == 1) {{
-            count = count + 2
+            acc = acc + x * 2.0
         }} else if (m == 2) {{
-            count = count + 3
+            acc = acc + x * 0.5
         }} else {{
-            count = count + 4
+            acc = acc + x * 4.0
         }}
         i = i + 1
     }}
-    Result(count)
+    Result(acc)
 }}",
         Entry = "main",
         Syscalls = new Dictionary<string, int> { { "Result", 0 } },
@@ -302,32 +296,24 @@ func main() {{
 
     static int B04_CSharp(int n)
     {
-        Number limit = Number.FromInt(n);
-        Number step = Number.One;
+        Number half = Number.Half;
+        Number two = Number.FromInt(2);
         Number four = Number.FromInt(4);
-        Number count = Number.Zero;
-        Number i = Number.Zero;
-        Number n0 = Number.Zero, n1 = Number.One, n2 = Number.FromInt(2);
-        Number n3 = Number.FromInt(3), n4 = Number.FromInt(4);
-        while (i < limit)
+        Number acc = Number.Zero;
+        for (int i = 0; i < n; i++)
         {
-            Number m = i % four;
-            if (m == n0) count = count + n1;
-            else if (m == n1) count = count + n2;
-            else if (m == n2) count = count + n3;
-            else count = count + n4;
-            i = i + step;
+            Number x = Number.FromInt(i) * half;
+            int m = i % 4;
+            if (m == 0) acc = acc + x;
+            else if (m == 1) acc = acc + x * two;
+            else if (m == 2) acc = acc + x * half;
+            else acc = acc + x * four;
         }
-        return count.ToInt();
+        return acc.ToInt();
     }
 
     // ========================================================================
-    //  B05: Simple Accumulator — minimal overhead, pure ADD loop
-    //  NOTE: B05 is intentionally minimal (only ADD + compare + jump).
-    //  The VM/C# ratio is amplified because C# JIT optimizes the tight
-    //  loop aggressively while the VM pays per-instruction dispatch overhead
-    //  on every iteration.  This makes B05 a worst-case dispatch-overhead
-    //  indicator rather than a typical workload benchmark.
+    //  B05: Accumulator — int loop, float sum (i * 0.5)
     // ========================================================================
 
     static BenchCase B05_Script(int n) => new BenchCase
@@ -337,7 +323,7 @@ func main() {{
     var sum: int = 0
     var i: int = 0
     while (i < {n}) {{
-        sum = sum + i
+        sum = sum + i * 0.5
         i = i + 1
     }}
     Result(sum)
@@ -351,15 +337,10 @@ func main() {{
 
     static int B05_CSharp(int n)
     {
-        Number limit = Number.FromInt(n);
-        Number step = Number.One;
+        Number half = Number.Half;
         Number sum = Number.Zero;
-        Number i = Number.Zero;
-        while (i < limit)
-        {
-            sum = sum + i;
-            i = i + step;
-        }
+        for (int i = 0; i < n; i++)
+            sum = sum + Number.FromInt(i) * half;
         return sum.ToInt();
     }
 
@@ -394,19 +375,84 @@ func main() {{
 
     static int B06_CSharp(int n)
     {
-        Number limit = Number.FromInt(n);
-        Number step = Number.One;
-        Number sum = Number.Zero;
-        Number i = Number.Zero;
-        while (i < limit)
+        int sum = 0;
+        for (int i = 0; i < n; i++)
+            sum += B06_RawHelper(i);
+        return sum;
+    }
+
+    // ========================================================================
+    //  C# Raw baselines — native int (loop) + double (computation)
+    //  B02/B06: pure int. B01/B03/B04/B05: int loop + double arithmetic.
+    // ========================================================================
+
+    static double B01_CSharpRaw(int n)
+    {
+        double acc = 0.0;
+        for (int i = 0; i < n; i++)
         {
-            sum = sum + B06_Helper(i);
-            i = i + step;
+            double x = i + 0.5;
+            acc += x;
+            double temp = x * 2.0;
+            temp -= 1.0;
+            acc += temp;
         }
-        return sum.ToInt();
+        return acc;
+    }
+
+    static double B02_CSharpRaw(int n)
+    {
+        int a = 0, b = 1;
+        for (int i = 0; i < n; i++)
+        {
+            int temp = b;
+            b = a + b;
+            a = temp;
+        }
+        return a;
+    }
+
+    static double B03_CSharpRaw(int n)
+    {
+        double acc = 0.0;
+        for (int i = 0; i < n; i++)
+            for (int j = 0; j < n; j++)
+                acc += (i + 0.5) * (j + 0.5);
+        return acc;
+    }
+
+    static double B04_CSharpRaw(int n)
+    {
+        double acc = 0.0;
+        for (int i = 0; i < n; i++)
+        {
+            double x = i * 0.5;
+            int m = i % 4;
+            if (m == 0) acc += x;
+            else if (m == 1) acc += x * 2.0;
+            else if (m == 2) acc += x * 0.5;
+            else acc += x * 4.0;
+        }
+        return acc;
+    }
+
+    static double B05_CSharpRaw(int n)
+    {
+        double sum = 0.0;
+        for (int i = 0; i < n; i++)
+            sum += i * 0.5;
+        return sum;
+    }
+
+    static double B06_CSharpRaw(int n)
+    {
+        int sum = 0;
+        for (int i = 0; i < n; i++)
+            sum += B06_RawHelper(i);
+        return sum;
     }
 
     [System.Runtime.CompilerServices.MethodImpl(
         System.Runtime.CompilerServices.MethodImplOptions.NoInlining)]
-    static Number B06_Helper(Number x) => x + Number.One;
+    static int B06_RawHelper(int x) => x + 1;
 }

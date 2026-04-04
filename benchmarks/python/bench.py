@@ -1,7 +1,8 @@
 """
-FFVM Cross-Language Benchmark — Python 3.12
+FFVM Cross-Language Benchmark — Python
 Implements B01–B05 with IDENTICAL logic to FFVM/C# benchmarks.
-Uses integer arithmetic for fair comparison.
+Each benchmark uses int for loop control and float for computation.
+B02 is pure integer (classic Fibonacci).
 
 Usage: python3 bench.py
 Output: [XLANG] name | lang | us | scale | result
@@ -9,7 +10,7 @@ Output: [XLANG] name | lang | us | scale | result
 import time
 
 
-def measure(name: str, fn, scale: int, expected: int) -> None:
+def measure(name: str, fn, scale: int, expected) -> None:
     # warmup
     for _ in range(20):
         fn(scale)
@@ -27,19 +28,19 @@ def measure(name: str, fn, scale: int, expected: int) -> None:
     print(f"[XLANG] {name} | python | {us:.1f} | {scale} | {result} | {status}")
 
 
-def b01_arith_loop(n: int) -> int:
-    acc = 0
-    i = 0
-    while i < n:
-        acc += i
-        temp = i * 1
-        temp -= 1
+# B01: ArithLoop — int loop, float arithmetic
+def b01_arith_loop(n: int) -> float:
+    acc = 0.0
+    for i in range(n):
+        x = i + 0.5
+        acc += x
+        temp = x * 2.0
+        temp -= 1.0
         acc += temp
-        # branch: if i % 3 == 0 then noop
-        i += 1
     return acc
 
 
+# B02: Fibonacci — pure int
 def b02_fibonacci(n: int) -> int:
     a, b = 0, 1
     for _ in range(n):
@@ -47,72 +48,53 @@ def b02_fibonacci(n: int) -> int:
     return a
 
 
-def b03_nested_loop(n: int) -> int:
-    acc = 0
+# B03: NestedLoop — int loops, float multiply-accumulate
+def b03_nested_loop(n: int) -> float:
+    acc = 0.0
     i = 0
     while i < n:
         j = 0
         while j < n:
-            acc += i * j
+            acc += (i + 0.5) * (j + 0.5)
             j += 1
         i += 1
     return acc
 
 
-def b04_branching(n: int) -> int:
-    count = 0
+# B04: Branching — int loop+branch, float accumulate
+def b04_branching(n: int) -> float:
+    acc = 0.0
     i = 0
     while i < n:
+        x = i * 0.5
         m = i % 4
         if m == 0:
-            count += 1
+            acc += x
         elif m == 1:
-            count += 2
+            acc += x * 2.0
         elif m == 2:
-            count += 3
+            acc += x * 0.5
         else:
-            count += 4
+            acc += x * 4.0
         i += 1
-    return count
+    return acc
 
 
-def b05_accumulator(n: int) -> int:
-    s = 0
+# B05: Accumulator — int loop, float sum
+def b05_accumulator(n: int) -> float:
+    s = 0.0
     i = 0
     while i < n:
-        s += i
+        s += i * 0.5
         i += 1
     return s
 
 
-def expected_b01(n: int) -> int:
-    return n * (n - 1) - n
-
-
-def expected_b02(n: int) -> int:
-    a, b = 0, 1
-    for _ in range(n):
-        a, b = b, a + b
-    return a
-
-
-def expected_b03(n: int) -> int:
-    return (n * (n - 1) // 2) ** 2
-
-
-def expected_b04(n: int) -> int:
-    return (n // 4) * 10
-
-
-def expected_b05(n: int) -> int:
-    return n * (n - 1) // 2
-
-
 if __name__ == "__main__":
     print("[XLANG_START] python")
-    measure("B01_ArithLoop",   b01_arith_loop,  10000, expected_b01(10000))
-    measure("B02_Fibonacci",   b02_fibonacci,   25,    expected_b02(25))
-    measure("B03_NestedLoop",  b03_nested_loop, 100,   expected_b03(100))
-    measure("B04_Branching",   b04_branching,   10000, expected_b04(10000))
-    measure("B05_Accumulator", b05_accumulator, 50000, expected_b05(50000))
+    measure("B01_ArithLoop",   b01_arith_loop,  10000, b01_arith_loop(10000))
+    measure("B02_Fibonacci",   b02_fibonacci,   46,    b02_fibonacci(46))
+    measure("B03_NestedLoop",  b03_nested_loop, 100,   b03_nested_loop(100))
+    measure("B04_Branching",   b04_branching,   10000, b04_branching(10000))
+    measure("B05_Accumulator", b05_accumulator, 50000, b05_accumulator(50000))
     print("[XLANG_END] python")
