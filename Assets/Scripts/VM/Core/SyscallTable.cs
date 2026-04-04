@@ -258,8 +258,7 @@ namespace FFVM
                 // Register no-op placeholder handler (does nothing at runtime)
                 if (_handlers[slot] == null)
                 {
-                    string capturedName = name;
-                    _handlers[slot] = (ref VMInstanceState s) => { /* no-op placeholder for '{capturedName}' */ };
+                    _handlers[slot] = (ref VMInstanceState s) => { /* no-op placeholder */ };
                     _names[slot] = name;
                 }
 
