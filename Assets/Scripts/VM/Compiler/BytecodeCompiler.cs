@@ -322,29 +322,133 @@ namespace FFVM.Compiler
             else
                 Emit(_isLeafFunction ? OpCode.RET_LEAF : OpCode.RET_FUNC);
 
-            // Emit deferred cleanup blocks for this function
-            for (int i = 0; i < _deferredCleanups.Count; i++)
-            {
-                int cleanupIP = _instructions.Count;
-                Backpatch(_deferredCleanups[i].PushCleanupIP, cleanupIP);
-
-                if (_deferredCleanups[i].ReleaseSyscallSlot >= 0)
-                {
-                    Emit(OpCode.SYSCALL, _deferredCleanups[i].ReleaseSyscallSlot, 0, 0);
-                }
-                else
-                {
-                    // G6: mark as inside cleanup block so wait/wait_for are rejected
-                    bool prevInCleanup = _inCleanupBlock;
-                    _inCleanupBlock = true;
-                    CompileBlock(_deferredCleanups[i].Body);
-                    _inCleanupBlock = prevInCleanup;
-                }
-                Emit(OpCode.RETURN);
-            }
+            // C6: Emit deferred cleanup blocks — merge adjacent PUSH_CLEANUP groups
+            EmitDeferredCleanups();
 
             // A.6: Record precise window size using max register actually allocated
             _callerWindowSize = (_maxVarRegUsed >= VarRegBase) ? (_maxVarRegUsed - VarRegBase + 1) : 0;
+        }
+
+        /// <summary>
+        /// C6: Emit deferred cleanup blocks with adjacent PUSH_CLEANUP merging.
+        /// Adjacent PUSH_CLEANUP instructions (consecutive IPs) are merged into a single
+        /// compound cleanup block, reducing cleanup stack depth and instruction count.
+        /// </summary>
+        private void EmitDeferredCleanups()
+        {
+            if (_deferredCleanups.Count == 0) return;
+
+            // Build groups of adjacent PUSH_CLEANUP instructions
+            var groups = new List<(int Start, int End)>(); // [Start, End) ranges into _deferredCleanups
+            int groupStart = 0;
+            for (int i = 1; i <= _deferredCleanups.Count; i++)
+            {
+                bool adjacent = i < _deferredCleanups.Count &&
+                    _deferredCleanups[i].PushCleanupIP == _deferredCleanups[i - 1].PushCleanupIP + 1;
+                // Safety: don't merge if any defer body in the group contains ReturnStmt
+                if (adjacent && _deferredCleanups[i].Body != null && ContainsReturn(_deferredCleanups[i].Body))
+                    adjacent = false;
+                if (i > groupStart + 1 && _deferredCleanups[i - 1].Body != null && ContainsReturn(_deferredCleanups[i - 1].Body))
+                {
+                    // Current item breaks merge safety; close previous group before it
+                    if (i - 1 > groupStart)
+                        groups.Add((groupStart, i - 1));
+                    else
+                        groups.Add((groupStart, i));
+                    groupStart = (i - 1 > groupStart) ? i - 1 : i;
+                    adjacent = false;
+                }
+                if (!adjacent)
+                {
+                    groups.Add((groupStart, i));
+                    groupStart = i;
+                }
+            }
+
+            // Emit each group
+            foreach (var (start, end) in groups)
+            {
+                int groupSize = end - start;
+                if (groupSize == 1)
+                {
+                    // Single cleanup — emit as before (no merge)
+                    EmitSingleCleanup(start);
+                }
+                else
+                {
+                    // C6: merged group — emit compound cleanup block in LIFO order
+                    // NOP-ify all PUSH_CLEANUP except the last in the group
+                    for (int i = start; i < end - 1; i++)
+                        _instructions[_deferredCleanups[i].PushCleanupIP] = new Instruction(OpCode.MOVE, 0, 0, 0);
+
+                    // Backpatch last PUSH_CLEANUP to point to compound block start
+                    int compoundIP = _instructions.Count;
+                    Backpatch(_deferredCleanups[end - 1].PushCleanupIP, compoundIP);
+
+                    // Emit cleanup blocks in REVERSE order (LIFO: last defer first)
+                    for (int i = end - 1; i >= start; i--)
+                    {
+                        EmitCleanupBody(i);
+                        if (i > start)
+                        {
+                            // No RETURN between merged blocks — fall through
+                        }
+                        else
+                        {
+                            // Final block in compound gets RETURN
+                            Emit(OpCode.RETURN);
+                        }
+                    }
+                }
+            }
+        }
+
+        /// <summary>Emit a single (non-merged) cleanup block.</summary>
+        private void EmitSingleCleanup(int index)
+        {
+            int cleanupIP = _instructions.Count;
+            Backpatch(_deferredCleanups[index].PushCleanupIP, cleanupIP);
+            EmitCleanupBody(index);
+            Emit(OpCode.RETURN);
+        }
+
+        /// <summary>Emit the body of a cleanup block (without RETURN).</summary>
+        private void EmitCleanupBody(int index)
+        {
+            if (_deferredCleanups[index].ReleaseSyscallSlot >= 0)
+            {
+                Emit(OpCode.SYSCALL, _deferredCleanups[index].ReleaseSyscallSlot, 0, 0);
+            }
+            else
+            {
+                bool prevInCleanup = _inCleanupBlock;
+                _inCleanupBlock = true;
+                CompileBlock(_deferredCleanups[index].Body);
+                _inCleanupBlock = prevInCleanup;
+            }
+        }
+
+        /// <summary>C6 safety: check if a block contains ReturnStmt (unsafe to merge).</summary>
+        private static bool ContainsReturn(BlockStmt block)
+        {
+            foreach (var stmt in block.Statements)
+            {
+                if (ContainsReturnStmt(stmt)) return true;
+            }
+            return false;
+        }
+
+        private static bool ContainsReturnStmt(Stmt stmt)
+        {
+            if (stmt is ReturnStmt) return true;
+            if (stmt is IfStmt ifStmt)
+            {
+                if (ContainsReturnStmt(ifStmt.ThenBranch)) return true;
+                if (ifStmt.ElseBranch != null && ContainsReturnStmt(ifStmt.ElseBranch)) return true;
+            }
+            if (stmt is WhileStmt whileStmt && ContainsReturnStmt(whileStmt.Body)) return true;
+            if (stmt is BlockStmt nested && ContainsReturn(nested)) return true;
+            return false;
         }
 
         // ===== FO6: Adaptive register window — pack temps after locals =====

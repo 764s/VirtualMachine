@@ -918,6 +918,220 @@ func main() {
             Assert(!result.Success, "C28: compile error for unpaired syscall in using");
         }
 
+        // ===== Test C6-01: C6 — consecutive defers are merged (2 adjacent PUSH_CLEANUP) =====
+        {
+            string source = @"
+func main() {
+    defer {
+        Report(1)
+    }
+    defer {
+        Report(2)
+    }
+    Report(3)
+}";
+            var syscalls = new Dictionary<string, int> { { "Report", 0 } };
+            var result = compiler.Compile(source, "main", syscalls);
+            Assert(result.Success, "C6-01 compile success");
+
+            var log = new List<string>();
+            var world = new VMWorld();
+            world.Modules.Load(0, result.Program);
+            world.Syscalls.Register(0, "Report", (ref VMInstanceState s) =>
+            {
+                log.Add($"{s.Registers.Get(0).ToInt()}");
+            });
+
+            int id = world.SpawnInstance(0, 0);
+            world.Tick();
+            // LIFO order: defer{Report(2)} runs first, then defer{Report(1)}
+            Assert(log.Count == 3, $"C6-01: 3 reports, got {log.Count}");
+            Assert(log[0] == "3", $"C6-01: body Report(3) first, got {log[0]}");
+            Assert(log[1] == "2", $"C6-01: LIFO defer Report(2) second, got {log[1]}");
+            Assert(log[2] == "1", $"C6-01: LIFO defer Report(1) last, got {log[2]}");
+            Assert((world.Pool.Instances[id].StateFlags & VMStateFlags.Completed) != 0, "C6-01: Completed");
+
+            // C6 verification: count PUSH_CLEANUP instructions — should be 1 (merged from 2)
+            int pushCount = 0;
+            for (int i = 0; i < result.Program.InstructionCount; i++)
+                if (result.Program.Instructions[i].Code == OpCode.PUSH_CLEANUP) pushCount++;
+            Assert(pushCount == 1, $"C6-01: C6 merged 2 defers → 1 PUSH_CLEANUP, got {pushCount}");
+        }
+
+        // ===== Test C6-02: C6 — three consecutive defers merged =====
+        {
+            string source = @"
+func main() {
+    defer {
+        Report(10)
+    }
+    defer {
+        Report(20)
+    }
+    defer {
+        Report(30)
+    }
+    Report(99)
+}";
+            var syscalls = new Dictionary<string, int> { { "Report", 0 } };
+            var result = compiler.Compile(source, "main", syscalls);
+            Assert(result.Success, "C6-02 compile success");
+
+            var log = new List<string>();
+            var world = new VMWorld();
+            world.Modules.Load(0, result.Program);
+            world.Syscalls.Register(0, "Report", (ref VMInstanceState s) =>
+            {
+                log.Add($"{s.Registers.Get(0).ToInt()}");
+            });
+
+            int id = world.SpawnInstance(0, 0);
+            world.Tick();
+            Assert(log.Count == 4, $"C6-02: 4 reports, got {log.Count}");
+            Assert(log[0] == "99", $"C6-02: body first, got {log[0]}");
+            Assert(log[1] == "30", $"C6-02: LIFO defer 30, got {log[1]}");
+            Assert(log[2] == "20", $"C6-02: LIFO defer 20, got {log[2]}");
+            Assert(log[3] == "10", $"C6-02: LIFO defer 10, got {log[3]}");
+
+            int pushCount = 0;
+            for (int i = 0; i < result.Program.InstructionCount; i++)
+                if (result.Program.Instructions[i].Code == OpCode.PUSH_CLEANUP) pushCount++;
+            Assert(pushCount == 1, $"C6-02: C6 merged 3 defers → 1 PUSH_CLEANUP, got {pushCount}");
+        }
+
+        // ===== Test C6-03: C6 — nested using (not adjacent, no merge) + correctness =====
+        {
+            string source = @"
+func main() {
+    using SetBB(1) {
+        using SetCC(2) {
+            Report(100)
+        }
+    }
+}";
+            var syscalls = new Dictionary<string, int> { { "SetBB", 0 }, { "ResetBB", 1 }, { "SetCC", 2 }, { "ResetCC", 3 }, { "Report", 4 } };
+
+            var world = new VMWorld();
+            world.Syscalls.RegisterPaired(
+                0, "SetBB", (ref VMInstanceState s) => { },
+                1, "ResetBB", (ref VMInstanceState s) => { });
+            world.Syscalls.RegisterPaired(
+                2, "SetCC", (ref VMInstanceState s) => { },
+                3, "ResetCC", (ref VMInstanceState s) => { });
+            world.Syscalls.Register(4, "Report", (ref VMInstanceState s) => { });
+
+            var result = compiler.Compile(source, "main", syscalls, world.Syscalls);
+            Assert(result.Success, "C6-03 compile success");
+
+            var log = new List<string>();
+            world.Syscalls.RegisterPaired(
+                0, "SetBB", (ref VMInstanceState s) => { log.Add("SetBB"); },
+                1, "ResetBB", (ref VMInstanceState s) => { log.Add("ResetBB"); });
+            world.Syscalls.RegisterPaired(
+                2, "SetCC", (ref VMInstanceState s) => { log.Add("SetCC"); },
+                3, "ResetCC", (ref VMInstanceState s) => { log.Add("ResetCC"); });
+            world.Syscalls.Register(4, "Report", (ref VMInstanceState s) => { log.Add($"Report({s.Registers.Get(0).ToInt()})"); });
+
+            world.Modules.Load(0, result.Program);
+            int id = world.SpawnInstance(0, 0);
+            world.Tick();
+            // Normal exit: POP_CLEANUP removes each using's frame, so no release syscalls called
+            Assert(log.Contains("SetBB"), "C6-03: SetBB called");
+            Assert(log.Contains("SetCC"), "C6-03: SetCC called");
+            Assert(log.Contains("Report(100)"), "C6-03: body Report(100)");
+            Assert(!log.Contains("ResetBB"), "C6-03: ResetBB NOT called (POP_CLEANUP normal exit)");
+            Assert(!log.Contains("ResetCC"), "C6-03: ResetCC NOT called (POP_CLEANUP normal exit)");
+            Assert((world.Pool.Instances[id].StateFlags & VMStateFlags.Completed) != 0, "C6-03: Completed");
+        }
+
+        // ===== Test C6-04: C6 — consecutive defers + using mixed (partial merge) =====
+        {
+            string source = @"
+func main() {
+    defer {
+        Report(1)
+    }
+    defer {
+        Report(2)
+    }
+    using SetBB(99) {
+        Report(3)
+    }
+    Report(4)
+}";
+            var syscalls = new Dictionary<string, int> { { "SetBB", 0 }, { "ResetBB", 1 }, { "Report", 2 } };
+
+            var world = new VMWorld();
+            world.Syscalls.RegisterPaired(
+                0, "SetBB", (ref VMInstanceState s) => { },
+                1, "ResetBB", (ref VMInstanceState s) => { });
+            world.Syscalls.Register(2, "Report", (ref VMInstanceState s) => { });
+
+            var result = compiler.Compile(source, "main", syscalls, world.Syscalls);
+            Assert(result.Success, "C6-04 compile success");
+
+            var log = new List<string>();
+            world.Syscalls.RegisterPaired(
+                0, "SetBB", (ref VMInstanceState s) => { log.Add("SetBB"); },
+                1, "ResetBB", (ref VMInstanceState s) => { log.Add("ResetBB"); });
+            world.Syscalls.Register(2, "Report", (ref VMInstanceState s) => { log.Add($"Report({s.Registers.Get(0).ToInt()})"); });
+
+            world.Modules.Load(0, result.Program);
+            int id = world.SpawnInstance(0, 0);
+            world.Tick();
+            Assert(log.Contains("SetBB"), "C6-04: SetBB called");
+            Assert(log.Contains("Report(3)"), "C6-04: body Report(3)");
+            Assert(log.Contains("Report(4)"), "C6-04: Report(4) after using");
+            Assert(log.Contains("Report(2)"), "C6-04: LIFO defer Report(2)");
+            Assert(log.Contains("Report(1)"), "C6-04: LIFO defer Report(1)");
+            Assert(!log.Contains("ResetBB"), "C6-04: ResetBB NOT called (POP_CLEANUP)");
+            Assert((world.Pool.Instances[id].StateFlags & VMStateFlags.Completed) != 0, "C6-04: Completed");
+
+            // The 2 defers should be merged, using should remain separate
+            int pushCount = 0;
+            for (int i = 0; i < result.Program.InstructionCount; i++)
+                if (result.Program.Instructions[i].Code == OpCode.PUSH_CLEANUP) pushCount++;
+            Assert(pushCount == 2, $"C6-04: 2 defers merged + 1 using = 2 PUSH_CLEANUP, got {pushCount}");
+        }
+
+        // ===== Test C6-05: C6 — kill path with merged defers (all cleanups execute) =====
+        {
+            string source = @"
+func main() {
+    defer {
+        Report(1)
+    }
+    defer {
+        Report(2)
+    }
+    wait 100
+    Report(99)
+}";
+            var syscalls = new Dictionary<string, int> { { "Report", 0 } };
+            var result = compiler.Compile(source, "main", syscalls);
+            Assert(result.Success, "C6-05 compile success");
+
+            var log = new List<string>();
+            var world = new VMWorld();
+            world.Modules.Load(0, result.Program);
+            world.Syscalls.Register(0, "Report", (ref VMInstanceState s) =>
+            {
+                log.Add($"{s.Registers.Get(0).ToInt()}");
+            });
+
+            int id = world.SpawnInstance(0, 0);
+            world.Tick();  // execute up to wait
+            world.Pool.Instances[id].StateFlags |= VMStateFlags.Killed; // kill while waiting
+            world.Tick();  // cleanup should run
+            world.Tick();  // in case cleanup needs multiple ticks
+
+            // Both defers should execute via compound cleanup even on kill
+            Assert(log.Contains("2"), "C6-05: kill path defer Report(2) executed");
+            Assert(log.Contains("1"), "C6-05: kill path defer Report(1) executed");
+            Assert(!log.Contains("99"), "C6-05: Report(99) NOT reached (killed during wait)");
+            Assert((world.Pool.Instances[id].StateFlags & VMStateFlags.Completed) != 0, "C6-05: Completed after kill cleanup");
+        }
+
         // ===== Test CF01: Basic function call — add(3, 4) → 7 =====
         {
             string source = @"
