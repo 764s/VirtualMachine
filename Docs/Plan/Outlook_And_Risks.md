@@ -252,11 +252,13 @@ LSP1（LSP Server 核心框架）           ← 所有 LSP 功能的通信基础
 | **1** | **O2** | OpCode 连续编号 → 强制跳转表 | dispatch ~20% 加速 | 低 | ✅ |
 | **2** | **O6** | Peephole 优化 pass | ~5-10% 指令数减少 | 中 | ⏳ |
 | **3** | **O8** | 指令压缩 16B → 4B | L1 缓存 10-20% 加速 | 高 | ⏳ |
-| **3** | **O15** | ExecuteInstance 热循环优化（哨兵指令 + JIT 提示 + 局部缓存） | 本地实测 VM 时间 -31~65% | 低~中 | 📌 B-γ4 |
+| **3** | **O15** | ExecuteInstance 热循环优化（哨兵指令 + JIT 提示 + 局部缓存） | 本地实测 VM 时间 -31~65% | 低~中 | ✅ B-γ4 完成 |
 
 **推荐顺序**：O1 ✅ → O2 ✅ → O6 → 视需要 O8/O15。B3 Tier 1 详情见 [Step_B3_Optimization_Tier1.md](Step_B3_Optimization_Tier1.md)。
 
-> **O15 已排入串行计划 B-γ4**（2026-04-04）。理由：与 BM1 (B-γ3) 联动，先建基准设施再测优化效果；且改动较独立，不影响后续功能步骤。
+> **O15 已完成** — 串行计划 B-γ4（2026-04-04）。SENTINEL 哨兵操作码 + AggressiveOptimization + MaxStepsPerTick 局部缓存。
+> 全部 6 项 benchmark VM 时间 -32%~-80%（平均 ~53%），超过目标 ≥30%。
+> 详见 [Step_B_Gamma4_O15_HotLoop.md](Step_B_Gamma4_O15_HotLoop.md)。
 
 > **O15 详情**（来源：[P001 §4.2](../Practice/P001_Performance_Baseline_Rebuild.md)）：
 > 1. **哨兵指令**：VMProgram 构造函数追加 SENTINEL 操作码，switch-case 中触发 PanicOutOfBounds，安全移除逐指令边界检查。需同步 SourceMap + InstructionCount 属性。
