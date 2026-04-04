@@ -21,7 +21,7 @@ cat > "$OUTPUT" << HEADER
 
 > Auto-generated on $(date -u '+%Y-%m-%d %H:%M:%S UTC')
 > Runtime: .NET ${RUNTIME} | OS: ${OS_NAME} | CPU cores: ${CORES}
-> Warmup: 20 runs, Measure: 200 runs, Release build
+> Warmup: 100 runs, Measure: 200 runs, Release build
 
 ## Results
 
