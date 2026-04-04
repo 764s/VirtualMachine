@@ -593,7 +593,7 @@ skill TracerBullet
 | — | **B-γ3 BM1 Benchmark 基础设施改进** | **WarmupRuns=100 + B02 fib(250) + B05 dispatch 说明 + B06 FuncCall 基准 + 环境指纹对比 + CI 自我基线** | **795** | [B-γ3](Plan/Step_B_Gamma3_BM1_Benchmark.md) |
 | — | **B-γ4 O15 ExecuteInstance 热循环优化** | **SENTINEL 哨兵操作码 + AggressiveOptimization + MaxStepsPerTick 局部缓存，VM 时间 -32%~-80%** | **795** | [B-γ4](Plan/Step_B_Gamma4_O15_HotLoop.md) |
 
-**当前位置 → B-γ4 完成，795 项 Assert × 2 模式全通过。O15 热循环优化：SENTINEL 哨兵操作码 + AggressiveOptimization + MaxStepsPerTick 局部缓存，全部 6 项 benchmark VM 时间 -32%~-80%（平均 ~53%）。**
+**当前位置 → B-γ5 完成，815 项 Assert × 2 模式全通过。S4 结构体函数参数：scratch zone 多寄存器传递 + R5 安全限制（总参数 ≤16 scratch registers）+ CS12-CS21 共 20 项新测试。**
 
 ---
 
@@ -602,9 +602,9 @@ skill TracerBullet
 以下步骤不依赖真实 ECS/Syscall 接入，可在当前独立环境中推进。
 步骤严格按编号顺序串行执行，每步完成后更新状态标记。
 
-> **当前位置 → B-γ5**（S4 结构体作为函数参数）
-> ✅ **紧急任务区已清空**：E001（🔴 寄存器生命周期）+ E002（🟠 Syscall 约定）已修复。串行计划恢复推进。795 项 Assert 全通过。
-> 📌 **P001 建议提前排入**：BM1（B-γ3 ✅）+ O15（B-γ4）从展望提升为串行步骤，确保性能基线和热循环优化在后续功能开发前就位，持续观察性能变化。
+> **当前位置 → B-γ6**（C6 嵌套 using 作用域优化）
+> ✅ **紧急任务区已清空**：E001（🔴 寄存器生命周期）+ E002（🟠 Syscall 约定）已修复。串行计划恢复推进。815 项 Assert 全通过。
+> 📌 **P001 建议提前排入**：BM1（B-γ3 ✅）+ O15（B-γ4 ✅）从展望提升为串行步骤，确保性能基线和热循环优化在后续功能开发前就位，持续观察性能变化。
 
 #### Phase 0: 正式命名
 
@@ -635,7 +635,7 @@ skill TracerBullet
 | 7 | B-γ2 | FF5 非 entry 函数 defer | ✅ | RET_FUNC 与 Cleanup 链正确对齐 + 测试通过 | 函数调用 ✅ |
 | 8 | B-γ3 | BM1 Benchmark 基础设施改进 | ✅ | update-history.sh 环境指纹 + performance_history.md 基线说明 + WarmupRuns≥100 + B02 scale 调整 + B05 说明 + B06 新增基准 + CI 自我基线 + benchmark 历史对比正确 | 无 |
 | 9 | B-γ4 | O15 ExecuteInstance 热循环优化 | ✅ | SENTINEL 哨兵操作码 + InstructionCount 属性 + 移除逐指令边界检查 + AggressiveOptimization + MaxStepsPerTick 局部缓存 + benchmark 验证 VM 时间 ≥30% 下降 + Assert 全通过 | 无 |
-| 10 | B-γ5 | S4 结构体作为函数参数 | ⏳ | 结构体参数寄存器传递 + R5 安全限制 + 测试通过 | B-γ1 (FO6) |
+| 10 | B-γ5 | S4 结构体作为函数参数 | ✅ | 结构体参数寄存器传递（scratch zone 多寄存器展开）+ R5 安全限制（≤16 scratch regs）+ CS12-CS21 测试通过 | B-γ1 (FO6) |
 | 11 | B-γ6 | C6 嵌套 using 作用域优化 | ⏳ | 合并相邻 PUSH_CLEANUP 指令 + 性能验证 + 测试通过 | 无 |
 | 12 | B-γ7 | SN1 嵌套结构体 | ⏳ | 递归拍平为连续寄存器 + 编译/运行测试通过 | struct ✅ |
 | 13 | B-γ8 | GR3 文档缺口 D1-D4 | ⏳ | D1-D4 内容补入 VM_Summary.md 对应章节 | 无 |
