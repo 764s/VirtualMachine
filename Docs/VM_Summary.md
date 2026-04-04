@@ -31,6 +31,10 @@ Docs/
     skill_114feiyanxuanfengtui.ffs    飞燕旋风腿（56 帧攻击技能）
     skill_25shangpanbeijizhong.ffs    上盘被击中（30 帧受击技能）
     README.md                        Syscall 协议 + 能力评估
+  Emergency/                 ← 紧急独立任务区（恶性 / 影响深远缺陷的修复通道）
+    README.md                        工作流定义 + 任务总览 + 风险汇总
+    E001_Register_Lifecycle_Bug.md   编译器寄存器生命周期 Bug
+    E002_Syscall_Register_Convention.md  Syscall 寄存器约定隐患
   Archive/                   ← 归档：早期讨论稿（已被本文压缩替代）
     VMScript.md ~ VMScript4.md   初期需求与设计讨论
 ```
@@ -38,6 +42,7 @@ Docs/
 - **Refs/**：VM_Summary.md 引用的子文档，包含各专题的详细说明。
 - **Plan/**：计划与检查清单。
 - **Skills/**：真实技能脚本的复现示例与分析。
+- **Emergency/**：紧急独立任务区，恶性/影响深远缺陷的修复通道。详见 §十五。
 - **Archive/**：早期分散的讨论稿，内容已合并入本文，保留仅供追溯。
 
 ---
@@ -596,6 +601,7 @@ skill TracerBullet
 步骤严格按编号顺序串行执行，每步完成后更新状态标记。
 
 > **当前位置 → B-γ3**（S4 结构体作为函数参数）
+> ⚠️ **串行计划暂停**：紧急独立任务区活跃中（E001, E002），修复完成后恢复推进。详见 §十五。
 
 #### Phase 0: 正式命名
 
@@ -946,4 +952,38 @@ bash benchmarks/update-history.sh bench-raw.txt
 | # | 实践文档 | 主题 | 日期 | 产出建议去向 |
 |---|---------|------|------|------------|
 | P001 | [P001_Performance_Baseline_Rebuild.md](Practice/P001_Performance_Baseline_Rebuild.md) | 性能基线重建 + 执行循环优化 | 2026-04-03 | 串行计划新步骤 / 展望 |
-| P002 | [P002_Sandbox_Build.md](Practice/P002_Sandbox_Build.md) | Sandbox 构建实践 | 2026-04-03 | P1 寄存器生命周期 Bug（高优先），P3 Syscall 约定文档化，P4 DapServer Syscall 支持，P8 .vscode gitignore |
+| P002 | [P002_Sandbox_Build.md](Practice/P002_Sandbox_Build.md) | Sandbox 构建实践 | 2026-04-03 | → 紧急独立任务区 E001, E002；次优先级 T001-T003 |
+
+---
+
+## 十五、紧急独立任务区
+
+> **职责说明**：
+> 独立于串行计划的紧急修复通道。恶性缺陷和影响深远缺陷在此跟踪和修复，
+> 修复期间串行计划暂停推进。缺陷全部修复后，次优先级任务归还串行计划或展望。
+>
+> **工作流详情与任务总览**：[Emergency/README.md](Emergency/README.md)
+>
+> **文件命名**：`Docs/Emergency/E{NNN}_{简短英文标题}.md`，编号递增。
+
+### 当前状态：🔴 活跃（串行计划暂停）
+
+| 等级 | ID | 缺陷 | 状态 | 详细文件 |
+|------|-----|------|------|---------|
+| 🔴 恶性 | E001 | 编译器寄存器生命周期 Bug — 2 死变量 + while 循环产生错误结果 | ⏳ | [E001](Emergency/E001_Register_Lifecycle_Bug.md) |
+| 🟠 深远 | E002 | Syscall 寄存器约定隐患 — 手动指定易错、无冲突检测、DAP 不支持 | ⏳ | [E002](Emergency/E002_Syscall_Register_Convention.md) |
+
+### 次优先级（缺陷修复后处理）
+
+| ID | 内容 | 来源 | 预期去向 |
+|----|------|------|---------|
+| T001 | Number 智能格式化 | P002-P5 | 展望计划 |
+| T002 | 深度递归验证 | P002-P6 | 依赖 E001 修复 |
+| T003 | Sandbox 回归测试 | P002-P7 | 工作流优化项（单独提出） |
+
+### 新增风险点（修复后纳入 Outlook_And_Risks.md）
+
+| ID | 所属 | 风险 |
+|----|------|------|
+| ER1-ER3 | E001 | 分配策略变更影响 / 根因层级不确定 / 被掩盖问题暴露 |
+| ER4-ER7 | E002 | 抽象层开销 / 兼容性 / no-op 掩盖错误 / API 变更影响 |
