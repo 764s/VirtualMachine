@@ -2,8 +2,9 @@
 
 > **来源**：[P002_Sandbox_Build.md — P3, P4](../Practice/P002_Sandbox_Build.md)
 > **等级**：🟠 影响深远缺陷 — 必须立即修复
-> **状态**：⏳ 待修复
+> **状态**：✅ 已修复
 > **创建日期**：2026-04-04
+> **修复日期**：2026-04-04
 
 ---
 
@@ -86,11 +87,36 @@ Syscall handler 从**绝对寄存器** r0/r1/r2 读写参数，而非 `RegisterB
 
 ---
 
-## 六、完成标准
+## 六、修复内容
 
-- [ ] Syscall 注册时自动验证无冲突
-- [ ] Handler 参数访问 API 抽象底层寄存器
-- [ ] 开发者引入新 syscall 无需手动指定寄存器号
-- [ ] DapServer 支持加载 `.ffvm.d.json` 声明文件
-- [ ] 全量 Assert 通过
-- [ ] 更新本文件状态为 ✅
+### Phase 1: Syscall 注册机制安全化
+
+1. **冲突检测** (`SyscallTable.Register()`): 当同一 slot 已被不同名称的 syscall 占用时，抛出 `InvalidOperationException` 明确错误。同名 re-register 视为热替换（hot-swap），兼容已有测试模式。
+
+2. **SyscallArgs 类型安全参数访问** (`ref struct SyscallArgs`): 新增 `SyscallArgs` 辅助结构体，提供 `GetInt(n)` / `GetFloat(n)` / `GetNumber(n)` / `SetReturnInt(v)` / `SetReturnFloat(v)` 等方法。开发者无需知道绝对寄存器约定。
+
+3. **文档修正**: `SyscallHandler` 委托注释从错误的 "RegisterBase+0" 更正为 "absolute registers r0, r1, r2, ..."，消除 P3 混淆来源。
+
+### Phase 2: DapServer 声明文件加载
+
+4. **`LoadDeclarationJson()`**: 在 `SyscallTable` 上新增方法，解析 `.ffvm.d.json` 文件内容，自动分配 slot 号、注册 no-op 占位 handler 和签名元数据，返回 name→slot 映射。
+
+5. **DapServer `syscallDecl` 参数**: `HandleLaunch()` 读取 `launch.json` 中 `syscallDecl` 字段，加载声明文件，使含 syscall 的脚本可在 DAP 调试模式下编译和运行。
+
+### Phase 3: 验证
+
+新增测试：
+- E002-01 ~ E002-06: 编译器测试（冲突检测、SyscallArgs、LoadDeclarationJson）
+- E002-DAP-01: DapServer + syscallDecl → 编译成功
+- E002-DAP-02: DapServer 无声明文件 → 编译失败（正确行为）
+
+---
+
+## 七、完成标准
+
+- [x] Syscall 注册时自动验证无冲突
+- [x] Handler 参数访问 API 抽象底层寄存器（SyscallArgs）
+- [x] 开发者引入新 syscall 可用 LoadDeclarationJson 自动分配 slot
+- [x] DapServer 支持加载 `.ffvm.d.json` 声明文件（通过 `syscallDecl` 参数）
+- [x] 795 项 Assert 全通过（763 原有 + 12 E001 + 20 E002）
+- [x] 更新本文件状态为 ✅

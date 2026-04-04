@@ -601,7 +601,7 @@ skill TracerBullet
 步骤严格按编号顺序串行执行，每步完成后更新状态标记。
 
 > **当前位置 → B-γ3**（S4 结构体作为函数参数）
-> ⚠️ **串行计划暂停**：紧急独立任务区活跃中（E001, E002），修复完成后恢复推进。详见 §十五。
+> ✅ **紧急任务区已清空**：E001（🔴 寄存器生命周期）+ E002（🟠 Syscall 约定）已修复。串行计划恢复推进。795 项 Assert 全通过。
 
 #### Phase 0: 正式命名
 
@@ -966,12 +966,12 @@ bash benchmarks/update-history.sh bench-raw.txt
 >
 > **文件命名**：`Docs/Emergency/E{NNN}_{简短英文标题}.md`，编号递增。
 
-### 当前状态：🔴 活跃（串行计划暂停）
+### 当前状态：✅ 已清空（串行计划已恢复）
 
 | 等级 | ID | 缺陷 | 状态 | 详细文件 |
 |------|-----|------|------|---------|
-| 🔴 恶性 | E001 | 编译器寄存器生命周期 Bug — 2 死变量 + while 循环产生错误结果 | ⏳ | [E001](Emergency/E001_Register_Lifecycle_Bug.md) |
-| 🟠 深远 | E002 | Syscall 寄存器约定隐患 — 手动指定易错、无冲突检测、DAP 不支持 | ⏳ | [E002](Emergency/E002_Syscall_Register_Convention.md) |
+| 🔴 恶性 | E001 | 编译器寄存器生命周期 Bug — 2 死变量 + while 循环产生错误结果 | ✅ 已修复 | [E001](Emergency/E001_Register_Lifecycle_Bug.md) |
+| 🟠 深远 | E002 | Syscall 寄存器约定隐患 — 手动指定易错、无冲突检测、DAP 不支持 | ✅ 已修复 | [E002](Emergency/E002_Syscall_Register_Convention.md) |
 
 ### 次优先级（缺陷修复后处理）
 

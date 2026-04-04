@@ -854,6 +854,83 @@ func main() {
         }
 
         // ================================================================
+        // E002 DAP Tests: syscallDecl loading
+        // ================================================================
+
+        // E002-DAP-01: DapServer launch with syscallDecl loads syscall declarations
+        {
+            string scriptContent = @"
+func main() {
+    Report(42)
+}";
+            string declContent = @"{
+    ""syscalls"": {
+        ""Report"": { ""params"": [{ ""name"": ""value"", ""type"": ""int"" }], ""returnType"": ""void"", ""description"": ""report value"" }
+    }
+}";
+            string scriptPath = Path.Combine(Path.GetTempPath(), $"e002_dap_{Guid.NewGuid()}.ffs");
+            string declPath = Path.Combine(Path.GetTempPath(), $"e002_dap_{Guid.NewGuid()}.ffvm.d.json");
+            try
+            {
+                File.WriteAllText(scriptPath, scriptContent);
+                File.WriteAllText(declPath, declContent);
+
+                var session = new DapBatchSession();
+                session.AddRequest("initialize", new JsonObject());
+                // Launch with syscallDecl
+                var launchArgs = new JsonObject();
+                launchArgs.Set("program", scriptPath);
+                launchArgs.Set("syscallDecl", declPath);
+                session.AddRequest("launch", launchArgs);
+                session.AddRequest("configurationDone", null);
+                session.AddContinue();
+                session.AddRequest("disconnect", null);
+
+                session.Run();
+
+                var initResp = session.ExpectResponse("initialize");
+                Assert(initResp?.GetBool("success") == true, "E002-DAP-01: initialize success");
+                var launchResp = session.ExpectResponse("launch");
+                Assert(launchResp?.GetBool("success") == true, "E002-DAP-01: launch with syscallDecl success");
+            }
+            finally
+            {
+                if (File.Exists(scriptPath)) File.Delete(scriptPath);
+                if (File.Exists(declPath)) File.Delete(declPath);
+            }
+        }
+
+        // E002-DAP-02: DapServer launch without syscallDecl — syscall scripts fail to compile
+        {
+            string scriptContent = @"
+func main() {
+    Report(42)
+}";
+            string scriptPath = Path.Combine(Path.GetTempPath(), $"e002_dap2_{Guid.NewGuid()}.ffs");
+            try
+            {
+                File.WriteAllText(scriptPath, scriptContent);
+
+                var session = new DapBatchSession();
+                session.AddRequest("initialize", new JsonObject());
+                session.AddLaunch(scriptPath); // no syscallDecl → Report is unknown
+                session.AddRequest("disconnect", null);
+
+                session.Run();
+
+                var initResp = session.ExpectResponse("initialize");
+                Assert(initResp?.GetBool("success") == true, "E002-DAP-02: initialize success");
+                var launchResp = session.ExpectResponse("launch");
+                // Launch should fail because Report is not a known function
+                Assert(launchResp?.GetBool("success") == false, "E002-DAP-02: launch without syscallDecl fails for syscall script");
+            }
+            finally
+            {
+                if (File.Exists(scriptPath)) File.Delete(scriptPath);
+            }
+        }
+
+        // ================================================================
         // Summary
         // ================================================================
         Debug.Log($"\n===== DapTests: {passed} passed, {failed} failed =====");

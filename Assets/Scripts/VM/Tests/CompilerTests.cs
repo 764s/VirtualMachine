@@ -2999,6 +2999,144 @@ func main() {
             Assert(reported == 55, $"E001-06: dead vars + while in func → val = {reported} (expected 55)");
         }
 
+        // ===== E002 Regression: Syscall safety + SyscallArgs =====
+
+        // E002-01: Collision detection — different name on same slot throws
+        {
+            bool caught = false;
+            try
+            {
+                var world = new VMWorld();
+                world.Syscalls.Register(0, "Foo", (ref VMInstanceState s) => { });
+                world.Syscalls.Register(0, "Bar", (ref VMInstanceState s) => { }); // collision!
+            }
+            catch (System.InvalidOperationException ex)
+            {
+                caught = ex.Message.Contains("collision");
+            }
+            Assert(caught, "E002-01: collision detection throws on different name, same slot");
+        }
+
+        // E002-02: Re-register same name on same slot succeeds (hot-swap)
+        {
+            bool ok = true;
+            try
+            {
+                var world = new VMWorld();
+                world.Syscalls.Register(0, "Foo", (ref VMInstanceState s) => { });
+                world.Syscalls.Register(0, "Foo", (ref VMInstanceState s) => { }); // same name = ok
+            }
+            catch
+            {
+                ok = false;
+            }
+            Assert(ok, "E002-02: re-register same name succeeds (hot-swap)");
+        }
+
+        // E002-03: SyscallArgs type-safe parameter access
+        {
+            string source = @"
+func main() {
+    Report(42, 7)
+}";
+            var syscalls = new Dictionary<string, int> { { "Report", 0 } };
+            var result = compiler.Compile(source, "main", syscalls);
+            Assert(result.Success, "E002-03 compile success");
+
+            int arg0 = -1, arg1 = -1;
+            var world = new VMWorld();
+            world.Modules.Load(0, result.Program);
+            world.Syscalls.Register(0, "Report", (ref VMInstanceState s) =>
+            {
+                var args = new SyscallArgs(ref s);
+                arg0 = args.GetInt(0);
+                arg1 = args.GetInt(1);
+            });
+            world.SpawnInstance(0, 0);
+            world.Tick();
+            Assert(arg0 == 42, $"E002-03: SyscallArgs.GetInt(0) = {arg0} (expected 42)");
+            Assert(arg1 == 7, $"E002-03: SyscallArgs.GetInt(1) = {arg1} (expected 7)");
+        }
+
+        // E002-04: SyscallArgs return value
+        {
+            string source = @"
+func main() {
+    var x: int = GetValue()
+    Report(x)
+}";
+            var syscalls = new Dictionary<string, int> { { "GetValue", 0 }, { "Report", 1 } };
+            var result = compiler.Compile(source, "main", syscalls);
+            Assert(result.Success, "E002-04 compile success");
+
+            int reported = -1;
+            var world = new VMWorld();
+            world.Modules.Load(0, result.Program);
+            world.Syscalls.Register(0, "GetValue", (ref VMInstanceState s) =>
+            {
+                var args = new SyscallArgs(ref s);
+                args.SetReturnInt(999);
+            });
+            world.Syscalls.Register(1, "Report", (ref VMInstanceState s) =>
+            {
+                reported = new SyscallArgs(ref s).GetInt(0);
+            });
+            world.SpawnInstance(0, 0);
+            world.Tick();
+            Assert(reported == 999, $"E002-04: SyscallArgs.SetReturnInt → Report = {reported} (expected 999)");
+        }
+
+        // E002-05: LoadDeclarationJson builds syscall map + signatures
+        {
+            string declJson = @"{
+    ""syscalls"": {
+        ""Ping"": { ""params"": [], ""returnType"": ""void"", ""description"": ""test ping"" },
+        ""Add"": { ""params"": [{ ""name"": ""a"", ""type"": ""int"" }, { ""name"": ""b"", ""type"": ""int"" }], ""returnType"": ""int"", ""description"": ""add two"" }
+    }
+}";
+            var table = new SyscallTable();
+            var map = table.LoadDeclarationJson(declJson);
+            Assert(map.ContainsKey("Ping"), "E002-05: Ping in map");
+            Assert(map.ContainsKey("Add"), "E002-05: Add in map");
+            Assert(map["Ping"] == 0, $"E002-05: Ping slot = {map["Ping"]} (expected 0)");
+            Assert(map["Add"] == 1, $"E002-05: Add slot = {map["Add"]} (expected 1)");
+
+            var sig = table.GetSignature(1);
+            Assert(sig != null, "E002-05: Add signature registered");
+            Assert(sig.Parameters.Length == 2, $"E002-05: Add has {sig.Parameters.Length} params (expected 2)");
+            Assert(sig.ReturnType == "int", $"E002-05: Add returnType = {sig.ReturnType}");
+        }
+
+        // E002-06: LoadDeclarationJson enables compilation of syscall scripts
+        {
+            string declJson = @"{
+    ""syscalls"": {
+        ""Report"": { ""params"": [{ ""name"": ""value"", ""type"": ""int"" }], ""returnType"": ""void"", ""description"": ""report"" }
+    }
+}";
+            var table = new SyscallTable();
+            var map = table.LoadDeclarationJson(declJson);
+
+            string source = @"
+func main() {
+    Report(42)
+}";
+            var result = compiler.Compile(source, "main", map);
+            Assert(result.Success, "E002-06: syscall script compiles with declaration-loaded map");
+
+            // Run with real handler replacing the no-op
+            int reported = -1;
+            var world = new VMWorld();
+            world.Modules.Load(0, result.Program);
+            world.Syscalls.Register(0, "Report", (ref VMInstanceState s) =>
+            {
+                reported = new SyscallArgs(ref s).GetInt(0);
+            });
+            world.SpawnInstance(0, 0);
+            world.Tick();
+            Assert(reported == 42, $"E002-06: declaration-loaded syscall works at runtime, got {reported}");
+        }
+
         // ===== Summary =====
         Debug.Log($"========================================");
         Debug.Log($"Compiler Tests: {passed} passed, {failed} failed");
