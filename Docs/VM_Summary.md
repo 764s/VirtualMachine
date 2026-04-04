@@ -600,8 +600,9 @@ skill TracerBullet
 以下步骤不依赖真实 ECS/Syscall 接入，可在当前独立环境中推进。
 步骤严格按编号顺序串行执行，每步完成后更新状态标记。
 
-> **当前位置 → B-γ3**（S4 结构体作为函数参数）
+> **当前位置 → B-γ3**（BM1 Benchmark 基础设施改进）
 > ✅ **紧急任务区已清空**：E001（🔴 寄存器生命周期）+ E002（🟠 Syscall 约定）已修复。串行计划恢复推进。795 项 Assert 全通过。
+> 📌 **P001 建议提前排入**：BM1（B-γ3）+ O15（B-γ4）从展望提升为串行步骤，确保性能基线和热循环优化在后续功能开发前就位，持续观察性能变化。
 
 #### Phase 0: 正式命名
 
@@ -630,22 +631,24 @@ skill TracerBullet
 |---|-----|------|------|----------|------|
 | 6 | B-γ1 | FO6 自适应寄存器窗口 | ✅ | 嵌套层数 ~3→~6 + R1/SR1 根本解决 + 测试通过 | F4 ✅ |
 | 7 | B-γ2 | FF5 非 entry 函数 defer | ✅ | RET_FUNC 与 Cleanup 链正确对齐 + 测试通过 | 函数调用 ✅ |
-| 8 | B-γ3 | S4 结构体作为函数参数 | ⏳ | 结构体参数寄存器传递 + R5 安全限制 + 测试通过 | B-γ1 (FO6) |
-| 9 | B-γ4 | C6 嵌套 using 作用域优化 | ⏳ | 合并相邻 PUSH_CLEANUP 指令 + 性能验证 + 测试通过 | 无 |
-| 10 | B-γ5 | SN1 嵌套结构体 | ⏳ | 递归拍平为连续寄存器 + 编译/运行测试通过 | struct ✅ |
-| 11 | B-γ6 | GR3 文档缺口 D1-D4 | ⏳ | D1-D4 内容补入 VM_Summary.md 对应章节 | 无 |
-| 12 | B-γ7 | STR1 常量字符串（最小化） | ⏳ | Lexer StringLiteral + VMProgram.StringConstants ROM + LOAD_CONST 索引 + Syscall 日志/宿主传递验证 + 不支持拼接 + 测试通过 | 无 |
+| 8 | B-γ3 | BM1 Benchmark 基础设施改进 | ⏳ | update-history.sh 环境指纹 + performance_history.md 基线说明 + WarmupRuns≥100 + B02 scale 调整 + B05 说明 + B06 新增基准 + CI 自我基线 + benchmark 历史对比正确 | 无 |
+| 9 | B-γ4 | O15 ExecuteInstance 热循环优化 | ⏳ | SENTINEL 哨兵操作码 + InstructionCount 属性 + 移除逐指令边界检查 + AggressiveOptimization + MaxStepsPerTick 局部缓存 + benchmark 验证 VM 时间 ≥30% 下降 + Assert 全通过 | 无 |
+| 10 | B-γ5 | S4 结构体作为函数参数 | ⏳ | 结构体参数寄存器传递 + R5 安全限制 + 测试通过 | B-γ1 (FO6) |
+| 11 | B-γ6 | C6 嵌套 using 作用域优化 | ⏳ | 合并相邻 PUSH_CLEANUP 指令 + 性能验证 + 测试通过 | 无 |
+| 12 | B-γ7 | SN1 嵌套结构体 | ⏳ | 递归拍平为连续寄存器 + 编译/运行测试通过 | struct ✅ |
+| 13 | B-γ8 | GR3 文档缺口 D1-D4 | ⏳ | D1-D4 内容补入 VM_Summary.md 对应章节 | 无 |
+| 14 | B-γ9 | STR1 常量字符串（最小化） | ⏳ | Lexer StringLiteral + VMProgram.StringConstants ROM + LOAD_CONST 索引 + Syscall 日志/宿主传递验证 + 不支持拼接 + 测试通过 | 无 |
 
 #### Phase δ: 按需补全
 
 | # | ID | 内容 | 状态 | 完成条件 | 依赖 |
 |---|-----|------|------|----------|------|
-| 13 | B-δ1 | O10 快照只拷贝活跃实例 | ⏳ | 快照数据量减少 80-90% + 性能验证 | B-β3 (O9) |
-| 14 | B-δ2 | SO1 COPY_BLOCK OpCode | ⏳ | 新 OpCode + Buffer.MemoryCopy 实现 + 大 struct 赋值验证 | struct ✅ |
-| 15 | B-δ3 | FF3 可选参数与默认值 | ⏳ | 编译器支持可选参数 + 默认值填充 + 测试通过 | 函数调用 ✅ |
-| 16 | B-δ4 | SN2 结构体字面量构造语法 | ⏳ | 编译器 sugar 实现 + 测试通过 | struct ✅ |
-| 17 | B-δ5 | C5 Cleanup 超时保护 | ⏳ | Cleanup 块执行超时检测 + 实例回收保证 + 测试通过 | 无 |
-| 18 | B-δ6 | B1 Unity Editor DAP (可选) | ⏳ | EditorApplication.update 轮询模式 + DR5 解决 + 测试通过 | DAP ✅ |
+| 15 | B-δ1 | O10 快照只拷贝活跃实例 | ⏳ | 快照数据量减少 80-90% + 性能验证 | B-β3 (O9) |
+| 16 | B-δ2 | SO1 COPY_BLOCK OpCode | ⏳ | 新 OpCode + Buffer.MemoryCopy 实现 + 大 struct 赋值验证 | struct ✅ |
+| 17 | B-δ3 | FF3 可选参数与默认值 | ⏳ | 编译器支持可选参数 + 默认值填充 + 测试通过 | 函数调用 ✅ |
+| 18 | B-δ4 | SN2 结构体字面量构造语法 | ⏳ | 编译器 sugar 实现 + 测试通过 | struct ✅ |
+| 19 | B-δ5 | C5 Cleanup 超时保护 | ⏳ | Cleanup 块执行超时检测 + 实例回收保证 + 测试通过 | 无 |
+| 20 | B-δ6 | B1 Unity Editor DAP (可选) | ⏳ | EditorApplication.update 轮询模式 + DR5 解决 + 测试通过 | DAP ✅ |
 
 > **剩余展望项**（暂无排期，业务驱动激活）：FF1 跨模块调用、FF2 函数回调、FF4 多返回值、
 > O8 指令压缩、O11-O14 运行时优化、FO2 尾调用、FO3 小函数内联、
@@ -972,7 +975,7 @@ bash benchmarks/update-history.sh bench-raw.txt
 
 | # | 实践文档 | 主题 | 日期 | 产出建议去向 | 状态 |
 |---|---------|------|------|------------|------|
-| P001 | [P001_Performance_Baseline_Rebuild.md](Practice/P001_Performance_Baseline_Rebuild.md) | 性能基线重建 + 执行循环优化 | 2026-04-03 | 串行计划新步骤 / 展望 | 待讨论 |
+| P001 | [P001_Performance_Baseline_Rebuild.md](Practice/P001_Performance_Baseline_Rebuild.md) | 性能基线重建 + 执行循环优化 | 2026-04-03 | → 串行计划 B-γ3（BM1）、B-γ4（O15） | ✅ 已处理 |
 | P002 | [P002_Sandbox_Build.md](Practice/P002_Sandbox_Build.md) | Sandbox 构建实践 | 2026-04-03 | → 紧急独立任务区 E001, E002；次优先级 T001-T003 | ✅ 已处理 |
 
 ---
