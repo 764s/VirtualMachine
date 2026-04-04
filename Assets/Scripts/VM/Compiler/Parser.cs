@@ -8,6 +8,7 @@ namespace FFVM.Compiler
         private Token[] _tokens;
         private int _pos;
         private List<string> _errors;
+        private string[] _sourceLines;
 
         public ModuleNode Parse(string source, out List<string> errors)
         {
@@ -15,6 +16,7 @@ namespace FFVM.Compiler
             _tokens = lexer.Tokenize();
             _pos = 0;
             _errors = new List<string>();
+            _sourceLines = (source ?? "").Split('\n');
 
             var module = new ModuleNode("script");
 
@@ -120,6 +122,7 @@ namespace FFVM.Compiler
             var decl = new FuncDecl(name, parameters, returnType, body, false);
             decl.Line = line;
             decl.Column = col;
+            AttachDocComment(decl, line);
             return decl;
         }
 
@@ -144,7 +147,73 @@ namespace FFVM.Compiler
             var decl = new StructDecl(name, fields);
             decl.Line = line;
             decl.Column = col;
+            var docLines = CollectDocLines(line);
+            if (docLines != null) decl.DocComment = string.Join("\n", docLines);
             return decl;
+        }
+
+        private void AttachDocComment(FuncDecl decl, int declLine)
+        {
+            var rawLines = CollectDocLines(declLine);
+            if (rawLines == null) return;
+
+            var summary = new List<string>();
+            string returnDoc = null;
+            // paramName → description
+            var paramDocs = new Dictionary<string, string>();
+
+            foreach (string line in rawLines)
+            {
+                if (line.StartsWith("@param "))
+                {
+                    string rest = line.Substring(7).TrimStart();
+                    int spaceIdx = rest.IndexOf(' ');
+                    if (spaceIdx > 0)
+                        paramDocs[rest.Substring(0, spaceIdx)] = rest.Substring(spaceIdx + 1).TrimStart();
+                    else
+                        paramDocs[rest] = "";
+                }
+                else if (line.StartsWith("@return ") || line.StartsWith("@returns "))
+                {
+                    int idx = line.IndexOf(' ');
+                    returnDoc = line.Substring(idx + 1).TrimStart();
+                }
+                else
+                {
+                    summary.Add(line);
+                }
+            }
+
+            decl.DocComment = summary.Count > 0 ? string.Join("\n", summary) : null;
+            decl.ReturnDoc = returnDoc;
+            foreach (var p in decl.Parameters)
+            {
+                string doc;
+                if (paramDocs.TryGetValue(p.Name, out doc))
+                    p.DocComment = doc;
+            }
+        }
+
+        private List<string> CollectDocLines(int declLine)
+        {
+            var lines = new List<string>();
+            for (int i = declLine - 2; i >= 0; i--)
+            {
+                string trimmed = _sourceLines[i].TrimStart();
+                if (trimmed.StartsWith("///"))
+                {
+                    string text = trimmed.Substring(3);
+                    if (text.Length > 0 && text[0] == ' ') text = text.Substring(1);
+                    lines.Add(text);
+                }
+                else
+                {
+                    break;
+                }
+            }
+            if (lines.Count == 0) return null;
+            lines.Reverse();
+            return lines;
         }
 
         // ===== Statements =====

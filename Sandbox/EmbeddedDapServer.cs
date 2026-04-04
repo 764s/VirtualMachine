@@ -344,6 +344,9 @@ namespace Sandbox
                     case "variables":
                         responseBody = HandleVariables(arguments);
                         break;
+                    case "evaluate":
+                        responseBody = HandleEvaluate(arguments);
+                        break;
                     case "disconnect":
                         HandleDisconnect();
                         break;
@@ -381,7 +384,7 @@ namespace Sandbox
             body.Set("supportsConfigurationDoneRequest", true);
             body.Set("supportsFunctionBreakpoints", false);
             body.Set("supportsConditionalBreakpoints", false);
-            body.Set("supportsEvaluateForHovers", false);
+            body.Set("supportsEvaluateForHovers", true);
             body.Set("supportsStepBack", false);
             body.Set("supportsSetVariable", false);
             return body;
@@ -636,6 +639,69 @@ namespace Sandbox
             var body = new JsonObject();
             body.Set("variables", variablesList);
             return body;
+        }
+
+        private JsonObject HandleEvaluate(JsonObject arguments)
+        {
+            string expression = arguments?.GetString("expression")?.Trim();
+            if (string.IsNullOrEmpty(expression))
+                throw new Exception("Empty expression");
+
+            if (_debugger == null || _program == null || _instanceId < 0)
+                throw new Exception("Not paused");
+
+            var vars = _debugger.GetVariables(_program, ref _world.Pool.Instances[_instanceId]);
+
+            // Field access: "varName.fieldName"
+            int dotIdx = expression.IndexOf('.');
+            if (dotIdx > 0)
+            {
+                string varName = expression.Substring(0, dotIdx);
+                string fieldName = expression.Substring(dotIdx + 1);
+                int vi = vars.FindIndex(x => x.Name == varName);
+                if (vi < 0)
+                    throw new Exception($"Unknown variable '{varName}'");
+                var v = vars[vi];
+                if (!v.IsStruct || v.FieldNames == null)
+                    throw new Exception($"'{varName}' is not a struct");
+                for (int i = 0; i < v.FieldNames.Length; i++)
+                {
+                    if (v.FieldNames[i] == fieldName)
+                    {
+                        var body = new JsonObject();
+                        body.Set("result", FormatNumber(v.FieldValues[i]));
+                        body.Set("variablesReference", 0);
+                        return body;
+                    }
+                }
+                throw new Exception($"'{varName}' has no field '{fieldName}'");
+            }
+
+            // Simple variable name lookup
+            int fi = vars.FindIndex(x => x.Name == expression);
+            if (fi >= 0)
+            {
+                var found = vars[fi];
+                var body = new JsonObject();
+                body.Set("result", FormatNumber(found.Value));
+                body.Set("type", found.IsStruct ? "struct" : "int");
+
+                if (found.IsStruct && found.FieldNames != null && found.FieldValues != null)
+                {
+                    _structExpansions = _structExpansions ?? new List<(string[], Number[])>();
+                    int refId = 1000 + _structExpansions.Count;
+                    _structExpansions.Add((found.FieldNames, found.FieldValues));
+                    body.Set("variablesReference", refId);
+                }
+                else
+                {
+                    body.Set("variablesReference", 0);
+                }
+                return body;
+            }
+
+            // Unsupported expression
+            throw new Exception($"Expression evaluation not supported: '{expression}'");
         }
 
         private void HandleDisconnect()

@@ -544,9 +544,13 @@ namespace FFVM.Debug
             string hoverText = FindHoverText(ast, astLine, astCol);
             if (hoverText == null) return null;
 
+            // Auto-wrap in code fence if not already markdown
+            if (!hoverText.StartsWith("```"))
+                hoverText = $"```ffvm\n{hoverText}\n```";
+
             var result = new JsonObject();
             var contents = new JsonObject();
-            contents.Set("kind", "plaintext");
+            contents.Set("kind", "markdown");
             contents.Set("value", hoverText);
             result.Set("contents", contents);
             return result;
@@ -563,7 +567,7 @@ namespace FFVM.Debug
             {
                 if (MatchesName(func.Line, func.Column, "func".Length + 1, func.Name, line, col))
                 {
-                    return FormatFuncSignature(func);
+                    return FormatFuncHover(func);
                 }
             }
 
@@ -572,7 +576,7 @@ namespace FFVM.Debug
             {
                 if (MatchesName(st.Line, st.Column, "struct".Length + 1, st.Name, line, col))
                 {
-                    return FormatStructSignature(st);
+                    return FormatStructHover(st);
                 }
             }
 
@@ -610,17 +614,22 @@ namespace FFVM.Debug
 
             if (stmt is VarDeclStmt vd)
             {
-                // Hover on variable name in declaration
-                // VarDeclStmt.Line/Column points to 'var' keyword; name follows after "var "
-                if (vd.Line == line)
-                {
-                    string typeStr = vd.TypeName ?? "int";
-                    return $"var {vd.Name}: {typeStr}";
-                }
+                // Check initializer FIRST (has precise column matching for calls, identifiers, etc.)
                 if (vd.Initializer != null)
                 {
                     string result = FindHoverInExpr(ast, currentFunc, vd.Initializer, line, col);
                     if (result != null) return result;
+                }
+                // Variable name hover — only when cursor is on the name itself
+                // VarDeclStmt.Column points to 'var'; name starts at Column + 4 ("var ")
+                if (vd.Line == line)
+                {
+                    int nameStart = vd.Column + 4; // skip "var "
+                    if (ColMatches(nameStart, vd.Name.Length, col))
+                    {
+                        string typeStr = vd.TypeName ?? "int";
+                        return $"var {vd.Name}: {typeStr}";
+                    }
                 }
             }
             else if (stmt is IfStmt ifs)
@@ -698,7 +707,12 @@ namespace FFVM.Debug
                 foreach (var p in currentFunc.Parameters)
                 {
                     if (p.Name == id.Name)
-                        return $"(parameter) {p.Name}: {p.TypeName}";
+                    {
+                        string paramHover = $"(parameter) {p.Name}: {p.TypeName}";
+                        if (p.DocComment != null)
+                            paramHover += $"\n\n{p.DocComment}";
+                        return paramHover;
+                    }
                 }
                 return $"{id.Name}";
             }
@@ -709,7 +723,7 @@ namespace FFVM.Debug
                 foreach (var func in ast.Functions)
                 {
                     if (func.Name == call.FunctionName)
-                        return FormatFuncSignature(func);
+                        return FormatFuncHover(func);
                 }
                 return $"func {call.FunctionName}(...)";
             }
@@ -820,12 +834,56 @@ namespace FFVM.Debug
             return $"func {func.Name}({string.Join(", ", parts)}){ret}";
         }
 
+        private static string FormatFuncHover(FuncDecl func)
+        {
+            string sig = FormatFuncSignature(func);
+            var sb = new System.Text.StringBuilder();
+            sb.Append($"```ffvm\n{sig}\n```");
+            if (func.DocComment != null)
+            {
+                sb.Append($"\n---\n{func.DocComment}");
+            }
+            bool hasParamDoc = false;
+            foreach (var p in func.Parameters)
+            {
+                if (p.DocComment != null)
+                {
+                    if (!hasParamDoc) { sb.Append("\n\n**Parameters:**\n"); hasParamDoc = true; }
+                    sb.Append($"\n- `{p.Name}` — {p.DocComment}");
+                }
+            }
+            if (func.ReturnDoc != null)
+                sb.Append($"\n\n**Returns:** {func.ReturnDoc}");
+            return sb.ToString();
+        }
+
+        private static string FormatFuncDoc(FuncDecl func)
+        {
+            var parts = new List<string>();
+            if (func.DocComment != null) parts.Add(func.DocComment);
+            foreach (var p in func.Parameters)
+            {
+                if (p.DocComment != null)
+                    parts.Add($"@param `{p.Name}` — {p.DocComment}");
+            }
+            if (func.ReturnDoc != null) parts.Add($"@return {func.ReturnDoc}");
+            return parts.Count > 0 ? string.Join("\n\n", parts) : null;
+        }
+
         private static string FormatStructSignature(StructDecl st)
         {
             var fields = new List<string>();
             foreach (var f in st.Fields)
                 fields.Add($"  {f.Name}: {f.TypeName}");
             return $"struct {st.Name} {{\n{string.Join("\n", fields)}\n}}";
+        }
+
+        private static string FormatStructHover(StructDecl st)
+        {
+            string sig = FormatStructSignature(st);
+            if (st.DocComment == null)
+                return $"```ffvm\n{sig}\n```";
+            return $"```ffvm\n{sig}\n```\n---\n{st.DocComment}";
         }
 
         // --- definition ---
@@ -958,8 +1016,11 @@ namespace FFVM.Debug
                     // Functions
                     foreach (var func in ast.Functions)
                     {
+                        string detail = FormatFuncSignature(func);
+                        if (func.DocComment != null)
+                            detail += "  — " + func.DocComment.Replace("\n", " ");
                         items.Add(MakeCompletionItem(func.Name, 3 /* Function */,
-                            FormatFuncSignature(func)));
+                            detail, FormatFuncDoc(func)));
                     }
 
                     // Structs
@@ -1035,7 +1096,7 @@ namespace FFVM.Debug
                 foreach (var func in ast.Functions)
                 {
                     if (func.Name == funcName)
-                        return MakeSignatureHelp(FormatFuncSignature(func), func.Parameters, activeParam);
+                        return MakeSignatureHelp(FormatFuncSignature(func), func.Parameters, activeParam, func.DocComment);
                 }
             }
 
@@ -1154,16 +1215,23 @@ namespace FFVM.Debug
         /// <summary>
         /// Build a SignatureHelp response object.
         /// </summary>
-        private static JsonObject MakeSignatureHelp(string label, IReadOnlyList<ParamDecl> funcParams, int activeParam)
+        private static JsonObject MakeSignatureHelp(string label, IReadOnlyList<ParamDecl> funcParams, int activeParam, string funcDoc = null)
         {
             var paramInfos = new List<object>();
             foreach (var p in funcParams)
             {
                 var pi = new JsonObject();
                 pi.Set("label", $"{p.Name}: {p.TypeName}");
+                if (p.DocComment != null)
+                {
+                    var doc = new JsonObject();
+                    doc.Set("kind", "markdown");
+                    doc.Set("value", p.DocComment);
+                    pi.Set("documentation", doc);
+                }
                 paramInfos.Add(pi);
             }
-            return BuildSignatureHelpResult(label, paramInfos, activeParam);
+            return BuildSignatureHelpResult(label, paramInfos, activeParam, funcDoc);
         }
 
         private static JsonObject MakeSignatureHelp(string label, SyscallParamInfo[] syscallParams, int activeParam)
@@ -1178,11 +1246,18 @@ namespace FFVM.Debug
             return BuildSignatureHelpResult(label, paramInfos, activeParam);
         }
 
-        private static JsonObject BuildSignatureHelpResult(string label, List<object> paramInfos, int activeParam)
+        private static JsonObject BuildSignatureHelpResult(string label, List<object> paramInfos, int activeParam, string funcDoc = null)
         {
             var sig = new JsonObject();
             sig.Set("label", label);
             sig.Set("parameters", paramInfos);
+            if (funcDoc != null)
+            {
+                var doc = new JsonObject();
+                doc.Set("kind", "markdown");
+                doc.Set("value", funcDoc);
+                sig.Set("documentation", doc);
+            }
 
             var signatures = new List<object> { sig };
 
@@ -1193,13 +1268,20 @@ namespace FFVM.Debug
             return result;
         }
 
-        private static JsonObject MakeCompletionItem(string label, int kind, string detail)
+        private static JsonObject MakeCompletionItem(string label, int kind, string detail, string documentation = null)
         {
             var item = new JsonObject();
             item.Set("label", label);
             item.Set("kind", kind);
             if (detail != null)
                 item.Set("detail", detail);
+            if (documentation != null)
+            {
+                var doc = new JsonObject();
+                doc.Set("kind", "markdown");
+                doc.Set("value", documentation);
+                item.Set("documentation", doc);
+            }
             return item;
         }
 

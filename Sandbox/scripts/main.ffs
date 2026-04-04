@@ -6,6 +6,10 @@
 // Debug with: F5 in VSCode (see README.md)
 
 // Simple function call (demonstrates leaf function optimization)
+/// Adds two integers and returns the result.
+/// @param a The first operand
+/// @param b The second operand
+/// @return The sum of a and b
 func add(a: int, b: int): int {
     return a + b
 }

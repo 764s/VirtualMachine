@@ -318,6 +318,7 @@ namespace FFVM.AST
     {
         public string Name { get; }
         public string TypeName { get; }
+        public string DocComment { get; set; }
         public ParamDecl(string name, string typeName)
         {
             Name = name;
@@ -332,6 +333,8 @@ namespace FFVM.AST
         public string ReturnType { get; }
         public BlockStmt Body { get; }
         public bool IsPrivate { get; }
+        public string DocComment { get; set; }
+        public string ReturnDoc { get; set; }
 
         public FuncDecl(string name, List<ParamDecl> parameters, string returnType, BlockStmt body, bool isPrivate)
             : base(NodeKind.FuncDecl)
@@ -359,6 +362,7 @@ namespace FFVM.AST
     {
         public string Name { get; }
         public List<StructField> Fields { get; }
+        public string DocComment { get; set; }
         public StructDecl(string name, List<StructField> fields) : base(NodeKind.StructDecl)
         {
             Name = name;
