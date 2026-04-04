@@ -45,7 +45,7 @@
 |----|------|----------|--------|
 | **FF1** | 跨模块函数调用 | 真实业务需要模块间函数共享时 | 中（需 VMModuleTable 扩展 + CALL_EXT OpCode） |
 | **FF2** | 函数作为 Syscall 参数（回调模式） | 需要宿主驱动的回调场景时 | 中（约定回调协议；受 Rule 6 约束只能传 IP 整数） |
-| **FF3** | 可选参数与默认值 | 提升开发体验时 | 低（仅编译器变更） |
+| **FF3** | ~~可选参数与默认值~~ | ~~提升开发体验时~~ | ✅ B-δ3 已实现 |
 | **FF4** | 多返回值 | 业务需要函数返回多值时（如 GetPosition → x,y） | 中（scratch zone 多寄存器 + 解构语法） |
 | **FF5** | ~~defer 在非 entry 函数中的正确执行~~ | ~~非 entry 函数使用 defer/using 时~~ | ✅ B-γ2 已实现 |
 
@@ -59,7 +59,7 @@
 | **S4-F1** | 结构体作为函数返回值（多寄存器 r0..rN 返回） | 编辑器需要展示 struct 返回值节点时 | 中 |
 | **SN1** | ~~嵌套结构体（struct 字段为另一个 struct）~~ | ✅ B-γ7 已完成（递归拍平+循环检测+子struct赋值+LSP嵌套补全）| 中 |
 | **SN1-F1** | 嵌套 struct 作为函数返回值 | FF4 多返回值排期时 | 中 |
-| **SN1-F3** | 嵌套 struct COPY_BLOCK 优化（N×MOVE→单条指令） | SO1 排期时 | 低 |
+| **SN1-F3** | 嵌套 struct COPY_BLOCK 优化（N×MOVE→单条指令） | ✅ SO1 已完成 | — |
 | **SN2** | 结构体字面量构造语法 | 后续步骤按需 | 低（编译器 sugar） |
 
 ### 2.4 全局 / 跨步骤展望
@@ -273,7 +273,7 @@ LSP1（LSP Server 核心框架）           ← 所有 LSP 功能的通信基础
 | Tier | ID | 内容 | 预期收益 | 复杂度 |
 |------|----|------|---------|--------|
 | **4** | **O9** | 活跃实例链表 | 稀疏场景 ~85% 无效遍历减少 | 低 | ✅ [B-β3](Step_B_Beta3_O9_ActiveList.md) |
-| **4** | **O10** | 快照只拷贝活跃实例 | 快照 80-90% 数据量减少 | 中 |
+| **4** | **O10** | 快照只拷贝活跃实例 | 快照 80-90% 数据量减少 | 中 | ✅ [B-δ1](Step_B_Delta1_O10_SnapshotActiveOnly.md) |
 | **5** | **O11** | Syscall 函数指针（`delegate*`） | Syscall 调用 ~30% 加速 | 中 |
 | **5** | **O12** | Number 原始字段比较优化 | 比较指令 ~10% | 低 |
 | **5** | **O13** | 热/冷字段分离 | 缓存行利用率提升 | 高 |
@@ -296,7 +296,7 @@ LSP1（LSP Server 核心框架）           ← 所有 LSP 功能的通信基础
 
 | ID | 内容 | 预期收益 | 复杂度 |
 |----|------|---------|--------|
-| **SO1** | COPY_BLOCK OpCode（替代 N 条 MOVE 的结构体赋值） | 大 struct 赋值性能提升 | 中（需新 OpCode + VMWorld 实现） |
+| **SO1** | COPY_BLOCK OpCode（替代 N 条 MOVE 的结构体赋值） | 大 struct 赋值性能提升 | 中（需新 OpCode + VMWorld 实现） | ✅ [B-δ2](Step_B_Delta2_SO1_CopyBlock.md) |
 
 ### 3.6 综合预估
 
@@ -313,7 +313,7 @@ LSP1（LSP Server 核心框架）           ← 所有 LSP 功能的通信基础
   O6
         ↓ benchmark 验证（期望 2-3x）
 [调整型：按需] ⏳
-  O9 → O10 → 视需要 O8/O13
+  O9 → O10 ✅ → 视需要 O8/O13
 ```
 
 **预估目标**：自然优化（O4 减少 15-20% 指令数 ✅）+ 调整型 Tier 1（O1/O2 .NET JIT ~9% ✅）+ 调整型 Tier 2（O6 再减 5-10% 指令 ⏳）完成后，编译脚本预期降至 **2-3x**（vs C#）。
@@ -399,7 +399,7 @@ LSP1（LSP Server 核心框架）           ← 所有 LSP 功能的通信基础
 
 | 复杂度 | 条目 |
 |--------|------|
-| 低 | C4, G6, O1, O2, O3, O5, O7, O9, FO4, FO5, FF3, SN2, DBG3, DBG5, DBG6, LSP2 |
+| 低 | C4, G6, O1, O2, O3, O5, O7, O9, FO4, FO5, SN2, DBG3, DBG5, DBG6, LSP2 |
 | 低~中 | O15, BM1 |
 | 中 | F4, S4, O4, O6, O10, O11, O14, FO1, FO6, FO7, FO2, FF1, FF2, FF4, FF5, SO1, SN1, H1, DBG1, DBG2, DBG4, DBG7, LSP1, LSP3, LSP4, LSP5, LSP6, LSP7 |
 | 高 | O8, O13, FO3 |
@@ -636,7 +636,7 @@ Gate 3: Unity Editor 内嵌 DAP（可选）             ← DBG7 Phase C
 | ID | 原等级 | 降级后 | 措施 |
 |----|--------|--------|------|
 | SR1 | ⚠️ | **低** | 编译器已有超限报错；实际业务 struct ≤5 字段为主 |
-| SR2 | ⚠️ | **低** | 业务 struct 通常 2-5 字段；SO1 COPY_BLOCK 作为后备 |
+| SR2 | ✅ | **已消除** | SO1 COPY_BLOCK 已完成（B-δ2），≥3 字段 struct 赋值为单条指令 |
 | SR3 | ⚠️ | **低** | S4 实施时联合验证；当前局部 struct 不涉及窗口偏移 |
 | SR4 | ⚠️ | **极低** | 语法层面已禁止方法调用；Parser 不支持 `a.b(c)` 形式 |
 
@@ -710,7 +710,7 @@ Gate 3: Unity Editor 内嵌 DAP（可选）             ← DBG7 Phase C
 | **α 语言服务收尾** | 开发体验质变 | B-α1, B-α2 | LSP6 Syscall 声明协议 → LSP7 参数提示 |
 | **β 优化 Tier 2** | 性能逼近 2x | B-β1, B-β2, B-β3 | O6 peephole → FO1 叶函数 → O9 活跃链表 |
 | **γ 功能完整性 + 性能基线** | 性能观测就位 + 语言能力补全 | B-γ1 ~ B-γ9 | FO6 自适应窗口 → FF5 非 entry defer → **BM1 Benchmark 基础设施** → **O15 热循环优化** → S4 struct 参数 → C6 嵌套 using → SN1 嵌套 struct → GR3 文档 → STR1 常量字符串 |
-| **δ 按需补全** | 业务驱动激活 | B-δ1 ~ B-δ6 | O10 活跃快照 → SO1 COPY_BLOCK → FF3 可选参数 → SN2 struct 字面量 → C5 Cleanup 超时 → B1 Editor DAP |
+| **δ 按需补全** | 业务驱动激活 | B-δ1 ~ B-δ6 | O10 活跃快照 ✅ → SO1 COPY_BLOCK ✅ → FF3 可选参数 ✅ → SN2 struct 字面量 → C5 Cleanup 超时 → B1 Editor DAP |
 
 > 完整的步骤序号、完成条件、依赖关系见 [VM_Summary.md §七-B](../VM_Summary.md#b-待执行阶段脚本引擎侧--细化推进序列)。
 

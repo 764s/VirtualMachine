@@ -27,7 +27,7 @@ namespace FFVM
         public int ActiveInstanceCount;
         public FreeStackSnapshot FreeStackState;
 
-        // Snapshots of all instance slots (including inactive — cheap to copy, simpler logic)
+        // Snapshots of instance slots (O10: only active entries are populated; inactive entries contain stale data)
         public VMInstanceState[] InstanceSnapshots;
 
         // Free stack snapshot
@@ -65,6 +65,7 @@ namespace FFVM
 
         /// <summary>
         /// Save current VM world state into the next ring slot.
+        /// O10: Only copies active instances instead of all 128 slots.
         /// </summary>
         public void SaveState(ref InstancePool pool, int frameNumber)
         {
@@ -74,13 +75,17 @@ namespace FFVM
             snap.FreeStackState.FreeTop = pool.FreeTop;
             snap.FreeStackState.ActiveListCount = pool.ActiveListCount;
 
-            // memcpy instances
-            Array.Copy(pool.Instances, snap.InstanceSnapshots, VMConstants.MaxInstances);
+            // O10: Copy only active instances (typically 3-10 out of 128)
+            for (int i = 0; i < pool.ActiveListCount; i++)
+            {
+                int id = pool.ActiveList[i];
+                snap.InstanceSnapshots[id] = pool.Instances[id];
+            }
 
-            // memcpy free stack
+            // memcpy free stack (int[128] = 512 bytes — always full copy)
             Array.Copy(pool.FreeStack, snap.FreeStackData, VMConstants.MaxFreeStack);
 
-            // O9: memcpy active list
+            // O9: memcpy active list (int[128] = 512 bytes — always full copy)
             Array.Copy(pool.ActiveList, snap.ActiveListData, VMConstants.MaxInstances);
 
             _head = (_head + 1) % VMConstants.SnapshotRingSize;
@@ -88,6 +93,8 @@ namespace FFVM
 
         /// <summary>
         /// Load a snapshot back into the VM world. Returns false if frame not found.
+        /// O10: Only restores active instances. Clears IsAlive on all slots first
+        /// to invalidate stale data from post-snapshot mutations.
         /// </summary>
         public bool LoadState(ref InstancePool pool, int frameNumber)
         {
@@ -96,10 +103,23 @@ namespace FFVM
                 ref VMWorldSnapshot snap = ref _ring[i];
                 if (snap.FrameNumber == frameNumber)
                 {
+                    // O10: Clear IsAlive on all slots to prevent stale instances
+                    // from appearing alive after rollback (128 byte writes — trivial cost)
+                    for (int j = 0; j < VMConstants.MaxInstances; j++)
+                    {
+                        pool.Instances[j].IsAlive = false;
+                    }
+
                     pool.ActiveListCount = snap.FreeStackState.ActiveListCount;
                     pool.FreeTop = snap.FreeStackState.FreeTop;
 
-                    Array.Copy(snap.InstanceSnapshots, pool.Instances, VMConstants.MaxInstances);
+                    // O10: Only restore active instances from snapshot
+                    for (int j = 0; j < snap.FreeStackState.ActiveListCount; j++)
+                    {
+                        int id = snap.ActiveListData[j];
+                        pool.Instances[id] = snap.InstanceSnapshots[id];
+                    }
+
                     Array.Copy(snap.FreeStackData, pool.FreeStack, VMConstants.MaxFreeStack);
 
                     // O9: restore active list

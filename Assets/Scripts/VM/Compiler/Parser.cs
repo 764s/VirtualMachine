@@ -109,6 +109,7 @@ namespace FFVM.Compiler
             Expect(TokenType.LParen, "after function name");
 
             var parameters = new List<ParamDecl>();
+            bool seenOptional = false;
             if (!Check(TokenType.RParen))
             {
                 do
@@ -116,7 +117,18 @@ namespace FFVM.Compiler
                     string pName = Expect(TokenType.Identifier, "in parameter list").Text ?? "?";
                     Expect(TokenType.Colon, "after parameter name");
                     string pType = Expect(TokenType.Identifier, "for parameter type").Text ?? "int";
-                    parameters.Add(new ParamDecl(pName, pType));
+                    // FF3: optional default value
+                    Expr defaultValue = null;
+                    if (Match(TokenType.Assign))
+                    {
+                        defaultValue = ParseExpression();
+                        seenOptional = true;
+                    }
+                    else if (seenOptional)
+                    {
+                        _errors.Add($"Required parameter '{pName}' cannot follow optional parameter (line {Current().Line})");
+                    }
+                    parameters.Add(new ParamDecl(pName, pType, defaultValue));
                 } while (Match(TokenType.Comma));
             }
             Expect(TokenType.RParen, "after parameters");

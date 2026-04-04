@@ -325,11 +325,7 @@ namespace FFVM.Compiler
                         int flatCount = _flatStructInfo[param.TypeName].FlatFieldCount;
                         int baseReg = DeclareStructVar(param.Name, flatCount);
                         _structVarTypes[param.Name] = param.TypeName;
-                        for (int j = 0; j < flatCount; j++)
-                        {
-                            if (baseReg + j != scratchReg + j)
-                                Emit(OpCode.MOVE, baseReg + j, scratchReg + j);
-                        }
+                        EmitStructCopy(baseReg, scratchReg, flatCount);
                         scratchReg += flatCount;
                     }
                     else
@@ -542,6 +538,7 @@ namespace FFVM.Compiler
                 case OpCode.MOVE: return 3;           // A=dest, B=src
                 case OpCode.NOT:  return 3;           // A=dest, B=src
                 case OpCode.NEG:  return 3;           // A=dest, B=src
+                case OpCode.COPY_BLOCK: return 3;     // A=dest, B=src, C=count (not a register)
 
                 // B = register
                 case OpCode.JUMP_IF_ZERO:     return 2;  // A=targetIP, B=testReg
@@ -1127,6 +1124,24 @@ namespace FFVM.Compiler
             _sourceLines.Add(_currentLine);
         }
 
+        /// <summary>
+        /// SO1: Emit struct copy — COPY_BLOCK for count ≥ 3, N×MOVE for count ≤ 2.
+        /// Self-copy (destBase == srcBase) is a no-op.
+        /// </summary>
+        private void EmitStructCopy(int destBase, int srcBase, int count)
+        {
+            if (destBase == srcBase) return;
+            if (count >= 3)
+            {
+                Emit(OpCode.COPY_BLOCK, destBase, srcBase, count);
+            }
+            else
+            {
+                for (int i = 0; i < count; i++)
+                    Emit(OpCode.MOVE, destBase + i, srcBase + i);
+            }
+        }
+
         private int EmitJump(OpCode code, int testReg = 0)
         {
             int ip = _instructions.Count;
@@ -1233,8 +1248,7 @@ namespace FFVM.Compiler
                         srcType == stmt.TypeName)
                     {
                         int srcBase = _variables[srcIdent.Name];
-                        for (int i = 0; i < flatCount; i++)
-                            Emit(OpCode.MOVE, baseReg + i, srcBase + i);
+                        EmitStructCopy(baseReg, srcBase, flatCount);
                     }
                     else
                     {
@@ -1621,8 +1635,7 @@ namespace FFVM.Compiler
                         int flatCount = _flatStructInfo[targetStructType].FlatFieldCount;
                         int destBase = _variables[targetIdent.Name];
                         int srcBase = _variables[srcIdent.Name];
-                        for (int i = 0; i < flatCount; i++)
-                            Emit(OpCode.MOVE, destBase + i, srcBase + i);
+                        EmitStructCopy(destBase, srcBase, flatCount);
                         return destBase;
                     }
                     _errors.Add($"Cannot assign non-struct value to struct variable '{targetIdent.Name}' (line {assign.Line})");
@@ -1653,8 +1666,7 @@ namespace FFVM.Compiler
                                 int subCount = _flatStructInfo[targetFieldType].FlatFieldCount;
                                 int tBaseReg = _variables[targetVar] + ResolveFlatFieldOffset(tType, targetDotPath);
                                 int sBaseReg = _variables[srcVar] + ResolveFlatFieldOffset(sType, srcDotPath);
-                                for (int i = 0; i < subCount; i++)
-                                    Emit(OpCode.MOVE, tBaseReg + i, sBaseReg + i);
+                                EmitStructCopy(tBaseReg, sBaseReg, subCount);
                                 return tBaseReg;
                             }
                         }
@@ -1674,8 +1686,7 @@ namespace FFVM.Compiler
                                 int subCount = _flatStructInfo[targetFieldType2].FlatFieldCount;
                                 int tBaseReg = _variables[tgtVar2] + ResolveFlatFieldOffset(tType2, tgtDotPath2);
                                 int sBaseReg = _variables[subSrcIdent.Name];
-                                for (int i = 0; i < subCount; i++)
-                                    Emit(OpCode.MOVE, tBaseReg + i, sBaseReg + i);
+                                EmitStructCopy(tBaseReg, sBaseReg, subCount);
                                 return tBaseReg;
                             }
                         }
@@ -1833,12 +1844,21 @@ namespace FFVM.Compiler
 
             int entryIP = _functionTable[call.FunctionName];
 
-            // Validate parameter count
+            // Validate parameter count (FF3: allow fewer args if remaining params have defaults)
             if (_funcDecls.TryGetValue(call.FunctionName, out var funcDecl))
             {
-                if (call.Arguments.Count != funcDecl.Parameters.Count)
+                int requiredCount = 0;
+                for (int i = 0; i < funcDecl.Parameters.Count; i++)
                 {
-                    _errors.Add($"Function '{call.FunctionName}' expects {funcDecl.Parameters.Count} arguments but got {call.Arguments.Count} (line {call.Line})");
+                    if (funcDecl.Parameters[i].DefaultValue == null)
+                        requiredCount++;
+                    else
+                        break; // once defaults start, all remaining are optional
+                }
+
+                if (call.Arguments.Count < requiredCount || call.Arguments.Count > funcDecl.Parameters.Count)
+                {
+                    _errors.Add($"Function '{call.FunctionName}' expects {requiredCount}-{funcDecl.Parameters.Count} arguments but got {call.Arguments.Count} (line {call.Line})");
                     return;
                 }
 
@@ -1887,6 +1907,22 @@ namespace FFVM.Compiler
                     {
                         if (argRegs[i] != scratchReg)
                             Emit(OpCode.MOVE, scratchReg, argRegs[i]);
+                        scratchReg++;
+                    }
+                }
+
+                // FF3: fill default values for omitted optional parameters
+                if (funcDecl != null)
+                {
+                    for (int i = call.Arguments.Count; i < funcDecl.Parameters.Count; i++)
+                    {
+                        var def = funcDecl.Parameters[i].DefaultValue;
+                        if (def != null)
+                        {
+                            int defReg = CompileExpr(def);
+                            if (defReg != scratchReg)
+                                Emit(OpCode.MOVE, scratchReg, defReg);
+                        }
                         scratchReg++;
                     }
                 }

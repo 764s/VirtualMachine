@@ -4308,6 +4308,406 @@ func main() {
                 $"STR1-12: no string constants when none used, got {result.Program.StringConstants.Length}");
         }
 
+        // =================================================================
+        //  FF3: Optional parameters with default values
+        // =================================================================
+
+        // ===== Test FF3-01: Basic optional parameter with default =====
+        {
+            string source = @"
+func add(a: int, b: int = 10): int {
+    return a + b
+}
+func main() {
+    Report(add(5))
+    Report(add(5, 20))
+}";
+            var syscalls = new Dictionary<string, int> { { "Report", 0 } };
+            var result = compiler.Compile(source, "main", syscalls);
+            Assert(result.Success, $"FF3-01 compile success: {(result.Success ? "" : string.Join("; ", result.Errors))}");
+
+            var log = new List<string>();
+            var world = new VMWorld();
+            world.Modules.Load(0, result.Program);
+            world.Syscalls.Register(0, "Report", (ref VMInstanceState s) =>
+            {
+                log.Add($"{s.Registers.Get(0).ToInt()}");
+            });
+
+            world.SpawnInstance(0, 0);
+            world.Tick();
+            Assert(log.Count >= 1 && log[0] == "15", $"FF3-01: add(5) = 15, got {(log.Count > 0 ? log[0] : "?")}");
+            Assert(log.Count >= 2 && log[1] == "25", $"FF3-01: add(5,20) = 25, got {(log.Count > 1 ? log[1] : "?")}");
+        }
+
+        // ===== Test FF3-02: Multiple optional parameters =====
+        {
+            string source = @"
+func calc(a: int, b: int = 2, c: int = 3): int {
+    return a + b * c
+}
+func main() {
+    Report(calc(10))
+    Report(calc(10, 5))
+    Report(calc(10, 5, 7))
+}";
+            var syscalls = new Dictionary<string, int> { { "Report", 0 } };
+            var result = compiler.Compile(source, "main", syscalls);
+            Assert(result.Success, $"FF3-02 compile success: {(result.Success ? "" : string.Join("; ", result.Errors))}");
+
+            var log = new List<string>();
+            var world = new VMWorld();
+            world.Modules.Load(0, result.Program);
+            world.Syscalls.Register(0, "Report", (ref VMInstanceState s) =>
+            {
+                log.Add($"{s.Registers.Get(0).ToInt()}");
+            });
+
+            world.SpawnInstance(0, 0);
+            world.Tick();
+            Assert(log.Count >= 1 && log[0] == "16", $"FF3-02: calc(10) = 10+2*3=16, got {(log.Count > 0 ? log[0] : "?")}");
+            Assert(log.Count >= 2 && log[1] == "25", $"FF3-02: calc(10,5) = 10+5*3=25, got {(log.Count > 1 ? log[1] : "?")}");
+            Assert(log.Count >= 3 && log[2] == "45", $"FF3-02: calc(10,5,7) = 10+5*7=45, got {(log.Count > 2 ? log[2] : "?")}");
+        }
+
+        // ===== Test FF3-03: All parameters optional =====
+        {
+            string source = @"
+func val(x: int = 42): int {
+    return x
+}
+func main() {
+    Report(val())
+    Report(val(99))
+}";
+            var syscalls = new Dictionary<string, int> { { "Report", 0 } };
+            var result = compiler.Compile(source, "main", syscalls);
+            Assert(result.Success, $"FF3-03 compile success: {(result.Success ? "" : string.Join("; ", result.Errors))}");
+
+            var log = new List<string>();
+            var world = new VMWorld();
+            world.Modules.Load(0, result.Program);
+            world.Syscalls.Register(0, "Report", (ref VMInstanceState s) =>
+            {
+                log.Add($"{s.Registers.Get(0).ToInt()}");
+            });
+
+            world.SpawnInstance(0, 0);
+            world.Tick();
+            Assert(log.Count >= 1 && log[0] == "42", $"FF3-03: val() = 42, got {(log.Count > 0 ? log[0] : "?")}");
+            Assert(log.Count >= 2 && log[1] == "99", $"FF3-03: val(99) = 99, got {(log.Count > 1 ? log[1] : "?")}");
+        }
+
+        // ===== Test FF3-04: Too few args → compile error =====
+        {
+            string source = @"
+func add(a: int, b: int = 10): int {
+    return a + b
+}
+func main() {
+    Report(add())
+}";
+            var syscalls = new Dictionary<string, int> { { "Report", 0 } };
+            var result = compiler.Compile(source, "main", syscalls);
+            Assert(!result.Success, "FF3-04: too few args is compile error");
+        }
+
+        // ===== Test FF3-05: Too many args → compile error =====
+        {
+            string source = @"
+func add(a: int, b: int = 10): int {
+    return a + b
+}
+func main() {
+    Report(add(1, 2, 3))
+}";
+            var syscalls = new Dictionary<string, int> { { "Report", 0 } };
+            var result = compiler.Compile(source, "main", syscalls);
+            Assert(!result.Success, "FF3-05: too many args is compile error");
+        }
+
+        // ===== Test FF3-06: Required after optional → compile error =====
+        {
+            string source = @"
+func bad(a: int = 1, b: int): int {
+    return a + b
+}
+func main() {
+    Report(bad(1, 2))
+}";
+            var syscalls = new Dictionary<string, int> { { "Report", 0 } };
+            var result = compiler.Compile(source, "main", syscalls);
+            Assert(!result.Success, "FF3-06: required after optional is compile error");
+        }
+
+        // ===== Test FF3-07: Default with expression (negative literal) =====
+        {
+            string source = @"
+func offset(x: int, dx: int = -5): int {
+    return x + dx
+}
+func main() {
+    Report(offset(10))
+    Report(offset(10, 3))
+}";
+            var syscalls = new Dictionary<string, int> { { "Report", 0 } };
+            var result = compiler.Compile(source, "main", syscalls);
+            Assert(result.Success, $"FF3-07 compile success: {(result.Success ? "" : string.Join("; ", result.Errors))}");
+
+            var log = new List<string>();
+            var world = new VMWorld();
+            world.Modules.Load(0, result.Program);
+            world.Syscalls.Register(0, "Report", (ref VMInstanceState s) =>
+            {
+                log.Add($"{s.Registers.Get(0).ToInt()}");
+            });
+
+            world.SpawnInstance(0, 0);
+            world.Tick();
+            Assert(log.Count >= 1 && log[0] == "5", $"FF3-07: offset(10) = 5, got {(log.Count > 0 ? log[0] : "?")}");
+            Assert(log.Count >= 2 && log[1] == "13", $"FF3-07: offset(10,3) = 13, got {(log.Count > 1 ? log[1] : "?")}");
+        }
+
+        // =================================================================
+        //  SO1: COPY_BLOCK OpCode tests
+        // =================================================================
+
+        // ===== Test SO1-01: 3-field struct uses COPY_BLOCK =====
+        {
+            string source = @"
+struct Vec3 {
+    x: int
+    y: int
+    z: int
+}
+func main() {
+    var a: Vec3
+    a.x = 10
+    a.y = 20
+    a.z = 30
+    var b: Vec3 = a
+    Report(b.x)
+    Report(b.y)
+    Report(b.z)
+}";
+            var syscalls = new Dictionary<string, int> { { "Report", 0 } };
+            var result = compiler.Compile(source, "main", syscalls);
+            Assert(result.Success, "SO1-01 compile success");
+
+            // Verify COPY_BLOCK is emitted (3 fields ≥ 3 threshold)
+            bool hasCopyBlock = false;
+            for (int i = 0; i < result.Program.InstructionCount; i++)
+            {
+                if (result.Program.Instructions[i].Code == OpCode.COPY_BLOCK)
+                {
+                    hasCopyBlock = true;
+                    Assert(result.Program.Instructions[i].C == 3,
+                        $"SO1-01: COPY_BLOCK count = {result.Program.Instructions[i].C} (== 3)");
+                    break;
+                }
+            }
+            Assert(hasCopyBlock, "SO1-01: COPY_BLOCK emitted for 3-field struct");
+
+            var log = new List<string>();
+            var world = new VMWorld();
+            world.Modules.Load(0, result.Program);
+            world.Syscalls.Register(0, "Report", (ref VMInstanceState s) =>
+            {
+                log.Add($"{s.Registers.Get(0).ToInt()}");
+            });
+
+            world.SpawnInstance(0, 0);
+            world.Tick();
+            Assert(log.Count >= 3 && log[0] == "10" && log[1] == "20" && log[2] == "30",
+                $"SO1-01: b = a → (10,20,30), got ({string.Join(",", log)})");
+        }
+
+        // ===== Test SO1-02: 2-field struct still uses N×MOVE (below threshold) =====
+        {
+            string source = @"
+struct Vec2 {
+    x: int
+    y: int
+}
+func main() {
+    var a: Vec2
+    a.x = 5
+    a.y = 9
+    var b: Vec2 = a
+    Report(b.x)
+    Report(b.y)
+}";
+            var syscalls = new Dictionary<string, int> { { "Report", 0 } };
+            var result = compiler.Compile(source, "main", syscalls);
+            Assert(result.Success, "SO1-02 compile success");
+
+            // Verify no COPY_BLOCK emitted (2 fields < 3 threshold)
+            bool hasCopyBlock = false;
+            for (int i = 0; i < result.Program.InstructionCount; i++)
+            {
+                if (result.Program.Instructions[i].Code == OpCode.COPY_BLOCK)
+                {
+                    hasCopyBlock = true;
+                    break;
+                }
+            }
+            Assert(!hasCopyBlock, "SO1-02: no COPY_BLOCK for 2-field struct (uses N×MOVE)");
+
+            var log = new List<string>();
+            var world = new VMWorld();
+            world.Modules.Load(0, result.Program);
+            world.Syscalls.Register(0, "Report", (ref VMInstanceState s) =>
+            {
+                log.Add($"{s.Registers.Get(0).ToInt()}");
+            });
+
+            world.SpawnInstance(0, 0);
+            world.Tick();
+            Assert(log.Count >= 2 && log[0] == "5" && log[1] == "9",
+                $"SO1-02: b = a → (5,9), got ({string.Join(",", log)})");
+        }
+
+        // ===== Test SO1-03: 4-field struct whole assignment =====
+        {
+            string source = @"
+struct Stats {
+    hp: int
+    mp: int
+    atk: int
+    def: int
+}
+func main() {
+    var s: Stats
+    s.hp = 100
+    s.mp = 50
+    s.atk = 25
+    s.def = 10
+    var t: Stats = s
+    Report(t.hp)
+    Report(t.mp)
+    Report(t.atk)
+    Report(t.def)
+}";
+            var syscalls = new Dictionary<string, int> { { "Report", 0 } };
+            var result = compiler.Compile(source, "main", syscalls);
+            Assert(result.Success, "SO1-03 compile success");
+
+            var log = new List<string>();
+            var world = new VMWorld();
+            world.Modules.Load(0, result.Program);
+            world.Syscalls.Register(0, "Report", (ref VMInstanceState s) =>
+            {
+                log.Add($"{s.Registers.Get(0).ToInt()}");
+            });
+
+            world.SpawnInstance(0, 0);
+            world.Tick();
+            Assert(log.Count >= 4 && log[0] == "100" && log[1] == "50" && log[2] == "25" && log[3] == "10",
+                $"SO1-03: t = s → (100,50,25,10), got ({string.Join(",", log)})");
+        }
+
+        // ===== Test SO1-04: Nested struct uses COPY_BLOCK for whole assignment =====
+        {
+            string source = @"
+struct Vec2 {
+    x: int
+    y: int
+}
+struct Rect {
+    min: Vec2
+    max: Vec2
+}
+func main() {
+    var r: Rect
+    r.min.x = 1
+    r.min.y = 2
+    r.max.x = 3
+    r.max.y = 4
+    var s: Rect = r
+    Report(s.min.x)
+    Report(s.min.y)
+    Report(s.max.x)
+    Report(s.max.y)
+}";
+            var syscalls = new Dictionary<string, int> { { "Report", 0 } };
+            var result = compiler.Compile(source, "main", syscalls);
+            Assert(result.Success, "SO1-04 compile success");
+
+            // Rect has 4 flat fields → should use COPY_BLOCK
+            bool hasCopyBlock = false;
+            for (int i = 0; i < result.Program.InstructionCount; i++)
+            {
+                if (result.Program.Instructions[i].Code == OpCode.COPY_BLOCK &&
+                    result.Program.Instructions[i].C == 4)
+                {
+                    hasCopyBlock = true;
+                    break;
+                }
+            }
+            Assert(hasCopyBlock, "SO1-04: COPY_BLOCK(4) emitted for nested 4-field struct");
+
+            var log = new List<string>();
+            var world = new VMWorld();
+            world.Modules.Load(0, result.Program);
+            world.Syscalls.Register(0, "Report", (ref VMInstanceState s) =>
+            {
+                log.Add($"{s.Registers.Get(0).ToInt()}");
+            });
+
+            world.SpawnInstance(0, 0);
+            world.Tick();
+            Assert(log.Count >= 4 && log[0] == "1" && log[1] == "2" && log[2] == "3" && log[3] == "4",
+                $"SO1-04: s = r → (1,2,3,4), got ({string.Join(",", log)})");
+        }
+
+        // ===== Test SO1-05: COPY_BLOCK survives rollback =====
+        {
+            string source = @"
+struct Vec3 {
+    x: int
+    y: int
+    z: int
+}
+func main() {
+    var a: Vec3
+    a.x = 7
+    a.y = 8
+    a.z = 9
+    var b: Vec3 = a
+    wait 1
+    Report(b.x)
+    Report(b.y)
+    Report(b.z)
+}";
+            var syscalls = new Dictionary<string, int> { { "Report", 0 } };
+            var result = compiler.Compile(source, "main", syscalls);
+            Assert(result.Success, "SO1-05 compile success");
+
+            var log = new List<string>();
+            var world = new VMWorld();
+            world.Modules.Load(0, result.Program);
+            world.Syscalls.Register(0, "Report", (ref VMInstanceState s) =>
+            {
+                log.Add($"{s.Registers.Get(0).ToInt()}");
+            });
+
+            world.SpawnInstance(0, 0);
+            world.Tick(); // frame 1: COPY_BLOCK executes, then WAIT 1 → suspend
+            world.SaveState();
+            world.Tick(); // frame 2: WaitCounter 1→0, skip
+            world.Tick(); // frame 3: Reports (7,8,9)
+            Assert(log.Count == 3, $"SO1-05: 3 reports, got {log.Count}");
+
+            // Rollback to frame 1 and replay
+            log.Clear();
+            bool loaded = world.LoadState(1);
+            Assert(loaded, "SO1-05: rollback succeeded");
+            world.Tick(); // replay frame 2: wait expires
+            world.Tick(); // replay frame 3: reports
+            Assert(log.Count >= 3 && log[0] == "7" && log[1] == "8" && log[2] == "9",
+                $"SO1-05: after rollback → (7,8,9), got ({string.Join(",", log)})");
+        }
+
         // ===== Summary =====
         Debug.Log($"========================================");
         Debug.Log($"Compiler Tests: {passed} passed, {failed} failed");

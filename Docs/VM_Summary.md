@@ -371,6 +371,14 @@ skill TracerBullet
 | `CALL` | A=目标函数入口 IP, B=callerWindowSize → 压入 CallFrame + 寄存器窗口偏移 + jump |
 | `RET_FUNC` | 弹出 CallFrame → 恢复 IP + RegisterBase → 返回 caller |
 
+#### Phase 4：结构体优化 + 叶函数（3 条）
+
+| OpCode | 职责 |
+|--------|------|
+| `CALL_LEAF` | 叶函数优化调用（跳过 CallFrame push/pop） |
+| `RET_LEAF` | 叶函数返回（从 inst 字段恢复） |
+| `COPY_BLOCK` | A=dest, B=src, C=count → 批量寄存器拷贝（≥3 字段结构体赋值） |
+
 ### 4.5 示意字节码
 
 ```
@@ -640,8 +648,11 @@ skill TracerBullet
 | — | **B-γ7 SN1 嵌套结构体** | **递归拍平为连续寄存器 + 循环引用检测 + 子 struct 赋值 + LSP 嵌套补全** | **884** | [B-γ7](Plan/Step_B_Gamma7_SN1_NestedStruct.md) |
 | — | **B-γ8 GR3 文档缺口 D1-D4** | **D1 技能流水线→§1.2 + D2 失败教训→§9.2 + D3 成功标准→§7.0 + D4 递进轴线→§7.0b** | **884** | — |
 | — | **B-γ9 STR1 常量字符串** | **Lexer StringLiteral + StringConstants ROM + LOAD_CONST 索引 + SyscallArgs.GetString + 不支持拼接 + 转义序列 + 快照安全** | **913** | — |
+| — | **B-δ1 O10 快照只拷贝活跃实例** | **SaveState/LoadState 仅遍历 ActiveList 拷贝活跃 VMInstanceState + LoadState 先清 IsAlive 防止幽灵实例** | **929** | [B-δ1](Plan/Step_B_Delta1_O10_SnapshotActiveOnly.md) |
+| — | **B-δ2 SO1 COPY_BLOCK OpCode** | **COPY_BLOCK(dst,src,count) 替代 N×MOVE 结构体赋值 + ≥3 字段阈值 + 编译器 EmitStructCopy** | **945** | [B-δ2](Plan/Step_B_Delta2_SO1_CopyBlock.md) |
+| — | **B-δ3 FF3 可选参数与默认值** | **ParamDecl.DefaultValue + Parser `= expr` + Compiler 缺省值填充 scratch zone + LSP 签名/hover/补全显示默认值** | **969** | [B-δ3](Plan/Step_B_Delta3_FF3_OptionalParams.md) |
 
-**当前位置 → B-γ9 完成（Phase γ 全部完成）。913 项 Assert × 2 模式全通过。**
+**当前位置 → B-δ3 完成。969 项 Assert × 2 模式全通过。**
 
 ---
 
@@ -650,8 +661,8 @@ skill TracerBullet
 以下步骤不依赖真实 ECS/Syscall 接入，可在当前独立环境中推进。
 步骤严格按编号顺序串行执行，每步完成后更新状态标记。
 
-> **当前位置 → B-δ1**（O10 快照只拷贝活跃实例）
-> ✅ **紧急任务区已清空**。913 项 Assert × 2 模式全通过。
+> **当前位置 → B-δ4**（SN2 结构体字面量构造语法）
+> ✅ **紧急任务区已清空**。969 项 Assert × 2 模式全通过。
 > 📌 **P001 建议提前排入**：BM1（B-γ3 ✅）+ O15（B-γ4 ✅）从展望提升为串行步骤，确保性能基线和热循环优化在后续功能开发前就位，持续观察性能变化。
 
 #### Phase 0: 正式命名
@@ -693,9 +704,9 @@ skill TracerBullet
 
 | # | ID | 内容 | 状态 | 完成条件 | 依赖 |
 |---|-----|------|------|----------|------|
-| 15 | B-δ1 | O10 快照只拷贝活跃实例 | ⏳ | 快照数据量减少 80-90% + 性能验证 | B-β3 (O9) |
-| 16 | B-δ2 | SO1 COPY_BLOCK OpCode | ⏳ | 新 OpCode + Buffer.MemoryCopy 实现 + 大 struct 赋值验证 | struct ✅ |
-| 17 | B-δ3 | FF3 可选参数与默认值 | ⏳ | 编译器支持可选参数 + 默认值填充 + 测试通过 | 函数调用 ✅ |
+| 15 | B-δ1 | O10 快照只拷贝活跃实例 | ✅ | 快照数据量减少 80-90% + 性能验证 | B-β3 (O9) |
+| 16 | B-δ2 | SO1 COPY_BLOCK OpCode | ✅ | 新 OpCode + Buffer.MemoryCopy 实现 + 大 struct 赋值验证 | struct ✅ |
+| 17 | B-δ3 | FF3 可选参数与默认值 | ✅ | 编译器支持可选参数 + 默认值填充 + LSP 默认值显示 + 测试通过 | 函数调用 ✅ |
 | 18 | B-δ4 | SN2 结构体字面量构造语法 | ⏳ | 编译器 sugar 实现 + 测试通过 | struct ✅ |
 | 19 | B-δ5 | C5 Cleanup 超时保护 | ⏳ | Cleanup 块执行超时检测 + 实例回收保证 + 测试通过 | 无 |
 | 20 | B-δ6 | B1 Unity Editor DAP (可选) | ⏳ | EditorApplication.update 轮询模式 + DR5 解决 + 测试通过 | DAP ✅ |

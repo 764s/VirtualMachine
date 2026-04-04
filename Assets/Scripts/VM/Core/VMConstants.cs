@@ -7,7 +7,8 @@ namespace FFVM
         // 内存预算参考 (VMSlot = 8 bytes):
         //   单实例 RAM ≈ MaxRegisters × 8 = 512 bytes (仅寄存器部分)
         //   全实例 RAM ≈ MaxInstances × ~740 bytes ≈ 92 KB
-        //   快照环总量 ≈ 全实例 RAM × SnapshotRingSize ≈ 740 KB
+        //   快照环总量 ≈ 全实例 RAM × SnapshotRingSize ≈ 740 KB (预分配)
+        //   O10: 实际快照拷贝量 ≈ ActiveCount × ~740B (典型 3-10 实例 ≈ 2-7 KB)
         //   调参时以此为锚点评估内存压力
         //
         public const int MaxInstances = 128;

@@ -326,10 +326,13 @@ namespace FFVM.AST
         public string Name { get; }
         public string TypeName { get; }
         public string DocComment { get; set; }
-        public ParamDecl(string name, string typeName)
+        /// <summary>FF3: Optional default value expression (null = required parameter).</summary>
+        public Expr DefaultValue { get; }
+        public ParamDecl(string name, string typeName, Expr defaultValue = null)
         {
             Name = name;
             TypeName = typeName;
+            DefaultValue = defaultValue;
         }
     }
 

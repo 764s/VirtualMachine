@@ -889,6 +889,229 @@ public static class PerformanceTests
             Assert(sparseUs > 0, $"P11 O9 sparse perf: {sparseUs:F2} µs/tick (benchmark logged)");
         }
 
+        // =================================================================
+        //  O10: Snapshot only copies active instances
+        //  Verifies correctness and data reduction after O10 optimization.
+        // =================================================================
+
+        // ===== Test P12: O10 — Save/Load correctness with partial active instances =====
+        {
+            var o10Program = new VMProgram(
+                new Instruction[]
+                {
+                    new Instruction(OpCode.WAIT, 100),   // 0: stay alive
+                    new Instruction(OpCode.RETURN),      // 1: return
+                },
+                new Number[0],
+                0
+            );
+
+            var o10World = new VMWorld();
+            o10World.Modules.Load(0, o10Program);
+
+            // Spawn 5 instances
+            int[] o10Ids = new int[5];
+            for (int i = 0; i < 5; i++)
+                o10Ids[i] = o10World.SpawnInstance(0, 0);
+
+            o10World.Tick(); // frame 1: instances execute WAIT 100, suspend
+
+            // Set distinct register values (after tick so IP is valid)
+            for (int i = 0; i < 5; i++)
+                o10World.Pool.Instances[o10Ids[i]].Registers.Set(0, Number.FromInt(100 + i));
+
+            o10World.SaveState();
+
+            // Mutate all registers
+            for (int i = 0; i < 5; i++)
+                o10World.Pool.Instances[o10Ids[i]].Registers.Set(0, Number.FromInt(999));
+
+            // Rollback
+            bool o10Loaded = o10World.LoadState(o10World.FrameNumber);
+            Assert(o10Loaded, "P12 O10: LoadState succeeded");
+
+            // Verify all 5 instances restored correctly
+            bool o10Correct = true;
+            for (int i = 0; i < 5; i++)
+            {
+                ref var inst = ref o10World.Pool.Instances[o10Ids[i]];
+                if (!inst.IsAlive ||
+                    inst.Registers.Get(0) != Number.FromInt(100 + i) ||
+                    inst.ActiveListIndex < 0)
+                {
+                    o10Correct = false;
+                    break;
+                }
+            }
+            Assert(o10Correct, "P12 O10: all 5 instances restored with correct registers");
+            Assert(o10World.Pool.ActiveListCount == 5,
+                $"P12 O10: ActiveListCount = {o10World.Pool.ActiveListCount} (== 5)");
+        }
+
+        // ===== Test P13: O10 — Stale instances invalidated after rollback =====
+        {
+            var o10StaleProgram = new VMProgram(
+                new Instruction[]
+                {
+                    new Instruction(OpCode.WAIT, 100),
+                    new Instruction(OpCode.RETURN),
+                },
+                new Number[0],
+                0
+            );
+
+            var o10Stale = new VMWorld();
+            o10Stale.Modules.Load(0, o10StaleProgram);
+
+            // Spawn 3, save
+            int[] sIds = new int[3];
+            for (int i = 0; i < 3; i++)
+                sIds[i] = o10Stale.SpawnInstance(0, 0);
+
+            o10Stale.Tick();
+            o10Stale.SaveState(); // frame 1: 3 active
+
+            // Spawn 2 more AFTER snapshot
+            int extra1 = o10Stale.SpawnInstance(0, 0);
+            int extra2 = o10Stale.SpawnInstance(0, 0);
+            Assert(o10Stale.Pool.Instances[extra1].IsAlive, "P13 O10: extra1 alive before rollback");
+
+            // Rollback to frame 1
+            bool loaded = o10Stale.LoadState(o10Stale.FrameNumber);
+            Assert(loaded, "P13 O10 stale: LoadState succeeded");
+
+            // extra1 and extra2 should NOT be alive
+            Assert(!o10Stale.Pool.Instances[extra1].IsAlive,
+                "P13 O10 stale: extra1 not alive after rollback");
+            Assert(!o10Stale.Pool.Instances[extra2].IsAlive,
+                "P13 O10 stale: extra2 not alive after rollback");
+
+            // Original 3 should be alive
+            bool origAlive = true;
+            for (int i = 0; i < 3; i++)
+            {
+                if (!o10Stale.Pool.Instances[sIds[i]].IsAlive)
+                {
+                    origAlive = false;
+                    break;
+                }
+            }
+            Assert(origAlive, "P13 O10 stale: original 3 instances still alive");
+            Assert(o10Stale.Pool.ActiveListCount == 3,
+                $"P13 O10 stale: ActiveListCount = {o10Stale.Pool.ActiveListCount} (== 3)");
+        }
+
+        // ===== Test P14: O10 — Edge case: 0 active instances =====
+        {
+            var o10Empty = new VMWorld();
+            o10Empty.Modules.Load(0, new VMProgram(
+                new Instruction[] { new Instruction(OpCode.RETURN) },
+                new Number[0], 0
+            ));
+
+            o10Empty.Tick();
+            o10Empty.SaveState(); // frame 1: 0 active
+            o10Empty.SpawnInstance(0, 0); // spawn after snapshot
+
+            bool loaded = o10Empty.LoadState(o10Empty.FrameNumber);
+            Assert(loaded, "P14 O10 empty: LoadState succeeded");
+            Assert(o10Empty.Pool.ActiveListCount == 0,
+                $"P14 O10 empty: ActiveListCount = {o10Empty.Pool.ActiveListCount} (== 0)");
+        }
+
+        // ===== Test P15: O10 — Snapshot save/load benchmark (data reduction) =====
+        {
+            var o10BenchProgram = new VMProgram(
+                new Instruction[]
+                {
+                    new Instruction(OpCode.WAIT, 100),
+                    new Instruction(OpCode.RETURN),
+                },
+                new Number[0],
+                0
+            );
+
+            // Measure with 5 active instances (typical case)
+            var o10Bench = new VMWorld();
+            o10Bench.Modules.Load(0, o10BenchProgram);
+            for (int i = 0; i < 5; i++)
+                o10Bench.SpawnInstance(0, 0);
+            o10Bench.Tick();
+
+            // Warmup
+            for (int w = 0; w < 100; w++)
+            {
+                o10Bench.SaveState();
+                o10Bench.LoadState(o10Bench.FrameNumber);
+            }
+
+            int benchRounds = 100_000;
+            var saveSw = Stopwatch.StartNew();
+            for (int r = 0; r < benchRounds; r++)
+                o10Bench.SaveState();
+            saveSw.Stop();
+            double saveUs = saveSw.Elapsed.TotalMicroseconds / benchRounds;
+
+            var loadSw = Stopwatch.StartNew();
+            for (int r = 0; r < benchRounds; r++)
+                o10Bench.LoadState(o10Bench.FrameNumber);
+            loadSw.Stop();
+            double loadUs = loadSw.Elapsed.TotalMicroseconds / benchRounds;
+
+            Debug.Log($"[BENCH] O10 snapshot (5/128 active): save={saveUs:F2} µs, load={loadUs:F2} µs");
+
+            // Data reduction: 5/128 = 3.9% of instances copied → 96% reduction in instance data
+            Assert(saveUs > 0, $"P15 O10 save perf: {saveUs:F2} µs (benchmark logged)");
+            Assert(loadUs > 0, $"P15 O10 load perf: {loadUs:F2} µs (benchmark logged)");
+        }
+
+        // ===== Test P16: O10 — Post-rollback tick correctness =====
+        {
+            int o10ExecCount = 0;
+            var o10TickProgram = new VMProgram(
+                new Instruction[]
+                {
+                    new Instruction(OpCode.SYSCALL, 0),   // 0: count
+                    new Instruction(OpCode.WAIT, 100),     // 1: stay alive
+                    new Instruction(OpCode.RETURN),        // 2: return
+                },
+                new Number[0],
+                1
+            );
+
+            var o10Tick = new VMWorld();
+            o10Tick.Modules.Load(0, o10TickProgram);
+            o10Tick.Syscalls.Register(0, "Count", (ref VMInstanceState s) => { o10ExecCount++; });
+
+            // Spawn 3, tick, save
+            for (int i = 0; i < 3; i++)
+                o10Tick.SpawnInstance(0, 0);
+            o10Tick.Tick(); // frame 1: instances execute SYSCALL → WAIT
+            o10Tick.SaveState();
+            int savedFrame = o10Tick.FrameNumber;
+
+            // Spawn 2 more, tick several times
+            o10Tick.SpawnInstance(0, 0);
+            o10Tick.SpawnInstance(0, 0);
+            for (int t = 0; t < 5; t++)
+                o10Tick.Tick();
+
+            // Rollback
+            o10ExecCount = 0;
+            bool loaded = o10Tick.LoadState(savedFrame);
+            Assert(loaded, "P16 O10 tick: LoadState succeeded");
+
+            // Tick 10 more frames — only 3 original instances should be ticked
+            // (they are in WAIT state, so no SYSCALL calls expected)
+            o10Tick.Tick();
+            Assert(o10ExecCount == 0,
+                $"P16 O10 tick: post-rollback tick, execCount = {o10ExecCount} (== 0, all waiting)");
+
+            // Verify only 3 active
+            Assert(o10Tick.Pool.ActiveListCount == 3,
+                $"P16 O10 tick: ActiveListCount = {o10Tick.Pool.ActiveListCount} (== 3)");
+        }
+
         // ===== Summary =====
         Debug.Log($"========================================");
         Debug.Log($"Performance Tests: {passed} passed, {failed} failed");

@@ -708,7 +708,7 @@ namespace FFVM.Debug
                 {
                     if (p.Name == id.Name)
                     {
-                        string paramHover = $"(parameter) {p.Name}: {p.TypeName}";
+                        string paramHover = $"(parameter) {FormatParamDecl(p)}";
                         if (p.DocComment != null)
                             paramHover += $"\n\n{p.DocComment}";
                         return paramHover;
@@ -825,11 +825,29 @@ namespace FFVM.Debug
             return ColMatches(nameStart, name.Length, col) || ColMatches(declCol, keywordPlusSpace - 1, col);
         }
 
+        private static string FormatParamDecl(ParamDecl p)
+        {
+            string s = $"{p.Name}: {p.TypeName}";
+            if (p.DefaultValue != null)
+                s += $" = {FormatDefaultValue(p.DefaultValue)}";
+            return s;
+        }
+
+        private static string FormatDefaultValue(Expr expr)
+        {
+            if (expr is IntLiteralExpr il) return il.Value.ToString();
+            if (expr is NumberLiteralExpr nl) return nl.Value.ToString();
+            if (expr is BoolLiteralExpr bl) return bl.Value ? "true" : "false";
+            if (expr is UnaryExpr ue && ue.Kind == NodeKind.Negate)
+                return $"-{FormatDefaultValue(ue.Operand)}";
+            return "...";
+        }
+
         private static string FormatFuncSignature(FuncDecl func)
         {
             var parts = new List<string>();
             foreach (var p in func.Parameters)
-                parts.Add($"{p.Name}: {p.TypeName}");
+                parts.Add(FormatParamDecl(p));
             string ret = func.ReturnType != null ? $": {func.ReturnType}" : "";
             return $"func {func.Name}({string.Join(", ", parts)}){ret}";
         }
@@ -1085,7 +1103,7 @@ namespace FFVM.Debug
                         foreach (var param in containingFunc.Parameters)
                         {
                             items.Add(MakeCompletionItem(param.Name, 6 /* Variable */,
-                                $"(parameter) {param.Name}: {param.TypeName}"));
+                                $"(parameter) {FormatParamDecl(param)}"));
                         }
                         // Local variables declared before cursor line
                         CollectVariablesInScope(containingFunc.Body, lspLine + 1, items);
@@ -1269,7 +1287,7 @@ namespace FFVM.Debug
             foreach (var p in funcParams)
             {
                 var pi = new JsonObject();
-                pi.Set("label", $"{p.Name}: {p.TypeName}");
+                pi.Set("label", FormatParamDecl(p));
                 if (p.DocComment != null)
                 {
                     var doc = new JsonObject();

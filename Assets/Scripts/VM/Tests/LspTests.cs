@@ -1435,6 +1435,81 @@ public static class LspTests
             }
         }
 
+        // ===== Test FF3-LSP-01: signatureHelp shows default values =====
+        {
+            string source = "func greet(a: int, b: int = 10, c: int = 20): int {\n  return a + b + c\n}\nfunc entry() {\n  greet(1, \n}";
+            // cursor at line 4 after "greet(1, " → activeParameter = 1 (b)
+            var session = new LspBatchSession();
+            session.AddInitialize();
+            session.AddInitialized();
+            session.AddDidOpen("file:///ff3sig.ffs", source);
+            session.AddSignatureHelp("file:///ff3sig.ffs", 4, 11);
+            session.AddShutdown();
+            session.AddExit();
+            session.Run();
+
+            session.ExpectResponse(0);
+            var sigResp = session.ExpectResponse(1);
+            Assert(sigResp != null, "FF3-LSP-01: signatureHelp response received");
+            if (sigResp != null)
+            {
+                var result = sigResp.GetObject("result");
+                Assert(result != null, "FF3-LSP-01: result is not null");
+                if (result != null)
+                {
+                    var sigs = result.GetArray("signatures");
+                    Assert(sigs != null && sigs.Count > 0, "FF3-LSP-01: has signatures");
+                    if (sigs != null && sigs.Count > 0)
+                    {
+                        var sig = sigs[0] as JsonObject;
+                        string label = sig?.GetString("label");
+                        Assert(label != null && label.Contains("b: int = 10") && label.Contains("c: int = 20"),
+                            $"FF3-LSP-01: label shows defaults, got '{label}'");
+                        var parms = sig?.GetArray("parameters");
+                        Assert(parms != null && parms.Count == 3, $"FF3-LSP-01: 3 params, got {parms?.Count}");
+                        if (parms != null && parms.Count >= 2)
+                        {
+                            var p1 = parms[1] as JsonObject;
+                            string p1Label = p1?.GetString("label");
+                            Assert(p1Label != null && p1Label.Contains("= 10"),
+                                $"FF3-LSP-01: param 'b' label shows '= 10', got '{p1Label}'");
+                        }
+                    }
+                    int ap = result.GetInt("activeParameter");
+                    Assert(ap == 1, $"FF3-LSP-01: activeParameter=1, got {ap}");
+                }
+            }
+        }
+
+        // ===== Test FF3-LSP-02: hover on optional parameter shows default =====
+        {
+            string source = "func foo(x: int, y: int = 42): int {\n  return x + y\n}";
+            // hover on 'y' at line 1, col 17..17
+            var session = new LspBatchSession();
+            session.AddInitialize();
+            session.AddInitialized();
+            session.AddDidOpen("file:///ff3hover.ffs", source);
+            session.AddHover("file:///ff3hover.ffs", 0, 17);
+            session.AddShutdown();
+            session.AddExit();
+            session.Run();
+
+            session.ExpectResponse(0);
+            var hoverResp = session.ExpectResponse(1);
+            Assert(hoverResp != null, "FF3-LSP-02: hover response received");
+            if (hoverResp != null)
+            {
+                var result = hoverResp.GetObject("result");
+                if (result != null)
+                {
+                    var contents = result.GetObject("contents");
+                    string value = contents?.GetString("value");
+                    Assert(value != null && value.Contains("= 42"),
+                        $"FF3-LSP-02: hover shows default '= 42', got '{value}'");
+                }
+            }
+        }
+
         Debug.Log($"\n===== LspTests: {passed} passed, {failed} failed =====");
     }
 

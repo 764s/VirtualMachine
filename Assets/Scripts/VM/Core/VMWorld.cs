@@ -296,6 +296,18 @@ namespace FFVM
                             inst.IP++;
                             break;
 
+                        // --- SO1: Struct block copy ---
+                        case OpCode.COPY_BLOCK:
+                        {
+                            int dst = Reg(op.A, rb);
+                            int src = Reg(op.B, rb);
+                            int count = op.C;
+                            for (int ci = 0; ci < count; ci++)
+                                regs[dst + ci] = regs[src + ci];
+                            inst.IP++;
+                            break;
+                        }
+
                         // --- Phase 2: Control Flow ---
 
                         case OpCode.JUMP:
