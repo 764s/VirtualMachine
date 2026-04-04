@@ -46,6 +46,17 @@ namespace FFVM
         private int _tempBreakpointIP = -1;
 
         /// <summary>
+        /// Temporary breakpoint by source line — for step-over in loops.
+        /// When set, stops at the first instruction on ANY different source line
+        /// at the same or shallower call depth (does not enter functions).
+        /// -1 = inactive. Automatically cleared after one hit.
+        /// </summary>
+        private int _stepOverFromLine = -1;
+
+        /// <summary>Call stack depth when step-over started. Only stop when depth &lt;= this.</summary>
+        private int _stepOverFromDepth = -1;
+
+        /// <summary>
         /// Callback when a breakpoint is hit.
         /// Parameters: (instanceId, ip, sourceLine).
         /// In tests: lambda to collect events.
@@ -73,13 +84,26 @@ namespace FFVM
         public void AddBreakpoint(int line) => _breakpointLines.Add(line);
         public void RemoveBreakpoint(int line) => _breakpointLines.Remove(line);
         public void ClearBreakpoints() => _breakpointLines.Clear();
-        public bool HasBreakpoints => _breakpointLines.Count > 0 || _tempBreakpointIP >= 0;
+        public bool HasBreakpoints => _breakpointLines.Count > 0 || _tempBreakpointIP >= 0 || _stepOverFromLine >= 0;
 
         /// <summary>Set a temporary breakpoint at a specific IP (single-shot, auto-cleared on hit).</summary>
         public void SetTempBreakpoint(int ip) => _tempBreakpointIP = ip;
 
+        /// <summary>Set step-over mode: stop at the first instruction on a different line
+        /// at the same or shallower call depth. Handles all control flow including loops.</summary>
+        public void SetStepOverFromLine(int line, int callDepth)
+        {
+            _stepOverFromLine = line;
+            _stepOverFromDepth = callDepth;
+        }
+
         /// <summary>Clear the temporary breakpoint without triggering.</summary>
-        public void ClearTempBreakpoint() => _tempBreakpointIP = -1;
+        public void ClearTempBreakpoint()
+        {
+            _tempBreakpointIP = -1;
+            _stepOverFromLine = -1;
+            _stepOverFromDepth = -1;
+        }
 
         /// <summary>
         /// Called at the start of each Tick to reset per-tick state.
@@ -95,7 +119,7 @@ namespace FFVM
         /// Returns true if a breakpoint was triggered (caller may want to yield).
         /// Checks temporary breakpoint (IP-exact) first, then line breakpoints.
         /// </summary>
-        public bool CheckBreakpoint(int instanceId, int ip, int[] sourceMap)
+        public bool CheckBreakpoint(int instanceId, int ip, int[] sourceMap, int callDepth = 0)
         {
             if (SkipNextCheck)
             {
@@ -107,16 +131,32 @@ namespace FFVM
             if (_tempBreakpointIP >= 0 && ip == _tempBreakpointIP)
             {
                 _tempBreakpointIP = -1; // Auto-clear after hit
+                _stepOverFromLine = -1; // Clear companion step-over too
                 int tempLine = (sourceMap != null && ip >= 0 && ip < sourceMap.Length) ? sourceMap[ip] : 0;
                 _lastHitLine = tempLine;
                 OnBreakpointHit?.Invoke(instanceId, ip, tempLine);
                 return true;
             }
 
+            // --- Step-over check: stop on any different line at same/shallower call depth ---
+            if (_stepOverFromLine >= 0 && sourceMap != null && ip >= 0 && ip < sourceMap.Length)
+            {
+                int srcLine = sourceMap[ip];
+                if (srcLine > 0 && srcLine != _stepOverFromLine && callDepth <= _stepOverFromDepth)
+                {
+                    _tempBreakpointIP = -1;
+                    _stepOverFromLine = -1;
+                    _stepOverFromDepth = -1;
+                    _lastHitLine = srcLine;
+                    OnBreakpointHit?.Invoke(instanceId, ip, srcLine);
+                    return true;
+                }
+            }
+
             // --- When a temp breakpoint is active (step in progress), skip line breakpoints ---
             // Otherwise the user's line breakpoint on the current line re-fires before
             // the VM reaches the step target (e.g., re-hits line 47 before entering add()).
-            if (_tempBreakpointIP >= 0)
+            if (_tempBreakpointIP >= 0 || _stepOverFromLine >= 0)
                 return false;
 
             // --- Line breakpoint check ---

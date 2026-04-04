@@ -47,7 +47,7 @@ func main() {
     var added: int = add(17, 25)
     print_str(0, added)
 
-    // --- Computation example: sum 1..100 ---
+    // --- Computation example: sum 1..100 (while loop) ---
     var sum: int = 0
     var i: int = 1
     while i <= 100 {
@@ -55,6 +55,13 @@ func main() {
         i = i + 1
     }
     print_str(10, sum)
+
+    // --- For loop example: factorial of 5 ---
+    var fact: int = 1
+    for var j: int = 1; j <= 5; j = j + 1 {
+        fact = fact * j
+    }
+    print_str(0, fact)
 
     print(0)
 }

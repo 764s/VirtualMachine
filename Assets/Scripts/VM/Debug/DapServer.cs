@@ -317,9 +317,10 @@ namespace FFVM.Debug
                 throw new InvalidOperationException("next: no active session");
 
             ref VMInstanceState inst = ref _world.Pool.Instances[_instanceId];
-            int targetIP = ScriptDebugger.FindNextLineIP(_program, inst.IP);
-            if (targetIP >= 0)
-                _debugger.SetTempBreakpoint(targetIP);
+            int currentLine = (_program.SourceMap != null && inst.IP >= 0 && inst.IP < _program.SourceMap.Length)
+                ? _program.SourceMap[inst.IP] : -1;
+            if (currentLine > 0)
+                _debugger.SetStepOverFromLine(currentLine, inst.CallStackDepth);
 
             return RunUntilBreakpoint("step", skipFirstCheck: true);
         }
