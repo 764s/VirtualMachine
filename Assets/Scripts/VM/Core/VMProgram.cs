@@ -60,14 +60,35 @@ namespace FFVM
         /// <summary>DBG2: Variable symbol table for debugging. Null in release builds.</summary>
         public readonly SymbolEntry[] SymbolTable;
 
+        /// <summary>O15: Logical instruction count, excluding the trailing SENTINEL.</summary>
+        public int InstructionCount => Instructions.Length - 1;
+
         public VMProgram(Instruction[] instructions, Number[] constants, int requiredRegisters,
             FunctionEntry[] functions = null, int[] sourceMap = null, SymbolEntry[] symbolTable = null)
         {
-            Instructions = instructions;
+            // O15: append SENTINEL — allows removing per-instruction boundary check in ExecuteInstance.
+            var withSentinel = new Instruction[instructions.Length + 1];
+            System.Array.Copy(instructions, withSentinel, instructions.Length);
+            withSentinel[instructions.Length] = new Instruction(OpCode.SENTINEL);
+            Instructions = withSentinel;
+
             Constants = constants;
             RequiredRegisters = requiredRegisters;
             Functions = functions ?? System.Array.Empty<FunctionEntry>();
-            SourceMap = sourceMap;
+
+            // O15: sync SourceMap — extend to cover SENTINEL with invalid line marker (-1).
+            if (sourceMap != null)
+            {
+                var withSentinelMap = new int[sourceMap.Length + 1];
+                System.Array.Copy(sourceMap, withSentinelMap, sourceMap.Length);
+                withSentinelMap[sourceMap.Length] = -1;
+                SourceMap = withSentinelMap;
+            }
+            else
+            {
+                SourceMap = null;
+            }
+
             SymbolTable = symbolTable;
         }
 

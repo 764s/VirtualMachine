@@ -87,7 +87,7 @@ public static class BenchmarkRunner
             return;
         }
 
-        int instrCount = result.Program.Instructions.Length;
+        int instrCount = result.Program.InstructionCount;
 
         // ── warmup VM ──
         for (int w = 0; w < WarmupRuns; w++)

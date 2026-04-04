@@ -1,3 +1,5 @@
+using System.Runtime.CompilerServices;
+
 namespace FFVM
 {
     /// <summary>
@@ -140,6 +142,7 @@ namespace FFVM
             return r < 16 ? r : r + regBase;
         }
 
+        [MethodImpl(MethodImplOptions.AggressiveOptimization)]
         private unsafe void ExecuteInstance(ref VMInstanceState inst)
         {
             VMProgram program = Modules.Get(inst.ModuleSlot);
@@ -152,6 +155,7 @@ namespace FFVM
             var code = program.Instructions;
             var consts = program.Constants;
             int steps = 0;
+            int maxSteps = MaxStepsPerTick; // O15: cache to local — avoid field read every iteration
 
             // Cache debugger reference for the duration of this execution burst
             var dbg = Debugger;
@@ -167,13 +171,11 @@ namespace FFVM
             // largest per-instruction overhead in the dispatch loop.
             fixed (Number* regs = &inst.Registers.R00)
             {
-                while (steps < MaxStepsPerTick)
+                while (steps < maxSteps)
                 {
-                    if (inst.IP < 0 || inst.IP >= code.Length)
-                    {
-                        inst.ErrorFlag = VMError.PanicOutOfBounds;
-                        return;
-                    }
+                    // O15: boundary check removed — SENTINEL opcode at end of Instructions
+                    // triggers PanicOutOfBounds via its switch-case, replacing the per-instruction
+                    // if (inst.IP < 0 || inst.IP >= code.Length) guard.
 
                     // --- Breakpoint check (zero overhead when Debugger is null) ---
                     if (srcMap != null)
@@ -497,6 +499,12 @@ namespace FFVM
                             }
                             break;
                         }
+
+                        // --- O15: sentinel (end-of-program guard) ---
+
+                        case OpCode.SENTINEL:
+                            inst.ErrorFlag = VMError.PanicOutOfBounds;
+                            return;
 
                         default:
                             inst.ErrorFlag = VMError.PanicIllegalInstruction;
