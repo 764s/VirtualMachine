@@ -205,6 +205,8 @@ LSP1（LSP Server 核心框架）           ← 所有 LSP 功能的通信基础
 |----|------|----------|--------|
 | **BM1** | Benchmark 基础设施改进 | CI 性能跟踪需要可靠对比时 | 低~中 |
 
+> **已排入串行计划 B-γ3**（2026-04-04）。理由：后续功能开发过程中需要持续观察性能变化，Benchmark 基础设施应尽早就位。
+
 > **来源**：[P001_Performance_Baseline_Rebuild.md §4.1 + §4.3](../Practice/P001_Performance_Baseline_Rebuild.md)
 >
 > **背景**：CI benchmark 历史的 Δ 列直接拿跨环境数值做差，产生误导性退化报警。B02 计时低于精度阈值，B05 受 dispatch overhead 放大效应影响。
@@ -261,9 +263,11 @@ LSP1（LSP Server 核心框架）           ← 所有 LSP 功能的通信基础
 | **1** | **O2** | OpCode 连续编号 → 强制跳转表 | dispatch ~20% 加速 | 低 | ✅ |
 | **2** | **O6** | Peephole 优化 pass | ~5-10% 指令数减少 | 中 | ⏳ |
 | **3** | **O8** | 指令压缩 16B → 4B | L1 缓存 10-20% 加速 | 高 | ⏳ |
-| **3** | **O15** | ExecuteInstance 热循环优化（哨兵指令 + JIT 提示 + 局部缓存） | 本地实测 VM 时间 -31~65% | 低~中 | ⏳ |
+| **3** | **O15** | ExecuteInstance 热循环优化（哨兵指令 + JIT 提示 + 局部缓存） | 本地实测 VM 时间 -31~65% | 低~中 | 📌 B-γ4 |
 
 **推荐顺序**：O1 ✅ → O2 ✅ → O6 → 视需要 O8/O15。B3 Tier 1 详情见 [Step_B3_Optimization_Tier1.md](Step_B3_Optimization_Tier1.md)。
+
+> **O15 已排入串行计划 B-γ4**（2026-04-04）。理由：与 BM1 (B-γ3) 联动，先建基准设施再测优化效果；且改动较独立，不影响后续功能步骤。
 
 > **O15 详情**（来源：[P001 §4.2](../Practice/P001_Performance_Baseline_Rebuild.md)）：
 > 1. **哨兵指令**：VMProgram 构造函数追加 SENTINEL 操作码，switch-case 中触发 PanicOutOfBounds，安全移除逐指令边界检查。需同步 SourceMap + InstructionCount 属性。
@@ -704,13 +708,13 @@ Gate 3: Unity Editor 内嵌 DAP（可选）             ← DBG7 Phase C
 > 已完成步骤的详细时间线见 VM_Summary.md §七-A。以下仅展开待执行部分。
 > **当前位置以 `当前位置 →` 标记**，见 VM_Summary.md §七-B。
 
-#### 脚本引擎侧（B 区间 — 4 个 Phase，17 个步骤）
+#### 脚本引擎侧（B 区间 — 4 个 Phase，21 个步骤）
 
 | Phase | 定位 | 步骤 | 内容摘要 |
 |-------|------|------|----------|
 | **α 语言服务收尾** | 开发体验质变 | B-α1, B-α2 | LSP6 Syscall 声明协议 → LSP7 参数提示 |
 | **β 优化 Tier 2** | 性能逼近 2x | B-β1, B-β2, B-β3 | O6 peephole → FO1 叶函数 → O9 活跃链表 |
-| **γ 功能完整性** | 语言能力补全 | B-γ1 ~ B-γ6 | FO6 自适应窗口 → FF5 非 entry defer → S4 struct 参数 → C6 嵌套 using → SN1 嵌套 struct → GR3 文档 |
+| **γ 功能完整性 + 性能基线** | 性能观测就位 + 语言能力补全 | B-γ1 ~ B-γ9 | FO6 自适应窗口 → FF5 非 entry defer → **BM1 Benchmark 基础设施** → **O15 热循环优化** → S4 struct 参数 → C6 嵌套 using → SN1 嵌套 struct → GR3 文档 → STR1 常量字符串 |
 | **δ 按需补全** | 业务驱动激活 | B-δ1 ~ B-δ6 | O10 活跃快照 → SO1 COPY_BLOCK → FF3 可选参数 → SN2 struct 字面量 → C5 Cleanup 超时 → B1 Editor DAP |
 
 > 完整的步骤序号、完成条件、依赖关系见 [VM_Summary.md §七-B](../VM_Summary.md#b-待执行阶段脚本引擎侧--细化推进序列)。
@@ -740,21 +744,19 @@ Gate 3: Unity Editor 内嵌 DAP（可选）             ← DBG7 Phase C
 | BB1 | 黑板 Key 编译期自动分配 ID | 编译器成熟后 |
 | PR1 | Paired Syscall 支持带参反向调用 | 需要带参释放场景 |
 | DM1 | VM 编排表现脚本（双轨模式） | 需要复杂镜头/特效序列 |
-| O15 | ExecuteInstance 热循环优化（哨兵 + JIT 提示 + 局部缓存） | Benchmark 驱动 |
-| BM1 | Benchmark 基础设施改进（环境感知 + 调参 + CI 自我基线） | CI 性能跟踪需要可靠对比 |
 
 ### 8.2 风险理想方案速查
 
 | 风险 ID | 理想方案 | 插入位置 | 决策依据 |
 |---------|---------|---------|---------|
 | **R1** | FO6 自适应寄存器窗口（嵌套 ~3→~6 层） | B-γ1 | 编译器已有函数表，分析实际使用寄存器数自然扩展 |
-| **R5** | ≤4 字段直传 + 编译报错 → FO6 后解除 | B-γ3 (S4) | 与 FO6 联合评估，先设安全限制 |
+| **R5** | ≤4 字段直传 + 编译报错 → FO6 后解除 | B-γ5 (S4) | 与 FO6 联合评估，先设安全限制 |
 | **R7** | _pendingCalls >50 自动切 Dictionary | F4 阶段 | ✅ 已完成 |
 | **R8** | 编译器禁止 Cleanup 块内函数调用 | F4 阶段 | ✅ 已完成 |
 | **SR1** | 编译器超限报错 + FO6 扩大 local 区 | B-γ1 (FO6) | 明确错误信息 + 根本解决方案 |
 | **SR2** | SO1 COPY_BLOCK OpCode | B-δ2 | `Buffer.MemoryCopy` 批量拷贝替代 N×MOVE |
 | **GR1** | ✅ CI 构建矩阵 USE_FIXPOINT 自动验证 + Fix64 除法溢出修复 | ✅ 已完成 | CI 矩阵双模式，624 项 Assert 均通过 |
-| **GR3** | D1-D4 文档缺口批量补全 | B-γ6 | 不阻塞功能，但必须补全 |
+| **GR3** | D1-D4 文档缺口批量补全 | B-γ8 | 不阻塞功能，但必须补全 |
 | **DR5** | EditorApplication.update 轮询模式 | B-δ6 | 主线程永不阻塞 |
 
 ### 8.3 门控测试清单
