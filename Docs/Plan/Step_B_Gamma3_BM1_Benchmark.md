@@ -1,7 +1,7 @@
 # B-γ3: BM1 Benchmark 基础设施改进
 
 > 来源：P001_Performance_Baseline_Rebuild.md §4.1 + §4.3
-> 状态：⏳ 执行中
+> 状态：✅ 完成
 
 ## 目标
 
