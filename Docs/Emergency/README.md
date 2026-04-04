@@ -52,13 +52,13 @@
 
 | ID | 缺陷 | 来源 | 状态 | 详细文件 |
 |----|------|------|------|---------|
-| E001 | 编译器寄存器生命周期 Bug — 2 死变量 + while 循环产生错误结果 127 | P002-P1 | ⏳ | [E001_Register_Lifecycle_Bug.md](E001_Register_Lifecycle_Bug.md) |
+| E001 | 编译器寄存器生命周期 Bug — 2 死变量 + while 循环产生错误结果 127 | P002-P1 | ✅ 已修复 | [E001_Register_Lifecycle_Bug.md](E001_Register_Lifecycle_Bug.md) |
 
 ### 🟠 影响深远缺陷（紧急修复）
 
 | ID | 缺陷 | 来源 | 状态 | 详细文件 |
 |----|------|------|------|---------|
-| E002 | Syscall 寄存器约定隐患 — 手动指定易出错、无冲突检测、DAP 不支持 | P002-P3,P4 | ⏳ | [E002_Syscall_Register_Convention.md](E002_Syscall_Register_Convention.md) |
+| E002 | Syscall 寄存器约定隐患 — 手动指定易出错、无冲突检测、DAP 不支持 | P002-P3,P4 | ✅ 已修复 | [E002_Syscall_Register_Convention.md](E002_Syscall_Register_Convention.md) |
 
 ### 🔵 次优先级（缺陷修复后处理）
 
@@ -98,3 +98,5 @@
 | 日期 | 事件 | 备注 |
 |------|------|------|
 | 2026-04-04 | 紧急独立任务区建立 | 源自 P002 Sandbox 实践发现，含 2 个紧急缺陷 + 3 个次优先级任务 |
+| 2026-04-04 | E001 ✅ 修复完成 | 根因：CompileBlock 变量释放后未从 _liveRanges 移除 → 重复释放。修复：释放后 _liveRanges.Remove()。新增 6 个回归测试。775 项 Assert 全通过 |
+| 2026-04-04 | E002 ✅ 修复完成 | 冲突检测 + SyscallArgs 类型安全 API + DapServer syscallDecl 加载 + 文档修正。新增 8 个测试。795 项 Assert 全通过 |

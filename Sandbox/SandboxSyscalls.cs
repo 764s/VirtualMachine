@@ -101,8 +101,8 @@ namespace Sandbox
             // Slot 0: print(value)  — print a numeric value
             table.Register(0, "print", (ref VMInstanceState s) =>
             {
-                var val = s.Registers.Get(0);
-                LogOutput(val.ToString());
+                var args = new SyscallArgs(ref s);
+                LogOutput(args.GetNumber(0).ToString());
             });
             table.RegisterSignature(0, new SyscallSignature(
                 new[] { new SyscallParamInfo("value", "number") },
@@ -111,8 +111,9 @@ namespace Sandbox
             // Slot 1: print_str(labelId, value) — print a labeled value
             table.Register(1, "print_str", (ref VMInstanceState s) =>
             {
-                int labelId = s.Registers.Get(0).ToInt();
-                var val = s.Registers.Get(1);
+                var args = new SyscallArgs(ref s);
+                int labelId = args.GetInt(0);
+                var val = args.GetNumber(1);
                 string label = StringLabels.TryGetValue(labelId, out var labelText) ? labelText : $"#{labelId}";
                 LogOutput($"{label} = {val}");
             });
@@ -123,8 +124,9 @@ namespace Sandbox
             // Slot 2: time() → elapsed ms since run start
             table.Register(2, "time", (ref VMInstanceState s) =>
             {
+                var args = new SyscallArgs(ref s);
                 long elapsed = _currentTickTimeMs - _startTimeMs;
-                s.Registers.Set(0, Number.FromInt((int)elapsed));
+                args.SetReturnInt((int)elapsed);
             });
             table.RegisterSignature(2, new SyscallSignature(
                 Array.Empty<SyscallParamInfo>(),
@@ -133,8 +135,9 @@ namespace Sandbox
             // Slot 3: delta_time() → ms since last tick
             table.Register(3, "delta_time", (ref VMInstanceState s) =>
             {
+                var args = new SyscallArgs(ref s);
                 long delta = _currentTickTimeMs - _lastTickTimeMs;
-                s.Registers.Set(0, Number.FromInt((int)delta));
+                args.SetReturnInt((int)delta);
             });
             table.RegisterSignature(3, new SyscallSignature(
                 Array.Empty<SyscallParamInfo>(),
@@ -143,9 +146,10 @@ namespace Sandbox
             // Slot 4: random(upperBound) → random int in [0, upperBound)
             table.Register(4, "random", (ref VMInstanceState s) =>
             {
-                int upper = s.Registers.Get(0).ToInt();
+                var args = new SyscallArgs(ref s);
+                int upper = args.GetInt(0);
                 int result = upper > 0 ? _random.Next(upper) : 0;
-                s.Registers.Set(0, Number.FromInt(result));
+                args.SetReturnInt(result);
             });
             table.RegisterSignature(4, new SyscallSignature(
                 new[] { new SyscallParamInfo("upperBound", "int") },
@@ -154,9 +158,10 @@ namespace Sandbox
             // Slot 5: abs(value) → |value|
             table.Register(5, "abs", (ref VMInstanceState s) =>
             {
-                var val = s.Registers.Get(0);
+                var args = new SyscallArgs(ref s);
+                var val = args.GetNumber(0);
                 if (val < Number.Zero)
-                    s.Registers.Set(0, -val);
+                    args.SetReturn(-val);
             });
             table.RegisterSignature(5, new SyscallSignature(
                 new[] { new SyscallParamInfo("value", "number") },
@@ -165,9 +170,10 @@ namespace Sandbox
             // Slot 6: min(a, b) → smaller of a and b
             table.Register(6, "min", (ref VMInstanceState s) =>
             {
-                var a = s.Registers.Get(0);
-                var b = s.Registers.Get(1);
-                s.Registers.Set(0, a < b ? a : b);
+                var args = new SyscallArgs(ref s);
+                var a = args.GetNumber(0);
+                var b = args.GetNumber(1);
+                args.SetReturn(a < b ? a : b);
             });
             table.RegisterSignature(6, new SyscallSignature(
                 new[] { new SyscallParamInfo("a", "number"), new SyscallParamInfo("b", "number") },
@@ -176,9 +182,10 @@ namespace Sandbox
             // Slot 7: max(a, b) → larger of a and b
             table.Register(7, "max", (ref VMInstanceState s) =>
             {
-                var a = s.Registers.Get(0);
-                var b = s.Registers.Get(1);
-                s.Registers.Set(0, a > b ? a : b);
+                var args = new SyscallArgs(ref s);
+                var a = args.GetNumber(0);
+                var b = args.GetNumber(1);
+                args.SetReturn(a > b ? a : b);
             });
             table.RegisterSignature(7, new SyscallSignature(
                 new[] { new SyscallParamInfo("a", "number"), new SyscallParamInfo("b", "number") },
@@ -187,12 +194,13 @@ namespace Sandbox
             // Slot 8: clamp(value, lo, hi) → clamped value
             table.Register(8, "clamp", (ref VMInstanceState s) =>
             {
-                var val = s.Registers.Get(0);
-                var lo = s.Registers.Get(1);
-                var hi = s.Registers.Get(2);
+                var args = new SyscallArgs(ref s);
+                var val = args.GetNumber(0);
+                var lo = args.GetNumber(1);
+                var hi = args.GetNumber(2);
                 if (val < lo) val = lo;
                 else if (val > hi) val = hi;
-                s.Registers.Set(0, val);
+                args.SetReturn(val);
             });
             table.RegisterSignature(8, new SyscallSignature(
                 new[] { new SyscallParamInfo("value", "number"), new SyscallParamInfo("lo", "number"), new SyscallParamInfo("hi", "number") },
@@ -201,10 +209,10 @@ namespace Sandbox
             // Slot 9: sqrt(value) → approximate square root
             table.Register(9, "sqrt", (ref VMInstanceState s) =>
             {
-                var val = s.Registers.Get(0);
-                float f = val.ToFloat();
+                var args = new SyscallArgs(ref s);
+                float f = args.GetFloat(0);
                 float result = f >= 0 ? (float)Math.Sqrt(f) : 0f;
-                s.Registers.Set(0, Number.FromFloat(result));
+                args.SetReturnFloat(result);
             });
             table.RegisterSignature(9, new SyscallSignature(
                 new[] { new SyscallParamInfo("value", "number") },
@@ -213,7 +221,8 @@ namespace Sandbox
             // Slot 10: frame_count() → current frame number
             table.Register(10, "frame_count", (ref VMInstanceState s) =>
             {
-                s.Registers.Set(0, Number.FromInt(_frameCount));
+                var args = new SyscallArgs(ref s);
+                args.SetReturnInt(_frameCount);
             });
             table.RegisterSignature(10, new SyscallSignature(
                 Array.Empty<SyscallParamInfo>(),

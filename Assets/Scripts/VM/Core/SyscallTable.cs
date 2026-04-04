@@ -6,10 +6,41 @@ namespace FFVM
     /// <summary>
     /// Delegate type for Syscall functions.
     /// Syscalls read/write registers directly on the instance state.
-    /// Convention: arguments in registers starting at RegisterBase+0,
-    /// return value in RegisterBase+0.
+    /// Convention: arguments in absolute registers r0, r1, r2, ... (NOT relative to RegisterBase).
+    /// The compiler moves arguments to r0..rN before the SYSCALL instruction.
+    /// Return value is written to r0.
     /// </summary>
     public delegate void SyscallHandler(ref VMInstanceState instance);
+
+    /// <summary>
+    /// E002: Convenience wrapper for type-safe syscall parameter access.
+    /// Abstracts the absolute register convention so handlers don't need to know register details.
+    /// Usage: var args = new SyscallArgs(ref s); int val = args.GetInt(0);
+    /// </summary>
+    public ref struct SyscallArgs
+    {
+        private ref VMInstanceState _state;
+
+        public SyscallArgs(ref VMInstanceState state) { _state = ref state; }
+
+        /// <summary>Get the Nth argument as an integer (reads absolute register N).</summary>
+        public int GetInt(int index) => _state.Registers.Get(index).ToInt();
+
+        /// <summary>Get the Nth argument as a float (reads absolute register N).</summary>
+        public float GetFloat(int index) => _state.Registers.Get(index).ToFloat();
+
+        /// <summary>Get the Nth argument as a raw Number value (reads absolute register N).</summary>
+        public Number GetNumber(int index) => _state.Registers.Get(index);
+
+        /// <summary>Set the return value (writes absolute register 0).</summary>
+        public void SetReturn(Number value) => _state.Registers.Set(0, value);
+
+        /// <summary>Set the return value as an integer (writes absolute register 0).</summary>
+        public void SetReturnInt(int value) => _state.Registers.Set(0, Number.FromInt(value));
+
+        /// <summary>Set the return value as a float (writes absolute register 0).</summary>
+        public void SetReturnFloat(float value) => _state.Registers.Set(0, Number.FromFloat(value));
+    }
 
     /// <summary>
     /// Describes a single syscall parameter (name + type).
@@ -83,11 +114,17 @@ namespace FFVM
 
         /// <summary>
         /// Register a syscall handler at a specific slot.
+        /// E002: Throws if slot is already occupied by a different syscall (collision detection).
+        /// Re-registering the same name is allowed (acts as Replace for hot-swap).
         /// </summary>
         public void Register(int slot, string name, SyscallHandler handler)
         {
             if (slot < 0 || slot >= VMConstants.MaxSyscalls)
                 throw new ArgumentOutOfRangeException(nameof(slot));
+            if (_handlers[slot] != null && _names[slot] != name)
+                throw new InvalidOperationException(
+                    $"Syscall slot {slot} collision: '{name}' cannot overwrite existing '{_names[slot]}'. " +
+                    $"Choose a different slot.");
             _handlers[slot] = handler;
             _names[slot] = name;
         }
@@ -192,6 +229,66 @@ namespace FFVM
             if (slot < 0 || slot >= VMConstants.MaxSyscalls)
                 return null;
             return _signatures[slot];
+        }
+
+        /// <summary>
+        /// E002: Parse a .ffvm.d.json declaration file and return the name→slot mapping
+        /// plus registered no-op placeholder handlers and signatures on this table.
+        /// Auto-assigns slot numbers starting from 0 in JSON key order.
+        /// </summary>
+        /// <param name="json">The raw JSON content of the declaration file.</param>
+        /// <returns>Dictionary mapping syscall names to auto-assigned slot numbers.</returns>
+        public Dictionary<string, int> LoadDeclarationJson(string json)
+        {
+            var map = new Dictionary<string, int>();
+            var root = FFVM.Debug.JsonObject.Parse(json);
+            if (root == null) return map;
+
+            var syscallsObj = root.GetObject("syscalls");
+            if (syscallsObj == null) return map;
+
+            int slot = 0;
+            foreach (var name in syscallsObj.Keys)
+            {
+                if (slot >= VMConstants.MaxSyscalls)
+                    break;
+
+                map[name] = slot;
+
+                // Register no-op placeholder handler (does nothing at runtime)
+                if (_handlers[slot] == null)
+                {
+                    _handlers[slot] = (ref VMInstanceState s) => { /* no-op placeholder */ };
+                    _names[slot] = name;
+                }
+
+                // Parse and register signature metadata
+                var entry = syscallsObj.GetObject(name);
+                if (entry != null)
+                {
+                    var paramsList = entry.GetArray("params");
+                    var paramInfos = new List<SyscallParamInfo>();
+                    if (paramsList != null)
+                    {
+                        foreach (var p in paramsList)
+                        {
+                            if (p is FFVM.Debug.JsonObject pObj)
+                            {
+                                string pName = pObj.GetString("name") ?? "";
+                                string pType = pObj.GetString("type") ?? "number";
+                                paramInfos.Add(new SyscallParamInfo(pName, pType));
+                            }
+                        }
+                    }
+                    string returnType = entry.GetString("returnType") ?? "void";
+                    string description = entry.GetString("description") ?? "";
+                    RegisterSignature(slot, new SyscallSignature(paramInfos.ToArray(), returnType, description));
+                }
+
+                slot++;
+            }
+
+            return map;
         }
     }
 }

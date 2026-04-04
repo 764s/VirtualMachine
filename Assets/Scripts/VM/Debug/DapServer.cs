@@ -184,10 +184,28 @@ namespace FFVM.Debug
 
             string source = File.ReadAllText(_scriptPath);
 
+            // E002: Load syscall declarations from .ffvm.d.json if specified
+            var syscalls = new Dictionary<string, int>();
+            var syscallTable = new SyscallTable();
+            string syscallDeclPath = arguments?.GetString("syscallDecl");
+            if (!string.IsNullOrEmpty(syscallDeclPath))
+            {
+                // Resolve relative path against script directory
+                if (!Path.IsPathRooted(syscallDeclPath))
+                {
+                    string scriptDir = Path.GetDirectoryName(_scriptPath) ?? ".";
+                    syscallDeclPath = Path.Combine(scriptDir, syscallDeclPath);
+                }
+                if (File.Exists(syscallDeclPath))
+                {
+                    string declJson = File.ReadAllText(syscallDeclPath);
+                    syscalls = syscallTable.LoadDeclarationJson(declJson);
+                }
+            }
+
             // Compile the script
             var compiler = new BytecodeCompiler();
-            var syscalls = new Dictionary<string, int>(); // No syscalls in DAP mode initially
-            var result = compiler.Compile(source, "main", syscalls);
+            var result = compiler.Compile(source, "main", syscalls, syscallTable);
 
             if (!result.Success)
                 throw new InvalidOperationException($"launch: compilation failed: {string.Join("; ", result.Errors)}");
@@ -197,6 +215,14 @@ namespace FFVM.Debug
             // Create VM world
             _world = new VMWorld();
             _world.Modules.Load(0, _program);
+
+            // Copy syscall table state (no-op handlers + signatures) to world
+            // E002: Load declarations into the world's syscall table
+            if (!string.IsNullOrEmpty(syscallDeclPath) && File.Exists(syscallDeclPath))
+            {
+                string declJson = File.ReadAllText(syscallDeclPath);
+                _world.Syscalls.LoadDeclarationJson(declJson);
+            }
 
             // Attach debugger
             _debugger = new ScriptDebugger();

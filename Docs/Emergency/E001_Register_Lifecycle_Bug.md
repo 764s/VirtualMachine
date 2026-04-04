@@ -2,8 +2,9 @@
 
 > **来源**：[P002_Sandbox_Build.md — P1](../Practice/P002_Sandbox_Build.md)
 > **等级**：🔴 恶性缺陷 — 必须立即修复
-> **状态**：⏳ 待修复
+> **状态**：✅ 已修复
 > **创建日期**：2026-04-04
+> **修复日期**：2026-04-04
 
 ---
 
@@ -80,12 +81,52 @@ func main() {
 
 ---
 
-## 五、完成标准
+## 五、根因与修复
 
-- [ ] 根因已精确定位并记录
-- [ ] 修复代码已提交
-- [ ] 回归测试覆盖最小复现 + 参数化变体
-- [ ] 763+ 项 Assert × 2 模式全通过
-- [ ] Sandbox 端到端输出 5050
-- [ ] P6 递归场景重新评估完成
-- [ ] 更新本文件状态为 ✅
+### 根因
+
+CompileBlock 中 F4 变量释放逻辑存在**重复释放**缺陷：
+
+1. `TryReleaseVar()` 将变量寄存器加入 `_freeVarRegs`，但**不从 `_liveRanges` 移除**该变量
+2. 当被释放的寄存器被新变量复用后，该寄存器从 `_freeVarRegs` 消失
+3. 下一次 release check 时，已释放变量仍在 `_liveRanges` 中，其寄存器不在 `_freeVarRegs` → `alreadyFreed` 误判为 `false`
+4. 同一寄存器被**二次释放**，导致后续变量再次复用 → 两个活跃变量共享同一寄存器
+
+**2 死变量场景触发路径**：
+- `dead0→r16`（释放）→ `sum→r16`（复用）→ `dead0` 二次释放（r16 再入 free list）→ `i→r16`（二次复用）
+- `sum` 和 `i` 均在 r16 → `sum = sum + i` 变为 `r16 = r16 + r16`（自身翻倍）
+- 循环产生 1→2→3→6→7→14→15→30→31→62→63→126→**127**（超出 100 退出）
+
+### 修复
+
+`BytecodeCompiler.cs` CompileBlock 释放循环末尾，在 `TryReleaseVar()` 之后增加 `_liveRanges.Remove()`，防止同一变量被重复处理：
+
+```csharp
+for (int r = 0; r < toRelease.Count; r++)
+{
+    TryReleaseVar(toRelease[r]);
+    _liveRanges.Remove(toRelease[r]);  // E001 fix: prevents double-free
+}
+```
+
+### 回归测试
+
+CompilerTests.cs 新增 6 个测试（E001-01 到 E001-06）：
+- E001-01: 2 死变量 + while（原始复现）→ 5050
+- E001-02: 4 死变量 + while → 55
+- E001-03: 死变量 + for 循环 → 15
+- E001-04: 死变量与活变量交替 → 300
+- E001-05: 嵌套 while + 死变量 → 9
+- E001-06: 非 entry 函数中死变量 + while → 55
+
+---
+
+## 六、完成标准
+
+- [x] 根因已精确定位并记录
+- [x] 修复代码已提交
+- [x] 回归测试覆盖最小复现 + 参数化变体（6 个测试）
+- [x] 775 项 Assert × 2 模式全通过（763 原有 + 12 新增）
+- [x] Sandbox 端到端输出 5050（已验证：sum = 5050.0000 ✅）
+- [ ] P6 递归场景重新评估完成（可在后续 session 进行）
+- [x] 更新本文件状态为 ✅

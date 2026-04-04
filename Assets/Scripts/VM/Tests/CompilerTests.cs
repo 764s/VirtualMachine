@@ -2812,6 +2812,331 @@ func main() {
             Assert((world.Pool.Instances[id].StateFlags & VMStateFlags.Completed) != 0, "FF5-07: Completed");
         }
 
+        // ===== E001 Regression: Dead variables + while loop register lifecycle =====
+
+        // E001-01: 2 dead vars before while loop (original repro — sum=127 bug)
+        {
+            string source = @"
+func main() {
+    var dead0: int = 1
+    var dead1: int = 2
+    var sum: int = 0
+    var i: int = 1
+    while i <= 100 {
+        sum = sum + i
+        i = i + 1
+    }
+    Report(sum)
+}";
+            var syscalls = new Dictionary<string, int> { { "Report", 0 } };
+            var result = compiler.Compile(source, "main", syscalls);
+            Assert(result.Success, "E001-01 compile success");
+
+            int reported = -1;
+            var world = new VMWorld();
+            world.Modules.Load(0, result.Program);
+            world.Syscalls.Register(0, "Report", (ref VMInstanceState s) =>
+            {
+                reported = s.Registers.Get(0).ToInt();
+            });
+            world.SpawnInstance(0, 0);
+            world.Tick();
+            Assert(reported == 5050, $"E001-01: 2 dead vars + while → sum = {reported} (expected 5050)");
+        }
+
+        // E001-02: 4 dead vars before while loop
+        {
+            string source = @"
+func main() {
+    var d0: int = 1
+    var d1: int = 2
+    var d2: int = 3
+    var d3: int = 4
+    var sum: int = 0
+    var i: int = 1
+    while i <= 10 {
+        sum = sum + i
+        i = i + 1
+    }
+    Report(sum)
+}";
+            var syscalls = new Dictionary<string, int> { { "Report", 0 } };
+            var result = compiler.Compile(source, "main", syscalls);
+            Assert(result.Success, "E001-02 compile success");
+
+            int reported = -1;
+            var world = new VMWorld();
+            world.Modules.Load(0, result.Program);
+            world.Syscalls.Register(0, "Report", (ref VMInstanceState s) =>
+            {
+                reported = s.Registers.Get(0).ToInt();
+            });
+            world.SpawnInstance(0, 0);
+            world.Tick();
+            Assert(reported == 55, $"E001-02: 4 dead vars + while → sum = {reported} (expected 55)");
+        }
+
+        // E001-03: Dead vars with for loop
+        {
+            string source = @"
+func main() {
+    var unused1: int = 10
+    var unused2: int = 20
+    var total: int = 0
+    for var j: int = 1; j <= 5; j = j + 1 {
+        total = total + j
+    }
+    Report(total)
+}";
+            var syscalls = new Dictionary<string, int> { { "Report", 0 } };
+            var result = compiler.Compile(source, "main", syscalls);
+            Assert(result.Success, "E001-03 compile success");
+
+            int reported = -1;
+            var world = new VMWorld();
+            world.Modules.Load(0, result.Program);
+            world.Syscalls.Register(0, "Report", (ref VMInstanceState s) =>
+            {
+                reported = s.Registers.Get(0).ToInt();
+            });
+            world.SpawnInstance(0, 0);
+            world.Tick();
+            Assert(reported == 15, $"E001-03: dead vars + for → total = {reported} (expected 15)");
+        }
+
+        // E001-04: Dead vars interleaved with live vars (no conflict expected)
+        {
+            string source = @"
+func main() {
+    var a: int = 100
+    var dead: int = 999
+    var b: int = 200
+    var result: int = a + b
+    Report(result)
+}";
+            var syscalls = new Dictionary<string, int> { { "Report", 0 } };
+            var result = compiler.Compile(source, "main", syscalls);
+            Assert(result.Success, "E001-04 compile success");
+
+            int reported = -1;
+            var world = new VMWorld();
+            world.Modules.Load(0, result.Program);
+            world.Syscalls.Register(0, "Report", (ref VMInstanceState s) =>
+            {
+                reported = s.Registers.Get(0).ToInt();
+            });
+            world.SpawnInstance(0, 0);
+            world.Tick();
+            Assert(reported == 300, $"E001-04: interleaved dead/live vars → result = {reported} (expected 300)");
+        }
+
+        // E001-05: Nested while loops with dead vars
+        {
+            string source = @"
+func main() {
+    var x: int = 0
+    var y: int = 0
+    var sum: int = 0
+    var i: int = 1
+    while i <= 3 {
+        var j: int = 1
+        while j <= 3 {
+            sum = sum + 1
+            j = j + 1
+        }
+        i = i + 1
+    }
+    Report(sum)
+}";
+            var syscalls = new Dictionary<string, int> { { "Report", 0 } };
+            var result = compiler.Compile(source, "main", syscalls);
+            Assert(result.Success, "E001-05 compile success");
+
+            int reported = -1;
+            var world = new VMWorld();
+            world.Modules.Load(0, result.Program);
+            world.Syscalls.Register(0, "Report", (ref VMInstanceState s) =>
+            {
+                reported = s.Registers.Get(0).ToInt();
+            });
+            world.SpawnInstance(0, 0);
+            world.Tick();
+            Assert(reported == 9, $"E001-05: nested while with dead vars → sum = {reported} (expected 9)");
+        }
+
+        // E001-06: Dead vars + while in non-entry function
+        {
+            string source = @"
+func compute(): int {
+    var dead1: int = 42
+    var dead2: int = 43
+    var sum: int = 0
+    var i: int = 1
+    while i <= 10 {
+        sum = sum + i
+        i = i + 1
+    }
+    return sum
+}
+
+func main() {
+    var val: int = compute()
+    Report(val)
+}";
+            var syscalls = new Dictionary<string, int> { { "Report", 0 } };
+            var result = compiler.Compile(source, "main", syscalls);
+            Assert(result.Success, "E001-06 compile success");
+
+            int reported = -1;
+            var world = new VMWorld();
+            world.Modules.Load(0, result.Program);
+            world.Syscalls.Register(0, "Report", (ref VMInstanceState s) =>
+            {
+                reported = s.Registers.Get(0).ToInt();
+            });
+            world.SpawnInstance(0, 0);
+            world.Tick();
+            Assert(reported == 55, $"E001-06: dead vars + while in func → val = {reported} (expected 55)");
+        }
+
+        // ===== E002 Regression: Syscall safety + SyscallArgs =====
+
+        // E002-01: Collision detection — different name on same slot throws
+        {
+            bool caught = false;
+            try
+            {
+                var world = new VMWorld();
+                world.Syscalls.Register(0, "Foo", (ref VMInstanceState s) => { });
+                world.Syscalls.Register(0, "Bar", (ref VMInstanceState s) => { }); // collision!
+            }
+            catch (System.InvalidOperationException ex)
+            {
+                caught = ex.Message.Contains("collision");
+            }
+            Assert(caught, "E002-01: collision detection throws on different name, same slot");
+        }
+
+        // E002-02: Re-register same name on same slot succeeds (hot-swap)
+        {
+            bool ok = true;
+            try
+            {
+                var world = new VMWorld();
+                world.Syscalls.Register(0, "Foo", (ref VMInstanceState s) => { });
+                world.Syscalls.Register(0, "Foo", (ref VMInstanceState s) => { }); // same name = ok
+            }
+            catch
+            {
+                ok = false;
+            }
+            Assert(ok, "E002-02: re-register same name succeeds (hot-swap)");
+        }
+
+        // E002-03: SyscallArgs type-safe parameter access
+        {
+            string source = @"
+func main() {
+    Report(42, 7)
+}";
+            var syscalls = new Dictionary<string, int> { { "Report", 0 } };
+            var result = compiler.Compile(source, "main", syscalls);
+            Assert(result.Success, "E002-03 compile success");
+
+            int arg0 = -1, arg1 = -1;
+            var world = new VMWorld();
+            world.Modules.Load(0, result.Program);
+            world.Syscalls.Register(0, "Report", (ref VMInstanceState s) =>
+            {
+                var args = new SyscallArgs(ref s);
+                arg0 = args.GetInt(0);
+                arg1 = args.GetInt(1);
+            });
+            world.SpawnInstance(0, 0);
+            world.Tick();
+            Assert(arg0 == 42, $"E002-03: SyscallArgs.GetInt(0) = {arg0} (expected 42)");
+            Assert(arg1 == 7, $"E002-03: SyscallArgs.GetInt(1) = {arg1} (expected 7)");
+        }
+
+        // E002-04: SyscallArgs return value
+        {
+            string source = @"
+func main() {
+    var x: int = GetValue()
+    Report(x)
+}";
+            var syscalls = new Dictionary<string, int> { { "GetValue", 0 }, { "Report", 1 } };
+            var result = compiler.Compile(source, "main", syscalls);
+            Assert(result.Success, "E002-04 compile success");
+
+            int reported = -1;
+            var world = new VMWorld();
+            world.Modules.Load(0, result.Program);
+            world.Syscalls.Register(0, "GetValue", (ref VMInstanceState s) =>
+            {
+                var args = new SyscallArgs(ref s);
+                args.SetReturnInt(999);
+            });
+            world.Syscalls.Register(1, "Report", (ref VMInstanceState s) =>
+            {
+                reported = new SyscallArgs(ref s).GetInt(0);
+            });
+            world.SpawnInstance(0, 0);
+            world.Tick();
+            Assert(reported == 999, $"E002-04: SyscallArgs.SetReturnInt → Report = {reported} (expected 999)");
+        }
+
+        // E002-05: LoadDeclarationJson builds syscall map + signatures
+        {
+            string declJson = @"{
+    ""syscalls"": {
+        ""Ping"": { ""params"": [], ""returnType"": ""void"", ""description"": ""test ping"" },
+        ""Add"": { ""params"": [{ ""name"": ""a"", ""type"": ""int"" }, { ""name"": ""b"", ""type"": ""int"" }], ""returnType"": ""int"", ""description"": ""add two"" }
+    }
+}";
+            var table = new SyscallTable();
+            var map = table.LoadDeclarationJson(declJson);
+            Assert(map.ContainsKey("Ping"), "E002-05: Ping in map");
+            Assert(map.ContainsKey("Add"), "E002-05: Add in map");
+            Assert(map["Ping"] == 0, $"E002-05: Ping slot = {map["Ping"]} (expected 0)");
+            Assert(map["Add"] == 1, $"E002-05: Add slot = {map["Add"]} (expected 1)");
+
+            var sig = table.GetSignature(1);
+            Assert(sig != null, "E002-05: Add signature registered");
+            Assert(sig.Parameters.Length == 2, $"E002-05: Add has {sig.Parameters.Length} params (expected 2)");
+            Assert(sig.ReturnType == "int", $"E002-05: Add returnType = {sig.ReturnType}");
+        }
+
+        // E002-06: LoadDeclarationJson enables compilation of syscall scripts
+        {
+            string declJson = @"{
+    ""syscalls"": {
+        ""Report"": { ""params"": [{ ""name"": ""value"", ""type"": ""int"" }], ""returnType"": ""void"", ""description"": ""report"" }
+    }
+}";
+            var table = new SyscallTable();
+            var map = table.LoadDeclarationJson(declJson);
+
+            string source = @"
+func main() {
+    Report(42)
+}";
+            var result = compiler.Compile(source, "main", map);
+            Assert(result.Success, "E002-06: syscall script compiles with declaration-loaded map");
+
+            // Run with real handler replacing the no-op
+            int reported = -1;
+            var world = new VMWorld();
+            world.Modules.Load(0, result.Program);
+            world.Syscalls.Register(0, "Report", (ref VMInstanceState s) =>
+            {
+                reported = new SyscallArgs(ref s).GetInt(0);
+            });
+            world.SpawnInstance(0, 0);
+            world.Tick();
+            Assert(reported == 42, $"E002-06: declaration-loaded syscall works at runtime, got {reported}");
+        }
+
         // ===== Summary =====
         Debug.Log($"========================================");
         Debug.Log($"Compiler Tests: {passed} passed, {failed} failed");
