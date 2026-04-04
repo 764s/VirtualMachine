@@ -284,12 +284,33 @@ namespace FFVM.Compiler
             _liveRanges = AnalyzeVariableLifetimes(func);
 
             // Bind parameters: copy from scratch zone r0..rN into local registers r16+
-            for (int i = 0; i < func.Parameters.Count; i++)
+            // S4: struct parameters occupy multiple consecutive registers
             {
-                int localReg = DeclareVar(func.Parameters[i].Name);
-                // Emit MOVE to copy param from scratch r[i] to local r[localReg]
-                if (localReg != i)
-                    Emit(OpCode.MOVE, localReg, i);
+                int scratchReg = 0;
+                for (int i = 0; i < func.Parameters.Count; i++)
+                {
+                    var param = func.Parameters[i];
+                    if (_structTypes.TryGetValue(param.TypeName, out var paramSD))
+                    {
+                        // Struct parameter: allocate consecutive locals, copy multi-reg from scratch
+                        int baseReg = DeclareStructVar(param.Name, paramSD.Fields.Count);
+                        _structVarTypes[param.Name] = param.TypeName;
+                        for (int j = 0; j < paramSD.Fields.Count; j++)
+                        {
+                            if (baseReg + j != scratchReg + j)
+                                Emit(OpCode.MOVE, baseReg + j, scratchReg + j);
+                        }
+                        scratchReg += paramSD.Fields.Count;
+                    }
+                    else
+                    {
+                        // Scalar parameter (original behavior)
+                        int localReg = DeclareVar(param.Name);
+                        if (localReg != scratchReg)
+                            Emit(OpCode.MOVE, localReg, scratchReg);
+                        scratchReg++;
+                    }
+                }
             }
 
             // Compile function body
@@ -301,29 +322,131 @@ namespace FFVM.Compiler
             else
                 Emit(_isLeafFunction ? OpCode.RET_LEAF : OpCode.RET_FUNC);
 
-            // Emit deferred cleanup blocks for this function
-            for (int i = 0; i < _deferredCleanups.Count; i++)
-            {
-                int cleanupIP = _instructions.Count;
-                Backpatch(_deferredCleanups[i].PushCleanupIP, cleanupIP);
-
-                if (_deferredCleanups[i].ReleaseSyscallSlot >= 0)
-                {
-                    Emit(OpCode.SYSCALL, _deferredCleanups[i].ReleaseSyscallSlot, 0, 0);
-                }
-                else
-                {
-                    // G6: mark as inside cleanup block so wait/wait_for are rejected
-                    bool prevInCleanup = _inCleanupBlock;
-                    _inCleanupBlock = true;
-                    CompileBlock(_deferredCleanups[i].Body);
-                    _inCleanupBlock = prevInCleanup;
-                }
-                Emit(OpCode.RETURN);
-            }
+            // C6: Emit deferred cleanup blocks — merge adjacent PUSH_CLEANUP groups
+            EmitDeferredCleanups();
 
             // A.6: Record precise window size using max register actually allocated
             _callerWindowSize = (_maxVarRegUsed >= VarRegBase) ? (_maxVarRegUsed - VarRegBase + 1) : 0;
+        }
+
+        /// <summary>
+        /// C6: Emit deferred cleanup blocks with adjacent PUSH_CLEANUP merging.
+        /// Adjacent PUSH_CLEANUP instructions (consecutive IPs) are merged into a single
+        /// compound cleanup block, reducing cleanup stack depth and instruction count.
+        /// </summary>
+        private void EmitDeferredCleanups()
+        {
+            if (_deferredCleanups.Count == 0) return;
+
+            // Build groups of adjacent PUSH_CLEANUP instructions.
+            // Two cleanups are "adjacent" if their PushCleanupIP values are consecutive
+            // AND neither contains a ReturnStmt in its defer body (which would break
+            // compound cleanup semantics by prematurely exiting the merged block).
+            var groups = new List<(int Start, int End)>(); // [Start, End) ranges into _deferredCleanups
+            int groupStart = 0;
+            for (int i = 1; i <= _deferredCleanups.Count; i++)
+            {
+                bool canMerge = i < _deferredCleanups.Count
+                    && _deferredCleanups[i].PushCleanupIP == _deferredCleanups[i - 1].PushCleanupIP + 1
+                    && !DeferBodyContainsReturn(_deferredCleanups[i])
+                    && !DeferBodyContainsReturn(_deferredCleanups[i - 1]);
+                if (!canMerge)
+                {
+                    groups.Add((groupStart, i));
+                    groupStart = i;
+                }
+            }
+
+            // Emit each group
+            foreach (var (start, end) in groups)
+            {
+                int groupSize = end - start;
+                if (groupSize == 1)
+                {
+                    // Single cleanup — emit as before (no merge)
+                    EmitSingleCleanup(start);
+                }
+                else
+                {
+                    // C6: merged group — emit compound cleanup block in LIFO order
+                    // NOP-ify all PUSH_CLEANUP except the last in the group
+                    for (int i = start; i < end - 1; i++)
+                        _instructions[_deferredCleanups[i].PushCleanupIP] = new Instruction(OpCode.MOVE, 0, 0, 0);
+
+                    // Backpatch last PUSH_CLEANUP to point to compound block start
+                    int compoundIP = _instructions.Count;
+                    Backpatch(_deferredCleanups[end - 1].PushCleanupIP, compoundIP);
+
+                    // Emit cleanup blocks in REVERSE order (LIFO: last defer first)
+                    for (int i = end - 1; i >= start; i--)
+                    {
+                        EmitCleanupBody(i);
+                        if (i > start)
+                        {
+                            // No RETURN between merged blocks — fall through
+                        }
+                        else
+                        {
+                            // Final block in compound gets RETURN
+                            Emit(OpCode.RETURN);
+                        }
+                    }
+                }
+            }
+        }
+
+        /// <summary>Emit a single (non-merged) cleanup block.</summary>
+        private void EmitSingleCleanup(int index)
+        {
+            int cleanupIP = _instructions.Count;
+            Backpatch(_deferredCleanups[index].PushCleanupIP, cleanupIP);
+            EmitCleanupBody(index);
+            Emit(OpCode.RETURN);
+        }
+
+        /// <summary>Emit the body of a cleanup block (without RETURN).</summary>
+        private void EmitCleanupBody(int index)
+        {
+            if (_deferredCleanups[index].ReleaseSyscallSlot >= 0)
+            {
+                Emit(OpCode.SYSCALL, _deferredCleanups[index].ReleaseSyscallSlot, 0, 0);
+            }
+            else
+            {
+                bool prevInCleanup = _inCleanupBlock;
+                _inCleanupBlock = true;
+                CompileBlock(_deferredCleanups[index].Body);
+                _inCleanupBlock = prevInCleanup;
+            }
+        }
+
+        /// <summary>C6 safety: check if a DeferredCleanup's defer body contains ReturnStmt.</summary>
+        private static bool DeferBodyContainsReturn(DeferredCleanup dc)
+        {
+            return dc.Body != null && ContainsReturn(dc.Body);
+        }
+
+        /// <summary>C6 safety: check if a block contains ReturnStmt (unsafe to merge).</summary>
+        private static bool ContainsReturn(BlockStmt block)
+        {
+            foreach (var stmt in block.Statements)
+            {
+                if (ContainsReturnStmt(stmt)) return true;
+            }
+            return false;
+        }
+
+        private static bool ContainsReturnStmt(Stmt stmt)
+        {
+            if (stmt is ReturnStmt) return true;
+            if (stmt is IfStmt ifStmt)
+            {
+                if (ContainsReturnStmt(ifStmt.ThenBranch)) return true;
+                if (ifStmt.ElseBranch != null && ContainsReturnStmt(ifStmt.ElseBranch)) return true;
+            }
+            if (stmt is WhileStmt whileStmt && ContainsReturnStmt(whileStmt.Body)) return true;
+            if (stmt is BlockStmt nested && ContainsReturn(nested)) return true;
+            return false;
         }
 
         // ===== FO6: Adaptive register window — pack temps after locals =====
@@ -552,13 +675,17 @@ namespace FFVM.Compiler
             for (int i = 0; i < func.Parameters.Count; i++)
             {
                 order++;
+                // S4: struct parameters need correct FieldCount for register release
+                int fieldCount = 0;
+                if (_structTypes.TryGetValue(func.Parameters[i].TypeName, out var paramStructDecl))
+                    fieldCount = paramStructDecl.Fields.Count;
                 ranges[func.Parameters[i].Name] = new LiveRange
                 {
                     Name = func.Parameters[i].Name,
                     DefOrder = order,
                     LastUseOrder = order,
                     CrossesAwait = false,
-                    FieldCount = 0
+                    FieldCount = fieldCount
                 };
                 declaredBeforeAwait.Add(func.Parameters[i].Name);
             }
@@ -1373,6 +1500,7 @@ namespace FFVM.Compiler
 
         /// <summary>
         /// Core: compile args → scratch zone, emit CALL instruction.
+        /// S4: struct arguments expand to multiple consecutive scratch registers.
         /// callerWindowSize = VarRegBase(16) + localVarCount for register window offset.
         /// </summary>
         private void EmitUserCall(CallExpr call)
@@ -1394,6 +1522,21 @@ namespace FFVM.Compiler
                     _errors.Add($"Function '{call.FunctionName}' expects {funcDecl.Parameters.Count} arguments but got {call.Arguments.Count} (line {call.Line})");
                     return;
                 }
+
+                // S4/R5: validate total scratch registers needed for all parameters
+                int totalScratchRegs = 0;
+                for (int i = 0; i < funcDecl.Parameters.Count; i++)
+                {
+                    if (_structTypes.TryGetValue(funcDecl.Parameters[i].TypeName, out var psd))
+                        totalScratchRegs += psd.Fields.Count;
+                    else
+                        totalScratchRegs += 1;
+                }
+                if (totalScratchRegs > VarRegBase)
+                {
+                    _errors.Add($"Function '{call.FunctionName}' requires {totalScratchRegs} scratch registers for parameters (max {VarRegBase}) (line {call.Line})");
+                    return;
+                }
             }
 
             // Phase 1: compile all args into temp registers
@@ -1401,11 +1544,35 @@ namespace FFVM.Compiler
             for (int i = 0; i < call.Arguments.Count; i++)
                 argRegs[i] = CompileExpr(call.Arguments[i]);
 
-            // Phase 2: move args to r0, r1, ... (scratch zone — shared, not windowed)
-            for (int i = 0; i < call.Arguments.Count; i++)
+            // Phase 2: move args to scratch zone r0, r1, ... (shared, not windowed)
+            // S4: struct arguments expand to N consecutive scratch registers
             {
-                if (argRegs[i] != i)
-                    Emit(OpCode.MOVE, i, argRegs[i]);
+                int scratchReg = 0;
+                for (int i = 0; i < call.Arguments.Count; i++)
+                {
+                    // Check if this argument is a struct variable
+                    bool isStructArg = false;
+                    if (call.Arguments[i] is IdentifierExpr argIdent &&
+                        _structVarTypes.TryGetValue(argIdent.Name, out var argTypeName) &&
+                        _structTypes.TryGetValue(argTypeName, out var argSD))
+                    {
+                        isStructArg = true;
+                        int srcBase = argRegs[i]; // base register of the struct
+                        for (int j = 0; j < argSD.Fields.Count; j++)
+                        {
+                            if (srcBase + j != scratchReg + j)
+                                Emit(OpCode.MOVE, scratchReg + j, srcBase + j);
+                        }
+                        scratchReg += argSD.Fields.Count;
+                    }
+
+                    if (!isStructArg)
+                    {
+                        if (argRegs[i] != scratchReg)
+                            Emit(OpCode.MOVE, scratchReg, argRegs[i]);
+                        scratchReg++;
+                    }
+                }
             }
 
             // callerWindowSize = number of local var registers currently in use

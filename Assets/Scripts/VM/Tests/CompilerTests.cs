@@ -918,6 +918,220 @@ func main() {
             Assert(!result.Success, "C28: compile error for unpaired syscall in using");
         }
 
+        // ===== Test C6-01: C6 — consecutive defers are merged (2 adjacent PUSH_CLEANUP) =====
+        {
+            string source = @"
+func main() {
+    defer {
+        Report(1)
+    }
+    defer {
+        Report(2)
+    }
+    Report(3)
+}";
+            var syscalls = new Dictionary<string, int> { { "Report", 0 } };
+            var result = compiler.Compile(source, "main", syscalls);
+            Assert(result.Success, "C6-01 compile success");
+
+            var log = new List<string>();
+            var world = new VMWorld();
+            world.Modules.Load(0, result.Program);
+            world.Syscalls.Register(0, "Report", (ref VMInstanceState s) =>
+            {
+                log.Add($"{s.Registers.Get(0).ToInt()}");
+            });
+
+            int id = world.SpawnInstance(0, 0);
+            world.Tick();
+            // LIFO order: defer{Report(2)} runs first, then defer{Report(1)}
+            Assert(log.Count == 3, $"C6-01: 3 reports, got {log.Count}");
+            Assert(log[0] == "3", $"C6-01: body Report(3) first, got {log[0]}");
+            Assert(log[1] == "2", $"C6-01: LIFO defer Report(2) second, got {log[1]}");
+            Assert(log[2] == "1", $"C6-01: LIFO defer Report(1) last, got {log[2]}");
+            Assert((world.Pool.Instances[id].StateFlags & VMStateFlags.Completed) != 0, "C6-01: Completed");
+
+            // C6 verification: count PUSH_CLEANUP instructions — should be 1 (merged from 2)
+            int pushCount = 0;
+            for (int i = 0; i < result.Program.InstructionCount; i++)
+                if (result.Program.Instructions[i].Code == OpCode.PUSH_CLEANUP) pushCount++;
+            Assert(pushCount == 1, $"C6-01: C6 merged 2 defers → 1 PUSH_CLEANUP, got {pushCount}");
+        }
+
+        // ===== Test C6-02: C6 — three consecutive defers merged =====
+        {
+            string source = @"
+func main() {
+    defer {
+        Report(10)
+    }
+    defer {
+        Report(20)
+    }
+    defer {
+        Report(30)
+    }
+    Report(99)
+}";
+            var syscalls = new Dictionary<string, int> { { "Report", 0 } };
+            var result = compiler.Compile(source, "main", syscalls);
+            Assert(result.Success, "C6-02 compile success");
+
+            var log = new List<string>();
+            var world = new VMWorld();
+            world.Modules.Load(0, result.Program);
+            world.Syscalls.Register(0, "Report", (ref VMInstanceState s) =>
+            {
+                log.Add($"{s.Registers.Get(0).ToInt()}");
+            });
+
+            int id = world.SpawnInstance(0, 0);
+            world.Tick();
+            Assert(log.Count == 4, $"C6-02: 4 reports, got {log.Count}");
+            Assert(log[0] == "99", $"C6-02: body first, got {log[0]}");
+            Assert(log[1] == "30", $"C6-02: LIFO defer 30, got {log[1]}");
+            Assert(log[2] == "20", $"C6-02: LIFO defer 20, got {log[2]}");
+            Assert(log[3] == "10", $"C6-02: LIFO defer 10, got {log[3]}");
+
+            int pushCount = 0;
+            for (int i = 0; i < result.Program.InstructionCount; i++)
+                if (result.Program.Instructions[i].Code == OpCode.PUSH_CLEANUP) pushCount++;
+            Assert(pushCount == 1, $"C6-02: C6 merged 3 defers → 1 PUSH_CLEANUP, got {pushCount}");
+        }
+
+        // ===== Test C6-03: C6 — nested using (not adjacent, no merge) + correctness =====
+        {
+            string source = @"
+func main() {
+    using SetBB(1) {
+        using SetCC(2) {
+            Report(100)
+        }
+    }
+}";
+            var syscalls = new Dictionary<string, int> { { "SetBB", 0 }, { "ResetBB", 1 }, { "SetCC", 2 }, { "ResetCC", 3 }, { "Report", 4 } };
+
+            var world = new VMWorld();
+            world.Syscalls.RegisterPaired(
+                0, "SetBB", (ref VMInstanceState s) => { },
+                1, "ResetBB", (ref VMInstanceState s) => { });
+            world.Syscalls.RegisterPaired(
+                2, "SetCC", (ref VMInstanceState s) => { },
+                3, "ResetCC", (ref VMInstanceState s) => { });
+            world.Syscalls.Register(4, "Report", (ref VMInstanceState s) => { });
+
+            var result = compiler.Compile(source, "main", syscalls, world.Syscalls);
+            Assert(result.Success, "C6-03 compile success");
+
+            var log = new List<string>();
+            world.Syscalls.RegisterPaired(
+                0, "SetBB", (ref VMInstanceState s) => { log.Add("SetBB"); },
+                1, "ResetBB", (ref VMInstanceState s) => { log.Add("ResetBB"); });
+            world.Syscalls.RegisterPaired(
+                2, "SetCC", (ref VMInstanceState s) => { log.Add("SetCC"); },
+                3, "ResetCC", (ref VMInstanceState s) => { log.Add("ResetCC"); });
+            world.Syscalls.Register(4, "Report", (ref VMInstanceState s) => { log.Add($"Report({s.Registers.Get(0).ToInt()})"); });
+
+            world.Modules.Load(0, result.Program);
+            int id = world.SpawnInstance(0, 0);
+            world.Tick();
+            // Normal exit: POP_CLEANUP removes each using's frame, so no release syscalls called
+            Assert(log.Contains("SetBB"), "C6-03: SetBB called");
+            Assert(log.Contains("SetCC"), "C6-03: SetCC called");
+            Assert(log.Contains("Report(100)"), "C6-03: body Report(100)");
+            Assert(!log.Contains("ResetBB"), "C6-03: ResetBB NOT called (POP_CLEANUP normal exit)");
+            Assert(!log.Contains("ResetCC"), "C6-03: ResetCC NOT called (POP_CLEANUP normal exit)");
+            Assert((world.Pool.Instances[id].StateFlags & VMStateFlags.Completed) != 0, "C6-03: Completed");
+        }
+
+        // ===== Test C6-04: C6 — consecutive defers + using mixed (partial merge) =====
+        {
+            string source = @"
+func main() {
+    defer {
+        Report(1)
+    }
+    defer {
+        Report(2)
+    }
+    using SetBB(99) {
+        Report(3)
+    }
+    Report(4)
+}";
+            var syscalls = new Dictionary<string, int> { { "SetBB", 0 }, { "ResetBB", 1 }, { "Report", 2 } };
+
+            var world = new VMWorld();
+            world.Syscalls.RegisterPaired(
+                0, "SetBB", (ref VMInstanceState s) => { },
+                1, "ResetBB", (ref VMInstanceState s) => { });
+            world.Syscalls.Register(2, "Report", (ref VMInstanceState s) => { });
+
+            var result = compiler.Compile(source, "main", syscalls, world.Syscalls);
+            Assert(result.Success, "C6-04 compile success");
+
+            var log = new List<string>();
+            world.Syscalls.RegisterPaired(
+                0, "SetBB", (ref VMInstanceState s) => { log.Add("SetBB"); },
+                1, "ResetBB", (ref VMInstanceState s) => { log.Add("ResetBB"); });
+            world.Syscalls.Register(2, "Report", (ref VMInstanceState s) => { log.Add($"Report({s.Registers.Get(0).ToInt()})"); });
+
+            world.Modules.Load(0, result.Program);
+            int id = world.SpawnInstance(0, 0);
+            world.Tick();
+            Assert(log.Contains("SetBB"), "C6-04: SetBB called");
+            Assert(log.Contains("Report(3)"), "C6-04: body Report(3)");
+            Assert(log.Contains("Report(4)"), "C6-04: Report(4) after using");
+            Assert(log.Contains("Report(2)"), "C6-04: LIFO defer Report(2)");
+            Assert(log.Contains("Report(1)"), "C6-04: LIFO defer Report(1)");
+            Assert(!log.Contains("ResetBB"), "C6-04: ResetBB NOT called (POP_CLEANUP)");
+            Assert((world.Pool.Instances[id].StateFlags & VMStateFlags.Completed) != 0, "C6-04: Completed");
+
+            // The 2 defers should be merged, using should remain separate
+            int pushCount = 0;
+            for (int i = 0; i < result.Program.InstructionCount; i++)
+                if (result.Program.Instructions[i].Code == OpCode.PUSH_CLEANUP) pushCount++;
+            Assert(pushCount == 2, $"C6-04: 2 defers merged + 1 using = 2 PUSH_CLEANUP, got {pushCount}");
+        }
+
+        // ===== Test C6-05: C6 — kill path with merged defers (all cleanups execute) =====
+        {
+            string source = @"
+func main() {
+    defer {
+        Report(1)
+    }
+    defer {
+        Report(2)
+    }
+    wait 100
+    Report(99)
+}";
+            var syscalls = new Dictionary<string, int> { { "Report", 0 } };
+            var result = compiler.Compile(source, "main", syscalls);
+            Assert(result.Success, "C6-05 compile success");
+
+            var log = new List<string>();
+            var world = new VMWorld();
+            world.Modules.Load(0, result.Program);
+            world.Syscalls.Register(0, "Report", (ref VMInstanceState s) =>
+            {
+                log.Add($"{s.Registers.Get(0).ToInt()}");
+            });
+
+            int id = world.SpawnInstance(0, 0);
+            world.Tick();  // execute up to wait
+            world.Pool.Instances[id].StateFlags |= VMStateFlags.Killed; // kill while waiting
+            world.Tick();  // cleanup should run
+            world.Tick();  // in case cleanup needs multiple ticks
+
+            // Both defers should execute via compound cleanup even on kill
+            Assert(log.Contains("2"), "C6-05: kill path defer Report(2) executed");
+            Assert(log.Contains("1"), "C6-05: kill path defer Report(1) executed");
+            Assert(!log.Contains("99"), "C6-05: Report(99) NOT reached (killed during wait)");
+            Assert((world.Pool.Instances[id].StateFlags & VMStateFlags.Completed) != 0, "C6-05: Completed after kill cleanup");
+        }
+
         // ===== Test CF01: Basic function call — add(3, 4) → 7 =====
         {
             string source = @"
@@ -1503,6 +1717,345 @@ func main() {
             world.SpawnInstance(0, 0);
             world.Tick();
             Assert(log.Count == 1 && log[0] == "14", $"CS11: 3*2 + 4*2 = 14, got {(log.Count > 0 ? log[0] : "?")}");
+        }
+
+        // ===== Test CS12: S4 — basic struct parameter passing =====
+        {
+            string source = @"
+struct Vec2 {
+    x: int
+    y: int
+}
+func sum(v: Vec2) {
+    return v.x + v.y
+}
+func main() {
+    var a: Vec2
+    a.x = 10
+    a.y = 20
+    Report(sum(a))
+}";
+            var syscalls = new Dictionary<string, int> { { "Report", 0 } };
+            var result = compiler.Compile(source, "main", syscalls);
+            Assert(result.Success, "CS12 compile success");
+
+            var log = new List<string>();
+            var world = new VMWorld();
+            world.Modules.Load(0, result.Program);
+            world.Syscalls.Register(0, "Report", (ref VMInstanceState s) =>
+            {
+                log.Add($"{s.Registers.Get(0).ToInt()}");
+            });
+
+            world.SpawnInstance(0, 0);
+            world.Tick();
+            Assert(log.Count == 1 && log[0] == "30", $"CS12: sum({{10,20}}) = 30, got {(log.Count > 0 ? log[0] : "?")}");
+        }
+
+        // ===== Test CS13: S4 — multiple struct parameters =====
+        {
+            string source = @"
+struct Vec2 {
+    x: int
+    y: int
+}
+func add(a: Vec2, b: Vec2) {
+    return a.x + a.y + b.x + b.y
+}
+func main() {
+    var p: Vec2
+    p.x = 1
+    p.y = 2
+    var q: Vec2
+    q.x = 10
+    q.y = 20
+    Report(add(p, q))
+}";
+            var syscalls = new Dictionary<string, int> { { "Report", 0 } };
+            var result = compiler.Compile(source, "main", syscalls);
+            Assert(result.Success, "CS13 compile success");
+
+            var log = new List<string>();
+            var world = new VMWorld();
+            world.Modules.Load(0, result.Program);
+            world.Syscalls.Register(0, "Report", (ref VMInstanceState s) =>
+            {
+                log.Add($"{s.Registers.Get(0).ToInt()}");
+            });
+
+            world.SpawnInstance(0, 0);
+            world.Tick();
+            Assert(log.Count == 1 && log[0] == "33", $"CS13: add({{1,2}},{{10,20}}) = 33, got {(log.Count > 0 ? log[0] : "?")}");
+        }
+
+        // ===== Test CS14: S4 — mixed scalar and struct parameters =====
+        {
+            string source = @"
+struct Vec2 {
+    x: int
+    y: int
+}
+func scale(v: Vec2, factor: int) {
+    return (v.x + v.y) * factor
+}
+func main() {
+    var a: Vec2
+    a.x = 3
+    a.y = 7
+    Report(scale(a, 5))
+}";
+            var syscalls = new Dictionary<string, int> { { "Report", 0 } };
+            var result = compiler.Compile(source, "main", syscalls);
+            Assert(result.Success, "CS14 compile success");
+
+            var log = new List<string>();
+            var world = new VMWorld();
+            world.Modules.Load(0, result.Program);
+            world.Syscalls.Register(0, "Report", (ref VMInstanceState s) =>
+            {
+                log.Add($"{s.Registers.Get(0).ToInt()}");
+            });
+
+            world.SpawnInstance(0, 0);
+            world.Tick();
+            Assert(log.Count == 1 && log[0] == "50", $"CS14: scale({{3,7}}, 5) = 50, got {(log.Count > 0 ? log[0] : "?")}");
+        }
+
+        // ===== Test CS15: S4 — struct parameter isolation (caller unchanged) =====
+        {
+            string source = @"
+struct Vec2 {
+    x: int
+    y: int
+}
+func process(v: Vec2) {
+    return v.x + 100
+}
+func main() {
+    var a: Vec2
+    a.x = 5
+    a.y = 15
+    var result: int = process(a)
+    Report(a.x)
+    Report(result)
+}";
+            var syscalls = new Dictionary<string, int> { { "Report", 0 } };
+            var result = compiler.Compile(source, "main", syscalls);
+            Assert(result.Success, "CS15 compile success");
+
+            var log = new List<string>();
+            var world = new VMWorld();
+            world.Modules.Load(0, result.Program);
+            world.Syscalls.Register(0, "Report", (ref VMInstanceState s) =>
+            {
+                log.Add($"{s.Registers.Get(0).ToInt()}");
+            });
+
+            world.SpawnInstance(0, 0);
+            world.Tick();
+            Assert(log.Count >= 1 && log[0] == "5", $"CS15: caller a.x unchanged = 5, got {(log.Count > 0 ? log[0] : "?")}");
+            Assert(log.Count >= 2 && log[1] == "105", $"CS15: process result = 105, got {(log.Count > 1 ? log[1] : "?")}");
+        }
+
+        // ===== Test CS16: S4 — struct parameter in call chain =====
+        {
+            string source = @"
+struct Vec2 {
+    x: int
+    y: int
+}
+func inner(v: Vec2) {
+    return v.x + v.y
+}
+func outer(v: Vec2) {
+    return inner(v) + 1000
+}
+func main() {
+    var a: Vec2
+    a.x = 5
+    a.y = 3
+    Report(outer(a))
+}";
+            var syscalls = new Dictionary<string, int> { { "Report", 0 } };
+            var result = compiler.Compile(source, "main", syscalls);
+            Assert(result.Success, "CS16 compile success");
+
+            var log = new List<string>();
+            var world = new VMWorld();
+            world.Modules.Load(0, result.Program);
+            world.Syscalls.Register(0, "Report", (ref VMInstanceState s) =>
+            {
+                log.Add($"{s.Registers.Get(0).ToInt()}");
+            });
+
+            world.SpawnInstance(0, 0);
+            world.Tick();
+            Assert(log.Count == 1 && log[0] == "1008", $"CS16: outer({{5,3}}) = 5+3+1000 = 1008, got {(log.Count > 0 ? log[0] : "?")}");
+        }
+
+        // ===== Test CS17: S4 — struct parameter with leaf function =====
+        {
+            string source = @"
+struct Vec2 {
+    x: int
+    y: int
+}
+func dot(a: Vec2, b: Vec2) {
+    return a.x * b.x + a.y * b.y
+}
+func main() {
+    var p: Vec2
+    p.x = 3
+    p.y = 4
+    var q: Vec2
+    q.x = 5
+    q.y = 6
+    Report(dot(p, q))
+}";
+            var syscalls = new Dictionary<string, int> { { "Report", 0 } };
+            var result = compiler.Compile(source, "main", syscalls);
+            Assert(result.Success, "CS17 compile success");
+
+            var log = new List<string>();
+            var world = new VMWorld();
+            world.Modules.Load(0, result.Program);
+            world.Syscalls.Register(0, "Report", (ref VMInstanceState s) =>
+            {
+                log.Add($"{s.Registers.Get(0).ToInt()}");
+            });
+
+            world.SpawnInstance(0, 0);
+            world.Tick();
+            Assert(log.Count == 1 && log[0] == "39", $"CS17: dot({{3,4}},{{5,6}}) = 15+24 = 39, got {(log.Count > 0 ? log[0] : "?")}");
+        }
+
+        // ===== Test CS18: S4/R5 — error: too many scratch registers =====
+        {
+            string source = @"
+struct Big5 {
+    a: int
+    b: int
+    c: int
+    d: int
+    e: int
+}
+func bad(x: Big5, y: Big5, z: Big5, w: int, v: int) {
+    return w
+}
+func main() {
+    var s: Big5
+    bad(s, s, s, 1, 2)
+}";
+            var syscalls = new Dictionary<string, int>();
+            var result = compiler.Compile(source, "main", syscalls);
+            Assert(!result.Success, "CS18: compile error — too many scratch registers (5+5+5+1+1=17 > 16)");
+        }
+
+        // ===== Test CS19: S4 — scalar before struct parameter =====
+        {
+            string source = @"
+struct Vec2 {
+    x: int
+    y: int
+}
+func compute(factor: int, v: Vec2) {
+    return factor * (v.x + v.y)
+}
+func main() {
+    var a: Vec2
+    a.x = 4
+    a.y = 6
+    Report(compute(3, a))
+}";
+            var syscalls = new Dictionary<string, int> { { "Report", 0 } };
+            var result = compiler.Compile(source, "main", syscalls);
+            Assert(result.Success, "CS19 compile success");
+
+            var log = new List<string>();
+            var world = new VMWorld();
+            world.Modules.Load(0, result.Program);
+            world.Syscalls.Register(0, "Report", (ref VMInstanceState s) =>
+            {
+                log.Add($"{s.Registers.Get(0).ToInt()}");
+            });
+
+            world.SpawnInstance(0, 0);
+            world.Tick();
+            Assert(log.Count == 1 && log[0] == "30", $"CS19: compute(3, {{4,6}}) = 3*10 = 30, got {(log.Count > 0 ? log[0] : "?")}");
+        }
+
+        // ===== Test CS20: S4 — struct parameter with 3 fields =====
+        {
+            string source = @"
+struct DamageInfo {
+    base_dmg: int
+    multiplier: int
+    bonus: int
+}
+func totalDamage(d: DamageInfo) {
+    return d.base_dmg * d.multiplier + d.bonus
+}
+func main() {
+    var d: DamageInfo
+    d.base_dmg = 10
+    d.multiplier = 3
+    d.bonus = 5
+    Report(totalDamage(d))
+}";
+            var syscalls = new Dictionary<string, int> { { "Report", 0 } };
+            var result = compiler.Compile(source, "main", syscalls);
+            Assert(result.Success, "CS20 compile success");
+
+            var log = new List<string>();
+            var world = new VMWorld();
+            world.Modules.Load(0, result.Program);
+            world.Syscalls.Register(0, "Report", (ref VMInstanceState s) =>
+            {
+                log.Add($"{s.Registers.Get(0).ToInt()}");
+            });
+
+            world.SpawnInstance(0, 0);
+            world.Tick();
+            Assert(log.Count == 1 && log[0] == "35", $"CS20: totalDamage({{10,3,5}}) = 35, got {(log.Count > 0 ? log[0] : "?")}");
+        }
+
+        // ===== Test CS21: S4 — struct parameter in while loop =====
+        {
+            string source = @"
+struct Pair {
+    a: int
+    b: int
+}
+func sumN(p: Pair) {
+    var total: int = 0
+    var i: int = p.a
+    while i <= p.b {
+        total = total + i
+        i = i + 1
+    }
+    return total
+}
+func main() {
+    var r: Pair
+    r.a = 1
+    r.b = 10
+    Report(sumN(r))
+}";
+            var syscalls = new Dictionary<string, int> { { "Report", 0 } };
+            var result = compiler.Compile(source, "main", syscalls);
+            Assert(result.Success, "CS21 compile success");
+
+            var log = new List<string>();
+            var world = new VMWorld();
+            world.Modules.Load(0, result.Program);
+            world.Syscalls.Register(0, "Report", (ref VMInstanceState s) =>
+            {
+                log.Add($"{s.Registers.Get(0).ToInt()}");
+            });
+
+            world.SpawnInstance(0, 0);
+            world.Tick();
+            Assert(log.Count == 1 && log[0] == "55", $"CS21: sumN({{1,10}}) = 55, got {(log.Count > 0 ? log[0] : "?")}");
         }
 
         // ===== Test C4-01: Direct call to requires_cleanup syscall → compile error =====
