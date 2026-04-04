@@ -116,7 +116,7 @@ namespace Sandbox
             _lastCompileSourceTime = fileTime;
             _compiled = true;
 
-            int instrCount = _program.Instructions.Length;
+            int instrCount = _program.InstructionCount;
             int constCount = _program.Constants.Length;
             int funcCount = _program.Functions.Length;
             Console.WriteLine($"[COMPILE] OK — {instrCount} instructions, {constCount} constants, {funcCount} functions ({elapsed.TotalMilliseconds:F1}ms)");
