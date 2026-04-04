@@ -584,8 +584,9 @@ skill TracerBullet
 | — | **B-β2 FO1 叶函数优化** | **CALL_LEAF/RET_LEAF 指令对 + 叶函数跳过 CallFrame push/pop + 调试器透明降级** | **700** | [B-β2](Plan/Step_B_Beta2_FO1_LeafFunction.md) |
 | — | **B-β3 O9 活跃实例链表** | **ActiveList 替代全量遍历 + swap-remove O(1) + 稀疏场景验证 + Snapshot 一致性** | **711** | [B-β3](Plan/Step_B_Beta3_O9_ActiveList.md) |
 | — | **B-γ1 FO6 自适应寄存器窗口** | **编译后 temp 重映射紧接 locals + CALL 窗口 = locals+temps + 累计窗口溢出检测 + 嵌套 ~3→~6** | **721** | [B-γ1](Plan/Step_B_Gamma1_FO6_AdaptiveWindow.md) |
+| — | **B-γ2 FF5 非 entry 函数 defer** | **RET_FUNC cleanup 链对齐 + CleanupBase 作用域边界 + r0 返回值保护 + Kill 逐层展开** | **763** | [B-γ2](Plan/Step_B_Gamma2_FF5_NonEntryDefer.md) |
 
-**当前位置 → B-γ1 完成，721 项 Assert × 2 模式全通过。自适应寄存器窗口：ComputeAndRemapFunctionWindow 将 temp 寄存器重映射到紧接 locals 之后，CALL.B = locals+temps 总窗口，AnalyzeCallDepth 扩展累计窗口溢出检测。嵌套层数从 ~3 扩展到 ~6+，R1/SR1 根本解决。**
+**当前位置 → B-γ2 完成，763 项 Assert × 2 模式全通过。非 entry 函数 defer/using：RET_FUNC 检测 CleanupDepth > CleanupBase 进入 InCleanup，RETURN 按 CleanupBase 边界逐层退出，savedR0 保护返回值，Kill 路径跨函数正确清理。含 defer/using 的函数排除 leaf 优化。**
 
 ---
 
@@ -594,7 +595,7 @@ skill TracerBullet
 以下步骤不依赖真实 ECS/Syscall 接入，可在当前独立环境中推进。
 步骤严格按编号顺序串行执行，每步完成后更新状态标记。
 
-> **当前位置 → B-γ2**（FF5 非 entry 函数 defer）
+> **当前位置 → B-γ3**（S4 结构体作为函数参数）
 
 #### Phase 0: 正式命名
 
@@ -622,7 +623,7 @@ skill TracerBullet
 | # | ID | 内容 | 状态 | 完成条件 | 依赖 |
 |---|-----|------|------|----------|------|
 | 6 | B-γ1 | FO6 自适应寄存器窗口 | ✅ | 嵌套层数 ~3→~6 + R1/SR1 根本解决 + 测试通过 | F4 ✅ |
-| 7 | B-γ2 | FF5 非 entry 函数 defer | ⏳ | RET_FUNC 与 Cleanup 链正确对齐 + 测试通过 | 函数调用 ✅ |
+| 7 | B-γ2 | FF5 非 entry 函数 defer | ✅ | RET_FUNC 与 Cleanup 链正确对齐 + 测试通过 | 函数调用 ✅ |
 | 8 | B-γ3 | S4 结构体作为函数参数 | ⏳ | 结构体参数寄存器传递 + R5 安全限制 + 测试通过 | B-γ1 (FO6) |
 | 9 | B-γ4 | C6 嵌套 using 作用域优化 | ⏳ | 合并相邻 PUSH_CLEANUP 指令 + 性能验证 + 测试通过 | 无 |
 | 10 | B-γ5 | SN1 嵌套结构体 | ⏳ | 递归拍平为连续寄存器 + 编译/运行测试通过 | struct ✅ |

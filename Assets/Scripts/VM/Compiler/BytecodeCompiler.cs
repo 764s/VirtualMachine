@@ -1629,6 +1629,7 @@ namespace FFVM.Compiler
         /// <summary>
         /// Analyze all functions and determine which are leaf functions.
         /// A function is leaf if its body contains no CallExpr, WaitStmt, WaitForStmt, or YieldStmt.
+        /// FF5: functions with defer/using are also non-leaf (need CALL/RET_FUNC for CleanupBase).
         /// Entry function is never treated as leaf (uses RETURN, not RET_FUNC/RET_LEAF).
         /// </summary>
         private void AnalyzeLeafFunctions(ModuleNode module, string entryFunc)
@@ -1642,8 +1643,46 @@ namespace FFVM.Compiler
                     _leafFunctions[func.Name] = false; // entry function is never leaf
                     continue;
                 }
+                // FF5: functions with defer/using need full CALL/RET_FUNC path for cleanup chain
+                if (ContainsDeferOrUsing(func.Body))
+                {
+                    _leafFunctions[func.Name] = false;
+                    continue;
+                }
                 _leafFunctions[func.Name] = !ContainsNonLeafNode(func.Body);
             }
+        }
+
+        /// <summary>
+        /// FF5: Returns true if the statement subtree contains a DeferStmt or UsingStmt.
+        /// Functions with defer/using cannot use the leaf optimization because
+        /// CALL_LEAF/RET_LEAF don't preserve CleanupBase for cleanup chain alignment.
+        /// </summary>
+        private bool ContainsDeferOrUsing(Stmt stmt)
+        {
+            if (stmt == null) return false;
+            if (stmt is DeferStmt || stmt is UsingStmt) return true;
+
+            if (stmt is BlockStmt block)
+            {
+                for (int i = 0; i < block.Statements.Count; i++)
+                    if (ContainsDeferOrUsing(block.Statements[i])) return true;
+            }
+            else if (stmt is IfStmt ifStmt)
+            {
+                if (ContainsDeferOrUsing(ifStmt.ThenBranch)) return true;
+                if (ifStmt.ElseBranch != null && ContainsDeferOrUsing(ifStmt.ElseBranch)) return true;
+            }
+            else if (stmt is WhileStmt whileStmt)
+            {
+                if (ContainsDeferOrUsing(whileStmt.Body)) return true;
+            }
+            else if (stmt is ForStmt forStmt)
+            {
+                if (ContainsDeferOrUsing(forStmt.Body)) return true;
+            }
+
+            return false;
         }
 
         /// <summary>

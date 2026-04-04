@@ -47,7 +47,7 @@
 | **FF2** | 函数作为 Syscall 参数（回调模式） | 需要宿主驱动的回调场景时 | 中（约定回调协议；受 Rule 6 约束只能传 IP 整数） |
 | **FF3** | 可选参数与默认值 | 提升开发体验时 | 低（仅编译器变更） |
 | **FF4** | 多返回值 | 业务需要函数返回多值时（如 GetPosition → x,y） | 中（scratch zone 多寄存器 + 解构语法） |
-| **FF5** | defer 在非 entry 函数中的正确执行 | 非 entry 函数使用 defer/using 时 | 中（RET_FUNC 需与 Cleanup 链对齐） |
+| **FF5** | ~~defer 在非 entry 函数中的正确执行~~ | ~~非 entry 函数使用 defer/using 时~~ | ✅ B-γ2 已实现 |
 
 ### 2.3 结构体相关（来源：步骤 9）
 
