@@ -801,7 +801,15 @@ namespace FFVM.Compiler
                         }
                     }
                     for (int r = 0; r < toRelease.Count; r++)
+                    {
                         TryReleaseVar(toRelease[r]);
+                        // E001 fix: remove from liveRanges to prevent double-free.
+                        // Without this, a released variable whose register was reused
+                        // by another variable would pass the "alreadyFreed" check again
+                        // (since the register is no longer in _freeVarRegs after reuse),
+                        // causing the same register to be freed and reused a second time.
+                        _liveRanges.Remove(toRelease[r]);
+                    }
                 }
             }
         }

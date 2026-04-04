@@ -2812,6 +2812,193 @@ func main() {
             Assert((world.Pool.Instances[id].StateFlags & VMStateFlags.Completed) != 0, "FF5-07: Completed");
         }
 
+        // ===== E001 Regression: Dead variables + while loop register lifecycle =====
+
+        // E001-01: 2 dead vars before while loop (original repro — sum=127 bug)
+        {
+            string source = @"
+func main() {
+    var dead0: int = 1
+    var dead1: int = 2
+    var sum: int = 0
+    var i: int = 1
+    while i <= 100 {
+        sum = sum + i
+        i = i + 1
+    }
+    Report(sum)
+}";
+            var syscalls = new Dictionary<string, int> { { "Report", 0 } };
+            var result = compiler.Compile(source, "main", syscalls);
+            Assert(result.Success, "E001-01 compile success");
+
+            int reported = -1;
+            var world = new VMWorld();
+            world.Modules.Load(0, result.Program);
+            world.Syscalls.Register(0, "Report", (ref VMInstanceState s) =>
+            {
+                reported = s.Registers.Get(0).ToInt();
+            });
+            world.SpawnInstance(0, 0);
+            world.Tick();
+            Assert(reported == 5050, $"E001-01: 2 dead vars + while → sum = {reported} (expected 5050)");
+        }
+
+        // E001-02: 4 dead vars before while loop
+        {
+            string source = @"
+func main() {
+    var d0: int = 1
+    var d1: int = 2
+    var d2: int = 3
+    var d3: int = 4
+    var sum: int = 0
+    var i: int = 1
+    while i <= 10 {
+        sum = sum + i
+        i = i + 1
+    }
+    Report(sum)
+}";
+            var syscalls = new Dictionary<string, int> { { "Report", 0 } };
+            var result = compiler.Compile(source, "main", syscalls);
+            Assert(result.Success, "E001-02 compile success");
+
+            int reported = -1;
+            var world = new VMWorld();
+            world.Modules.Load(0, result.Program);
+            world.Syscalls.Register(0, "Report", (ref VMInstanceState s) =>
+            {
+                reported = s.Registers.Get(0).ToInt();
+            });
+            world.SpawnInstance(0, 0);
+            world.Tick();
+            Assert(reported == 55, $"E001-02: 4 dead vars + while → sum = {reported} (expected 55)");
+        }
+
+        // E001-03: Dead vars with for loop
+        {
+            string source = @"
+func main() {
+    var unused1: int = 10
+    var unused2: int = 20
+    var total: int = 0
+    for var j: int = 1; j <= 5; j = j + 1 {
+        total = total + j
+    }
+    Report(total)
+}";
+            var syscalls = new Dictionary<string, int> { { "Report", 0 } };
+            var result = compiler.Compile(source, "main", syscalls);
+            Assert(result.Success, "E001-03 compile success");
+
+            int reported = -1;
+            var world = new VMWorld();
+            world.Modules.Load(0, result.Program);
+            world.Syscalls.Register(0, "Report", (ref VMInstanceState s) =>
+            {
+                reported = s.Registers.Get(0).ToInt();
+            });
+            world.SpawnInstance(0, 0);
+            world.Tick();
+            Assert(reported == 15, $"E001-03: dead vars + for → total = {reported} (expected 15)");
+        }
+
+        // E001-04: Dead vars interleaved with live vars (no conflict expected)
+        {
+            string source = @"
+func main() {
+    var a: int = 100
+    var dead: int = 999
+    var b: int = 200
+    var result: int = a + b
+    Report(result)
+}";
+            var syscalls = new Dictionary<string, int> { { "Report", 0 } };
+            var result = compiler.Compile(source, "main", syscalls);
+            Assert(result.Success, "E001-04 compile success");
+
+            int reported = -1;
+            var world = new VMWorld();
+            world.Modules.Load(0, result.Program);
+            world.Syscalls.Register(0, "Report", (ref VMInstanceState s) =>
+            {
+                reported = s.Registers.Get(0).ToInt();
+            });
+            world.SpawnInstance(0, 0);
+            world.Tick();
+            Assert(reported == 300, $"E001-04: interleaved dead/live vars → result = {reported} (expected 300)");
+        }
+
+        // E001-05: Nested while loops with dead vars
+        {
+            string source = @"
+func main() {
+    var x: int = 0
+    var y: int = 0
+    var sum: int = 0
+    var i: int = 1
+    while i <= 3 {
+        var j: int = 1
+        while j <= 3 {
+            sum = sum + 1
+            j = j + 1
+        }
+        i = i + 1
+    }
+    Report(sum)
+}";
+            var syscalls = new Dictionary<string, int> { { "Report", 0 } };
+            var result = compiler.Compile(source, "main", syscalls);
+            Assert(result.Success, "E001-05 compile success");
+
+            int reported = -1;
+            var world = new VMWorld();
+            world.Modules.Load(0, result.Program);
+            world.Syscalls.Register(0, "Report", (ref VMInstanceState s) =>
+            {
+                reported = s.Registers.Get(0).ToInt();
+            });
+            world.SpawnInstance(0, 0);
+            world.Tick();
+            Assert(reported == 9, $"E001-05: nested while with dead vars → sum = {reported} (expected 9)");
+        }
+
+        // E001-06: Dead vars + while in non-entry function
+        {
+            string source = @"
+func compute(): int {
+    var dead1: int = 42
+    var dead2: int = 43
+    var sum: int = 0
+    var i: int = 1
+    while i <= 10 {
+        sum = sum + i
+        i = i + 1
+    }
+    return sum
+}
+
+func main() {
+    var val: int = compute()
+    Report(val)
+}";
+            var syscalls = new Dictionary<string, int> { { "Report", 0 } };
+            var result = compiler.Compile(source, "main", syscalls);
+            Assert(result.Success, "E001-06 compile success");
+
+            int reported = -1;
+            var world = new VMWorld();
+            world.Modules.Load(0, result.Program);
+            world.Syscalls.Register(0, "Report", (ref VMInstanceState s) =>
+            {
+                reported = s.Registers.Get(0).ToInt();
+            });
+            world.SpawnInstance(0, 0);
+            world.Tick();
+            Assert(reported == 55, $"E001-06: dead vars + while in func → val = {reported} (expected 55)");
+        }
+
         // ===== Summary =====
         Debug.Log($"========================================");
         Debug.Log($"Compiler Tests: {passed} passed, {failed} failed");
