@@ -338,27 +338,19 @@ namespace FFVM.Compiler
         {
             if (_deferredCleanups.Count == 0) return;
 
-            // Build groups of adjacent PUSH_CLEANUP instructions
+            // Build groups of adjacent PUSH_CLEANUP instructions.
+            // Two cleanups are "adjacent" if their PushCleanupIP values are consecutive
+            // AND neither contains a ReturnStmt in its defer body (which would break
+            // compound cleanup semantics by prematurely exiting the merged block).
             var groups = new List<(int Start, int End)>(); // [Start, End) ranges into _deferredCleanups
             int groupStart = 0;
             for (int i = 1; i <= _deferredCleanups.Count; i++)
             {
-                bool adjacent = i < _deferredCleanups.Count &&
-                    _deferredCleanups[i].PushCleanupIP == _deferredCleanups[i - 1].PushCleanupIP + 1;
-                // Safety: don't merge if any defer body in the group contains ReturnStmt
-                if (adjacent && _deferredCleanups[i].Body != null && ContainsReturn(_deferredCleanups[i].Body))
-                    adjacent = false;
-                if (i > groupStart + 1 && _deferredCleanups[i - 1].Body != null && ContainsReturn(_deferredCleanups[i - 1].Body))
-                {
-                    // Current item breaks merge safety; close previous group before it
-                    if (i - 1 > groupStart)
-                        groups.Add((groupStart, i - 1));
-                    else
-                        groups.Add((groupStart, i));
-                    groupStart = (i - 1 > groupStart) ? i - 1 : i;
-                    adjacent = false;
-                }
-                if (!adjacent)
+                bool canMerge = i < _deferredCleanups.Count
+                    && _deferredCleanups[i].PushCleanupIP == _deferredCleanups[i - 1].PushCleanupIP + 1
+                    && !DeferBodyContainsReturn(_deferredCleanups[i])
+                    && !DeferBodyContainsReturn(_deferredCleanups[i - 1]);
+                if (!canMerge)
                 {
                     groups.Add((groupStart, i));
                     groupStart = i;
@@ -426,6 +418,12 @@ namespace FFVM.Compiler
                 CompileBlock(_deferredCleanups[index].Body);
                 _inCleanupBlock = prevInCleanup;
             }
+        }
+
+        /// <summary>C6 safety: check if a DeferredCleanup's defer body contains ReturnStmt.</summary>
+        private static bool DeferBodyContainsReturn(DeferredCleanup dc)
+        {
+            return dc.Body != null && ContainsReturn(dc.Body);
         }
 
         /// <summary>C6 safety: check if a block contains ReturnStmt (unsafe to merge).</summary>

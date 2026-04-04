@@ -35,7 +35,7 @@
 | ID | 内容 | 触发时机 | 详情 |
 |----|------|----------|------|
 | **C5** | Cleanup 块执行超时保护 | 待定 | 防止 Cleanup 块内死循环阻塞实例回收。[§3.3 C5](../VM_Summary.md#33-cleanup-机制using理想defer逃生舱) |
-| **C6** | 嵌套 `using` 作用域优化（合并相邻 PUSH_CLEANUP） | 待定 | 性能优化，非功能阻塞。[§3.3 C6](../VM_Summary.md#33-cleanup-机制using理想defer逃生舱) |
+| **C6** | ~~嵌套 `using` 作用域优化（合并相邻 PUSH_CLEANUP）~~ | ✅ B-γ6 已完成 | 连续 defer compound merge + 安全限制（含 return 不合并）+ C6-01~C6-05 测试通过 |
 
 ### 2.2 函数调用相关（来源：步骤 8）
 
