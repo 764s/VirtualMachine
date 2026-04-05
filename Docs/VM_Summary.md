@@ -637,7 +637,7 @@ skill TracerBullet
 | — | **B-δ4 SN2 结构体字面量构造语法** | **StructLiteralExpr AST + Parser `TypeName { field: expr }` + Compiler sugar 展开 + 嵌套字面量 + CS31-CS38 测试** | **990** | [B-δ4](Plan/Step_B_Delta4_SN2_StructLiteral.md) |
 | — | **B-δ5 C5 Cleanup 超时保护** | **MaxCleanupSteps 每块步数预算 + 超时跳过当前块继续剩余 cleanup + C5-01~C5-04 测试** | **1007** | [B-δ5](Plan/Step_B_Delta5_C5_CleanupTimeout.md) |
 
-**B 阶段全部完成。1007 项 Assert × 2 模式全通过。B-ε 性能优化串行计划全部完成（4/4）。B-ζ 分支场景优化串行计划全部完成（3/3）。当前位置 → C 阶段。**
+**B 阶段全部完成。1007 项 Assert × 2 模式全通过。B-ε 性能优化串行计划全部完成（4/4）。B-ζ 分支场景优化串行计划全部完成（3/3）。B-η O8 指令压缩完成（O8-1~O8-3/O8-5 ✅，O8-4 ⏸）。当前位置 → C 阶段（⚪ 宿主阻塞）。**
 
 ---
 
@@ -647,7 +647,7 @@ B 阶段 20 个步骤（B-R1 → B-δ5）全部完成，已归入上方 A 区表
 原 B-δ6（B1 Unity Editor DAP）为可选项，已转入功能展望，见 [Outlook_And_Risks.md](Plan/Outlook_And_Risks.md)。
 
 > **剩余展望项**（暂无排期，业务驱动激活）：B1 Unity Editor DAP、FF1 跨模块调用、FF2 函数回调、FF4 多返回值、
-> O8 指令压缩、O11-O14 运行时优化、FO2 尾调用、FO3 小函数内联、
+> O11-O14 运行时优化、FO2 尾调用、FO3 小函数内联、
 > BB1 黑板 Key 编译期 ID、PR1 带参 Paired Syscall、DM1 双轨编排模式。
 > 完整索引见 [Outlook_And_Risks.md](Plan/Outlook_And_Risks.md)。
 
@@ -682,7 +682,24 @@ B 阶段 20 个步骤（B-R1 → B-δ5）全部完成，已归入上方 A 区表
 | B-ζ2 | CMP-immediate 指令 | ✅ | +6 OpCode `JUMP_IF_EQ_K` ~ `JUMP_IF_GTE_K`：`A=targetIP, B=reg, C=constIndex`，一条指令完成"与常量比较并跳转"，替代 `LOAD_CONST tmp` + `JUMP_IF_*`。Peephole 识别 + 编译器直接 emit | ~15-20% B04 加速；所有含常量比较的分支受益 | 中（+6 OpCode + VMWorld case + Peephole/Compiler 识别） |
 | B-ζ3 | SWITCH 跳转表指令 | ✅ | 编译器识别连续 if-else if 链中所有条件为同一变量对连续整数常量（从 0 起）比较时，生成 `SWITCH defaultIP, testReg, jumpTableIdx` 跳转表指令；O(N) 串行测试 → O(1) 分派。+1 OpCode + VMProgram.JumpTables + 编译器 TryCompileSwitch + Peephole 跳转表重映射 | B04↓40-47%（含高方差环境） | 中高（AST 模式识别 + 跳转表编码 + 新 OpCode + 仅对连续 0-based 整数常量有效） |
 
-**B-ζ 分支场景优化串行计划完成（3/3 ✅）。当前位置 → C 阶段。下一步 C1 真实 Syscall 接入 ECS。**
+**B-ζ 分支场景优化串行计划完成（3/3 ✅）。B-η O8 指令压缩完成（O8-1~O8-3/O8-5 ✅，O8-4 临时妥协 ⏸）。当前位置 → C 阶段（⚪ 宿主阻塞）。**
+
+---
+
+### B-η. 指令压缩串行计划（O8: 16B → 4B，L1 缓存系统性加速）
+
+> 背景：B-ε/B-ζ 完成后，B01/B03 已超越 Lua，B04 仍慢 46%。
+> 根因：16B/指令 vs Lua 4B，分支密集循环体 L1 icache 压力 + 间接跳转/比较开销。
+> 本优化为全场景系统性加速（10-20%），B04 分支密集场景受益最大。
+> 详细设计见 [Step_O8_InstructionCompression.md](Plan/Step_O8_InstructionCompression.md)。
+
+| 序号 | 步骤 | 状态 | 内容 | 预期收益 | 复杂度 |
+|------|------|------|------|---------|--------|
+| O8-1 | Instruction 4B 重定义 | ✅ | `Instruction` 从 16B → 4B（`StructLayout.Explicit, Size=4`，1B opcode + 3×1B byte operand），构造函数 `int→(byte)` 截断 | L1 缓存 4× 密度提升 | 低 |
+| O8-2 | VM 执行引擎适配 | ✅ | `int opA = op.A | extendedA` per-instruction merge，20+ case 从 `op.A` → `opA`（仅 IP 类操作数） | 与 O8-1 合并验证 | 低 |
+| O8-3 | EXTEND_AX 辅助指令 | ✅ | EXTEND_AX(hi)=OpCode 46 前缀 + `_wideA` 并行列表 + `ExpandWideJumps()` 后处理 pass（迭代式 IP 重映射）+ VM 原子处理（零 step 代价 + continue） | 大型脚本支持 | 中 |
+| O8-4 | Peephole 适配 | ⏸ | `_wideA` 并行列表方案使 Peephole 不直接处理 EXTEND_AX；`ExpandWideJumps` 在 Peephole 之后运行，临时妥协可接受 | 未来按需消除冗余 | — |
+| O8-5 | Benchmark + 文档 | ✅ | B01-B06 验证：B01↓17% B03↓15% B04↓5% B05↓7%；B06↑21%（EXTEND_AX 额外指令）；1007 Assert 全通过 | 确认系统性加速 | 低 |
 
 ---
 
@@ -828,10 +845,21 @@ B 阶段 20 个步骤（B-R1 → B-δ5）全部完成，已归入上方 A 区表
 | FO7 | 调用栈深度静态分析 | F4 阶段 | 函数调用 | 编译期计算最大调用深度 | 运行时无栈溢出检查 |
 | SO1 | COPY_BLOCK OpCode | B-δ2 | 结构体 | COPY_BLOCK(dst,src,count) 替代 N×MOVE | 大 struct 赋值 N→1 指令 |
 | C6 | 相邻 cleanup 合并 | B-γ6 | 编译器 | 连续 defer compound merge | 减少 PUSH_CLEANUP/POP_CLEANUP 对 |
+| O17 | LICM 循环不变量提升 | B-ζ1 | 编译器 | 循环体内常量提升到循环前 | B04↓33%，普遍↓17-39% |
+| O18 | CMP-immediate 指令 | B-ζ2 | 编译器+解释器 | JUMP_IF_*_K 直接比较常量池 | 分支含常量比较加速 |
+| O19 | SWITCH 跳转表 | B-ζ3 | 编译器+解释器 | 连续整数 if-else → O(1) 分派 | B04↓40-47% |
 
 ### 10.2 优化展望（未实施）
 
-#### 串行优化计划
+#### 指令压缩串行计划（O8，已排期 B-η）
+
+> 详见 [Step_O8_InstructionCompression.md](Plan/Step_O8_InstructionCompression.md)
+
+Instruction 16B → 4B（1B opcode + 3×1B operand），全场景 10-20% L1 缓存系统性加速。
+5 步串行子计划（O8-1 ~ O8-5），~535 行改动，影响 3 个核心文件。
+调试器/DAP/LSP/快照零改动。
+
+#### 其他串行优化计划（已完成）
 
 以跨语言 benchmark（§12.3）追平 Lua 为目标，按 **收益/成本比** 排序的串行实施计划：
 

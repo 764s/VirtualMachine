@@ -83,28 +83,32 @@ namespace FFVM
         // --- B-ζ3: SWITCH jump table ---
         SWITCH       = 45,  // A=defaultIP, B=testReg, C=jumpTableIdx → val=Reg[B].ToInt(); if 0≤val<len then JumpTables[C][val] else IP=A
 
+        // --- O8: wide IP prefix (instruction compression) ---
+        EXTEND_AX    = 46,  // A=hi_byte → next instruction's A operand is extended to (hi<<8 | lo)
+
         // --- O15: sentinel (never emitted by compiler) ---
-        SENTINEL     = 46,  // appended by VMProgram ctor; replaces per-instruction boundary check
+        SENTINEL     = 47,  // appended by VMProgram ctor; replaces per-instruction boundary check
     }
 
     /// <summary>
     /// Fixed-width bytecode instruction. Value type for array storage.
-    /// 16 bytes per instruction (1 byte opcode + 3 padding + 3×4 int).
+    /// O8: 4 bytes per instruction (1 byte opcode + 3×1 byte operand).
+    /// Constructor accepts int for convenience; values are truncated to byte.
     /// </summary>
-    [StructLayout(LayoutKind.Sequential)]
+    [StructLayout(LayoutKind.Explicit, Size = 4)]
     public struct Instruction
     {
-        public OpCode Code;
-        public int A;
-        public int B;
-        public int C;
+        [FieldOffset(0)] public OpCode Code;  // 1 byte
+        [FieldOffset(1)] public byte A;       // 1 byte
+        [FieldOffset(2)] public byte B;       // 1 byte
+        [FieldOffset(3)] public byte C;       // 1 byte
 
         public Instruction(OpCode code, int a = 0, int b = 0, int c = 0)
         {
             Code = code;
-            A = a;
-            B = b;
-            C = c;
+            A = (byte)a;
+            B = (byte)b;
+            C = (byte)c;
         }
     }
 }

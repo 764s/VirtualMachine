@@ -228,7 +228,13 @@ namespace FFVM
 
                 if (program.Instructions[ip].Code == OpCode.CALL ||
                     program.Instructions[ip].Code == OpCode.CALL_LEAF)
-                    return program.Instructions[ip].A; // A = target function entry IP
+                {
+                    // O8: check for EXTEND_AX prefix to reconstruct wide IP
+                    int targetIP = program.Instructions[ip].A;
+                    if (ip > 0 && program.Instructions[ip - 1].Code == OpCode.EXTEND_AX)
+                        targetIP |= program.Instructions[ip - 1].A << 8;
+                    return targetIP;
+                }
             }
 
             // No CALL on this line — degrade to Step Over

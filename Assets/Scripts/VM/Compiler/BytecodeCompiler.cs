@@ -24,6 +24,7 @@ namespace FFVM.Compiler
         private const int TempRegBase = 48;
 
         private List<Instruction> _instructions;
+        private List<int> _wideA;  // O8: full int A values parallel to _instructions (byte A may truncate for IP > 255)
         private List<Number> _constants;
         private Dictionary<string, int> _variables;   // name → register
         private Dictionary<string, Number> _constValues;  // B-ε3: name → compile-time constant value
@@ -137,6 +138,7 @@ namespace FFVM.Compiler
         public CompileResult CompileModule(ModuleNode module, string entryFunc, Dictionary<string, int> syscalls, SyscallTable syscallTable = null)
         {
             _instructions = new List<Instruction>();
+            _wideA = new List<int>();
             _constants = new List<Number>();
             _stringConstants = new List<string>();
             _jumpTables = new List<int[]>();
@@ -232,6 +234,7 @@ namespace FFVM.Compiler
                         {
                             var instr = _instructions[kv.Value[j]];
                             _instructions[kv.Value[j]] = new Instruction(instr.Code, targetIP, instr.B, instr.C);
+                            _wideA[kv.Value[j]] = targetIP;
                         }
                     }
                     else
@@ -249,6 +252,7 @@ namespace FFVM.Compiler
                     {
                         var instr = _instructions[pending.InstructionIP];
                         _instructions[pending.InstructionIP] = new Instruction(instr.Code, targetIP, instr.B, instr.C);
+                        _wideA[pending.InstructionIP] = targetIP;
                     }
                     else
                     {
@@ -266,6 +270,9 @@ namespace FFVM.Compiler
 
             // O6: Peephole optimization pass — eliminate redundant instructions
             PeepholeOptimize(functionEntries);
+
+            // O8: Wide expansion pass — insert EXTEND_AX for instructions with IP > 255
+            ExpandWideJumps(functionEntries);
 
             int maxRegs = VarRegBase; // minimum
             for (int i = 0; i < functionEntries.Count; i++)
@@ -406,7 +413,10 @@ namespace FFVM.Compiler
                     // C6: merged group — emit compound cleanup block in LIFO order
                     // NOP-ify all PUSH_CLEANUP except the last in the group
                     for (int i = start; i < end - 1; i++)
+                    {
                         _instructions[_deferredCleanups[i].PushCleanupIP] = new Instruction(OpCode.MOVE, 0, 0, 0);
+                        _wideA[_deferredCleanups[i].PushCleanupIP] = 0;
+                    }
 
                     // Backpatch last PUSH_CLEANUP to point to compound block start
                     int compoundIP = _instructions.Count;
@@ -509,7 +519,7 @@ namespace FFVM.Compiler
                 // Patch CALL/CALL_LEAF window sizes to use function-level total
                 if (instr.Code == OpCode.CALL || instr.Code == OpCode.CALL_LEAF)
                 {
-                    _instructions[ip] = new Instruction(instr.Code, instr.A, totalWindow, instr.C);
+                    _instructions[ip] = new Instruction(instr.Code, _wideA[ip], totalWindow, instr.C);
                     continue;
                 }
 
@@ -1169,6 +1179,7 @@ namespace FFVM.Compiler
         private void Emit(OpCode code, int a = 0, int b = 0, int c = 0)
         {
             _instructions.Add(new Instruction(code, a, b, c));
+            _wideA.Add(a);  // O8: preserve full int A value
             // DBG1: record source line for this instruction
             _sourceLines.Add(_currentLine);
         }
@@ -1276,6 +1287,7 @@ namespace FFVM.Compiler
         {
             var instr = _instructions[instrIP];
             _instructions[instrIP] = new Instruction(instr.Code, targetIP, instr.B, instr.C);
+            _wideA[instrIP] = targetIP;  // O8: update wide A value
         }
 
         // ===== Statement compilation =====
@@ -1692,6 +1704,7 @@ namespace FFVM.Compiler
 
             // 8. Backpatch: SWITCH.A = defaultIP, all end-of-case JUMPs → endIP
             _instructions[switchIP] = new Instruction(OpCode.SWITCH, defaultIP, testReg, jumpTableIdx);
+            _wideA[switchIP] = defaultIP;
             for (int i = 0; i < endJumps.Count; i++)
                 Backpatch(endJumps[i], endIP);
 
@@ -3061,7 +3074,7 @@ namespace FFVM.Compiler
             for (int i = 0; i < count; i++)
             {
                 if (HasJumpTargetInA(_instructions[i].Code))
-                    jumpTargets.Add(_instructions[i].A);
+                    jumpTargets.Add(_wideA[i]);  // O8: use full int A value
                 // B-ζ3: SWITCH jump table entries are also jump targets
                 if (_instructions[i].Code == OpCode.SWITCH)
                 {
@@ -3102,7 +3115,7 @@ namespace FFVM.Compiler
                 }
 
                 // P4: unconditional JUMP to next instruction → eliminate
-                if (ins.Code == OpCode.JUMP && ins.A == i + 1)
+                if (ins.Code == OpCode.JUMP && _wideA[i] == i + 1)  // O8: use full int A
                 {
                     eliminated[i] = true;
                     continue;
@@ -3120,6 +3133,7 @@ namespace FFVM.Compiler
                     && next.B == ins.A && ins.A >= TempRegBase)
                 {
                     _instructions[i] = new Instruction(ins.Code, next.A, ins.B, ins.C);
+                    _wideA[i] = next.A;  // O8: register value, always byte-safe
                     eliminated[i + 1] = true;
                     continue;
                 }
@@ -3142,7 +3156,8 @@ namespace FFVM.Compiler
                     && !IsRegUsedAsSourceAfter(ins.A, i + 2, funcBounds, functionEntries, count))
                 {
                     OpCode fused = FusedJumpFor(ins.Code, next.Code == OpCode.JUMP_IF_ZERO);
-                    _instructions[i] = new Instruction(fused, next.A, ins.B, ins.C);
+                    _instructions[i] = new Instruction(fused, _wideA[i + 1], ins.B, ins.C);
+                    _wideA[i] = _wideA[i + 1];  // O8: propagate wide A from JUMP_IF target
                     eliminated[i + 1] = true;
                     continue;
                 }
@@ -3164,21 +3179,28 @@ namespace FFVM.Compiler
 
             // Build compacted instruction and source line lists
             var newInstructions = new List<Instruction>(newIP);
+            var newWideA = new List<int>(newIP);
             var newSourceLines = new List<int>(newIP);
             for (int i = 0; i < count; i++)
             {
                 if (eliminated[i]) continue;
 
                 var ins = _instructions[i];
+                int wideAVal = _wideA[i];
                 // Rebase jump targets
                 if (HasJumpTargetInA(ins.Code))
-                    ins = new Instruction(ins.Code, remap[ins.A], ins.B, ins.C);
+                {
+                    wideAVal = remap[wideAVal];  // O8: remap full int A
+                    ins = new Instruction(ins.Code, wideAVal, ins.B, ins.C);
+                }
 
                 newInstructions.Add(ins);
+                newWideA.Add(wideAVal);
                 newSourceLines.Add(_sourceLines[i]);
             }
 
             _instructions = newInstructions;
+            _wideA = newWideA;
             _sourceLines = newSourceLines;
 
             // Rebase FunctionEntry IPs
@@ -3195,6 +3217,112 @@ namespace FFVM.Compiler
                 int[] table = _jumpTables[t];
                 for (int j = 0; j < table.Length; j++)
                     table[j] = remap[table[j]];
+            }
+        }
+
+        /// <summary>
+        /// O8: Wide expansion pass — insert EXTEND_AX before instructions whose A operand (IP) exceeds 255.
+        /// Runs after Peephole. Uses the same remap pattern as Peephole compaction (but in reverse: expansion).
+        /// May iterate if EXTEND_AX insertion pushes more IPs beyond 255.
+        /// </summary>
+        private void ExpandWideJumps(List<FunctionEntry> functionEntries)
+        {
+            // Fast path: if total instruction count <= 255, no EXTEND_AX needed
+            if (_instructions.Count <= 255) return;
+
+            // Iterate: inserting EXTEND_AX increases IPs, which may push more targets over 255.
+            // Each pass only inserts EXTEND_AX for instructions WITHOUT an existing prefix.
+            for (int pass = 0; pass < 10; pass++)
+            {
+                int count = _instructions.Count;
+                int extraCount = 0;
+                var needsExtend = new bool[count];
+
+                for (int i = 0; i < count; i++)
+                {
+                    if (!HasJumpTargetInA(_instructions[i].Code)) continue;
+                    if (_wideA[i] <= 255) continue;
+                    // Skip if already has EXTEND_AX prefix from a previous pass
+                    if (i > 0 && _instructions[i - 1].Code == OpCode.EXTEND_AX) continue;
+                    needsExtend[i] = true;
+                    extraCount++;
+                }
+                if (extraCount == 0) break; // converged
+
+                // Build remap: old IP -> new IP (EXTEND_AX insertion adds 1 slot before marked instruction)
+                // remap[i] points to the EXTEND_AX prefix when present, so that jumps
+                // targeting instruction i will first execute the EXTEND_AX, setting extendedA.
+                int[] remap = new int[count + 1];
+                int newIP = 0;
+                for (int i = 0; i < count; i++)
+                {
+                    remap[i] = newIP;
+                    if (needsExtend[i]) newIP++;
+                    newIP++;
+                }
+                remap[count] = newIP;
+
+                // Build expanded lists
+                var newInstructions = new List<Instruction>(newIP);
+                var newWideA = new List<int>(newIP);
+                var newSourceLines = new List<int>(newIP);
+
+                for (int i = 0; i < count; i++)
+                {
+                    var ins = _instructions[i];
+                    int wideAVal = _wideA[i];
+
+                    // Remap all IP-based A operands to new IP space
+                    if (HasJumpTargetInA(ins.Code))
+                    {
+                        wideAVal = remap[wideAVal];
+                        ins = new Instruction(ins.Code, wideAVal, ins.B, ins.C);
+                    }
+
+                    if (needsExtend[i])
+                    {
+                        // Insert EXTEND_AX before this instruction
+                        newInstructions.Add(new Instruction(OpCode.EXTEND_AX, wideAVal >> 8));
+                        newWideA.Add(wideAVal >> 8);
+                        newSourceLines.Add(_sourceLines[i]);
+                    }
+
+                    newInstructions.Add(ins);
+                    newWideA.Add(wideAVal);
+                    newSourceLines.Add(_sourceLines[i]);
+                }
+
+                // Fix up existing EXTEND_AX instructions (from previous passes) whose
+                // successor's target IP may have changed due to this pass's remapping
+                for (int i = 0; i < newInstructions.Count - 1; i++)
+                {
+                    if (newInstructions[i].Code == OpCode.EXTEND_AX
+                        && HasJumpTargetInA(newInstructions[i + 1].Code))
+                    {
+                        int hi = newWideA[i + 1] >> 8;
+                        newInstructions[i] = new Instruction(OpCode.EXTEND_AX, hi);
+                        newWideA[i] = hi;
+                    }
+                }
+
+                _instructions = newInstructions;
+                _wideA = newWideA;
+                _sourceLines = newSourceLines;
+
+                // Rebase FunctionEntry IPs
+                for (int i = 0; i < functionEntries.Count; i++)
+                {
+                    var fe = functionEntries[i];
+                    functionEntries[i] = new FunctionEntry(fe.Name, remap[fe.EntryIP], fe.ParamCount, fe.LocalRegCount, fe.IsLeaf);
+                }
+
+                // Rebase SWITCH jump table entries
+                for (int t = 0; t < _jumpTables.Count; t++)
+                {
+                    int[] table = _jumpTables[t];
+                    for (int j = 0; j < table.Length; j++)
+                        table[j] = remap[table[j]];
+                }
             }
         }
     }

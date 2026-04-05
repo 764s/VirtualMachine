@@ -180,6 +180,7 @@ namespace FFVM
             fixed (Instruction* codeBase = code)
             fixed (Number* constBase = consts)
             {
+                int extendedA = 0;  // O8: high byte accumulator for EXTEND_AX prefix
                 while (steps < maxSteps)
                 {
                     // O15: boundary check removed — SENTINEL opcode at end of Instructions
@@ -199,6 +200,17 @@ namespace FFVM
 
                     ref Instruction op = ref codeBase[inst.IP];
                     int rb = inst.RegisterBase;
+
+                    // O8: EXTEND_AX is a prefix — process atomically without counting as a step.
+                    // extendedA merge is deferred to point-of-use in IP-reading cases only,
+                    // so non-IP instructions (ADD, MUL, LOAD_CONST, ...) pay zero overhead.
+                    if (op.Code == OpCode.EXTEND_AX)
+                    {
+                        extendedA = op.A << 8;
+                        inst.IP++;
+                        continue;
+                    }
+
                     steps++;
 
                     // C5: Cleanup timeout protection — per-block step budget
@@ -272,7 +284,8 @@ namespace FFVM
                                 inst.ErrorFlag = VMError.PanicStackOverflow;
                                 return;
                             }
-                            inst.CleanupStack.Set(inst.CleanupDepth, new CleanupFrame { CleanupEntryIP = op.A });
+                            inst.CleanupStack.Set(inst.CleanupDepth, new CleanupFrame { CleanupEntryIP = op.A | extendedA });
+                            extendedA = 0;
                             inst.CleanupDepth++;
                             inst.IP++;
                             break;
@@ -361,21 +374,24 @@ namespace FFVM
                         // --- Phase 2: Control Flow ---
 
                         case OpCode.JUMP:
-                            inst.IP = op.A;
+                            inst.IP = op.A | extendedA;
+                            extendedA = 0;
                             break;
 
                         case OpCode.JUMP_IF_ZERO:
                             if (regs[Reg(op.B, rb)] == Number.Zero)
-                                inst.IP = op.A;
+                                inst.IP = op.A | extendedA;
                             else
                                 inst.IP++;
+                            extendedA = 0;
                             break;
 
                         case OpCode.JUMP_IF_NOT_ZERO:
                             if (regs[Reg(op.B, rb)] != Number.Zero)
-                                inst.IP = op.A;
+                                inst.IP = op.A | extendedA;
                             else
                                 inst.IP++;
+                            extendedA = 0;
                             break;
 
                         // --- Phase 2: Arithmetic ---
@@ -482,7 +498,8 @@ namespace FFVM
                             inst.CallStack.Set(inst.CallStackDepth, frame);
                             inst.CallStackDepth++;
                             inst.RegisterBase += op.B; // B = callerWindowSize
-                            inst.IP = op.A;            // A = target function entry IP
+                            inst.IP = op.A | extendedA;            // A = target function entry IP
+                            extendedA = 0;
                             break;                     // don't IP++ — already jumped
                         }
 
@@ -540,7 +557,8 @@ namespace FFVM
                                 inst.LeafRegisterBase = inst.RegisterBase;
                             }
                             inst.RegisterBase += op.B;
-                            inst.IP = op.A;
+                            inst.IP = op.A | extendedA;
+                            extendedA = 0;
                             break;
                         }
 
@@ -567,44 +585,50 @@ namespace FFVM
 
                         case OpCode.JUMP_IF_EQ:
                             if (regs[Reg(op.B, rb)] == regs[Reg(op.C, rb)])
-                                inst.IP = op.A;
+                                inst.IP = op.A | extendedA;
                             else
                                 inst.IP++;
+                            extendedA = 0;
                             break;
 
                         case OpCode.JUMP_IF_NEQ:
                             if (regs[Reg(op.B, rb)] != regs[Reg(op.C, rb)])
-                                inst.IP = op.A;
+                                inst.IP = op.A | extendedA;
                             else
                                 inst.IP++;
+                            extendedA = 0;
                             break;
 
                         case OpCode.JUMP_IF_LT:
                             if (regs[Reg(op.B, rb)] < regs[Reg(op.C, rb)])
-                                inst.IP = op.A;
+                                inst.IP = op.A | extendedA;
                             else
                                 inst.IP++;
+                            extendedA = 0;
                             break;
 
                         case OpCode.JUMP_IF_LTE:
                             if (regs[Reg(op.B, rb)] <= regs[Reg(op.C, rb)])
-                                inst.IP = op.A;
+                                inst.IP = op.A | extendedA;
                             else
                                 inst.IP++;
+                            extendedA = 0;
                             break;
 
                         case OpCode.JUMP_IF_GT:
                             if (regs[Reg(op.B, rb)] > regs[Reg(op.C, rb)])
-                                inst.IP = op.A;
+                                inst.IP = op.A | extendedA;
                             else
                                 inst.IP++;
+                            extendedA = 0;
                             break;
 
                         case OpCode.JUMP_IF_GTE:
                             if (regs[Reg(op.B, rb)] >= regs[Reg(op.C, rb)])
-                                inst.IP = op.A;
+                                inst.IP = op.A | extendedA;
                             else
                                 inst.IP++;
+                            extendedA = 0;
                             break;
 
                         // --- B-ε4: FORLOOP super-instruction ---
@@ -614,9 +638,10 @@ namespace FFVM
                             int cr = Reg(op.B, rb);
                             regs[cr] = regs[cr] + Number.One;
                             if (regs[cr] < regs[Reg(op.C, rb)])
-                                inst.IP = op.A;
+                                inst.IP = op.A | extendedA;
                             else
                                 inst.IP++;
+                            extendedA = 0;
                             break;
                         }
 
@@ -624,44 +649,50 @@ namespace FFVM
 
                         case OpCode.JUMP_IF_EQ_K:
                             if (regs[Reg(op.B, rb)] == constBase[op.C])
-                                inst.IP = op.A;
+                                inst.IP = op.A | extendedA;
                             else
                                 inst.IP++;
+                            extendedA = 0;
                             break;
 
                         case OpCode.JUMP_IF_NEQ_K:
                             if (regs[Reg(op.B, rb)] != constBase[op.C])
-                                inst.IP = op.A;
+                                inst.IP = op.A | extendedA;
                             else
                                 inst.IP++;
+                            extendedA = 0;
                             break;
 
                         case OpCode.JUMP_IF_LT_K:
                             if (regs[Reg(op.B, rb)] < constBase[op.C])
-                                inst.IP = op.A;
+                                inst.IP = op.A | extendedA;
                             else
                                 inst.IP++;
+                            extendedA = 0;
                             break;
 
                         case OpCode.JUMP_IF_LTE_K:
                             if (regs[Reg(op.B, rb)] <= constBase[op.C])
-                                inst.IP = op.A;
+                                inst.IP = op.A | extendedA;
                             else
                                 inst.IP++;
+                            extendedA = 0;
                             break;
 
                         case OpCode.JUMP_IF_GT_K:
                             if (regs[Reg(op.B, rb)] > constBase[op.C])
-                                inst.IP = op.A;
+                                inst.IP = op.A | extendedA;
                             else
                                 inst.IP++;
+                            extendedA = 0;
                             break;
 
                         case OpCode.JUMP_IF_GTE_K:
                             if (regs[Reg(op.B, rb)] >= constBase[op.C])
-                                inst.IP = op.A;
+                                inst.IP = op.A | extendedA;
                             else
                                 inst.IP++;
+                            extendedA = 0;
                             break;
 
                         // --- B-ζ3: SWITCH jump table dispatch ---
@@ -673,7 +704,8 @@ namespace FFVM
                             if (val >= 0 && val < table.Length)
                                 inst.IP = table[val];
                             else
-                                inst.IP = op.A; // default
+                                inst.IP = op.A | extendedA; // default
+                            extendedA = 0;
                             break;
                         }
 
