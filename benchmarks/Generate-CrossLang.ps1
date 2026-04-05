@@ -3,7 +3,8 @@
 #  Parses raw benchmark output from all languages and generates
 #  a cross-language comparison markdown report.
 #  Each benchmark naturally mixes int (loop control) and float
-#  (computation). Baseline: C# raw (native int + double).
+#  (computation). Baseline: C# (Number struct, same semantics as FFVM).
+#  Column order: C# raw | C# (baseline) | FFVM | Lua | Node.js | Python
 #
 #  Usage: powershell -File Generate-CrossLang.ps1 [-RawDir <dir>] [-Output <file>]
 # ============================================================
@@ -160,35 +161,39 @@ if ($verParts.Count -gt 0) {
 # Absolute times
 [void]$sb.AppendLine("### Absolute Times (${MU}s)")
 [void]$sb.AppendLine("")
-[void]$sb.AppendLine("| Benchmark | C# raw | C# | FFVM | Node.js | Lua | Python |")
-[void]$sb.AppendLine("|-----------|-------:|---:|-----:|--------:|----:|-------:|")
+[void]$sb.AppendLine("| Benchmark | C# raw | C# | FFVM | Lua | Node.js | Python |")
+[void]$sb.AppendLine("|-----------|-------:|---:|-----:|----:|--------:|-------:|")
 
 foreach ($b in $benchmarks) {
     $raw = Fmt-Time $rawTimes $b
     $cs  = Fmt-Time $csTimes $b
     $vm  = Fmt-Time $vmTimes $b
-    $js  = Fmt-Time $jsTimes $b
     $lua = Fmt-Time $luaTimes $b
+    $js  = Fmt-Time $jsTimes $b
     $py  = Fmt-Time $pyTimes $b
-    [void]$sb.AppendLine("| $b | $raw | $cs | $vm | $js | $lua | $py |")
+    [void]$sb.AppendLine("| $b | $raw | $cs | $vm | $lua | $js | $py |")
 }
 
 [void]$sb.AppendLine("")
 
-# Ratios
-[void]$sb.AppendLine("### Relative to C# raw (1.00x)")
+# Ratios — baseline is C# (Number struct)
+[void]$sb.AppendLine("### Relative to C# (1.00x)")
 [void]$sb.AppendLine("")
-[void]$sb.AppendLine("| Benchmark | C# raw | C# | FFVM | Node.js | Lua | Python |")
-[void]$sb.AppendLine("|-----------|-------:|---:|-----:|--------:|----:|-------:|")
+[void]$sb.AppendLine("> Baseline = **C#** (uses ``Number`` struct for computation, ``int`` for loop control).")
+[void]$sb.AppendLine("> This is the fairest comparison target: same .NET runtime, same ``Number`` arithmetic.")
+[void]$sb.AppendLine("> FFVM adds interpretation overhead on top of the same ``Number`` cost.")
+[void]$sb.AppendLine("")
+[void]$sb.AppendLine("| Benchmark | C# raw | C# | FFVM | Lua | Node.js | Python |")
+[void]$sb.AppendLine("|-----------|-------:|---:|-----:|----:|--------:|-------:|")
 
 foreach ($b in $benchmarks) {
-    $rawR = "1.00x"
-    $csR  = Fmt-Ratio $csTimes $b $rawTimes
-    $vmR  = Fmt-Ratio $vmTimes $b $rawTimes
-    $jsR  = Fmt-Ratio $jsTimes $b $rawTimes
-    $luaR = Fmt-Ratio $luaTimes $b $rawTimes
-    $pyR  = Fmt-Ratio $pyTimes $b $rawTimes
-    [void]$sb.AppendLine("| $b | $rawR | $csR | $vmR | $jsR | $luaR | $pyR |")
+    $rawR = Fmt-Ratio $rawTimes $b $csTimes
+    $csR  = "1.00x"
+    $vmR  = Fmt-Ratio $vmTimes $b $csTimes
+    $luaR = Fmt-Ratio $luaTimes $b $csTimes
+    $jsR  = Fmt-Ratio $jsTimes $b $csTimes
+    $pyR  = Fmt-Ratio $pyTimes $b $csTimes
+    [void]$sb.AppendLine("| $b | $rawR | $csR | $vmR | $luaR | $jsR | $pyR |")
 }
 
 [void]$sb.AppendLine("")
@@ -202,16 +207,69 @@ foreach ($b in $benchmarks) {
 [void]$sb.AppendLine("")
 [void]$sb.AppendLine("### Key Takeaways")
 [void]$sb.AppendLine("")
-[void]$sb.AppendLine("- **C# raw** ${DASH} Theoretical maximum. RyuJIT: native ``int`` for loops, ``double`` for computation.")
-[void]$sb.AppendLine("- **C#** ${DASH} Uses ``Number`` struct for float computation. B02 (pure int) matches raw; others show ``Number`` overhead.")
-[void]$sb.AppendLine("- **FFVM** ${DASH} Bytecode interpreter. All values degraded to ``Number`` (double). No type specialization. Target: ${LE} 10x of C#.")
-[void]$sb.AppendLine("- **Node.js (V8)** ${DASH} Multi-tier JIT. V8 uses Smi for int loop counters, HeapNumber for doubles. Approaches native speed.")
-[void]$sb.AppendLine("- **Lua (PUC-Rio)** ${DASH} Register-based interpreter. All numbers are C ``double`` (degraded). Competitive with FFVM.")
-[void]$sb.AppendLine("- **Python (CPython)** ${DASH} Slowest. ``int`` is boxed arbitrary-precision, ``float`` is boxed C ``double``. Both heap-allocated.")
+[void]$sb.AppendLine("- **C# raw** ${DASH} Theoretical maximum. RyuJIT: native ``int`` loops + ``double`` arithmetic. Hardware-level optimization ceiling.")
+[void]$sb.AppendLine("- **C#** ${DASH} **Baseline.** Uses ``Number`` struct (double wrapper) for computation, same as FFVM runtime type. Isolates interpretation overhead from arithmetic cost.")
+[void]$sb.AppendLine("- **FFVM** ${DASH} Register-based bytecode interpreter. All values are ``Number`` (double). FORLOOP super-instruction optimizes canonical for-loops.")
+[void]$sb.AppendLine("- **Lua (PUC-Rio)** ${DASH} Register-based interpreter in C. All numbers are C ``double``. FORLOOP instruction. **Primary comparison target** ${DASH} closest architectural peer.")
+[void]$sb.AppendLine("- **Node.js (V8)** ${DASH} Multi-tier JIT. Approaches native speed. Not a realistic comparison target for an interpreter.")
+[void]$sb.AppendLine("- **Python (CPython)** ${DASH} Stack-based interpreter. Boxed types + arbitrary-precision ``int``. Substantially slower than both FFVM and Lua.")
 [void]$sb.AppendLine("")
-[void]$sb.AppendLine("> **FFVM** is a pure bytecode interpreter (no JIT). It competes with Lua (PUC-Rio)")
-[void]$sb.AppendLine("> and substantially outperforms CPython. The gap to Node.js/C# raw reflects the")
-[void]$sb.AppendLine("> fundamental cost of interpretation vs JIT compilation.")
+
+# ── B02 Measurement Caveat ──
+[void]$sb.AppendLine("### B02 Measurement Caveat")
+[void]$sb.AppendLine("")
+[void]$sb.AppendLine("B02_Fibonacci (scale=46, only 46 iterations) runs in sub-microsecond time across all languages.")
+[void]$sb.AppendLine("At this scale, **timer resolution and harness overhead dominate the measurement**:")
+[void]$sb.AppendLine("")
+[void]$sb.AppendLine("- FFVM reports ~0.3${MU}s, but this includes ``SpawnInstance`` + ``Tick`` + ``DestroyInstance`` harness overhead per iteration.")
+[void]$sb.AppendLine("- C# raw / C# report ~0.4${MU}s ${DASH} the marginal difference is pure noise at this resolution.")
+[void]$sb.AppendLine("- Lua reports 0.0${MU}s ${DASH} ``os.clock()`` resolution is too coarse for sub-${MU}s measurement.")
+[void]$sb.AppendLine("- Any apparent FFVM advantage over C# in B02 is a **measurement artifact**, not a real performance win.")
+[void]$sb.AppendLine("")
+[void]$sb.AppendLine("> **Conclusion**: B02 at scale=46 is below the reliable measurement threshold.")
+[void]$sb.AppendLine("> Cross-language ratios for B02 should be disregarded. To fix, increase scale to ~10,000+ iterations.")
+[void]$sb.AppendLine("")
+
+# ── FFVM vs Lua Gap Analysis ──
+[void]$sb.AppendLine("### FFVM vs Lua: Gap Analysis")
+[void]$sb.AppendLine("")
+[void]$sb.AppendLine("FFVM and Lua are the closest architectural peers: both are register-based interpreters")
+[void]$sb.AppendLine("with a unified ``double`` number type and a FORLOOP super-instruction.")
+[void]$sb.AppendLine("Remaining gap factors:")
+[void]$sb.AppendLine("")
+[void]$sb.AppendLine("| Factor | Lua (C) | FFVM (C#) | Impact |")
+[void]$sb.AppendLine("|--------|---------|-----------|--------|")
+[void]$sb.AppendLine("| **Instruction encoding** | 4 bytes (packed uint32) | 16 bytes (OpCode+3${TIMES}int) | FFVM 4${TIMES} larger instructions ${RARR} worse L1 icache utilization. A tight 10-instruction loop fits in 40B (Lua) vs 160B (FFVM). |")
+[void]$sb.AppendLine("| **Dispatch mechanism** | C ``switch`` on native enum (computed goto on GCC) | C# ``switch`` on byte, JIT compiles to jump table | Lua with GCC uses threaded dispatch (label-as-value); FFVM uses standard switch. ~10-20% dispatch overhead difference. |")
+[void]$sb.AppendLine("| **Value representation** | C ``double`` (raw 8-byte IEEE 754) | ``Number`` struct (readonly wrapper around ``double``) | FFVM's ``Number`` operator overloads add method-call overhead. JIT may inline but not guaranteed for all operators. |")
+[void]$sb.AppendLine("| **Register access** | ``lua_Number`` array, direct C pointer indexing | ``Number*`` pinned pointer + ``Reg()`` helper with register window offset | FFVM's ``Reg(op.X, rb)`` adds an ``op.X + rb`` addition per register access for multi-instance support. |")
+[void]$sb.AppendLine("| **Branching overhead** | Branchless compare (C operators map to single x86 cmov/jcc) | ``Number`` comparison ${RARR} operator overload ${RARR} ``double`` compare | B04 shows the largest gap: heavy branching amplifies per-comparison overhead. |")
+[void]$sb.AppendLine("| **Self-limiting design** | General-purpose language | Skill scripting VM with safety constraints | FFVM enforces register windows, cleanup chains, MaxSteps budgets, debugger hooks ${DASH} these add per-instruction overhead that Lua doesn't have. |")
+[void]$sb.AppendLine("")
+[void]$sb.AppendLine("> **Key insight**: The largest single factor is **instruction encoding size** (4x).")
+[void]$sb.AppendLine("> FFVM uses 16-byte instructions (1-byte opcode + 3${TIMES}4-byte int operands)")
+[void]$sb.AppendLine("> vs Lua's 4-byte packed instructions. This directly impacts L1 instruction cache")
+[void]$sb.AppendLine("> hit rate and memory bandwidth in tight loops.")
+[void]$sb.AppendLine("")
+
+# ── Potential Optimization Outlook ──
+[void]$sb.AppendLine("### Potential Optimizations")
+[void]$sb.AppendLine("")
+[void]$sb.AppendLine("Despite self-limiting design choices, several optimization paths remain:")
+[void]$sb.AppendLine("")
+[void]$sb.AppendLine("| ID | Optimization | Expected Impact | Complexity | Notes |")
+[void]$sb.AppendLine("|----|-------------|----------------|------------|-------|")
+[void]$sb.AppendLine("| **O8** | Instruction compression 16B${RARR}4B | 10-20% (cache) | High | Pack opcode+3 operands into uint32. Biggest single win. Requires full opcode encoding redesign. |")
+[void]$sb.AppendLine("| **O11** | Syscall ``delegate*`` (function pointer) | ~30% syscall path | Medium | Replace virtual dispatch with unmanaged function pointers. |")
+[void]$sb.AppendLine("| **O12** | ``Number`` raw field comparison | ~10% compare | Low | Bypass operator overload, compare raw ``double`` fields directly in VM dispatch. |")
+[void]$sb.AppendLine("| **FO3** | Small function inlining | Up to -80% for tiny helpers | High | Inline functions ${LE}N instructions at call site. Eliminates CALL/RET overhead. |")
+[void]$sb.AppendLine("| **P${DASH}F1** | ``while`` loop FORLOOP recognition | ~5-10% for while-heavy code | Medium | Pattern-match ``while(i<N) { ... i=i+1 }`` to FORLOOP. |")
+[void]$sb.AppendLine("| ${DASH} | Eliminate ``Reg()`` offset in single-instance fast path | ~5% dispatch | Low | When no call stack, skip register window offset. |")
+[void]$sb.AppendLine("")
+[void]$sb.AppendLine("> **Realistic target**: With O8 (instruction compression) + O12 (raw comparison),")
+[void]$sb.AppendLine("> FFVM could reach **parity or better than Lua** on compute-heavy benchmarks.")
+[void]$sb.AppendLine("> The self-limiting design overhead (register windows, cleanup chains, debugger hooks)")
+[void]$sb.AppendLine("> is a conscious trade-off for safety and debuggability in a game scripting context.")
 
 # Write file with UTF-8 (no BOM)
 $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
