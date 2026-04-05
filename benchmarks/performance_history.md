@@ -26,6 +26,54 @@
 
 <!-- HISTORY_START — CI 自动追加区域，请勿手动编辑此标记 -->
 
+### 2026-04-05 09:45 UTC — `a76c56ea7f098cca9488486868ddf42cbda25542`
+
+> .NET 8.0.25 | Microsoft | 8 cores
+
+| Benchmark | VM (μs) | C# (μs) | Ratio | Δ VM | Δ Ratio |
+|-----------|---------|---------|-------|------|---------|
+| B01_ArithLoop | 1006.5 | 91.8 | 10.96x | -518.8 (↓34%) | +1.34x ⚠️ |
+| B02_Fibonacci | 4.2 | 1.1 | 3.76x | +0.2 (↑5%) | +0.91x ⚠️ |
+| B03_NestedLoop | 1003.2 | 59.8 | 16.77x | +56.5 (↑6%) | -39.63x ✅ |
+| B04_Branching | 3004 | 104.7 | 28.68x | +1261.6 (↑72%) | +10.66x ⚠️ |
+| B05_Accumulator | 3100.2 | 147.7 | 20.99x | +386.3 (↑14%) | -4.07x ✅ |
+| B06_FuncCall | 857.7 | 38.4 | 22.31x | -190.0 (↓18%) | +1.48x ⚠️ |
+
+⚠️ **Regression detected**: VM/C# ratio increased >10% on one or more benchmarks.
+
+
+### 2026-04-05 09:34 UTC — `a76c56ea7f098cca9488486868ddf42cbda25542`
+
+> .NET 8.0.25 | Microsoft | 8 cores
+
+| Benchmark | VM (μs) | C# (μs) | Ratio | Δ VM | Δ Ratio |
+|-----------|---------|---------|-------|------|---------|
+| B01_ArithLoop | 1525.3 | 158.6 | 9.62x | -312.5 (↓17%) | -4.08x ✅ |
+| B02_Fibonacci | 4 | 1.4 | 2.85x | -0.1 (↓2%) | -2.22x ✅ |
+| B03_NestedLoop | 946.7 | 16.8 | 56.4x | -251.8 (↓21%) | +1.90x ⚠️ |
+| B04_Branching | 1742.4 | 96.7 | 18.02x | -848.0 (↓33%) | -9.25x ✅ |
+| B05_Accumulator | 2713.9 | 108.3 | 25.06x | -1730.2 (↓39%) | -13.17x ✅ |
+| B06_FuncCall | 1047.7 | 50.3 | 20.83x | +148.9 (↑17%) | +6.96x ⚠️ |
+
+⚠️ **Regression detected**: VM/C# ratio increased >10% on one or more benchmarks.
+
+
+### 2026-04-05 09:22 UTC — `a76c56ea7f098cca9488486868ddf42cbda25542`
+
+> .NET 8.0.25 | Microsoft | 8 cores
+
+| Benchmark | VM (μs) | C# (μs) | Ratio | Δ VM | Δ Ratio |
+|-----------|---------|---------|-------|------|---------|
+| B01_ArithLoop | 1837.8 | 134.1 | 13.7x | — (env changed) | — (env changed) |
+| B02_Fibonacci | 4.1 | 0.8 | 5.07x | — (env changed) | — (env changed) |
+| B03_NestedLoop | 1198.5 | 22 | 54.5x | — (env changed) | — (env changed) |
+| B04_Branching | 2590.4 | 95 | 27.27x | — (env changed) | — (env changed) |
+| B05_Accumulator | 4444.1 | 116.2 | 38.23x | — (env changed) | — (env changed) |
+| B06_FuncCall | 898.8 | 64.8 | 13.87x | — (env changed) | — (env changed) |
+
+📌 **New environment baseline**: environment changed from `10.0.5|Microsoft|20` to `8.0.25|Microsoft|8`. Deltas reset.
+
+
 ### 2026-04-05 07:02 UTC — `3ed5d2ebc7059619216bc6953b5821ec2fa89c65`
 
 > .NET 10.0.5 | Microsoft | 20 cores

@@ -637,7 +637,7 @@ skill TracerBullet
 | — | **B-δ4 SN2 结构体字面量构造语法** | **StructLiteralExpr AST + Parser `TypeName { field: expr }` + Compiler sugar 展开 + 嵌套字面量 + CS31-CS38 测试** | **990** | [B-δ4](Plan/Step_B_Delta4_SN2_StructLiteral.md) |
 | — | **B-δ5 C5 Cleanup 超时保护** | **MaxCleanupSteps 每块步数预算 + 超时跳过当前块继续剩余 cleanup + C5-01~C5-04 测试** | **1007** | [B-δ5](Plan/Step_B_Delta5_C5_CleanupTimeout.md) |
 
-**B 阶段全部完成。1007 项 Assert × 2 模式全通过。B-ε 性能优化串行计划全部完成（4/4）。当前位置 → B-ζ 分支场景优化。**
+**B 阶段全部完成。1007 项 Assert × 2 模式全通过。B-ε 性能优化串行计划全部完成（4/4）。B-ζ 分支场景优化串行计划全部完成（3/3）。当前位置 → C 阶段。**
 
 ---
 
@@ -678,11 +678,11 @@ B 阶段 20 个步骤（B-R1 → B-δ5）全部完成，已归入上方 A 区表
 
 | 序号 | 步骤 | 状态 | 内容 | 预期收益 | 复杂度 |
 |------|------|------|------|---------|--------|
-| B-ζ1 | LICM（循环不变量常量提升） | ⏳ | 编译器识别循环体内 LOAD_CONST 引用的常量为循环不变量，提升到循环前一次加载到寄存器，循环体内复用。B04 每迭代约省 ~6 条 LOAD_CONST | ~30-40% B04 加速；所有循环基准普遍受益 | 中（循环体常量分析 + 寄存器分配调整；消耗额外 local 寄存器槽位） |
-| B-ζ2 | CMP-immediate 指令 | ⏳ | +6 OpCode `JUMP_IF_EQ_K` ~ `JUMP_IF_GTE_K`：`A=targetIP, B=reg, C=constIndex`，一条指令完成"与常量比较并跳转"，替代 `LOAD_CONST tmp` + `JUMP_IF_*`。Peephole 识别 + 编译器直接 emit | ~15-20% B04 加速；所有含常量比较的分支受益 | 中（+6 OpCode + VMWorld case + Peephole/Compiler 识别） |
-| B-ζ3 | SWITCH 跳转表指令 | ⏳ | 编译器识别连续 if-else if 链中所有条件为同一变量对连续整数常量比较时，生成 `SWITCH reg, jumpTable` 跳转表指令；O(N) 串行测试 → O(1) 分派 | ~20-30% B04 加速；适用于状态机/多分支场景 | 中高（AST 模式识别 + 跳转表编码 + 新 OpCode + 仅对连续整数常量有效） |
+| B-ζ1 | LICM（循环不变量常量提升） | ✅ | 编译器识别循环体内 LOAD_CONST 引用的常量为循环不变量，提升到循环前一次加载到寄存器，循环体内复用。B04 降33% | B04 ↓ 33%，B01/B03/B05 普遍↓17-39% | 中 | [B-ζ1](Plan/Step_B_Zeta1_LICM.md) |
+| B-ζ2 | CMP-immediate 指令 | ✅ | +6 OpCode `JUMP_IF_EQ_K` ~ `JUMP_IF_GTE_K`：`A=targetIP, B=reg, C=constIndex`，一条指令完成"与常量比较并跳转"，替代 `LOAD_CONST tmp` + `JUMP_IF_*`。Peephole 识别 + 编译器直接 emit | ~15-20% B04 加速；所有含常量比较的分支受益 | 中（+6 OpCode + VMWorld case + Peephole/Compiler 识别） |
+| B-ζ3 | SWITCH 跳转表指令 | ✅ | 编译器识别连续 if-else if 链中所有条件为同一变量对连续整数常量（从 0 起）比较时，生成 `SWITCH defaultIP, testReg, jumpTableIdx` 跳转表指令；O(N) 串行测试 → O(1) 分派。+1 OpCode + VMProgram.JumpTables + 编译器 TryCompileSwitch + Peephole 跳转表重映射 | B04↓40-47%（含高方差环境） | 中高（AST 模式识别 + 跳转表编码 + 新 OpCode + 仅对连续 0-based 整数常量有效） |
 
-**当前位置 → B-ζ 分支场景优化串行计划。下一步 B-ζ1 LICM。**
+**B-ζ 分支场景优化串行计划完成（3/3 ✅）。当前位置 → C 阶段。下一步 C1 真实 Syscall 接入 ECS。**
 
 ---
 

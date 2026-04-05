@@ -29,6 +29,9 @@ namespace FFVM.Compiler
         private Dictionary<string, Number> _constValues;  // B-ε3: name → compile-time constant value
         private int _nextVarReg;
         private int _forLoopId;                            // B-ε4: unique suffix for hidden limit vars
+        private Dictionary<int, int> _hoistedConstants;     // B-ζ1: LICM — constIndex → hoisted register
+        private int _licmId;                               // B-ζ1: unique suffix for hoisted constant vars
+        private List<int[]> _jumpTables;                   // B-ζ3: SWITCH jump tables (tableIdx → IP array)
         private int _tempTop;
         private Dictionary<string, int> _syscalls;    // name → slot
         private SyscallTable _syscallTable;            // paired slot lookup (optional, for using)
@@ -136,6 +139,7 @@ namespace FFVM.Compiler
             _instructions = new List<Instruction>();
             _constants = new List<Number>();
             _stringConstants = new List<string>();
+            _jumpTables = new List<int[]>();
             _syscalls = syscalls ?? new Dictionary<string, int>();
             _syscallTable = syscallTable;
             _errors = new List<string>();
@@ -279,7 +283,8 @@ namespace FFVM.Compiler
                     functionEntries.ToArray(),
                     _sourceLines.ToArray(),
                     _symbolEntries.ToArray(),
-                    _stringConstants.Count > 0 ? _stringConstants.ToArray() : null
+                    _stringConstants.Count > 0 ? _stringConstants.ToArray() : null,
+                    _jumpTables.Count > 0 ? _jumpTables.ToArray() : null
                 ),
                 Errors = _errors
             };
@@ -547,6 +552,15 @@ namespace FFVM.Compiler
                 // B = register
                 case OpCode.JUMP_IF_ZERO:     return 2;  // A=targetIP, B=testReg
                 case OpCode.JUMP_IF_NOT_ZERO: return 2;  // A=targetIP, B=testReg
+
+                // B = register, C = constIndex (B-ζ2 fused constant-compare-and-branch)
+                case OpCode.JUMP_IF_EQ_K:  case OpCode.JUMP_IF_NEQ_K:
+                case OpCode.JUMP_IF_LT_K:  case OpCode.JUMP_IF_LTE_K:
+                case OpCode.JUMP_IF_GT_K:  case OpCode.JUMP_IF_GTE_K:
+                    return 2; // A=targetIP, B=reg, C=constIndex
+
+                // B-ζ3: SWITCH — B=testReg
+                case OpCode.SWITCH: return 2; // A=defaultIP, B=testReg, C=jumpTableIdx
 
                 // B, C = registers (P5 fused compare-and-branch)
                 case OpCode.JUMP_IF_EQ:  case OpCode.JUMP_IF_NEQ:
@@ -1097,6 +1111,25 @@ namespace FFVM.Compiler
 
         // ===== Constant pool =====
 
+        /// <summary>
+        /// B-ζ1: Emit a LOAD_CONST or reuse a hoisted register.
+        /// If the constant was hoisted (LICM), returns the hoisted register directly (no instruction emitted)
+        /// or emits a MOVE if a specific destReg is requested.
+        /// </summary>
+        private int EmitLoadConst(int constIndex, int destReg)
+        {
+            if (_hoistedConstants != null && _hoistedConstants.TryGetValue(constIndex, out int hoistedReg))
+            {
+                if (destReg < 0) return hoistedReg; // no specific dest → use hoisted register directly
+                if (destReg == hoistedReg) return destReg;
+                Emit(OpCode.MOVE, destReg, hoistedReg);
+                return destReg;
+            }
+            int reg = destReg >= 0 ? destReg : AllocTemp();
+            Emit(OpCode.LOAD_CONST, reg, constIndex);
+            return reg;
+        }
+
         private int AddConst(Number value)
         {
             for (int i = 0; i < _constants.Count; i++)
@@ -1390,13 +1423,287 @@ namespace FFVM.Compiler
             else
             {
                 // Default initialize to 0
-                int ci = AddConst(Number.Zero);
-                Emit(OpCode.LOAD_CONST, reg, ci);
+                EmitLoadConst(AddConst(Number.Zero), reg);
             }
+        }
+
+        // ===== B-ζ1: LICM — Loop-Invariant Constant Motion =====
+
+        private const int MaxHoistedPerLoop = 8;
+
+        /// <summary>
+        /// Walk an AST subtree and collect all Number constants that would generate LOAD_CONST.
+        /// </summary>
+        private void CollectLoopLiterals(ASTNode node, HashSet<Number> result)
+        {
+            if (node == null) return;
+            // Constant-foldable expressions: collect folded value, don't recurse
+            if ((node is BinaryExpr || node is UnaryExpr) && TryFoldConstant((Expr)node, out Number folded))
+            {
+                result.Add(folded);
+                return;
+            }
+            if (node is IntLiteralExpr intLit) { result.Add(Number.FromInt(intLit.Value)); return; }
+            if (node is NumberLiteralExpr numLit) { result.Add(Number.FromFloat(numLit.Value)); return; }
+            if (node is BoolLiteralExpr boolLit) { result.Add(boolLit.Value ? Number.One : Number.Zero); return; }
+            // const identifier — inline value
+            if (node is IdentifierExpr ident && _constValues != null && _constValues.TryGetValue(ident.Name, out Number cv))
+            {
+                result.Add(cv);
+                return;
+            }
+            // Recurse into children
+            if (node is BlockStmt block)
+            {
+                for (int i = 0; i < block.Statements.Count; i++) CollectLoopLiterals(block.Statements[i], result);
+            }
+            else if (node is ExprStmt es) CollectLoopLiterals(es.Expression, result);
+            else if (node is VarDeclStmt vd)
+            {
+                if (vd.Initializer != null) CollectLoopLiterals(vd.Initializer, result);
+                else result.Add(Number.Zero); // default init
+            }
+            else if (node is IfStmt ifs)
+            {
+                CollectLoopLiterals(ifs.Condition, result);
+                CollectLoopLiterals(ifs.ThenBranch, result);
+                if (ifs.ElseBranch != null) CollectLoopLiterals(ifs.ElseBranch, result);
+            }
+            else if (node is WhileStmt ws) { CollectLoopLiterals(ws.Condition, result); CollectLoopLiterals(ws.Body, result); }
+            else if (node is ForStmt fs)
+            {
+                if (fs.Initializer != null) CollectLoopLiterals(fs.Initializer, result);
+                if (fs.Condition != null) CollectLoopLiterals(fs.Condition, result);
+                if (fs.Increment != null) CollectLoopLiterals(fs.Increment, result);
+                CollectLoopLiterals(fs.Body, result);
+            }
+            else if (node is ReturnStmt rs) { if (rs.Value != null) CollectLoopLiterals(rs.Value, result); }
+            else if (node is BinaryExpr bin) { CollectLoopLiterals(bin.Left, result); CollectLoopLiterals(bin.Right, result); }
+            else if (node is UnaryExpr un) { CollectLoopLiterals(un.Operand, result); }
+            else if (node is AssignExpr ae) { CollectLoopLiterals(ae.Target, result); CollectLoopLiterals(ae.Value, result); }
+            else if (node is CallExpr ce) { for (int i = 0; i < ce.Arguments.Count; i++) CollectLoopLiterals(ce.Arguments[i], result); }
+            else if (node is FieldAccessExpr fa) { CollectLoopLiterals(fa.Target, result); }
+            else if (node is StructLiteralExpr sl) { for (int i = 0; i < sl.Fields.Count; i++) CollectLoopLiterals(sl.Fields[i].Value, result); }
+            else if (node is UsingStmt us2) { for (int i = 0; i < us2.Arguments.Count; i++) CollectLoopLiterals(us2.Arguments[i], result); CollectLoopLiterals(us2.Body, result); }
+            else if (node is DeferStmt ds) { CollectLoopLiterals(ds.Body, result); }
+        }
+
+        /// <summary>
+        /// Hoist loop-invariant constants: emit LOAD_CONST before the loop, populate _hoistedConstants.
+        /// Returns the previous hoisted map for restoration after the loop.
+        /// </summary>
+        private Dictionary<int, int> BeginLoopHoist(params ASTNode[] bodyNodes)
+        {
+            var saved = _hoistedConstants;
+            var literals = new HashSet<Number>();
+            for (int i = 0; i < bodyNodes.Length; i++)
+                CollectLoopLiterals(bodyNodes[i], literals);
+            if (literals.Count == 0) return saved;
+
+            // Inherit existing hoisted map
+            _hoistedConstants = saved != null
+                ? new Dictionary<int, int>(saved)
+                : new Dictionary<int, int>();
+
+            int hoisted = 0;
+            foreach (var val in literals)
+            {
+                if (hoisted >= MaxHoistedPerLoop) break;
+                int ci = AddConst(val);
+                if (_hoistedConstants.ContainsKey(ci)) continue; // already hoisted by outer loop
+                int reg = DeclareVar($"$lc{_licmId++}");
+                Emit(OpCode.LOAD_CONST, reg, ci);
+                _hoistedConstants[ci] = reg;
+                hoisted++;
+            }
+            ResetTemps();
+            return saved;
+        }
+
+        private void EndLoopHoist(Dictionary<int, int> saved)
+        {
+            _hoistedConstants = saved;
+        }
+
+        // ===== B-ζ2: CMP-immediate — fused constant-compare-and-jump =====
+
+        /// <summary>
+        /// Try to emit a fused JUMP_IF_*_K for a comparison condition with a constant operand.
+        /// Emits a "skip-when-false" jump (same semantics as JUMP_IF_ZERO for the condition).
+        /// Returns true if emitted, with jumpIP for backpatching.
+        /// </summary>
+        private bool TryEmitKJump(Expr condition, out int jumpIP)
+        {
+            jumpIP = -1;
+            if (!(condition is BinaryExpr bin)) return false;
+
+            // Must be a comparison operator
+            NodeKind kind = bin.Kind;
+            if (kind != NodeKind.Eq && kind != NodeKind.Neq &&
+                kind != NodeKind.Lt && kind != NodeKind.Lte &&
+                kind != NodeKind.Gt && kind != NodeKind.Gte)
+                return false;
+
+            // Try right operand as constant
+            if (TryFoldConstant(bin.Right, out Number rightVal))
+            {
+                int regLeft = CompileExpr(bin.Left);
+                int ci = AddConst(rightVal);
+                jumpIP = _instructions.Count;
+                Emit(InvertedKOp(kind), 0, regLeft, ci);
+                return true;
+            }
+
+            // Try left operand as constant (swap sides + flip comparison)
+            if (TryFoldConstant(bin.Left, out Number leftVal))
+            {
+                int regRight = CompileExpr(bin.Right);
+                int ci = AddConst(leftVal);
+                jumpIP = _instructions.Count;
+                Emit(InvertedKOp(SwapCompare(kind)), 0, regRight, ci);
+                return true;
+            }
+
+            return false;
+        }
+
+        /// <summary>Returns the _K opcode that jumps when the comparison is FALSE (inverted).</summary>
+        private static OpCode InvertedKOp(NodeKind cmp)
+        {
+            switch (cmp)
+            {
+                case NodeKind.Eq:  return OpCode.JUMP_IF_NEQ_K;
+                case NodeKind.Neq: return OpCode.JUMP_IF_EQ_K;
+                case NodeKind.Lt:  return OpCode.JUMP_IF_GTE_K;
+                case NodeKind.Lte: return OpCode.JUMP_IF_GT_K;
+                case NodeKind.Gt:  return OpCode.JUMP_IF_LTE_K;
+                case NodeKind.Gte: return OpCode.JUMP_IF_LT_K;
+                default: return OpCode.NOP;
+            }
+        }
+
+        /// <summary>Swap comparison direction: a &lt; b → b &gt; a (for constant-on-left).</summary>
+        private static NodeKind SwapCompare(NodeKind cmp)
+        {
+            switch (cmp)
+            {
+                case NodeKind.Lt:  return NodeKind.Gt;
+                case NodeKind.Lte: return NodeKind.Gte;
+                case NodeKind.Gt:  return NodeKind.Lt;
+                case NodeKind.Gte: return NodeKind.Lte;
+                default: return cmp; // Eq, Neq are commutative
+            }
+        }
+
+        // ===== B-ζ3: SWITCH jump table compilation =====
+
+        /// <summary>
+        /// Try to compile an if-else-if chain as a SWITCH jump table dispatch.
+        /// Pattern: if (v == 0) { ... } else if (v == 1) { ... } else if (v == 2) { ... } else { ... }
+        /// Requirements: same variable, == comparisons, consecutive integer constants starting from 0, ≥3 cases.
+        /// </summary>
+        private bool TryCompileSwitch(IfStmt stmt)
+        {
+            // 1. Walk the if-else-if chain and collect cases
+            var caseBlocks = new List<(int constVal, Stmt body)>();
+            string switchVar = null;
+            Stmt defaultBlock = null;
+            IfStmt current = stmt;
+
+            while (current != null)
+            {
+                // Condition must be a BinaryExpr with Eq kind
+                if (!(current.Condition is BinaryExpr bin) || bin.Kind != NodeKind.Eq)
+                    return false;
+
+                // One side must be an identifier, the other a foldable integer constant
+                string varName;
+                int constVal;
+
+                if (bin.Left is IdentifierExpr leftId && TryFoldConstant(bin.Right, out Number rightVal))
+                {
+                    varName = leftId.Name;
+                    constVal = rightVal.ToInt();
+                    if (Number.FromInt(constVal) != rightVal) return false; // not an exact integer
+                }
+                else if (bin.Right is IdentifierExpr rightId && TryFoldConstant(bin.Left, out Number leftVal))
+                {
+                    varName = rightId.Name;
+                    constVal = leftVal.ToInt();
+                    if (Number.FromInt(constVal) != leftVal) return false;
+                }
+                else return false;
+
+                // All branches must test the same variable
+                if (switchVar == null) switchVar = varName;
+                else if (switchVar != varName) return false;
+
+                // Variable must be declared
+                if (!_variables.ContainsKey(switchVar)) return false;
+
+                caseBlocks.Add((constVal, current.ThenBranch));
+
+                if (current.ElseBranch is IfStmt nextIf)
+                    current = nextIf;
+                else
+                {
+                    defaultBlock = current.ElseBranch; // may be null
+                    current = null;
+                }
+            }
+
+            // 2. Need ≥3 cases for SWITCH to be worthwhile
+            if (caseBlocks.Count < 3) return false;
+
+            // 3. Sort by constant value and check consecutive from 0
+            caseBlocks.Sort((a, b) => a.constVal.CompareTo(b.constVal));
+            if (caseBlocks[0].constVal != 0) return false;
+            for (int i = 1; i < caseBlocks.Count; i++)
+                if (caseBlocks[i].constVal != i) return false;
+
+            // 4. Emit SWITCH instruction (placeholder for default IP)
+            int testReg = _variables[switchVar];
+            int tableSize = caseBlocks.Count;
+            int jumpTableIdx = _jumpTables.Count;
+            int[] jumpTable = new int[tableSize];
+            _jumpTables.Add(jumpTable);
+
+            int switchIP = CurrentIP();
+            Emit(OpCode.SWITCH, 0, testReg, jumpTableIdx); // A=defaultIP placeholder
+            ResetTemps();
+
+            // 5. Compile each case block, record entry IPs
+            var endJumps = new List<int>();
+            for (int i = 0; i < tableSize; i++)
+            {
+                jumpTable[i] = CurrentIP();
+                CompileStmt(caseBlocks[i].body);
+                endJumps.Add(EmitJump(OpCode.JUMP));
+                ResetTemps();
+            }
+
+            // 6. Default block
+            int defaultIP = CurrentIP();
+            if (defaultBlock != null)
+                CompileStmt(defaultBlock);
+
+            // 7. End of switch
+            int endIP = CurrentIP();
+
+            // 8. Backpatch: SWITCH.A = defaultIP, all end-of-case JUMPs → endIP
+            _instructions[switchIP] = new Instruction(OpCode.SWITCH, defaultIP, testReg, jumpTableIdx);
+            for (int i = 0; i < endJumps.Count; i++)
+                Backpatch(endJumps[i], endIP);
+
+            return true;
         }
 
         private void CompileIf(IfStmt stmt)
         {
+            // B-ζ3: try SWITCH jump table for if-else-if chains
+            if (stmt.ElseBranch is IfStmt && TryCompileSwitch(stmt))
+                return;
+
             // B-ε3: DCE — constant condition eliminates dead branch
             if (TryFoldConstant(stmt.Condition, out Number condVal))
             {
@@ -1407,8 +1714,17 @@ namespace FFVM.Compiler
                 return;
             }
 
-            int condReg = CompileExpr(stmt.Condition);
-            int jumpElseIP = EmitJump(OpCode.JUMP_IF_ZERO, condReg);
+            // B-ζ2: try fused constant-compare-and-jump
+            int jumpElseIP;
+            if (TryEmitKJump(stmt.Condition, out jumpElseIP))
+            {
+                // emitted JUMP_IF_*_K directly
+            }
+            else
+            {
+                int condReg = CompileExpr(stmt.Condition);
+                jumpElseIP = EmitJump(OpCode.JUMP_IF_ZERO, condReg);
+            }
             ResetTemps();
 
             CompileStmt(stmt.ThenBranch);
@@ -1432,14 +1748,28 @@ namespace FFVM.Compiler
             if (TryFoldConstant(stmt.Condition, out Number condVal) && condVal == Number.Zero)
                 return; // entire loop eliminated
 
+            // B-ζ1: LICM — hoist loop-invariant constants before the loop
+            var savedHoist = BeginLoopHoist(stmt.Condition, stmt.Body);
+
             int loopStart = CurrentIP();
-            int condReg = CompileExpr(stmt.Condition);
-            int jumpEndIP = EmitJump(OpCode.JUMP_IF_ZERO, condReg);
+            // B-ζ2: try fused constant-compare-and-jump
+            int jumpEndIP;
+            if (TryEmitKJump(stmt.Condition, out jumpEndIP))
+            {
+                // emitted JUMP_IF_*_K directly
+            }
+            else
+            {
+                int condReg = CompileExpr(stmt.Condition);
+                jumpEndIP = EmitJump(OpCode.JUMP_IF_ZERO, condReg);
+            }
             ResetTemps();
 
             CompileStmt(stmt.Body);
             Emit(OpCode.JUMP, loopStart);
             Backpatch(jumpEndIP, CurrentIP());
+
+            EndLoopHoist(savedHoist);
         }
 
         private void CompileFor(ForStmt stmt)
@@ -1454,14 +1784,25 @@ namespace FFVM.Compiler
                 ResetTemps();
             }
 
+            // B-ζ1: LICM — hoist loop-invariant constants (condition + body + increment)
+            var savedHoist = BeginLoopHoist(stmt.Condition, stmt.Body, stmt.Increment);
+
             int loopStart = CurrentIP();
 
             // Condition (if null, treat as always true → infinite loop)
             int jumpEndIP = -1;
             if (stmt.Condition != null)
             {
-                int condReg = CompileExpr(stmt.Condition);
-                jumpEndIP = EmitJump(OpCode.JUMP_IF_ZERO, condReg);
+                // B-ζ2: try fused constant-compare-and-jump
+                if (TryEmitKJump(stmt.Condition, out jumpEndIP))
+                {
+                    // emitted JUMP_IF_*_K directly
+                }
+                else
+                {
+                    int condReg = CompileExpr(stmt.Condition);
+                    jumpEndIP = EmitJump(OpCode.JUMP_IF_ZERO, condReg);
+                }
                 ResetTemps();
             }
 
@@ -1477,6 +1818,8 @@ namespace FFVM.Compiler
 
             if (jumpEndIP >= 0)
                 Backpatch(jumpEndIP, CurrentIP());
+
+            EndLoopHoist(savedHoist);
         }
 
         /// <summary>
@@ -1540,12 +1883,17 @@ namespace FFVM.Compiler
             Emit(OpCode.JUMP_IF_GTE, 0, counterReg, limitReg); // A=placeholder
             ResetTemps();
 
+            // B-ζ1: LICM — hoist loop-invariant constants before body
+            var savedHoist = BeginLoopHoist(stmt.Body);
+
             // Loop body
             int loopBodyIP = CurrentIP();
             CompileStmt(stmt.Body);
 
             // FORLOOP: counter += 1; if counter < limit → goto loopBody
             Emit(OpCode.FORLOOP, loopBodyIP, counterReg, limitReg);
+
+            EndLoopHoist(savedHoist);
 
             // Backpatch exit jump
             Backpatch(exitIP, CurrentIP());
@@ -1757,40 +2105,30 @@ namespace FFVM.Compiler
             {
                 if (TryFoldConstant(expr, out Number foldedValue))
                 {
-                    int reg = destReg >= 0 ? destReg : AllocTemp();
-                    Emit(OpCode.LOAD_CONST, reg, AddConst(foldedValue));
-                    return reg;
+                    return EmitLoadConst(AddConst(foldedValue), destReg);
                 }
             }
 
             if (expr is IntLiteralExpr intLit)
             {
-                int reg = destReg >= 0 ? destReg : AllocTemp();
-                Emit(OpCode.LOAD_CONST, reg, AddConst(Number.FromInt(intLit.Value)));
-                return reg;
+                return EmitLoadConst(AddConst(Number.FromInt(intLit.Value)), destReg);
             }
 
             if (expr is NumberLiteralExpr numLit)
             {
-                int reg = destReg >= 0 ? destReg : AllocTemp();
-                Emit(OpCode.LOAD_CONST, reg, AddConst(Number.FromFloat(numLit.Value)));
-                return reg;
+                return EmitLoadConst(AddConst(Number.FromFloat(numLit.Value)), destReg);
             }
 
             if (expr is BoolLiteralExpr boolLit)
             {
-                int reg = destReg >= 0 ? destReg : AllocTemp();
-                Emit(OpCode.LOAD_CONST, reg, AddConst(boolLit.Value ? Number.One : Number.Zero));
-                return reg;
+                return EmitLoadConst(AddConst(boolLit.Value ? Number.One : Number.Zero), destReg);
             }
 
             // STR1: String literal → store index into string constant pool as numeric constant
             if (expr is StringLiteralExpr strLit)
             {
                 int strIdx = AddStringConst(strLit.Value);
-                int reg = destReg >= 0 ? destReg : AllocTemp();
-                Emit(OpCode.LOAD_CONST, reg, AddConst(Number.FromInt(strIdx)));
-                return reg;
+                return EmitLoadConst(AddConst(Number.FromInt(strIdx)), destReg);
             }
 
             if (expr is IdentifierExpr ident)
@@ -1798,9 +2136,7 @@ namespace FFVM.Compiler
                 // B-ε3: const propagation — inline constant value
                 if (_constValues != null && _constValues.TryGetValue(ident.Name, out Number constVal))
                 {
-                    int reg = destReg >= 0 ? destReg : AllocTemp();
-                    Emit(OpCode.LOAD_CONST, reg, AddConst(constVal));
-                    return reg;
+                    return EmitLoadConst(AddConst(constVal), destReg);
                 }
                 return ResolveVar(ident.Name);
             }
@@ -2687,10 +3023,17 @@ namespace FFVM.Compiler
                 case OpCode.JUMP_IF_LTE:
                 case OpCode.JUMP_IF_GT:
                 case OpCode.JUMP_IF_GTE:
+                case OpCode.JUMP_IF_EQ_K:
+                case OpCode.JUMP_IF_NEQ_K:
+                case OpCode.JUMP_IF_LT_K:
+                case OpCode.JUMP_IF_LTE_K:
+                case OpCode.JUMP_IF_GT_K:
+                case OpCode.JUMP_IF_GTE_K:
                 case OpCode.FORLOOP:
                 case OpCode.CALL:
                 case OpCode.CALL_LEAF:
                 case OpCode.PUSH_CLEANUP:
+                case OpCode.SWITCH:
                     return true;
                 default:
                     return false;
@@ -2719,6 +3062,13 @@ namespace FFVM.Compiler
             {
                 if (HasJumpTargetInA(_instructions[i].Code))
                     jumpTargets.Add(_instructions[i].A);
+                // B-ζ3: SWITCH jump table entries are also jump targets
+                if (_instructions[i].Code == OpCode.SWITCH)
+                {
+                    int[] table = _jumpTables[_instructions[i].C];
+                    for (int t = 0; t < table.Length; t++)
+                        jumpTargets.Add(table[t]);
+                }
             }
 
             // Phase 2: pattern matching — mark eliminated instructions as NOP
@@ -2837,6 +3187,14 @@ namespace FFVM.Compiler
                 var fe = functionEntries[i];
                 int newEntryIP = remap[fe.EntryIP];
                 functionEntries[i] = new FunctionEntry(fe.Name, newEntryIP, fe.ParamCount, fe.LocalRegCount, fe.IsLeaf);
+            }
+
+            // B-ζ3: Rebase SWITCH jump table entries
+            for (int t = 0; t < _jumpTables.Count; t++)
+            {
+                int[] table = _jumpTables[t];
+                for (int j = 0; j < table.Length; j++)
+                    table[j] = remap[table[j]];
             }
         }
     }

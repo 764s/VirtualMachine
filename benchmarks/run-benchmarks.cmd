@@ -25,10 +25,9 @@ cd /d "%ROOT%"
 
 echo [*] Building and running benchmarks...
 
-:: Build to a temp directory to avoid file lock from running LSP server
-:: (VS Code LanguageClient keeps StandaloneRunner running as --lsp)
-set "BENCH_ARTIFACTS=%TEMP%\ffvm_bench_build"
-dotnet run --project "%ROOT%\%RUNNER%\StandaloneRunner.csproj" -c Release --artifacts-path "%BENCH_ARTIFACTS%" -- --bench > "%RAW%" 2>&1
+:: Note: --artifacts-path removed; it caused process-start failures on some
+:: environments.  If LSP file locks are a problem, stop the LSP server first.
+dotnet run --project "%ROOT%\%RUNNER%\StandaloneRunner.csproj" -c Release -- --bench > "%RAW%" 2>&1
 
 :: ?? parse environment line ??
 set "ENV_LINE="

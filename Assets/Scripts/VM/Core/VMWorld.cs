@@ -620,6 +620,63 @@ namespace FFVM
                             break;
                         }
 
+                        // --- B-ζ2: fused constant-compare-and-branch ---
+
+                        case OpCode.JUMP_IF_EQ_K:
+                            if (regs[Reg(op.B, rb)] == constBase[op.C])
+                                inst.IP = op.A;
+                            else
+                                inst.IP++;
+                            break;
+
+                        case OpCode.JUMP_IF_NEQ_K:
+                            if (regs[Reg(op.B, rb)] != constBase[op.C])
+                                inst.IP = op.A;
+                            else
+                                inst.IP++;
+                            break;
+
+                        case OpCode.JUMP_IF_LT_K:
+                            if (regs[Reg(op.B, rb)] < constBase[op.C])
+                                inst.IP = op.A;
+                            else
+                                inst.IP++;
+                            break;
+
+                        case OpCode.JUMP_IF_LTE_K:
+                            if (regs[Reg(op.B, rb)] <= constBase[op.C])
+                                inst.IP = op.A;
+                            else
+                                inst.IP++;
+                            break;
+
+                        case OpCode.JUMP_IF_GT_K:
+                            if (regs[Reg(op.B, rb)] > constBase[op.C])
+                                inst.IP = op.A;
+                            else
+                                inst.IP++;
+                            break;
+
+                        case OpCode.JUMP_IF_GTE_K:
+                            if (regs[Reg(op.B, rb)] >= constBase[op.C])
+                                inst.IP = op.A;
+                            else
+                                inst.IP++;
+                            break;
+
+                        // --- B-ζ3: SWITCH jump table dispatch ---
+
+                        case OpCode.SWITCH:
+                        {
+                            int val = regs[Reg(op.B, rb)].ToInt();
+                            int[] table = program.JumpTables[op.C];
+                            if (val >= 0 && val < table.Length)
+                                inst.IP = table[val];
+                            else
+                                inst.IP = op.A; // default
+                            break;
+                        }
+
                         // --- O15: sentinel (end-of-program guard) ---
 
                         case OpCode.SENTINEL:

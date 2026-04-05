@@ -283,15 +283,15 @@ LSP1（LSP Server 核心框架）           ← 所有 LSP 功能的通信基础
 
 | # | 串行步骤 | 名称 | 核心改动 | 复杂度 | 状态 |
 |---|---------|------|---------|--------|------|
-| **P4** | B-ζ1 | LICM 循环不变量常量提升 | 循环体内 LOAD_CONST 提升到循环前，复用寄存器 | 中 | ⏳ |
-| **P5** | B-ζ2 | CMP-immediate 指令 | +6 OpCode `JUMP_IF_*_K`（reg vs const 比较并跳转） | 中 | ⏳ |
-| **P6** | B-ζ3 | SWITCH 跳转表指令 | 连续整数 if-else chain → O(1) 跳转表分派 | 中高 | ⏳ |
+| **P4** | B-ζ1 | LICM 循环不变量常量提升 | 循环体内 LOAD_CONST 提升到循环前，复用寄存器。B04↓33% | 中 | ✅ |
+| **P5** | B-ζ2 | CMP-immediate 指令 | +6 OpCode `JUMP_IF_*_K`（reg vs const 比较并跳转），减少寄存器压力 | 中 | ✅ |
+| **P6** | B-ζ3 | SWITCH 跳转表指令 | 连续整数 if-else chain → O(1) 跳转表分派 | 中高 | ✅ |
 
 | Tier | ID | 内容 | 预期收益 | 复杂度 | 状态 |
 |------|----|------|---------|--------|------|
-| **3** | **O17** | LICM 循环不变量常量提升 | 循环体 LOAD_CONST 减少 ~30-40%；指令流缩短改善 L1 cache | 中 | ⏳ B-ζ1 |
-| **3** | **O18** | CMP-immediate 比较并跳转 (JUMP_IF_*_K) | 分支条件常量比较减少 ~15-20% | 中 | ⏳ B-ζ2 |
-| **3** | **O19** | SWITCH 跳转表指令 | 连续整数分支 O(N)→O(1)，~20-30% | 中高 | ⏳ B-ζ3 |
+| **3** | **O17** | LICM 循环不变量常量提升 | 实测 B04↓33%, B01-B05 ↓17-39%；指令流缩短改善 L1 cache | 中 | ✅ B-ζ1 |
+| **3** | **O18** | CMP-immediate 比较并跳转 (JUMP_IF_*_K) | 分支条件常量比较直接从常量池读取，减少寄存器压力 | 中 | ✅ B-ζ2 |
+| **3** | **O19** | SWITCH 跳转表指令 | 连续整数分支 O(N)→O(1)，B04↓40-47% | 中高 | ✅ B-ζ3 |
 
 > **O15 详情**（来源：[P001 §4.2](../Practice/P001_Performance_Baseline_Rebuild.md)）：
 > 1. **哨兵指令**：VMProgram 构造函数追加 SENTINEL 操作码，switch-case 中触发 PanicOutOfBounds，安全移除逐指令边界检查。需同步 SourceMap + InstructionCount 属性。

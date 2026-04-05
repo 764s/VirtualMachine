@@ -72,8 +72,19 @@ namespace FFVM
         // --- B-ε4: FORLOOP super-instruction ---
         FORLOOP      = 38,  // A=loopTopIP, B=counterReg, C=limitReg → Reg[B]+=1; if Reg[B]<Reg[C] IP=A
 
+        // --- B-ζ2: fused constant-compare-and-branch ---
+        JUMP_IF_EQ_K  = 39,  // A=targetIP, B=reg, C=constIndex → if Reg[B] == Constants[C] then IP = A
+        JUMP_IF_NEQ_K = 40,  // A=targetIP, B=reg, C=constIndex → if Reg[B] != Constants[C] then IP = A
+        JUMP_IF_LT_K  = 41,  // A=targetIP, B=reg, C=constIndex → if Reg[B] <  Constants[C] then IP = A
+        JUMP_IF_LTE_K = 42,  // A=targetIP, B=reg, C=constIndex → if Reg[B] <= Constants[C] then IP = A
+        JUMP_IF_GT_K  = 43,  // A=targetIP, B=reg, C=constIndex → if Reg[B] >  Constants[C] then IP = A
+        JUMP_IF_GTE_K = 44,  // A=targetIP, B=reg, C=constIndex → if Reg[B] >= Constants[C] then IP = A
+
+        // --- B-ζ3: SWITCH jump table ---
+        SWITCH       = 45,  // A=defaultIP, B=testReg, C=jumpTableIdx → val=Reg[B].ToInt(); if 0≤val<len then JumpTables[C][val] else IP=A
+
         // --- O15: sentinel (never emitted by compiler) ---
-        SENTINEL     = 39,  // appended by VMProgram ctor; replaces per-instruction boundary check
+        SENTINEL     = 46,  // appended by VMProgram ctor; replaces per-instruction boundary check
     }
 
     /// <summary>
