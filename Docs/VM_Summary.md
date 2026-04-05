@@ -513,33 +513,16 @@ skill TracerBullet
 | 运行时调试 | `ScriptDebugger`（DBG3 断点桥接 + DBG5 变量查看适配器 + DBG6 调用栈查看，Gate 0 命令行调试能力，HaltOnBreakpoint + SkipNextCheck DAP 暂停支持，DBG4 单步映射：临时断点 + FindNextLineIP/FindStepIntoIP/FindStepOutIP） | ✅ 完成 |
 | DAP 适配器 | `DapServer`（DBG7-A：12 消息 DAP 最小协议 + DBG7-B：next/stepIn/stepOut handler，stdin/stdout JSON-RPC + ContentLengthStream 分帧 + JsonHelper 手写 JSON），`StandaloneRunner --dap` 模式，Gate 1 + Gate 2 自动化验证通过 | ✅ Phase 3B 完成 |
 | VS Code 扩展 | `vscode-ffvm-debug/`（package.json + TextMate grammar + language-configuration.json + launch.json 模板） | ✅ 完成 |
-| 测试 | 505 项 Assert 全部通过（112 TreeWalker + 214 Compiler + 17 Performance + 18 FFScript + 51 Debug + 93 DAP），另有 5 项自动化性能基准 | ✅ Phase 3B 通过 |
-| 性能基准 | `BenchmarkRunner`（5 组 VM vs C# 对比基准）+ `run-benchmarks.cmd` 自动化管线 → `benchmark_results.md` | ✅ 完成 |
+| 测试 | 1007 项 Assert 全部通过（112 TreeWalker + 506 Compiler + 44 Performance + 18 FFScript + 51 Debug + 97 DAP + 179 LSP），另有 6 项自动化性能基准 | ✅ B-δ5 通过 |
+| 性能基准 | `BenchmarkRunner`（6 组 VM vs C# 对比基准）+ `run-benchmarks.cmd` 自动化管线 → `benchmark_results.md` | ✅ 完成 |
+| 语言服务 | `LspServer`（LSP2 诊断 + LSP1 核心 + LSP3 实时诊断 + LSP4 符号分析 + LSP5 代码补全 + LSP6 Syscall 声明 + LSP7 参数提示） | ✅ 完成 |
 
 ### 5.2 未完成（按优先级排列）
 
 | 优先级 | 内容 | 阻塞关系 |
 |--------|------|----------|
-| P0 | V1 GC 精确验证 + V2 回滚正确性验证 | ✅ 通过（Test 27, 28） |
-| P1 | `MOVE`/`COPY` OpCode | ✅ 完成（Test 29, 37） |
-| P1 | `JUMP`/`JUMP_IF` OpCode + 比较/布尔运算 | ✅ 完成（Test 30-36） |
-| P1 | Step 5 新指令零 GC + 快照正确性验证 | ✅ 通过（Test 38, 39） |
-| P1 | V3 单实例性能基准 + V4 N 实例吞吐上限 | ✅ 通过（Test 40: 3.8x, Test 41: 0.391ms/128inst） |
-| P2 | Lexer + Parser（手写递归下降） | ✅ 完成（Lexer + Parser + BytecodeCompiler，22 项端到端编译器测试 C01-C22 通过） |
-| P2 | 自动化性能基准管线（BenchmarkRunner + run-benchmarks.cmd） | ✅ 完成（5 组 VM vs C# 对比，编译脚本 5-7x ratio） |
-| P2 | `using` 语法 Parser 解析（C1） | ✅ 完成 → 步骤 7（ParseUsing + UsingStmt AST 节点） |
-| P2 | Paired Syscall 注册协议（C2） | ✅ 完成 → 步骤 7（SyscallTable.RegisterPaired / GetPairedSlot / HasPair） |
-| P2 | 编译器 emit Cleanup 指令 for `using`（C3） | ✅ 完成 → 步骤 7（CompileUsing：SYSCALL + PUSH_CLEANUP + body + POP_CLEANUP） |
-| P2 | `wait_for` Parser + Compiler 接入（G1） | ✅ 完成 → 步骤 7（ParseWaitFor + CompileWaitFor + WAIT_FOR OpCode） |
-| P2（低） | 编译器 "requires cleanup" 强制检查（C4） | ✅ 完成 → 步骤 10 前置（SyscallTable.RequiresCleanup + CompileSyscall 检查） |
-| P2 | CALL / RET_FUNC OpCode + 跨函数调用 emit（F1-F2） | ✅ 完成 → 步骤 8（CALL=60, RET_FUNC=61, 两遍编译+前向引用回填） |
-| P2 | 函数调用 GC + 快照回滚验证（F3） | ✅ 完成 → 步骤 8（F05: 0 GC 验证通过） |
-| P2（低） | 编译器寄存器生命周期分析 + 跨 await 变量提升（F4） | ✅ 完成 → F4 阶段（LiveRange + AnalyzeVariableLifetimes + free list + DeclareStructVar） |
-| P2 | Parser struct 声明 + 编译器 struct → 寄存器拍平（S1-S3） | ✅ 完成 → 步骤 9（Lexer struct/Dot + Parser struct 声明 + 字段访问 + 编译器拍平，CS01-CS11 通过） |
 | P3 | V5 帧内 Profiler 验证（真实 Syscall 接入后） | 阻塞编辑器 UI |
 | P3 | 编辑器流程图投影 | 不阻塞 VM 核心 |
-| — | Cleanup 超时保护（C5）/ 嵌套 using 优化（C6） | 展望项，暂无排期 |
-| — | 结构体函数参数传递（S4） | 展望项，最晚步骤 10 前如需编辑器展示 |
 | — | Handle64 批处理协议 | 展望项，最晚于真实多目标业务接入前 |
 
 ---
@@ -651,67 +634,19 @@ skill TracerBullet
 | — | **B-δ1 O10 快照只拷贝活跃实例** | **SaveState/LoadState 仅遍历 ActiveList 拷贝活跃 VMInstanceState + LoadState 先清 IsAlive 防止幽灵实例** | **929** | [B-δ1](Plan/Step_B_Delta1_O10_SnapshotActiveOnly.md) |
 | — | **B-δ2 SO1 COPY_BLOCK OpCode** | **COPY_BLOCK(dst,src,count) 替代 N×MOVE 结构体赋值 + ≥3 字段阈值 + 编译器 EmitStructCopy** | **945** | [B-δ2](Plan/Step_B_Delta2_SO1_CopyBlock.md) |
 | — | **B-δ3 FF3 可选参数与默认值** | **ParamDecl.DefaultValue + Parser `= expr` + Compiler 缺省值填充 scratch zone + LSP 签名/hover/补全显示默认值** | **969** | [B-δ3](Plan/Step_B_Delta3_FF3_OptionalParams.md) |
+| — | **B-δ4 SN2 结构体字面量构造语法** | **StructLiteralExpr AST + Parser `TypeName { field: expr }` + Compiler sugar 展开 + 嵌套字面量 + CS31-CS38 测试** | **990** | [B-δ4](Plan/Step_B_Delta4_SN2_StructLiteral.md) |
+| — | **B-δ5 C5 Cleanup 超时保护** | **MaxCleanupSteps 每块步数预算 + 超时跳过当前块继续剩余 cleanup + C5-01~C5-04 测试** | **1007** | [B-δ5](Plan/Step_B_Delta5_C5_CleanupTimeout.md) |
 
-**当前位置 → B-δ3 完成。969 项 Assert × 2 模式全通过。**
+**B 阶段全部完成。1007 项 Assert × 2 模式全通过。下一步 → C 阶段（宿主集成）。**
 
 ---
 
-### B. 待执行阶段（脚本引擎侧 — 细化推进序列）
+### B. 已完成阶段（脚本引擎侧 — 全部 20 步已迁入 A 区）
 
-以下步骤不依赖真实 ECS/Syscall 接入，可在当前独立环境中推进。
-步骤严格按编号顺序串行执行，每步完成后更新状态标记。
+B 阶段 20 个步骤（B-R1 → B-δ5）全部完成，已归入上方 A 区表格。
+原 B-δ6（B1 Unity Editor DAP）为可选项，已转入功能展望，见 [Outlook_And_Risks.md](Plan/Outlook_And_Risks.md)。
 
-> **当前位置 → B-δ4**（SN2 结构体字面量构造语法）
-> ✅ **紧急任务区已清空**。969 项 Assert × 2 模式全通过。
-> 📌 **P001 建议提前排入**：BM1（B-γ3 ✅）+ O15（B-γ4 ✅）从展望提升为串行步骤，确保性能基线和热循环优化在后续功能开发前就位，持续观察性能变化。
-
-#### Phase 0: 正式命名
-
-| # | ID | 内容 | 状态 | 完成条件 | 依赖 |
-|---|-----|------|------|----------|------|
-| 0 | B-R1 | FFScript 正式命名 + `.ffs` 后缀统一 | ✅ | ① `.vm` → `.ffs` 全局替换 ② `SkillScriptTests` → `FFScriptTests` ③ DAP `.ffvm` → `.ffs` ④ VSCode 扩展注册 `.ffs` ⑤ 624 项 Assert 全通过 | 无 |
-
-#### Phase α: 语言服务收尾
-
-| # | ID | 内容 | 状态 | 完成条件 | 依赖 |
-|---|-----|------|------|----------|------|
-| 1 | B-α1 | LSP6 Syscall 声明协议 | ✅ | SyscallTable 扩展签名元数据 + .ffvm.d.json 声明文件加载 + 补全增强测试通过 | LSP5 ✅ |
-| 2 | B-α2 | LSP7 参数提示 (signatureHelp) | ✅ | textDocument/signatureHelp 实现 + 用户函数/Syscall 参数提示测试通过 | B-α1 ✅ |
-
-#### Phase β: 优化 Tier 2
-
-| # | ID | 内容 | 状态 | 完成条件 | 依赖 |
-|---|-----|------|------|----------|------|
-| 3 | B-β1 | O6 Peephole 优化 pass | ✅ | Peephole pass 实现 + 指令数减少 ≥5% + benchmark 验证 | O1+O2 ✅ |
-| 4 | B-β2 | FO1 叶函数优化 | ✅ | 叶函数跳过 CallFrame push/pop + benchmark 验证开销 -40~60% | F4 ✅ |
-| 5 | B-β3 | O9 活跃实例链表 | ✅ | 活跃实例链表替代全量遍历 + 稀疏场景性能验证 | 无 |
-
-#### Phase γ: 功能完整性
-
-| # | ID | 内容 | 状态 | 完成条件 | 依赖 |
-|---|-----|------|------|----------|------|
-| 6 | B-γ1 | FO6 自适应寄存器窗口 | ✅ | 嵌套层数 ~3→~6 + R1/SR1 根本解决 + 测试通过 | F4 ✅ |
-| 7 | B-γ2 | FF5 非 entry 函数 defer | ✅ | RET_FUNC 与 Cleanup 链正确对齐 + 测试通过 | 函数调用 ✅ |
-| 8 | B-γ3 | BM1 Benchmark 基础设施改进 | ✅ | update-history.sh 环境指纹 + performance_history.md 基线说明 + WarmupRuns≥100 + B02 scale 调整 + B05 说明 + B06 新增基准 + CI 自我基线 + benchmark 历史对比正确 | 无 |
-| 9 | B-γ4 | O15 ExecuteInstance 热循环优化 | ✅ | SENTINEL 哨兵操作码 + InstructionCount 属性 + 移除逐指令边界检查 + AggressiveOptimization + MaxStepsPerTick 局部缓存 + benchmark 验证 VM 时间 ≥30% 下降 + Assert 全通过 | 无 |
-| 10 | B-γ5 | S4 结构体作为函数参数 | ✅ | 结构体参数寄存器传递（scratch zone 多寄存器展开）+ R5 安全限制（≤16 scratch regs）+ CS12-CS21 测试通过 | B-γ1 (FO6) |
-| 11 | B-γ6 | C6 嵌套 using 作用域优化 | ✅ | 合并相邻 PUSH_CLEANUP（连续 defer compound merge）+ benchmark 无回退 + C6-01~C6-05 测试通过 | 无 |
-| 12 | B-γ7 | SN1 嵌套结构体 | ✅ | 递归拍平为连续寄存器 + 循环引用检测 + 子struct赋值 + LSP嵌套补全 + CS22-CS30 测试通过 | struct ✅ |
-| 13 | B-γ8 | GR3 文档缺口 D1-D4 | ✅ | D1-D4 内容补入 VM_Summary.md 对应章节 | 无 |
-| 14 | B-γ9 | STR1 常量字符串（最小化） | ✅ | Lexer StringLiteral + VMProgram.StringConstants ROM + LOAD_CONST 索引 + Syscall 日志/宿主传递验证 + 不支持拼接 + 测试通过 | 无 |
-
-#### Phase δ: 按需补全
-
-| # | ID | 内容 | 状态 | 完成条件 | 依赖 |
-|---|-----|------|------|----------|------|
-| 15 | B-δ1 | O10 快照只拷贝活跃实例 | ✅ | 快照数据量减少 80-90% + 性能验证 | B-β3 (O9) |
-| 16 | B-δ2 | SO1 COPY_BLOCK OpCode | ✅ | 新 OpCode + Buffer.MemoryCopy 实现 + 大 struct 赋值验证 | struct ✅ |
-| 17 | B-δ3 | FF3 可选参数与默认值 | ✅ | 编译器支持可选参数 + 默认值填充 + LSP 默认值显示 + 测试通过 | 函数调用 ✅ |
-| 18 | B-δ4 | SN2 结构体字面量构造语法 | ⏳ | 编译器 sugar 实现 + 测试通过 | struct ✅ |
-| 19 | B-δ5 | C5 Cleanup 超时保护 | ⏳ | Cleanup 块执行超时检测 + 实例回收保证 + 测试通过 | 无 |
-| 20 | B-δ6 | B1 Unity Editor DAP (可选) | ⏳ | EditorApplication.update 轮询模式 + DR5 解决 + 测试通过 | DAP ✅ |
-
-> **剩余展望项**（暂无排期，业务驱动激活）：FF1 跨模块调用、FF2 函数回调、FF4 多返回值、
+> **剩余展望项**（暂无排期，业务驱动激活）：B1 Unity Editor DAP、FF1 跨模块调用、FF2 函数回调、FF4 多返回值、
 > O8 指令压缩、O11-O14 运行时优化、FO2 尾调用、FO3 小函数内联、
 > BB1 黑板 Key 编译期 ID、PR1 带参 Paired Syscall、DM1 双轨编排模式。
 > 完整索引见 [Outlook_And_Risks.md](Plan/Outlook_And_Risks.md)。
@@ -746,7 +681,7 @@ skill TracerBullet
 | LSP 语言服务 | B-α ✅ 已纳入 | LSP6 声明协议 + LSP7 参数提示，细化为 B-α1/α2 |
 | 调整型优化 | B-β ✅ 已纳入 | O6 peephole + FO1 叶函数 + O9 活跃链表，细化为 B-β1/β2/β3 |
 | 功能完整性 | B-γ ✅ 已纳入 | FO6 + FF5 + S4 + C6 + SN1 + GR3，细化为 B-γ1~γ6 |
-| 按需补全 | B-δ ✅ 已纳入 | O10 + SO1 + FF3 + SN2 + C5 + B1，细化为 B-δ1~δ6 |
+| 按需补全 | B-δ ✅ 全部完成 | O10 + SO1 + FF3 + SN2 + C5 已完成；B1 转入展望 |
 
 每一步的通过标准都由前一步建立的物理约束决定。任何新能力必须先通过 Architecture Rules 的裁决原则。
 
@@ -829,40 +764,44 @@ skill TracerBullet
 
 ---
 
-## 十、性能优化展望
+## 十、性能优化
 
 > 通用 VM 优化详见 [VM_Optimization_Outlook.md](Refs/VM_Optimization_Outlook.md)
 > 函数调用路径专项优化详见 [Step8_FunctionCall.md §七](Plan/Step8_FunctionCall.md#七性能优化展望)
 > 结构体路径潜在优化详见 [Step9_StructFlatten.md §七](Plan/Step9_StructFlatten.md#七性能优化展望)
 > 全部展望与风险的统一索引详见 [Plan/Outlook_And_Risks.md](Plan/Outlook_And_Risks.md)
 
-当前编译脚本性能基准为 5-7x（vs 等价 C#），手写字节码基准为 1.7x。在不改变功能语义的前提下，已识别 14 项通用优化方向 + 7 项函数调用专项优化方向 + 1 项结构体专项优化方向：
+### 10.1 已执行优化记录
 
-**通用优化（O1-O14）**：
+当前编译脚本性能基准为 5-7x（vs 等价 C# Number），跨语言对比约 2-3x Lua（见 §12.3）。
+以下优化均已实施并通过测试，后续新增优化前应先查阅此表避免重复。
+
+| ID | 名称 | 实施步骤 | 类别 | 核心改动 | 效果 |
+|----|------|---------|------|---------|------|
+| O1 | 消除逐次 fixed pin | B3 Tier 1 | 解释器 | 单次 `fixed(Number* regs)` 覆盖整个 burst | dispatch 开销降低 |
+| O2 | 连续 OpCode（0-32） | B3 Tier 1 | 解释器 | enum 连续编号，JIT 生成跳转表 | switch dispatch 优化 |
+| O3 | 去冗余边界检查 | F4 阶段 | 解释器 | 编译器保证寄存器索引合法 | 移除 per-instruction 检查 |
+| O4 | dest-reg 传递 | F4 阶段 | 编译器 | 表达式直接写入目标寄存器 | 减少 MOVE 指令 |
+| O5 | 常量折叠 | F4 阶段 | 编译器 | 编译期计算常量表达式 | 减少 LOAD_CONST + 运算指令 |
+| O6 | Peephole 优化 pass | B-β1 | 编译器 | 自赋值消除 + dest-redirect + jump-to-next + NOP 压缩 | 指令数减少 ≥5% |
+| O7 | Syscall 结果直达 | F4 阶段 | 编译器 | Syscall 返回值直写目标寄存器 | 减少 MOVE |
+| O9 | 活跃实例链表 | B-β3 | 调度层 | ActiveList 替代全量遍历 + swap-remove O(1) | 稀疏场景 Tick 开销大幅降低 |
+| O10 | 快照只拷贝活跃实例 | B-δ1 | 调度层 | SaveState/LoadState 仅遍历 ActiveList | 快照数据量减少 80-90% |
+| O15 | 热循环优化 | B-γ4 | 解释器 | SENTINEL 哨兵 + AggressiveOptimization + MaxStepsPerTick 局部缓存 | VM 时间 -32%~-80% |
+| FO1 | 叶函数优化 | B-β2 | 函数调用 | CALL_LEAF/RET_LEAF 跳过 CallFrame push/pop | 叶函数开销 -40~60% |
+| FO5 | 返回值直达 | F4 阶段 | 函数调用 | 返回值直写调用方目标寄存器 | 减少 MOVE |
+| FO6 | 自适应寄存器窗口 | B-γ1 | 函数调用 | temp 重映射紧接 locals + 窗口 = locals+temps | 嵌套层数 ~3→~6 |
+| FO7 | 调用栈深度静态分析 | F4 阶段 | 函数调用 | 编译期计算最大调用深度 | 运行时无栈溢出检查 |
+| SO1 | COPY_BLOCK OpCode | B-δ2 | 结构体 | COPY_BLOCK(dst,src,count) 替代 N×MOVE | 大 struct 赋值 N→1 指令 |
+| C6 | 相邻 cleanup 合并 | B-γ6 | 编译器 | 连续 defer compound merge | 减少 PUSH_CLEANUP/POP_CLEANUP 对 |
+
+### 10.2 优化展望（未实施）
 
 | Tier | 核心优化 | 预期收益 | 复杂度 | 状态 |
 |------|---------|---------|--------|------|
-| **1. 解释器热路径** | 消除逐次 fixed pin（O1）✅、连续 OpCode 跳转表（O2）✅、去冗余边界检查（O3）✅ | dispatch ~9% (.NET JIT)；IL2CPP 预期 30-50% | 低 | **✅ Tier 1 完成** |
-| **2. 编译器优化** | dest-reg 传递（O4）✅、常量折叠（O5）✅、peephole pass（O6）、Syscall 直达（O7）✅ | 指令数减少 **15-25%** | 中 | O4/O5/O7 随 F4 完成；O6 待实施 |
 | **3. 指令编码** | 16B → 4B 紧凑指令（O8） | L1 缓存 **10-20%** | 高 | ⏳ |
-| **4. 调度层** | 活跃实例链表（O9）✅、稀疏快照（O10） | 调度/快照开销按稀疏度大幅降低 | 低-中 | O9 ✅ |
 | **5. 长期** | 函数指针 Syscall（O11）、SIMD Fix64（O14）等 | 特定路径加速 | 中-高 | ⏳ |
-
-**函数调用专项优化（FO1-FO7）**：
-
-| 优先级 | 优化 | 预期收益 | 复杂度 |
-|--------|------|---------|--------|
-| 🟢 高 | FO4 参数就位检测、FO5 返回值直达 | 每次调用减少 1-2 条 MOVE | 低 |
-| 🟡 中 | FO1 叶函数优化、FO6 自适应窗口、FO7 静态深度分析 | 叶函数开销 -40-60%；嵌套深度从 ~3 扩展到 ~6 | 低-中 |
-| 🔵 低 | FO2 尾调用消除、FO3 小函数内联 | 尾调用不增长调用深度；小函数 -80% 指令 | 中-高 |
-
-**结构体专项优化（SO1）**：
-
-| 优先级 | 优化 | 预期收益 | 复杂度 |
-|--------|------|---------|--------|
-| 🟡 中 | SO1 COPY_BLOCK OpCode | 大 struct 赋值指令数从 N 降至 1 | 中 |
-
-**预估目标**：Tier 1 完成（O1+O2 ✅），.NET JIT ~9% dispatch 加速。IL2CPP 预期 30-50%。Tier 2（O6 peephole）完成后，编译脚本基准预期从当前降至 **2-3x**。
+| 函数调用 | FO2 尾调用消除、FO3 小函数内联 | 尾调用不增长调用深度；小函数 -80% 指令 | 中-高 | ⏳ |
 
 > **B3 Tier 1 实施详情**：[Step_B3_Optimization_Tier1.md](Plan/Step_B3_Optimization_Tier1.md)
 
@@ -970,44 +909,26 @@ bash benchmarks/update-history.sh bench-raw.txt
 
 ---
 
-## 十三、功能展望、优化展望与风险点汇总
+## 十三、展望与风险汇总
 
 > 详见 [Plan/Outlook_And_Risks.md](Plan/Outlook_And_Risks.md)
 
-散布于各步骤子计划中的全部展望与风险已统一整理至上述文件。以下为入口索引。
+### 功能展望
 
-### 步骤 10 前必须就位
+| 分组 | 未完成 | 已完成 |
+|------|--------|--------|
+| 函数调用 | FF1 跨模块、FF2 回调、FF4 多返回值 | FF3 可选参数 ✅、FF5 非 entry defer ✅ |
+| 全局 / 跨步骤 | H1 Handle64、BB1 黑板 Key、PR1 带参配对、FIX1、DM1 双轨、B1 Editor DAP | — |
+| Cleanup / using | — | C5 超时 ✅、C6 合并 ✅ |
+| 结构体 | — | S4 参数 ✅、SN1 嵌套 ✅、SN2 字面量 ✅ |
+| 脚本调试 | — | DBG1-DBG7 全部 ✅ |
+| 语言服务 | — | LSP1-LSP7 全部 ✅ |
 
-| ID | 内容 | 来源 | 状态 |
-|----|------|------|------|
-| C4 | 编译器 "requires cleanup" 强制检查 | §3.3 | ✅ |
-| F4 | 寄存器生命周期分析 + 跨 await 变量提升 | Step 8 | ✅ |
-| G5 | C4 对应代码缺口 | §11.1 | ✅ |
-| G6 | Cleanup 块内禁止 wait 编译检查 | §11.1 | ✅ |
-| V5 | 帧内 Profiler 验证 | §4.6 | ⏳ |
+### 优化展望
 
-### 功能展望（15 项 + 脚本调试 7 项 + 语言服务 7 项）
+已执行优化见 §10.1（16 项）。未实施优化见 §10.2（O8/O11-O14/FO2/FO3）。
 
-| 分组 | 条目 | 数量 |
-|------|------|------|
-| Cleanup / using 相关 | C5, C6 | 2 |
-| 函数调用相关 | FF1-FF5 | 5 |
-| 结构体相关 | S4, SN1, SN2 | 3 |
-| 全局 / 跨步骤 | H1, BB1, PR1, FIX1, DM1 | 5 |
-| 脚本调试（真实宿主断点 + DAP） | DBG1-DBG7 | 7 | DBG1-DBG7 全部 ✅（Phase 1-3B 完成），DBG7-C 待 Phase 3C |
-| 语言服务（LSP） | LSP1-LSP7 | 7 |
-
-### 优化展望（22 项 = 自然 7 + 调整型 15）
-
-| 分组 | 条目 | 数量 | 说明 |
-|------|------|------|------|
-| **自然优化**（随功能实现） | O3, O4, O5, O7, FO4, FO5, FO7 | 7 | 随 F4 / 编译器成熟化顺带完成 ✅ |
-| 调整型 — 解释器热路径 | O1 ✅, O2 ✅, O6, O8 | 4 | O1+O2 = B3 Tier 1 ✅；O6/O8 待 Benchmark 驱动 |
-| 调整型 — 调度/快照/运行时 | O9-O14 | 6 | Benchmark 驱动 |
-| 调整型 — 函数调用路径 | FO1-FO3, FO6 | 4 | Benchmark 驱动 |
-| 调整型 — 结构体路径 | SO1 | 1 | Benchmark 驱动 |
-
-### 已识别风险（15 项原有 + 5 项新增 = 20 项，全部降至低/极低）
+### 已识别风险（20 项，全部降至低/极低）
 
 | 分组 | 条目 | 数量 | 降级后等级 |
 |------|------|------|-----------|
@@ -1015,10 +936,9 @@ bash benchmarks/update-history.sh bench-raw.txt
 | 步骤 8 — 前瞻 | R5-R8 | 4 | 低 |
 | 步骤 9 | SR1-SR4 | 4 | 低~极低 |
 | 全局 | GR1-GR3 | 3 | 低~极低 |
-| 外部工具对接（新增） | DR1-DR5 | 5 | 低~极低 |
+| 外部工具对接 | DR1-DR5 | 5 | 低~极低 |
 
 > 风险降级详细措施见 [Outlook_And_Risks.md §六](Plan/Outlook_And_Risks.md#六风险降级计划目标全部--低--极低)。
-> Release 模式隔离策略（`FFVM_SCRIPT_DEBUG` 条件编译）见 §6.1。
 
 ---
 

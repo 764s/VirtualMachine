@@ -1,6 +1,6 @@
 # FFVM Cross-Language Performance Comparison
 
-> Auto-generated: 2026-04-05 05:36:37
+> Auto-generated: 2026-04-05 12:32:12
 > .NET 10.0.5 | Microsoft Windows NT 10.0.26200.0 | 20 cores
 > Node.js 24.14.1 | Lua 5.1.5 | Python 3.13.2
 > 200 runs after warmup. All times in μs.
@@ -40,21 +40,21 @@ B02 is pure integer (classic Fibonacci). Each language uses its own supported ty
 
 | Benchmark | C# raw | C# | FFVM | Node.js | Lua | Python |
 |-----------|-------:|---:|-----:|--------:|----:|-------:|
-| B01_ArithLoop | 11.3 | 22.9 | 181.8 | 8.0 | 115.0 | 500.7 |
+| B01_ArithLoop | 11.2 | 20.4 | 213.7 | 8.6 | 95.0 | 471.0 |
 | B02_Fibonacci | 0.4 | 0.4 | 0.7 | 0.4 | 0.0 | 0.7 |
-| B03_NestedLoop | 8.3 | 19.9 | 175.7 | 8.4 | 90.0 | 362.0 |
-| B04_Branching | 11.3 | 18.2 | 371.3 | 9.6 | 205.0 | 681.2 |
-| B05_Accumulator | 22.7 | 20.5 | 666.3 | 19.7 | 245.0 | 1377.4 |
+| B03_NestedLoop | 8.3 | 20.2 | 191.6 | 6.6 | 80.0 | 360.6 |
+| B04_Branching | 10.3 | 17.3 | 376.8 | 9.7 | 235.0 | 676.9 |
+| B05_Accumulator | 22.0 | 19.7 | 713.7 | 20.1 | 240.0 | 1385.5 |
 
 ### Relative to C# raw (1.00x)
 
 | Benchmark | C# raw | C# | FFVM | Node.js | Lua | Python |
 |-----------|-------:|---:|-----:|--------:|----:|-------:|
-| B01_ArithLoop | 1.00x | 2.03x | 16.09x | 0.71x | 10.18x | 44.31x |
+| B01_ArithLoop | 1.00x | 1.82x | 19.08x | 0.77x | 8.48x | 42.05x |
 | B02_Fibonacci | 1.00x | 1.00x | 1.75x | 1.00x | 0.00x | 1.75x |
-| B03_NestedLoop | 1.00x | 2.40x | 21.17x | 1.01x | 10.84x | 43.61x |
-| B04_Branching | 1.00x | 1.61x | 32.86x | 0.85x | 18.14x | 60.28x |
-| B05_Accumulator | 1.00x | 0.90x | 29.35x | 0.87x | 10.79x | 60.68x |
+| B03_NestedLoop | 1.00x | 2.43x | 23.08x | 0.80x | 9.64x | 43.45x |
+| B04_Branching | 1.00x | 1.68x | 36.58x | 0.94x | 22.82x | 65.72x |
+| B05_Accumulator | 1.00x | 0.90x | 32.44x | 0.91x | 10.91x | 62.98x |
 
 ---
 

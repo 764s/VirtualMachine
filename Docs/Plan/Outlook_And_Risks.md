@@ -34,7 +34,7 @@
 
 | ID | 内容 | 触发时机 | 详情 |
 |----|------|----------|------|
-| **C5** | Cleanup 块执行超时保护 | 待定 | 防止 Cleanup 块内死循环阻塞实例回收。[§3.3 C5](../VM_Summary.md#33-cleanup-机制using理想defer逃生舱) |
+| **C5** | ~~Cleanup 块执行超时保护~~ | ✅ B-δ5 已完成 | MaxCleanupSteps 每块步数预算 + 超时跳过当前块继续剩余 cleanup + C5-01~C5-04 测试通过 |
 | **C6** | ~~嵌套 `using` 作用域优化（合并相邻 PUSH_CLEANUP）~~ | ✅ B-γ6 已完成 | 连续 defer compound merge + 安全限制（含 return 不合并）+ C6-01~C6-05 测试通过 |
 
 ### 2.2 函数调用相关（来源：步骤 8）
@@ -60,7 +60,10 @@
 | **SN1** | ~~嵌套结构体（struct 字段为另一个 struct）~~ | ✅ B-γ7 已完成（递归拍平+循环检测+子struct赋值+LSP嵌套补全）| 中 |
 | **SN1-F1** | 嵌套 struct 作为函数返回值 | FF4 多返回值排期时 | 中 |
 | **SN1-F3** | 嵌套 struct COPY_BLOCK 优化（N×MOVE→单条指令） | ✅ SO1 已完成 | — |
-| **SN2** | 结构体字面量构造语法 | 后续步骤按需 | 低（编译器 sugar） |
+| **SN2** | ~~结构体字面量构造语法~~ | ✅ B-δ4 已完成（StructLiteralExpr + 嵌套字面量 + CS31-CS38） | 低 |
+| **SN2-F1** | 字段乱序支持（按名称匹配） | 当字段数常规超过 5 时 | 低 |
+| **SN2-F2** | 部分字段省略（省略→零值） | 有业务需求时 | 低 |
+| **SN2-F3** | LSP 字面量内字段名补全 | LSP 增强需求时 | 低 |
 
 ### 2.4 全局 / 跨步骤展望
 
@@ -71,6 +74,7 @@
 | **PR1** | Paired Syscall 支持带参反向调用 | 需要带参释放场景时 | [§六 决策妥协表](../VM_Summary.md#六决策妥协表为什么当前这样将来如何补全) |
 | **FIX1** | Fix64 模式 (`USE_FIXPOINT`) 独立构建验证 | 正式测试前 | [§11.2 T5](../VM_Summary.md#112-测试缺口) |
 | **DM1** | VM 编排表现脚本（双轨模式：部分实例不参与快照） | 需要复杂镜头/特效序列时 | [§3.4](../VM_Summary.md#34-全程-fix64表现走-syscall) |
+| **B1** | Unity Editor DAP（EditorApplication.update 轮询模式 + DR5） | 可选，需要编辑器内调试时 | 原 B-δ6，转入展望 |
 
 ### 2.5 脚本调试（DBG 系列）
 
@@ -710,7 +714,7 @@ Gate 3: Unity Editor 内嵌 DAP（可选）             ← DBG7 Phase C
 | **α 语言服务收尾** | 开发体验质变 | B-α1, B-α2 | LSP6 Syscall 声明协议 → LSP7 参数提示 |
 | **β 优化 Tier 2** | 性能逼近 2x | B-β1, B-β2, B-β3 | O6 peephole → FO1 叶函数 → O9 活跃链表 |
 | **γ 功能完整性 + 性能基线** | 性能观测就位 + 语言能力补全 | B-γ1 ~ B-γ9 | FO6 自适应窗口 → FF5 非 entry defer → **BM1 Benchmark 基础设施** → **O15 热循环优化** → S4 struct 参数 → C6 嵌套 using → SN1 嵌套 struct → GR3 文档 → STR1 常量字符串 |
-| **δ 按需补全** | 业务驱动激活 | B-δ1 ~ B-δ6 | O10 活跃快照 ✅ → SO1 COPY_BLOCK ✅ → FF3 可选参数 ✅ → SN2 struct 字面量 → C5 Cleanup 超时 → B1 Editor DAP |
+| **δ 按需补全** | 业务驱动激活 | B-δ1 ~ B-δ6 | O10 活跃快照 ✅ → SO1 COPY_BLOCK ✅ → FF3 可选参数 ✅ → SN2 struct 字面量 ✅ → C5 Cleanup 超时 ✅ → B1 Editor DAP |
 
 > 完整的步骤序号、完成条件、依赖关系见 [VM_Summary.md §七-B](../VM_Summary.md#b-待执行阶段脚本引擎侧--细化推进序列)。
 

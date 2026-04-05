@@ -1132,6 +1132,162 @@ func main() {
             Assert((world.Pool.Instances[id].StateFlags & VMStateFlags.Completed) != 0, "C6-05: Completed after kill cleanup");
         }
 
+        // ===== Test C5-01: Cleanup block infinite loop → timeout skip → Completed =====
+        {
+            string source = @"
+func main() {
+    defer {
+        var x: int = 0
+        while x < 1 {
+            Report(999)
+        }
+    }
+    Report(1)
+}";
+            var syscalls = new Dictionary<string, int> { { "Report", 0 } };
+            var result = compiler.Compile(source, "main", syscalls);
+            Assert(result.Success, $"C5-01 compile success: {(result.Success ? "" : string.Join("; ", result.Errors))}");
+
+            var log = new List<string>();
+            var world = new VMWorld();
+            world.MaxCleanupSteps = 50; // small budget to trigger timeout quickly
+            world.MaxStepsPerTick = 10000; // large enough that overall won't hit
+            world.Modules.Load(0, result.Program);
+            world.Syscalls.Register(0, "Report", (ref VMInstanceState s) =>
+            {
+                log.Add($"{s.Registers.Get(0).ToInt()}");
+            });
+
+            int id = world.SpawnInstance(0, 0);
+            world.Tick();
+            Assert(log.Contains("1"), "C5-01: body Report(1) executed");
+            Assert((world.Pool.Instances[id].StateFlags & VMStateFlags.Completed) != 0,
+                "C5-01: instance Completed despite cleanup timeout");
+            Assert(world.Pool.Instances[id].ErrorFlag == VMError.None,
+                "C5-01: no panic error (cleanup timeout is graceful)");
+        }
+
+        // ===== Test C5-02: Multiple cleanups, first times out, second runs normally =====
+        {
+            // Non-adjacent defers → separate PUSH_CLEANUP frames (C6 won't merge)
+            string source = @"
+func main() {
+    defer {
+        Report(10)
+    }
+    Report(1)
+    defer {
+        var x: int = 0
+        while x < 1 {
+            Report(999)
+        }
+    }
+    Report(2)
+}";
+            var syscalls = new Dictionary<string, int> { { "Report", 0 } };
+            var result = compiler.Compile(source, "main", syscalls);
+            Assert(result.Success, $"C5-02 compile success: {(result.Success ? "" : string.Join("; ", result.Errors))}");
+
+            var log = new List<string>();
+            var world = new VMWorld();
+            world.MaxCleanupSteps = 50;
+            world.MaxStepsPerTick = 10000;
+            world.Modules.Load(0, result.Program);
+            world.Syscalls.Register(0, "Report", (ref VMInstanceState s) =>
+            {
+                log.Add($"{s.Registers.Get(0).ToInt()}");
+            });
+
+            int id = world.SpawnInstance(0, 0);
+            world.Tick();
+            Assert(log.Contains("1"), "C5-02: body Report(1) executed");
+            // Second defer (LIFO first) has infinite loop → timeout
+            // First defer (LIFO second) Report(10) should still execute
+            Assert(log.Contains("10"), "C5-02: outer defer Report(10) executed after inner timeout");
+            Assert((world.Pool.Instances[id].StateFlags & VMStateFlags.Completed) != 0,
+                "C5-02: instance Completed");
+        }
+
+        // ===== Test C5-03: Normal cleanup within budget — not affected =====
+        {
+            string source = @"
+func main() {
+    defer {
+        Report(42)
+    }
+    Report(1)
+}";
+            var syscalls = new Dictionary<string, int> { { "Report", 0 } };
+            var result = compiler.Compile(source, "main", syscalls);
+            Assert(result.Success, $"C5-03 compile success");
+
+            var log = new List<string>();
+            var world = new VMWorld();
+            world.MaxCleanupSteps = 50;
+            world.Modules.Load(0, result.Program);
+            world.Syscalls.Register(0, "Report", (ref VMInstanceState s) =>
+            {
+                log.Add($"{s.Registers.Get(0).ToInt()}");
+            });
+
+            int id = world.SpawnInstance(0, 0);
+            world.Tick();
+            Assert(log.Count == 2, $"C5-03: expected 2 reports, got {log.Count}");
+            Assert(log[0] == "1", $"C5-03: body Report(1) first, got {log[0]}");
+            Assert(log[1] == "42", $"C5-03: defer Report(42) second, got {log[1]}");
+            Assert((world.Pool.Instances[id].StateFlags & VMStateFlags.Completed) != 0,
+                "C5-03: instance Completed normally");
+        }
+
+        // ===== Test C5-04: Cleanup timeout on Kill path + wait_for dependent resumes =====
+        {
+            string source1 = @"
+func main() {
+    defer {
+        var x: int = 0
+        while x < 1 {
+            Report(999)
+        }
+    }
+    wait 100
+}";
+            string source2 = @"
+func main() {
+    wait_for(0)
+    Report(77)
+}";
+            var syscalls = new Dictionary<string, int> { { "Report", 0 } };
+            var compiler2 = new BytecodeCompiler();
+            var result1 = compiler.Compile(source1, "main", syscalls);
+            var result2 = compiler2.Compile(source2, "main", syscalls);
+            Assert(result1.Success, "C5-04 source1 compile success");
+            Assert(result2.Success, "C5-04 source2 compile success");
+
+            var log = new List<string>();
+            var world = new VMWorld();
+            world.MaxCleanupSteps = 50;
+            world.MaxStepsPerTick = 10000;
+            world.Modules.Load(0, result1.Program);
+            world.Modules.Load(1, result2.Program);
+            world.Syscalls.Register(0, "Report", (ref VMInstanceState s) =>
+            {
+                log.Add($"{s.Registers.Get(0).ToInt()}");
+            });
+
+            int id1 = world.SpawnInstance(0, 0); // source1, will be killed
+            int id2 = world.SpawnInstance(1, 1); // source2, waits for id1
+
+            world.Tick(); // both start, source1 hits wait 100, source2 hits wait_for(0)
+            // Kill source1
+            world.Pool.Instances[id1].StateFlags |= VMStateFlags.Killed;
+            world.Tick(); // cleanup of id1 times out, id1 completes
+            Assert((world.Pool.Instances[id1].StateFlags & VMStateFlags.Completed) != 0,
+                "C5-04: killed instance Completed after cleanup timeout");
+
+            world.Tick(); // id2 should now resume since id1 is completed
+            Assert(log.Contains("77"), "C5-04: wait_for dependent resumed after killed instance completed");
+        }
+
         // ===== Test CF01: Basic function call — add(3, 4) → 7 =====
         {
             string source = @"
@@ -2434,6 +2590,218 @@ func main() {
             Assert(log.Count == 4, $"CS30: expected 4 reports, got {log.Count}");
             Assert(log[0] == "10" && log[1] == "20" && log[2] == "30" && log[3] == "40",
                 $"CS30: sub-struct copy, got {string.Join(",", log)}");
+        }
+
+        // ===== Test CS31: SN2 — basic struct literal =====
+        {
+            string source = @"
+struct Vec2 {
+    x: int
+    y: int
+}
+func main() {
+    var v: Vec2 = Vec2 { x: 1, y: 2 }
+    Report(v.x + v.y)
+}";
+            var syscalls = new Dictionary<string, int> { { "Report", 0 } };
+            var result = compiler.Compile(source, "main", syscalls);
+            Assert(result.Success, $"CS31 compile success: {(result.Success ? "" : string.Join("; ", result.Errors))}");
+
+            var log = new List<string>();
+            var world = new VMWorld();
+            world.Modules.Load(0, result.Program);
+            world.Syscalls.Register(0, "Report", (ref VMInstanceState s) =>
+            {
+                log.Add($"{s.Registers.Get(0).ToInt()}");
+            });
+
+            world.SpawnInstance(0, 0);
+            world.Tick();
+            Assert(log.Count == 1, $"CS31: expected 1 report, got {log.Count}");
+            Assert(log[0] == "3", $"CS31: Vec2 {{ 1, 2 }} sum = 3, got {log[0]}");
+        }
+
+        // ===== Test CS32: SN2 — struct literal with expression values =====
+        {
+            string source = @"
+struct Vec2 {
+    x: int
+    y: int
+}
+func main() {
+    var v: Vec2 = Vec2 { x: 1 + 2, y: 3 * 4 }
+    Report(v.x)
+    Report(v.y)
+}";
+            var syscalls = new Dictionary<string, int> { { "Report", 0 } };
+            var result = compiler.Compile(source, "main", syscalls);
+            Assert(result.Success, $"CS32 compile success: {(result.Success ? "" : string.Join("; ", result.Errors))}");
+
+            var log = new List<string>();
+            var world = new VMWorld();
+            world.Modules.Load(0, result.Program);
+            world.Syscalls.Register(0, "Report", (ref VMInstanceState s) =>
+            {
+                log.Add($"{s.Registers.Get(0).ToInt()}");
+            });
+
+            world.SpawnInstance(0, 0);
+            world.Tick();
+            Assert(log.Count == 2, $"CS32: expected 2 reports, got {log.Count}");
+            Assert(log[0] == "3", $"CS32: x = 1+2 = 3, got {log[0]}");
+            Assert(log[1] == "12", $"CS32: y = 3*4 = 12, got {log[1]}");
+        }
+
+        // ===== Test CS33: SN2 — nested struct literal =====
+        {
+            string source = @"
+struct Vec2 {
+    x: int
+    y: int
+}
+struct Rect {
+    min: Vec2
+    max: Vec2
+}
+func main() {
+    var r: Rect = Rect { min: Vec2 { x: 1, y: 2 }, max: Vec2 { x: 3, y: 4 } }
+    Report(r.min.x + r.min.y + r.max.x + r.max.y)
+}";
+            var syscalls = new Dictionary<string, int> { { "Report", 0 } };
+            var result = compiler.Compile(source, "main", syscalls);
+            Assert(result.Success, $"CS33 compile success: {(result.Success ? "" : string.Join("; ", result.Errors))}");
+
+            var log = new List<string>();
+            var world = new VMWorld();
+            world.Modules.Load(0, result.Program);
+            world.Syscalls.Register(0, "Report", (ref VMInstanceState s) =>
+            {
+                log.Add($"{s.Registers.Get(0).ToInt()}");
+            });
+
+            world.SpawnInstance(0, 0);
+            world.Tick();
+            Assert(log.Count == 1, $"CS33: expected 1 report, got {log.Count}");
+            Assert(log[0] == "10", $"CS33: nested literal sum = 10, got {log[0]}");
+        }
+
+        // ===== Test CS34: SN2 — struct literal in assignment position =====
+        {
+            string source = @"
+struct Vec2 {
+    x: int
+    y: int
+}
+func main() {
+    var v: Vec2
+    v = Vec2 { x: 5, y: 6 }
+    Report(v.x + v.y)
+}";
+            var syscalls = new Dictionary<string, int> { { "Report", 0 } };
+            var result = compiler.Compile(source, "main", syscalls);
+            Assert(result.Success, $"CS34 compile success: {(result.Success ? "" : string.Join("; ", result.Errors))}");
+
+            var log = new List<string>();
+            var world = new VMWorld();
+            world.Modules.Load(0, result.Program);
+            world.Syscalls.Register(0, "Report", (ref VMInstanceState s) =>
+            {
+                log.Add($"{s.Registers.Get(0).ToInt()}");
+            });
+
+            world.SpawnInstance(0, 0);
+            world.Tick();
+            Assert(log.Count == 1, $"CS34: expected 1 report, got {log.Count}");
+            Assert(log[0] == "11", $"CS34: assign literal sum = 11, got {log[0]}");
+        }
+
+        // ===== Test CS35: SN2 — field count mismatch → compile error =====
+        {
+            string source = @"
+struct Vec2 {
+    x: int
+    y: int
+}
+func main() {
+    var v: Vec2 = Vec2 { x: 1 }
+}";
+            var syscalls = new Dictionary<string, int>();
+            var result = compiler.Compile(source, "main", syscalls);
+            Assert(!result.Success, "CS35: compile error for field count mismatch");
+            Assert(result.Errors.Count > 0 && result.Errors[0].Contains("1 fields, expected 2"),
+                   $"CS35: error mentions field count mismatch, got: {(result.Errors.Count > 0 ? result.Errors[0] : "none")}");
+        }
+
+        // ===== Test CS36: SN2 — field name mismatch → compile error =====
+        {
+            string source = @"
+struct Vec2 {
+    x: int
+    y: int
+}
+func main() {
+    var v: Vec2 = Vec2 { a: 1, b: 2 }
+}";
+            var syscalls = new Dictionary<string, int>();
+            var result = compiler.Compile(source, "main", syscalls);
+            Assert(!result.Success, "CS36: compile error for field name mismatch");
+            Assert(result.Errors.Count > 0 && result.Errors[0].Contains("expected 'x', got 'a'"),
+                   $"CS36: error mentions field name mismatch, got: {(result.Errors.Count > 0 ? result.Errors[0] : "none")}");
+        }
+
+        // ===== Test CS37: SN2 — unknown struct type → compile error =====
+        {
+            string source = @"
+struct Vec2 {
+    x: int
+    y: int
+}
+func main() {
+    var v: Vec2 = Vec3 { x: 1, y: 2 }
+}";
+            var syscalls = new Dictionary<string, int>();
+            var result = compiler.Compile(source, "main", syscalls);
+            Assert(!result.Success, "CS37: compile error for unknown struct type in literal");
+        }
+
+        // ===== Test CS38: SN2 — three-level nested struct literal =====
+        {
+            string source = @"
+struct Vec2 {
+    x: int
+    y: int
+}
+struct Rect {
+    min: Vec2
+    max: Vec2
+}
+struct Scene {
+    bounds: Rect
+    origin: Vec2
+}
+func main() {
+    var s: Scene = Scene {
+        bounds: Rect { min: Vec2 { x: 1, y: 2 }, max: Vec2 { x: 3, y: 4 } },
+        origin: Vec2 { x: 5, y: 6 }
+    }
+    Report(s.bounds.min.x + s.bounds.min.y + s.bounds.max.x + s.bounds.max.y + s.origin.x + s.origin.y)
+}";
+            var syscalls = new Dictionary<string, int> { { "Report", 0 } };
+            var result = compiler.Compile(source, "main", syscalls);
+            Assert(result.Success, $"CS38 compile success: {(result.Success ? "" : string.Join("; ", result.Errors))}");
+
+            var log = new List<string>();
+            var world = new VMWorld();
+            world.Modules.Load(0, result.Program);
+            world.Syscalls.Register(0, "Report", (ref VMInstanceState s) =>
+            {
+                log.Add($"{s.Registers.Get(0).ToInt()}");
+            });
+
+            world.SpawnInstance(0, 0);
+            world.Tick();
+            Assert(log.Count == 1, $"CS38: expected 1 report, got {log.Count}");
+            Assert(log[0] == "21", $"CS38: 3-level nested literal sum = 21, got {log[0]}");
         }
 
         // ===== Test C4-01: Direct call to requires_cleanup syscall → compile error =====

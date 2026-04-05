@@ -758,6 +758,14 @@ namespace FFVM.Debug
                     if (r != null) return r;
                 }
             }
+            if (expr is StructLiteralExpr sl)
+            {
+                foreach (var f in sl.Fields)
+                {
+                    string r = FindHoverInExpr(ast, currentFunc, f.Value, line, col);
+                    if (r != null) return r;
+                }
+            }
 
             return null;
         }
@@ -1887,6 +1895,10 @@ namespace FFVM.Debug
                 CollectCallRefsInExpr(assign.Value, funcName, uri, locations);
             }
             else if (expr is FieldAccessExpr fa) CollectCallRefsInExpr(fa.Target, funcName, uri, locations);
+            else if (expr is StructLiteralExpr sl)
+            {
+                foreach (var f in sl.Fields) CollectCallRefsInExpr(f.Value, funcName, uri, locations);
+            }
         }
 
         private static void CollectIdentRefsInBlock(BlockStmt block, string varName, string uri, List<object> locations)
@@ -1957,6 +1969,10 @@ namespace FFVM.Debug
                 foreach (var arg in call.Arguments) CollectIdentRefsInExpr(arg, varName, uri, locations);
             }
             else if (expr is FieldAccessExpr fa) CollectIdentRefsInExpr(fa.Target, varName, uri, locations);
+            else if (expr is StructLiteralExpr sl)
+            {
+                foreach (var f in sl.Fields) CollectIdentRefsInExpr(f.Value, varName, uri, locations);
+            }
         }
 
         private static void CollectTypeRefsInBlock(BlockStmt block, string typeName, string uri, List<object> locations)

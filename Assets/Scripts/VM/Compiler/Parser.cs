@@ -9,6 +9,7 @@ namespace FFVM.Compiler
         private int _pos;
         private List<string> _errors;
         private string[] _sourceLines;
+        private HashSet<string> _structNames = new HashSet<string>();
 
         public ModuleNode Parse(string source, out List<string> errors)
         {
@@ -170,6 +171,7 @@ namespace FFVM.Compiler
             decl.Column = col;
             var docLines = CollectDocLines(line);
             if (docLines != null) decl.DocComment = string.Join("\n", docLines);
+            _structNames.Add(name);
             return decl;
         }
 
@@ -648,10 +650,17 @@ namespace FFVM.Compiler
                 return expr;
             }
 
-            // Identifier or function call
+            // Identifier or function call or struct literal
             if (tok.Type == TokenType.Identifier)
             {
                 Advance();
+
+                // Struct literal: TypeName { field: expr, ... }
+                if (Check(TokenType.LBrace) && _structNames.Contains(tok.Text))
+                {
+                    return ParseStructLiteral(tok);
+                }
+
                 // Function call?
                 if (Check(TokenType.LParen))
                 {
@@ -692,6 +701,26 @@ namespace FFVM.Compiler
             err.Line = tok.Line;
             err.Column = tok.Column;
             return err;
+        }
+
+        private StructLiteralExpr ParseStructLiteral(Token typeToken)
+        {
+            Advance(); // consume '{'
+            var fields = new List<(string FieldName, Expr Value)>();
+            while (!Check(TokenType.RBrace) && !IsAtEnd())
+            {
+                string fieldName = Expect(TokenType.Identifier, "for field name in struct literal").Text ?? "?";
+                Expect(TokenType.Colon, "after field name in struct literal");
+                Expr value = ParseExpression();
+                fields.Add((fieldName, value));
+                // allow optional comma between fields
+                Match(TokenType.Comma);
+            }
+            Expect(TokenType.RBrace, "to close struct literal");
+            var expr = new StructLiteralExpr(typeToken.Text, fields);
+            expr.Line = typeToken.Line;
+            expr.Column = typeToken.Column;
+            return expr;
         }
     }
 }

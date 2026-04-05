@@ -33,6 +33,9 @@ namespace FFVM.AST
         Call,
         SyscallExpr,
 
+        // Expressions - Struct literal
+        StructLiteral,
+
         // Statements
         Block,
         VarDecl,
@@ -183,6 +186,18 @@ namespace FFVM.AST
             SyscallSlot = slot;
             SyscallName = name;
             Arguments = arguments;
+        }
+    }
+
+    public class StructLiteralExpr : Expr
+    {
+        public string TypeName { get; }
+        public List<(string FieldName, Expr Value)> Fields { get; }
+        public StructLiteralExpr(string typeName, List<(string FieldName, Expr Value)> fields)
+            : base(NodeKind.StructLiteral)
+        {
+            TypeName = typeName;
+            Fields = fields;
         }
     }
 

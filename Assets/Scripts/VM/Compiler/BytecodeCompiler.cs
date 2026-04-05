@@ -624,6 +624,11 @@ namespace FFVM.Compiler
                     for (int i = 0; i < call.Arguments.Count; i++)
                         WalkExpr(call.Arguments[i]);
                 }
+                else if (expr is StructLiteralExpr structLit)
+                {
+                    for (int i = 0; i < structLit.Fields.Count; i++)
+                        WalkExpr(structLit.Fields[i].Value);
+                }
             }
 
             void WalkStmt(Stmt stmt)
@@ -1142,6 +1147,80 @@ namespace FFVM.Compiler
             }
         }
 
+        /// <summary>
+        /// SN2: Compile a struct literal expression into a target register range.
+        /// Validates type match, field names, field count, and recursively handles nested literals.
+        /// </summary>
+        private void CompileStructLiteral(StructLiteralExpr literal, string expectedType, int baseReg, int errorLine)
+        {
+            if (literal.TypeName != expectedType)
+            {
+                _errors.Add($"Struct literal type '{literal.TypeName}' does not match expected type '{expectedType}' (line {errorLine})");
+                return;
+            }
+
+            if (!_structTypes.TryGetValue(literal.TypeName, out var structDecl))
+            {
+                _errors.Add($"Unknown struct type '{literal.TypeName}' in struct literal (line {literal.Line})");
+                return;
+            }
+
+            if (literal.Fields.Count != structDecl.Fields.Count)
+            {
+                _errors.Add($"Struct literal for '{literal.TypeName}' has {literal.Fields.Count} fields, expected {structDecl.Fields.Count} (line {literal.Line})");
+                return;
+            }
+
+            var flatInfo = _flatStructInfo[literal.TypeName];
+            int offset = 0;
+
+            for (int i = 0; i < literal.Fields.Count; i++)
+            {
+                var (fieldName, valueExpr) = literal.Fields[i];
+                var expectedField = structDecl.Fields[i];
+
+                if (fieldName != expectedField.Name)
+                {
+                    _errors.Add($"Field name mismatch in struct literal '{literal.TypeName}': expected '{expectedField.Name}', got '{fieldName}' (line {literal.Line})");
+                    return;
+                }
+
+                if (_structTypes.ContainsKey(expectedField.TypeName))
+                {
+                    // Nested struct field — must be a struct literal or struct var
+                    if (valueExpr is StructLiteralExpr nestedLiteral)
+                    {
+                        int nestedFlatCount = _flatStructInfo[expectedField.TypeName].FlatFieldCount;
+                        CompileStructLiteral(nestedLiteral, expectedField.TypeName, baseReg + offset, literal.Line);
+                        offset += nestedFlatCount;
+                    }
+                    else if (valueExpr is IdentifierExpr srcIdent &&
+                             _structVarTypes.TryGetValue(srcIdent.Name, out var srcType) &&
+                             srcType == expectedField.TypeName)
+                    {
+                        int nestedFlatCount = _flatStructInfo[expectedField.TypeName].FlatFieldCount;
+                        int srcBase = _variables[srcIdent.Name];
+                        EmitStructCopy(baseReg + offset, srcBase, nestedFlatCount);
+                        offset += nestedFlatCount;
+                    }
+                    else
+                    {
+                        _errors.Add($"Field '{fieldName}' of struct literal '{literal.TypeName}' requires a '{expectedField.TypeName}' struct literal or variable (line {literal.Line})");
+                        int nestedFlatCount = _flatStructInfo[expectedField.TypeName].FlatFieldCount;
+                        offset += nestedFlatCount;
+                    }
+                }
+                else
+                {
+                    // Scalar field — compile expression into target register
+                    int valueReg = CompileExpr(valueExpr, destReg: baseReg + offset);
+                    if (valueReg != baseReg + offset)
+                        Emit(OpCode.MOVE, baseReg + offset, valueReg);
+                    offset++;
+                }
+            }
+        }
+
         private int EmitJump(OpCode code, int testReg = 0)
         {
             int ip = _instructions.Count;
@@ -1241,6 +1320,7 @@ namespace FFVM.Compiler
                 _symbolEntries.Add(new SymbolEntry(stmt.Name, baseReg, flatCount, fieldNames, _currentFunctionName));
 
                 // Initialize: if initializer is another struct var of same type, emit N × MOVE
+                // SN2: or struct literal of same type
                 if (stmt.Initializer != null)
                 {
                     if (stmt.Initializer is IdentifierExpr srcIdent &&
@@ -1250,9 +1330,13 @@ namespace FFVM.Compiler
                         int srcBase = _variables[srcIdent.Name];
                         EmitStructCopy(baseReg, srcBase, flatCount);
                     }
+                    else if (stmt.Initializer is StructLiteralExpr literal)
+                    {
+                        CompileStructLiteral(literal, stmt.TypeName, baseReg, stmt.Line);
+                    }
                     else
                     {
-                        _errors.Add($"Struct variable '{stmt.Name}' can only be initialized from another struct of same type (line {stmt.Line})");
+                        _errors.Add($"Struct variable '{stmt.Name}' can only be initialized from another struct of same type or struct literal (line {stmt.Line})");
                     }
                 }
                 else
@@ -1624,6 +1708,7 @@ namespace FFVM.Compiler
             if (expr is AssignExpr assign)
             {
                 // Struct whole assignment: a = b (both are struct variables of same type)
+                // SN2: or a = TypeName { ... } struct literal
                 if (assign.Target is IdentifierExpr targetIdent &&
                     _structVarTypes.TryGetValue(targetIdent.Name, out var targetStructType))
                 {
@@ -1636,6 +1721,12 @@ namespace FFVM.Compiler
                         int destBase = _variables[targetIdent.Name];
                         int srcBase = _variables[srcIdent.Name];
                         EmitStructCopy(destBase, srcBase, flatCount);
+                        return destBase;
+                    }
+                    if (assign.Value is StructLiteralExpr literal)
+                    {
+                        int destBase = _variables[targetIdent.Name];
+                        CompileStructLiteral(literal, targetStructType, destBase, assign.Line);
                         return destBase;
                     }
                     _errors.Add($"Cannot assign non-struct value to struct variable '{targetIdent.Name}' (line {assign.Line})");

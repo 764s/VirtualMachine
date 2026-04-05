@@ -24,6 +24,9 @@ namespace FFVM
         /// <summary>Max instructions executed per instance per Tick to prevent infinite loops.</summary>
         public int MaxStepsPerTick = 1024;
 
+        /// <summary>Max instructions per cleanup block. Exceeding skips the block but continues remaining cleanup.</summary>
+        public int MaxCleanupSteps = 256;
+
         public int FrameNumber => _frameNumber;
 
         public VMWorld()
@@ -156,6 +159,8 @@ namespace FFVM
             var consts = program.Constants;
             int steps = 0;
             int maxSteps = MaxStepsPerTick; // O15: cache to local — avoid field read every iteration
+            int cleanupSteps = 0;
+            int maxCleanupSteps = MaxCleanupSteps; // C5: cache to local
 
             // Cache debugger reference for the duration of this execution burst
             var dbg = Debugger;
@@ -191,6 +196,44 @@ namespace FFVM
                     ref Instruction op = ref code[inst.IP];
                     int rb = inst.RegisterBase;
                     steps++;
+
+                    // C5: Cleanup timeout protection — per-block step budget
+                    if ((inst.StateFlags & VMStateFlags.InCleanup) != 0)
+                    {
+                        cleanupSteps++;
+                        if (cleanupSteps > maxCleanupSteps)
+                        {
+                            // Skip current cleanup block, advance to next
+                            cleanupSteps = 0;
+                            int cleanupBase = 0;
+                            if (inst.CallStackDepth > 0)
+                                cleanupBase = inst.CallStack.Get(inst.CallStackDepth - 1).CleanupBase;
+
+                            if (inst.CleanupDepth > cleanupBase)
+                            {
+                                inst.CleanupDepth--;
+                                inst.IP = inst.CleanupStack.Get(inst.CleanupDepth).CleanupEntryIP;
+                            }
+                            else if (inst.CallStackDepth > 0)
+                            {
+                                inst.CallStackDepth--;
+                                var frame = inst.CallStack.Get(inst.CallStackDepth);
+                                inst.StateFlags &= ~VMStateFlags.InCleanup;
+                                inst.IP = frame.ReturnIP;
+                                inst.RegisterBase = frame.RegisterBase;
+                                regs[0] = savedR0;
+                                if ((inst.StateFlags & VMStateFlags.Killed) != 0)
+                                    return;
+                            }
+                            else
+                            {
+                                inst.StateFlags &= ~VMStateFlags.InCleanup;
+                                inst.StateFlags |= VMStateFlags.Completed;
+                                return;
+                            }
+                            continue;
+                        }
+                    }
 
                     switch (op.Code)
                     {
@@ -249,6 +292,7 @@ namespace FFVM
                                     // More cleanup blocks to run in this scope (LIFO)
                                     inst.CleanupDepth--;
                                     inst.IP = inst.CleanupStack.Get(inst.CleanupDepth).CleanupEntryIP;
+                                    cleanupSteps = 0; // C5: reset per-block budget
                                 }
                                 else if (inst.CallStackDepth > 0)
                                 {
@@ -260,6 +304,7 @@ namespace FFVM
                                     inst.RegisterBase = frame.RegisterBase;
                                     // Restore return value that cleanup may have clobbered
                                     regs[0] = savedR0;
+                                    cleanupSteps = 0; // C5: reset for potential parent-scope cleanup
                                     // If Killed, stop — let next Tick handle parent-scope cleanup
                                     if ((inst.StateFlags & VMStateFlags.Killed) != 0)
                                         return;
@@ -280,6 +325,7 @@ namespace FFVM
                                     inst.StateFlags |= VMStateFlags.InCleanup;
                                     inst.CleanupDepth--;
                                     inst.IP = inst.CleanupStack.Get(inst.CleanupDepth).CleanupEntryIP;
+                                    cleanupSteps = 0; // C5: reset per-block budget
                                 }
                                 else
                                 {
@@ -449,6 +495,7 @@ namespace FFVM
                                 inst.StateFlags |= VMStateFlags.InCleanup;
                                 inst.CleanupDepth--;
                                 inst.IP = inst.CleanupStack.Get(inst.CleanupDepth).CleanupEntryIP;
+                                cleanupSteps = 0; // C5: reset per-block budget
                             }
                             else
                             {
