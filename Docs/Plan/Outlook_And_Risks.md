@@ -257,11 +257,20 @@ LSP1（LSP Server 核心框架）           ← 所有 LSP 功能的通信基础
 |------|----|------|---------|--------|------|
 | **1** | **O1** | 消除逐次 `fixed` 钉住 | dispatch ~9% (.NET JIT)；IL2CPP 预期 30-50% | 低 | ✅ |
 | **1** | **O2** | OpCode 连续编号 → 强制跳转表 | dispatch ~20% 加速 | 低 | ✅ |
-| **2** | **O6** | Peephole 优化 pass | ~5-10% 指令数减少 | 中 | ⏳ |
+| **2** | **O6** | Peephole 优化 pass | ~5-10% 指令数减少 | 中 | ✅ B-β1 完成 |
 | **3** | **O8** | 指令压缩 16B → 4B | L1 缓存 10-20% 加速 | 高 | ⏳ |
 | **3** | **O15** | ExecuteInstance 热循环优化（哨兵指令 + JIT 提示 + 局部缓存） | 本地实测 VM 时间 -31~65% | 低~中 | ✅ B-γ4 完成 |
 
-**推荐顺序**：O1 ✅ → O2 ✅ → O6 → 视需要 O8/O15。B3 Tier 1 详情见 [Step_B3_Optimization_Tier1.md](Step_B3_Optimization_Tier1.md)。
+**串行优化计划**（追平 Lua 目标，已纳入 §7 串行计划 B-ε1~ε4）：
+
+| # | 串行步骤 | 名称 | 核心改动 | 复杂度 | 状态 |
+|---|---------|------|---------|--------|------|
+| **P0** | B-ε1 | Unsafe.Add 消除边界检查 | `ref Unsafe.Add` 替代 `ref code[IP]` | 极低 | ⭐ 当前位置 |
+| **P1** | B-ε2 | Compare&Branch fusion | Peephole P5 + 6 fused OpCodes | 中 | ⏳ |
+| **P2** | B-ε3 | const + 常量传播 + 条件 DCE | `const` 关键字 + 传播 + 死分支消除 | 中 | ⏳ |
+| **P3** | B-ε4 | FORLOOP 超级指令 | 循环控制 4→1 指令 | 中-高 | ⏳ |
+
+**推荐顺序**：O1 ✅ → O2 ✅ → O6 ✅ → O15 ✅ → **P0 → P1 → P2 → P3** → 视需要 O8。B3 Tier 1 详情见 [Step_B3_Optimization_Tier1.md](Step_B3_Optimization_Tier1.md)。
 
 > **O15 已完成** — 串行计划 B-γ4（2026-04-04）。SENTINEL 哨兵操作码 + AggressiveOptimization + MaxStepsPerTick 局部缓存。
 > 全部 6 项 benchmark VM 时间 -32%~-80%（平均 ~53%），超过目标 ≥30%。

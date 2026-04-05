@@ -637,7 +637,7 @@ skill TracerBullet
 | — | **B-δ4 SN2 结构体字面量构造语法** | **StructLiteralExpr AST + Parser `TypeName { field: expr }` + Compiler sugar 展开 + 嵌套字面量 + CS31-CS38 测试** | **990** | [B-δ4](Plan/Step_B_Delta4_SN2_StructLiteral.md) |
 | — | **B-δ5 C5 Cleanup 超时保护** | **MaxCleanupSteps 每块步数预算 + 超时跳过当前块继续剩余 cleanup + C5-01~C5-04 测试** | **1007** | [B-δ5](Plan/Step_B_Delta5_C5_CleanupTimeout.md) |
 
-**B 阶段全部完成。1007 项 Assert × 2 模式全通过。下一步 → C 阶段（宿主集成）。**
+**B 阶段全部完成。1007 项 Assert × 2 模式全通过。当前位置 → B-ε 性能优化串行计划。**
 
 ---
 
@@ -650,6 +650,21 @@ B 阶段 20 个步骤（B-R1 → B-δ5）全部完成，已归入上方 A 区表
 > O8 指令压缩、O11-O14 运行时优化、FO2 尾调用、FO3 小函数内联、
 > BB1 黑板 Key 编译期 ID、PR1 带参 Paired Syscall、DM1 双轨编排模式。
 > 完整索引见 [Outlook_And_Risks.md](Plan/Outlook_And_Risks.md)。
+
+---
+
+### B-ε. 性能优化串行计划（追平 Lua 目标）
+
+> 背景：跨语言 benchmark（§12.3）显示 FFVM 比 Lua 5.4 慢 2-3x。
+> 根因分析：指令密度差距 2.0x（循环控制 4 条 vs Lua FORLOOP 1 条）× 逐指令开销差距 1.5x（托管数组边界检查 + Reg() 分支）≈ 3.0x。
+> 每步完成后运行 B01-B05 benchmark 确认收益，再推进下一步。
+
+| 序号 | 步骤 | 状态 | 内容 | 预期收益 | 复杂度 |
+|------|------|------|------|---------|--------|
+| B-ε1 | Unsafe.Add 消除边界检查 | ⭐ 当前位置 → | `ref Unsafe.Add(ref GetArrayDataReference(code), IP)` 替代 `ref code[IP]`，消除每条指令的 CLR bounds check | 每条指令省 1 次边界检查 | 极低（~3 行） |
+| B-ε2 | Compare&Branch fusion | ⏳ | Peephole P5：`CMP_* tmp,B,C` + `JUMP_IF_ZERO tgt,tmp` → `JUMP_IF_* tgt,B,C`；+6 OpCode + 6 VMWorld case | 分支指令数 2→1，if/while/for 热路径 -20~30% | 中（~80 行） |
+| B-ε3 | const + 常量传播 + 条件 DCE | ⏳ | `const` 关键字 + 编译期常量传播 + 死分支消除 | 减少 LOAD_CONST + 消除不可达代码 | 中（~150 行） |
+| B-ε4 | FORLOOP 超级指令 | ⏳ | `FORLOOP dst,limit,step,loopTop`；编译器 pattern-match `for(init;cmp;step)` | 循环控制 4→1 指令，数值循环 -40~50% | 中-高（~200 行） |
 
 ---
 
@@ -682,6 +697,7 @@ B 阶段 20 个步骤（B-R1 → B-δ5）全部完成，已归入上方 A 区表
 | 调整型优化 | B-β ✅ 已纳入 | O6 peephole + FO1 叶函数 + O9 活跃链表，细化为 B-β1/β2/β3 |
 | 功能完整性 | B-γ ✅ 已纳入 | FO6 + FF5 + S4 + C6 + SN1 + GR3，细化为 B-γ1~γ6 |
 | 按需补全 | B-δ ✅ 全部完成 | O10 + SO1 + FF3 + SN2 + C5 已完成；B1 转入展望 |
+| 性能优化（追平 Lua） | B-ε ⏳ 进行中 | Unsafe.Add + Compare&Branch fusion + const/DCE + FORLOOP，细化为 B-ε1~ε4 |
 
 每一步的通过标准都由前一步建立的物理约束决定。任何新能力必须先通过 Architecture Rules 的裁决原则。
 
@@ -796,6 +812,21 @@ B 阶段 20 个步骤（B-R1 → B-δ5）全部完成，已归入上方 A 区表
 | C6 | 相邻 cleanup 合并 | B-γ6 | 编译器 | 连续 defer compound merge | 减少 PUSH_CLEANUP/POP_CLEANUP 对 |
 
 ### 10.2 优化展望（未实施）
+
+#### 串行优化计划
+
+以跨语言 benchmark（§12.3）追平 Lua 为目标，按 **收益/成本比** 排序的串行实施计划：
+
+| # | 名称 | 核心改动 | 预期收益 | 复杂度 | 前置 |
+|---|------|---------|---------|--------|------|
+| **P0** | Unsafe.Add 消除边界检查 | `ref Unsafe.Add(ref GetArrayDataReference(code), IP)` 替代 `ref code[IP]` | 每条指令省 1 次 CLR bounds check | 极低（~3 行） | 无 |
+| **P1** | Compare&Branch fusion | Peephole P5：`CMP_* tmp,B,C` + `JUMP_IF_ZERO tgt,tmp` → `JUMP_IF_* tgt,B,C`；+6 OpCode + 6 VMWorld case | 分支指令数 2→1，热循环 -20~30% | 中（~80 行） | P0 |
+| **P2** | const + 常量传播 + 条件 DCE | `const` 关键字 + 编译期传播 + 死分支消除 | 减少 LOAD_CONST + 消除不可达代码 | 中（~150 行） | P1 |
+| **P3** | FORLOOP 超级指令 | `FORLOOP dst,limit,step,loopTop`；编译器 pattern-match `for(init;cmp;step)` | 循环控制 4 指令→1，数值循环 -40~50% | 中-高（~200 行） | P2 |
+
+> 每步完成后运行 B01-B05 benchmark 确认收益，再推进下一步。
+
+#### 其他展望
 
 | Tier | 核心优化 | 预期收益 | 复杂度 | 状态 |
 |------|---------|---------|--------|------|
