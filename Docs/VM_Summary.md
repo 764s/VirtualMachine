@@ -28,6 +28,8 @@ Docs/
     Step_B3_Optimization_Tier1.md    B3 调整型优化 Tier 1（O1 fixed pin + O2 连续 OpCode）
     Step_R1_FFScript_Rename.md       B-R1 FFScript 正式命名 + .ffs 后缀统一
     Step_B_Gamma7_SN1_NestedStruct.md  B-γ7 SN1 嵌套结构体（递归拍平 + 循环引用检测）
+    Step_C0_DeploymentArchitecture.md  C0 实战部署架构（VM 分配策略 + 多实例交互 + MI 系列）
+    Step_DIST_Distribution.md        DIST 分发计划（独立类库 + CLI 入口 + 单文件发布 + 扩展打包）
   Skills/                    ← 技能脚本复现示例
     skill_114feiyanxuanfengtui.ffs    飞燕旋风腿（56 帧攻击技能）
     skill_25shangpanbeijizhong.ffs    上盘被击中（30 帧受击技能）
@@ -637,7 +639,7 @@ skill TracerBullet
 | — | **B-δ4 SN2 结构体字面量构造语法** | **StructLiteralExpr AST + Parser `TypeName { field: expr }` + Compiler sugar 展开 + 嵌套字面量 + CS31-CS38 测试** | **990** | [B-δ4](Plan/Step_B_Delta4_SN2_StructLiteral.md) |
 | — | **B-δ5 C5 Cleanup 超时保护** | **MaxCleanupSteps 每块步数预算 + 超时跳过当前块继续剩余 cleanup + C5-01~C5-04 测试** | **1007** | [B-δ5](Plan/Step_B_Delta5_C5_CleanupTimeout.md) |
 
-**B 阶段全部完成。1007 项 Assert × 2 模式全通过。B-ε 性能优化串行计划全部完成（4/4）。B-ζ 分支场景优化串行计划全部完成（3/3）。B-η O8 指令压缩完成（O8-1~O8-3/O8-5 ✅，O8-4 ⏸）。当前位置 → C 阶段（⚪ 宿主阻塞）。**
+**B 阶段全部完成。1007 项 Assert × 2 模式全通过。B-ε 性能优化串行计划全部完成（4/4）。B-ζ 分支场景优化串行计划全部完成（3/3）。B-η O8 指令压缩完成（O8-1~O8-3/O8-5 ✅，O8-4 ⏸）。当前位置 → D 阶段（分发基础设施，C1 宿主阻塞期可推进） / C 阶段（⚪ 宿主阻塞）。**
 
 ---
 
@@ -682,7 +684,7 @@ B 阶段 20 个步骤（B-R1 → B-δ5）全部完成，已归入上方 A 区表
 | B-ζ2 | CMP-immediate 指令 | ✅ | +6 OpCode `JUMP_IF_EQ_K` ~ `JUMP_IF_GTE_K`：`A=targetIP, B=reg, C=constIndex`，一条指令完成"与常量比较并跳转"，替代 `LOAD_CONST tmp` + `JUMP_IF_*`。Peephole 识别 + 编译器直接 emit | ~15-20% B04 加速；所有含常量比较的分支受益 | 中（+6 OpCode + VMWorld case + Peephole/Compiler 识别） |
 | B-ζ3 | SWITCH 跳转表指令 | ✅ | 编译器识别连续 if-else if 链中所有条件为同一变量对连续整数常量（从 0 起）比较时，生成 `SWITCH defaultIP, testReg, jumpTableIdx` 跳转表指令；O(N) 串行测试 → O(1) 分派。+1 OpCode + VMProgram.JumpTables + 编译器 TryCompileSwitch + Peephole 跳转表重映射 | B04↓40-47%（含高方差环境） | 中高（AST 模式识别 + 跳转表编码 + 新 OpCode + 仅对连续 0-based 整数常量有效） |
 
-**B-ζ 分支场景优化串行计划完成（3/3 ✅）。B-η O8 指令压缩完成（O8-1~O8-3/O8-5 ✅，O8-4 临时妥协 ⏸）。当前位置 → C 阶段（⚪ 宿主阻塞）。**
+**B-ζ 分支场景优化串行计划完成（3/3 ✅）。B-η O8 指令压缩完成（O8-1~O8-3/O8-5 ✅，O8-4 临时妥协 ⏸）。当前位置 → D 阶段（分发基础设施，C1 宿主阻塞期可推进） / C 阶段（⚪ 宿主阻塞）。**
 
 ---
 
@@ -706,9 +708,11 @@ B 阶段 20 个步骤（B-R1 → B-δ5）全部完成，已归入上方 A 区表
 ### C. 待执行阶段（宿主集成侧 — 生产必经路径）
 
 以下步骤依赖真实游戏宿主环境，是从"引擎可用"到"生产上线"的关键差距。
+部署架构决策（VM 分配策略、多实例交互、数据读取方案）详见 [Step_C0_DeploymentArchitecture.md](Plan/Step_C0_DeploymentArchitecture.md)。
 
 | 序号 | 步骤 | 状态 | 内容 | 前置条件 | 说明 |
 |------|------|------|------|----------|------|
+| C0 | 部署架构决策 | ✅ | VM 分配策略（稳赚/模糊/稳亏边界）、多实例调试（MI-1）、数据读取（MI-4）、多 VM 交互（MI-2/3/5） | — | [详情](Plan/Step_C0_DeploymentArchitecture.md) |
 | C1 | 真实 Syscall 接入 ECS | ⚪ | 将 stub Syscall 替换为真实宿主实现（碰撞检测、伤害、击退、特效、黑板读写等） | 宿主 ECS 框架就绪 | **最关键的生产差距**：当前全部 Syscall 均为 mock，技能脚本无法与真实游戏世界交互 |
 | C2 | V5 帧内 Profiler 验证 | ⚪ | 含真实 ECS 交互开销的 Tick 耗时测量，确认帧预算可行 | C1 完成 | Unity Profiler Timeline 观察 VM Tick marker，GC.Alloc = 0 |
 | C3 | 技能资源管线 | ⚪ | .ffs 文件加载/编译/缓存/热更新策略 | C1 完成 | 编译后 VMProgram 的序列化与缓存，运行时按需加载 |
@@ -718,7 +722,25 @@ B 阶段 20 个步骤（B-R1 → B-δ5）全部完成，已归入上方 A 区表
 
 ---
 
-### D. 生产差距总结
+### D. 分发基础设施（C1 宿主阻塞期可推进）
+
+> 背景：引擎侧已成熟（1007 Assert、完整编译器/优化/调试/LSP），但分发形态仍为“源码仓库”级别。
+> 目标：让其他人在自己的项目中使用 FFVM 时，心智负担和操作负担最小化——力求单文件 / 单次点击。
+> 关键发现：VM 核心代码（Core / Compiler / AST / Interpreter）已零 Unity 依赖。
+> 关键决策：LSP/DAP 服务器 = `ffvm` CLI 的子命令（`ffvm lsp` / `ffvm dap`），VS Code 扩展仅为薄客户端。
+> 详细设计见 [Step_DIST_Distribution.md](Plan/Step_DIST_Distribution.md)。
+
+| 序号 | 步骤 | 状态 | 内容 | 前置条件 | 说明 |
+|------|------|------|------|----------|------|
+| DIST-1 | 创建独立 FFVM 类库项目 | ⏳ | `src/FFVM/FFVM.csproj`（netstandard2.1），public API 收窄，`dotnet pack` 产生 NuGet 包 | 无 | 核心代码已零 Unity 依赖，纯项目配置 |
+| DIST-2 | 统一 CLI 入口 | ⏳ | `src/FFVM.Cli/`：`ffvm run/compile/lsp/dap/version` 子命令，整合 Sandbox + DAP + LSP | DIST-1 | 替代当前 `ffvm.cmd` BAT 菜单 |
+| DIST-3 | 单文件发布 + 扩展打包 | ⏳ | PublishSingleFile 跨平台可执行 + `vsce package` 产生 .vsix | DIST-2 | 扩展改为读取 `ffvm.executablePath` 设置 |
+
+**DIST 与 C 阶段的关系**：DIST 系列不阻塞 C 阶段，VM 核心代码不变，仅新增项目配置和 CLI 入口。可在 C1 宿主阻塞期间并行推进。
+
+---
+
+### E. 生产差距总结
 
 | 差距领域 | 计划覆盖 | 说明 |
 |----------|---------|------|
@@ -728,6 +750,7 @@ B 阶段 20 个步骤（B-R1 → B-δ5）全部完成，已归入上方 A 区表
 | Handle64 批处理 | C4 ✅ 已纳入 | 原为展望项 H1 |
 | 帧同步集成验证 | C5 🆕 新增 | 原计划**未覆盖**。V2 验证了离线快照回滚正确性，但真实网络帧同步场景未验证 |
 | 编辑器流程图 | C6 ✅ 已纳入 | 原步骤 10 |
+| 分发基础设施（独立类库 + CLI + 打包） | D 🆕 新增 | 原计划**未覆盖**。DIST-1~DIST-3：独立 .csproj + `ffvm` CLI 入口 + 单文件发布 + .vsix 打包 |
 | LSP 语言服务 | B-α ✅ 已纳入 | LSP6 声明协议 + LSP7 参数提示，细化为 B-α1/α2 |
 | 调整型优化 | B-β ✅ 已纳入 | O6 peephole + FO1 叶函数 + O9 活跃链表，细化为 B-β1/β2/β3 |
 | 功能完整性 | B-γ ✅ 已纳入 | FO6 + FF5 + S4 + C6 + SN1 + GR3，细化为 B-γ1~γ6 |
@@ -996,6 +1019,8 @@ bash benchmarks/update-history.sh bench-raw.txt
 |------|--------|--------|
 | 函数调用 | FF1 跨模块、FF2 回调、FF4 多返回值 | FF3 可选参数 ✅、FF5 非 entry defer ✅ |
 | 全局 / 跨步骤 | H1 Handle64、BB1 黑板 Key、PR1 带参配对、FIX1、DM1 双轨、B1 Editor DAP | — |
+| 部署架构 (MI) | MI-1 DAP 多实例、MI-2 SpawnScript、MI-3 KillInstance、MI-5 事件总线 | — |
+| 数据读取 | MI-4 VMInspector | — |
 | Cleanup / using | — | C5 超时 ✅、C6 合并 ✅ |
 | 结构体 | — | S4 参数 ✅、SN1 嵌套 ✅、SN2 字面量 ✅ |
 | 脚本调试 | — | DBG1-DBG7 全部 ✅ |

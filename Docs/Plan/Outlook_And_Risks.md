@@ -78,8 +78,27 @@
 | **Pε-F1** | while 循环 FORLOOP 识别 | while 循环是主要循环形式时 | [B-ε](Step_B_Epsilon_Perf.md) |
 | **Pε-F2** | FORLOOP 变步长支持（step ≠ 1） | 非单位步长循环出现时 | [B-ε](Step_B_Epsilon_Perf.md) |
 | **Pε-F3** | `<=` 条件的 FORLOOP | `for(i=0; i<=N; ...)` 模式出现时 | [B-ε](Step_B_Epsilon_Perf.md) |
+| **MI-1** | DAP 多实例线程映射（每实例 → 伪线程） | C1-γ 接入 AI 层时 | [C0](Step_C0_DeploymentArchitecture.md) |
+| **MI-2** | SpawnScript Syscall（父实例启动子实例） | 需要技能脚本派生特效实例时 | [C0](Step_C0_DeploymentArchitecture.md) |
+| **MI-3** | KillInstance Syscall（显式终止指定实例） | 需要取消/打断子实例时 | [C0](Step_C0_DeploymentArchitecture.md) |
+| **MI-4** | VMInspector 宿主数据读取辅助（ReadVar / ReadStruct） | 宿主需要从外部读取实例状态时 | [C0](Step_C0_DeploymentArchitecture.md) |
+| **MI-5** | 实例间事件总线（EmitEvent / PollEvent） | 多实例需要松耦合通信时 | [C0](Step_C0_DeploymentArchitecture.md) |
 
-### 2.5 脚本调试（DBG 系列）
+### 2.5 分发基础设施（DIST 系列）
+
+> 来源：2026-04-05 讨论。目标：让其他人在自己的项目中使用 FFVM 时，心智负担和操作负担最小化。
+> 详细设计见 [Step_DIST_Distribution.md](Step_DIST_Distribution.md)。
+
+| ID | 内容 | 触发时机 | 复杂度 |
+|----|------|----------|--------|
+| **DIST-1** | 创建独立 FFVM 类库项目（`src/FFVM/FFVM.csproj`，netstandard2.1，public API 收窄） | C1 宿主阻塞期间可推进 | 低 |
+| **DIST-2** | 统一 CLI 入口（`ffvm run/compile/lsp/dap`，整合 Sandbox + DAP + LSP） | DIST-1 完成后 | 中 |
+| **DIST-3** | 单文件发布 + VS Code 扩展 .vsix 打包（PublishSingleFile + vsce package） | DIST-2 完成后 | 中 |
+
+**关键决策**：LSP/DAP 服务器 = `ffvm` CLI 的子命令（`ffvm lsp` / `ffvm dap`），VS Code 扩展仅为薄客户端。
+与 rust-analyzer、gopls、clangd 模式一致。
+
+### 2.6 脚本调试（DBG 系列）
 
 > 来源：[§六 决策妥协表](../VM_Summary.md#六决策妥协表为什么当前这样将来如何补全) "无调试符号 / 源码映射"
 >
@@ -218,6 +237,25 @@ LSP1（LSP Server 核心框架）           ← 所有 LSP 功能的通信基础
 > **已完成** — 串行计划 B-γ3（2026-04-04）。
 > 实现内容：WarmupRuns=100、B02 fib(250)、B05 dispatch 开销说明、B06 FuncCall 基准、update-history.sh 环境指纹 + CI 自我基线、performance_history.md 跨环境说明。
 > 详见 [Step_B_Gamma3_BM1_Benchmark.md](Step_B_Gamma3_BM1_Benchmark.md)。
+
+### 2.9 部署架构与多实例交互（MI 系列）
+
+> 来源：[Step_C0_DeploymentArchitecture.md](Step_C0_DeploymentArchitecture.md)
+>
+> 讨论 FFVM 在游戏架构各层（场景→角色→AI→技能→效果器）的分配策略、
+> 多实例调试、宿主数据读取、以及实例间交互模式。
+
+| ID | 内容 | 层级 | 复杂度 | 说明 |
+|----|------|------|--------|------|
+| **MI-1** | DAP 多实例线程映射 | 接口（DAP） | 低 | 每实例映射为 DAP 伪线程，~60 行；依赖 DBG7 |
+| **MI-2** | SpawnScript Syscall | 运行时（Syscall） | 低 | 父实例启动子实例，返回 childId；~10 行 handler |
+| **MI-3** | KillInstance Syscall | 运行时（Syscall） | 极低 | 终止指定实例 + defer cascade kill；~8 行 handler |
+| **MI-4** | VMInspector 宿主读取辅助 | 运行时（辅助） | 低 | ReadVar / ReadStruct helper；~30 行 |
+| **MI-5** | 实例间事件总线 | 运行时（Syscall） | 中 | EmitEvent + PollEvent Syscall + 环形缓冲；~40 行 |
+
+**前置依赖**：MI-1 依赖 DBG7（DAP 适配器）；MI-2/MI-3 依赖 InstancePool；MI-5 独立。
+
+**实施时机**：全部为 C 阶段宿主集成时按需引入，VM 核心零改动。
 
 ---
 
@@ -415,6 +453,15 @@ LSP1（LSP Server 核心框架）           ← 所有 LSP 功能的通信基础
 | **Rε2** | 隐藏 limit 变量 `$fl{N}` 占用变量寄存器 | 变量寄存器空间稍减 | TempRegBase=48 下最多 32 个 var slot，for 循环通常 ≤3 层 | [B-ε](Step_B_Epsilon_Perf.md) |
 | **Rε3** | Benchmark 改用 for 循环后与旧基线不直接可比 | 历史对比需注明循环类型 | 同时保留 B-ε2 基线（while）和 B-ε4 数据（for） | [B-ε](Step_B_Epsilon_Perf.md) |
 
+### 4.7 C0 风险（部署架构与多实例交互）
+
+| ID | 风险 | 影响 | 缓解 | 来源 |
+|----|------|------|------|------|
+| **R-MI2-1** | SpawnScript 递归派生导致实例池耗尽 | 128 上限后静默失败 | 编译期 `maxSpawn` 标注 + 运行时 Syscall 返回错误码 | [C0](Step_C0_DeploymentArchitecture.md) |
+| **R-MI3-1** | KillInstance 越权终止非子实例 | 安全与调试困难 | parentId 校验 — 仅允许 kill 自己的子树 | [C0](Step_C0_DeploymentArchitecture.md) |
+| **R-MI5-1** | 事件总线环形缓冲溢出丢失事件 | 高频事件被静默丢弃 | 溢出时 warning log + 可配置容量（默认 64） | [C0](Step_C0_DeploymentArchitecture.md) |
+| **R-MI5-2** | PollEvent 顺序依赖导致帧间行为不确定 | 多实例读取同一事件的顺序不可控 | 事件为广播语义（所有 Poll 者均可见），消费后标记而非删除 | [C0](Step_C0_DeploymentArchitecture.md) |
+
 ---
 
 ## 五、索引速查
@@ -425,7 +472,8 @@ LSP1（LSP Server 核心框架）           ← 所有 LSP 功能的通信基础
 |------|------|
 | **步骤 10 前必须** | C4, F4, G5, G6, V5 |
 | **步骤 10 前如需** | S4 |
-| **业务驱动** | FF1-FF5, H1, BB1, PR1, FIX1, DM1 |
+| **业务驱动** | FF1-FF5, H1, BB1, PR1, FIX1, DM1, MI-1~MI-5 |
+| **分发基础设施** | DIST-1~DIST-3（独立类库 + CLI 入口 + 单文件发布 + 扩展打包） |
 | **自然优化（随功能实现）** | O3, O4, O5, O7, FO4, FO5, FO7 |
 | **调整型优化（Benchmark 驱动）** | O1, O2, O6, O8, O9, O10, O11, O12, O13, O14, O15, FO1, FO2, FO3, FO6, SO1 |
 | **CI / Benchmark 基础设施** | BM1 |
@@ -437,17 +485,17 @@ LSP1（LSP Server 核心框架）           ← 所有 LSP 功能的通信基础
 
 | 复杂度 | 条目 |
 |--------|------|
-| 低 | C4, G6, O1, O2, O3, O5, O7, O9, FO4, FO5, SN2, DBG3, DBG5, DBG6, LSP2 |
+| 低 | C4, G6, O1, O2, O3, O5, O7, O9, FO4, FO5, SN2, DBG3, DBG5, DBG6, LSP2, MI-1, MI-2, MI-4, DIST-1 |
 | 低~中 | O15, BM1 |
-| 中 | F4, S4, O4, O6, O10, O11, O14, FO1, FO6, FO7, FO2, FF1, FF2, FF4, FF5, SO1, SN1, H1, DBG1, DBG2, DBG4, DBG7, LSP1, LSP3, LSP4, LSP5, LSP6, LSP7 |
+| 中 | F4, S4, O4, O6, O10, O11, O14, FO1, FO6, FO7, FO2, FF1, FF2, FF4, FF5, SO1, SN1, H1, DBG1, DBG2, DBG4, DBG7, LSP1, LSP3, LSP4, LSP5, LSP6, LSP7, MI-5, DIST-2, DIST-3 |
 | 高 | O8, O13, FO3 |
 
 ### 按风险等级（§六 降级后）
 
 | 等级 | 条目 | 数量 |
 |------|------|------|
-| **极低** | R2, R3, R4, R7, SR4, GR1, GR2, GR3, DBG3, DBG5, DBG6, LSP2, DR1, DR3, DR4 | 15 |
-| **低** | R1, R5, R6, R8, SR1, SR2, SR3, DBG1, DBG2, DBG4, DBG7, LSP1, LSP3, LSP4, LSP5, LSP6, LSP7, DR2, DR5 | 19 |
+| **极低** | R2, R3, R4, R7, SR4, GR1, GR2, GR3, DBG3, DBG5, DBG6, LSP2, DR1, DR3, DR4, MI-3 | 16 |
+| **低** | R1, R5, R6, R8, SR1, SR2, SR3, DBG1, DBG2, DBG4, DBG7, LSP1, LSP3, LSP4, LSP5, LSP6, LSP7, DR2, DR5, R-MI2-1, R-MI3-1, R-MI5-1, R-MI5-2 | 23 |
 | **中 / 高** | — | 0 |
 
 ### 按优化类别
@@ -700,12 +748,12 @@ Gate 3: Unity Editor 内嵌 DAP（可选）             ← DBG7 Phase C
 
 | 等级 | 条目 | 数量 |
 |------|------|------|
-| **极低** | R2, R3, R4, R7, SR4, GR1, GR2, GR3, DBG3, DBG5, DBG6, LSP2, DR1, DR3, DR4 | 15 |
-| **低** | R1, R5, R6, R8, SR1, SR2, SR3, DBG1, DBG2, DBG4, DBG7, LSP1, LSP3, LSP4, LSP5, LSP6, LSP7, DR2, DR5 | 19 |
+| **极低** | R2, R3, R4, R7, SR4, GR1, GR2, GR3, DBG3, DBG5, DBG6, LSP2, DR1, DR3, DR4, MI-3 | 16 |
+| **低** | R1, R5, R6, R8, SR1, SR2, SR3, DBG1, DBG2, DBG4, DBG7, LSP1, LSP3, LSP4, LSP5, LSP6, LSP7, DR2, DR5, R-MI2-1, R-MI3-1, R-MI5-1, R-MI5-2 | 23 |
 | **中** | — | 0 |
 | **高** | — | 0 |
 
-> ✅ **目标达成**：全部 34 项风险降至低或极低。
+> ✅ **目标达成**：全部 38 项风险降至低或极低。
 
 ---
 
