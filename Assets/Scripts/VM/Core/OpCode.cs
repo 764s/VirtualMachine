@@ -61,8 +61,19 @@ namespace FFVM
         // --- SO1: struct block copy ---
         COPY_BLOCK   = 31,  // A=destReg, B=srcReg, C=count → Reg[A..A+C-1] = Reg[B..B+C-1]
 
+        // --- P5: fused compare-and-branch (B-ε2) ---
+        JUMP_IF_EQ   = 32,  // A=targetIP, B=lhsReg, C=rhsReg → if Reg[B] == Reg[C] then IP = A
+        JUMP_IF_NEQ  = 33,  // A=targetIP, B=lhsReg, C=rhsReg → if Reg[B] != Reg[C] then IP = A
+        JUMP_IF_LT   = 34,  // A=targetIP, B=lhsReg, C=rhsReg → if Reg[B] <  Reg[C] then IP = A
+        JUMP_IF_LTE  = 35,  // A=targetIP, B=lhsReg, C=rhsReg → if Reg[B] <= Reg[C] then IP = A
+        JUMP_IF_GT   = 36,  // A=targetIP, B=lhsReg, C=rhsReg → if Reg[B] >  Reg[C] then IP = A
+        JUMP_IF_GTE  = 37,  // A=targetIP, B=lhsReg, C=rhsReg → if Reg[B] >= Reg[C] then IP = A
+
+        // --- B-ε4: FORLOOP super-instruction ---
+        FORLOOP      = 38,  // A=loopTopIP, B=counterReg, C=limitReg → Reg[B]+=1; if Reg[B]<Reg[C] IP=A
+
         // --- O15: sentinel (never emitted by compiler) ---
-        SENTINEL     = 32,  // appended by VMProgram ctor; replaces per-instruction boundary check
+        SENTINEL     = 39,  // appended by VMProgram ctor; replaces per-instruction boundary check
     }
 
     /// <summary>

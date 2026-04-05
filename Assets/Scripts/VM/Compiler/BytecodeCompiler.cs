@@ -26,7 +26,9 @@ namespace FFVM.Compiler
         private List<Instruction> _instructions;
         private List<Number> _constants;
         private Dictionary<string, int> _variables;   // name → register
+        private Dictionary<string, Number> _constValues;  // B-ε3: name → compile-time constant value
         private int _nextVarReg;
+        private int _forLoopId;                            // B-ε4: unique suffix for hidden limit vars
         private int _tempTop;
         private Dictionary<string, int> _syscalls;    // name → slot
         private SyscallTable _syscallTable;            // paired slot lookup (optional, for using)
@@ -290,8 +292,10 @@ namespace FFVM.Compiler
         private void CompileFunction(FuncDecl func, bool isEntry)
         {
             _variables = new Dictionary<string, int>();
+            _constValues = new Dictionary<string, Number>();
             _structVarTypes = new Dictionary<string, string>();
             _nextVarReg = VarRegBase;
+            _forLoopId = 0;
             _tempTop = TempRegBase;
             _deferredCleanups = new List<DeferredCleanup>();
             _isEntryFunction = isEntry;
@@ -543,6 +547,13 @@ namespace FFVM.Compiler
                 // B = register
                 case OpCode.JUMP_IF_ZERO:     return 2;  // A=targetIP, B=testReg
                 case OpCode.JUMP_IF_NOT_ZERO: return 2;  // A=targetIP, B=testReg
+
+                // B, C = registers (P5 fused compare-and-branch)
+                case OpCode.JUMP_IF_EQ:  case OpCode.JUMP_IF_NEQ:
+                case OpCode.JUMP_IF_LT:  case OpCode.JUMP_IF_LTE:
+                case OpCode.JUMP_IF_GT:  case OpCode.JUMP_IF_GTE:
+                case OpCode.FORLOOP:
+                    return 6; // A=targetIP, B=lhsReg/counterReg, C=rhsReg/limitReg
 
                 // A, B, C = registers
                 case OpCode.ADD: case OpCode.SUB:
@@ -1350,6 +1361,24 @@ namespace FFVM.Compiler
             }
 
             // Scalar variable (original path)
+
+            // B-ε3: const — fold to compile-time constant, no register allocation
+            if (stmt.IsConst)
+            {
+                if (stmt.Initializer == null)
+                {
+                    _errors.Add($"'const' requires an initializer (line {stmt.Line})");
+                    return;
+                }
+                if (TryFoldConstant(stmt.Initializer, out Number constVal))
+                {
+                    _constValues[stmt.Name] = constVal;
+                    return; // no register, no instruction emitted
+                }
+                _errors.Add($"'const' initializer must be a compile-time constant (line {stmt.Line})");
+                return;
+            }
+
             int reg = DeclareVar(stmt.Name);
             if (stmt.Initializer != null)
             {
@@ -1368,6 +1397,16 @@ namespace FFVM.Compiler
 
         private void CompileIf(IfStmt stmt)
         {
+            // B-ε3: DCE — constant condition eliminates dead branch
+            if (TryFoldConstant(stmt.Condition, out Number condVal))
+            {
+                if (condVal != Number.Zero)
+                    CompileStmt(stmt.ThenBranch);  // condition is true
+                else if (stmt.ElseBranch != null)
+                    CompileStmt(stmt.ElseBranch);  // condition is false, compile else
+                return;
+            }
+
             int condReg = CompileExpr(stmt.Condition);
             int jumpElseIP = EmitJump(OpCode.JUMP_IF_ZERO, condReg);
             ResetTemps();
@@ -1389,6 +1428,10 @@ namespace FFVM.Compiler
 
         private void CompileWhile(WhileStmt stmt)
         {
+            // B-ε3: DCE — while(false) is dead code
+            if (TryFoldConstant(stmt.Condition, out Number condVal) && condVal == Number.Zero)
+                return; // entire loop eliminated
+
             int loopStart = CurrentIP();
             int condReg = CompileExpr(stmt.Condition);
             int jumpEndIP = EmitJump(OpCode.JUMP_IF_ZERO, condReg);
@@ -1401,6 +1444,10 @@ namespace FFVM.Compiler
 
         private void CompileFor(ForStmt stmt)
         {
+            // B-ε4: detect canonical for-loop pattern → emit FORLOOP super-instruction
+            if (TryCompileForLoop(stmt))
+                return;
+
             if (stmt.Initializer != null)
             {
                 CompileStmt(stmt.Initializer);
@@ -1430,6 +1477,79 @@ namespace FFVM.Compiler
 
             if (jumpEndIP >= 0)
                 Backpatch(jumpEndIP, CurrentIP());
+        }
+
+        /// <summary>
+        /// B-ε4: Try to compile a for-loop as a FORLOOP super-instruction.
+        /// Pattern: for (var counter = INIT; counter &lt; LIMIT; counter = counter + 1) { body }
+        /// Emits: init → LOAD_CONST limit → JUMP_IF_GTE exit → body → FORLOOP loopBody
+        /// </summary>
+        private bool TryCompileForLoop(ForStmt stmt)
+        {
+            // 1) Init must be a scalar VarDeclStmt (not const, not struct)
+            if (!(stmt.Initializer is VarDeclStmt initDecl) || initDecl.IsConst)
+                return false;
+            string counterName = initDecl.Name;
+
+            // 2) Condition must be: counter < LIMIT
+            if (!(stmt.Condition is BinaryExpr cond) || cond.Kind != NodeKind.Lt)
+                return false;
+            if (!(cond.Left is IdentifierExpr condLeft) || condLeft.Name != counterName)
+                return false;
+            Expr limitExpr = cond.Right;
+
+            // 3) Increment must be: counter = counter + 1
+            if (!(stmt.Increment is AssignExpr incr))
+                return false;
+            if (!(incr.Target is IdentifierExpr incrTarget) || incrTarget.Name != counterName)
+                return false;
+            if (!(incr.Value is BinaryExpr incrBin) || incrBin.Kind != NodeKind.Add)
+                return false;
+            if (!(incrBin.Left is IdentifierExpr incrLeft) || incrLeft.Name != counterName)
+                return false;
+            bool stepIsOne = (incrBin.Right is IntLiteralExpr stepInt && stepInt.Value == 1)
+                          || (incrBin.Right is NumberLiteralExpr stepNum && stepNum.Value == 1.0f);
+            if (!stepIsOne)
+                return false;
+
+            // --- Pattern matched: emit FORLOOP ---
+
+            // Compile init (declares counter var + loads initial value)
+            CompileStmt(stmt.Initializer);
+            ResetTemps();
+            int counterReg = ResolveVar(counterName);
+
+            // Get limit into a persistent register
+            int limitReg;
+            if (limitExpr is IdentifierExpr limitIdent
+                && _variables.TryGetValue(limitIdent.Name, out int existingReg))
+            {
+                // Limit is an existing variable — use its register directly
+                limitReg = existingReg;
+            }
+            else
+            {
+                // Allocate hidden variable for limit, compile expression into it
+                limitReg = DeclareVar($"$fl{_forLoopId++}");
+                CompileExpr(limitExpr, destReg: limitReg);
+                ResetTemps();
+            }
+
+            // Initial check: if counter >= limit → skip loop entirely
+            int exitIP = _instructions.Count;
+            Emit(OpCode.JUMP_IF_GTE, 0, counterReg, limitReg); // A=placeholder
+            ResetTemps();
+
+            // Loop body
+            int loopBodyIP = CurrentIP();
+            CompileStmt(stmt.Body);
+
+            // FORLOOP: counter += 1; if counter < limit → goto loopBody
+            Emit(OpCode.FORLOOP, loopBodyIP, counterReg, limitReg);
+
+            // Backpatch exit jump
+            Backpatch(exitIP, CurrentIP());
+            return true;
         }
 
         private void CompileReturn(ReturnStmt stmt)
@@ -1583,6 +1703,11 @@ namespace FFVM.Compiler
                 value = boolLit.Value ? Number.One : Number.Zero;
                 return true;
             }
+            // B-ε3: const identifier propagation
+            if (expr is IdentifierExpr ident && _constValues != null && _constValues.TryGetValue(ident.Name, out value))
+            {
+                return true;
+            }
             if (expr is UnaryExpr un)
             {
                 if (!TryFoldConstant(un.Operand, out Number operand))
@@ -1670,6 +1795,13 @@ namespace FFVM.Compiler
 
             if (expr is IdentifierExpr ident)
             {
+                // B-ε3: const propagation — inline constant value
+                if (_constValues != null && _constValues.TryGetValue(ident.Name, out Number constVal))
+                {
+                    int reg = destReg >= 0 ? destReg : AllocTemp();
+                    Emit(OpCode.LOAD_CONST, reg, AddConst(constVal));
+                    return reg;
+                }
                 return ResolveVar(ident.Name);
             }
 
@@ -1795,6 +1927,12 @@ namespace FFVM.Compiler
                 // Scalar assignment (original path)
                 if (assign.Target is IdentifierExpr scalarTarget)
                 {
+                    // B-ε3: prevent assignment to const
+                    if (_constValues != null && _constValues.ContainsKey(scalarTarget.Name))
+                    {
+                        _errors.Add($"Cannot assign to 'const' variable '{scalarTarget.Name}' (line {assign.Line})");
+                        return destReg >= 0 ? destReg : AllocTemp();
+                    }
                     int scalarTargetReg = ResolveVar(scalarTarget.Name);
                     // O4: pass dest-reg hint so expression writes directly into target register
                     int scalarValueReg = CompileExpr(assign.Value, destReg: scalarTargetReg);
@@ -2463,6 +2601,75 @@ namespace FFVM.Compiler
             }
         }
 
+        /// <summary>P5: returns true if the opcode is a comparison (CMP_*).</summary>
+        private static bool IsCmpOp(OpCode code)
+        {
+            return code >= OpCode.CMP_EQ && code <= OpCode.CMP_GTE;
+        }
+
+        /// <summary>
+        /// P5: Check if a register is used as a source operand in any instruction
+        /// from fromIP to the end of the containing function, BEFORE being overwritten.
+        /// Returns true if the register is live (used as source before any write),
+        /// meaning fusion is NOT safe.
+        /// </summary>
+        private bool IsRegUsedAsSourceAfter(int reg, int fromIP, int[] funcBounds, List<FunctionEntry> functionEntries, int totalCount)
+        {
+            // Determine function boundary for the instruction at fromIP-2 (the CMP position)
+            int funcEnd = (fromIP >= 2) ? funcBounds[fromIP - 2] : totalCount;
+            for (int j = fromIP; j < funcEnd; j++)
+            {
+                var instr = _instructions[j];
+                byte mask = GetRegisterMask(instr.Code);
+
+                // Check if reg appears as a source operand (B or C)
+                if ((mask & 2) != 0 && instr.B == reg) return true;
+                if ((mask & 4) != 0 && instr.C == reg) return true;
+                if (instr.Code == OpCode.WAIT_FOR && instr.A == reg) return true;
+
+                // Check if reg is overwritten (dest in A) — old value is dead
+                // All instructions with mask bit 0 are dest-in-A, EXCEPT WAIT_FOR
+                if ((mask & 1) != 0 && instr.A == reg && instr.Code != OpCode.WAIT_FOR)
+                    return false; // overwritten before any read → safe to fuse
+            }
+            return false;
+        }
+
+        /// <summary>
+        /// P5: Map a CMP_* opcode to the fused JUMP_IF_* opcode.
+        /// When invertSense is true (JUMP_IF_ZERO), the comparison is inverted:
+        ///   CMP_EQ  + JUMP_IF_ZERO → JUMP_IF_NEQ (jump when NOT equal)
+        ///   CMP_LT  + JUMP_IF_ZERO → JUMP_IF_GTE (jump when NOT less-than)
+        /// When invertSense is false (JUMP_IF_NOT_ZERO), the comparison is kept:
+        ///   CMP_EQ  + JUMP_IF_NOT_ZERO → JUMP_IF_EQ
+        /// </summary>
+        private static OpCode FusedJumpFor(OpCode cmpOp, bool invertSense)
+        {
+            if (invertSense)
+            {
+                return cmpOp switch
+                {
+                    OpCode.CMP_EQ  => OpCode.JUMP_IF_NEQ,
+                    OpCode.CMP_NEQ => OpCode.JUMP_IF_EQ,
+                    OpCode.CMP_LT  => OpCode.JUMP_IF_GTE,
+                    OpCode.CMP_LTE => OpCode.JUMP_IF_GT,
+                    OpCode.CMP_GT  => OpCode.JUMP_IF_LTE,
+                    OpCode.CMP_GTE => OpCode.JUMP_IF_LT,
+                    _ => throw new System.InvalidOperationException($"Not a CMP opcode: {cmpOp}")
+                };
+            }
+            return cmpOp switch
+            {
+                OpCode.CMP_EQ  => OpCode.JUMP_IF_EQ,
+                OpCode.CMP_NEQ => OpCode.JUMP_IF_NEQ,
+                OpCode.CMP_LT  => OpCode.JUMP_IF_LT,
+                OpCode.CMP_LTE => OpCode.JUMP_IF_LTE,
+                OpCode.CMP_GT  => OpCode.JUMP_IF_GT,
+                OpCode.CMP_GTE => OpCode.JUMP_IF_GTE,
+                _ => throw new System.InvalidOperationException($"Not a CMP opcode: {cmpOp}")
+            };
+        }
+
         /// <summary>
         /// Returns true if the opcode uses operand A as an absolute IP target
         /// that must be remapped when instructions are deleted.
@@ -2474,6 +2681,13 @@ namespace FFVM.Compiler
                 case OpCode.JUMP:
                 case OpCode.JUMP_IF_ZERO:
                 case OpCode.JUMP_IF_NOT_ZERO:
+                case OpCode.JUMP_IF_EQ:
+                case OpCode.JUMP_IF_NEQ:
+                case OpCode.JUMP_IF_LT:
+                case OpCode.JUMP_IF_LTE:
+                case OpCode.JUMP_IF_GT:
+                case OpCode.JUMP_IF_GTE:
+                case OpCode.FORLOOP:
                 case OpCode.CALL:
                 case OpCode.CALL_LEAF:
                 case OpCode.PUSH_CLEANUP:
@@ -2491,6 +2705,7 @@ namespace FFVM.Compiler
         ///   P2: OP rT,… ; MOVE rV,rT → OP rV,… (dest-redirect, eliminates MOVE)
         ///   P3: MOVE rA,rB ; MOVE rB,rA → delete second (back-copy)
         ///   P4: JUMP target where target==IP+1 → NOP (jump-to-next)
+        ///   P5: CMP_* rT,B,C ; JUMP_IF_ZERO/NOT_ZERO tgt,rT → JUMP_IF_* tgt,B,C (compare-and-branch fusion)
         /// After marking, compacts the instruction stream and rebases all jump targets.
         /// </summary>
         private void PeepholeOptimize(List<FunctionEntry> functionEntries)
@@ -2510,6 +2725,19 @@ namespace FFVM.Compiler
             // Use a bool array to track which instructions are eliminated (turned to NOP).
             // We keep the original NOP instructions intact (only eliminate optimizer-marked ones).
             var eliminated = new bool[count];
+
+            // P5: precompute function boundaries for liveness scans.
+            // funcBounds[ip] = end IP of the function containing instruction at ip.
+            var funcBounds = new int[count];
+            {
+                int fi = 0;
+                for (int ip = 0; ip < count; ip++)
+                {
+                    while (fi + 1 < functionEntries.Count && functionEntries[fi + 1].EntryIP <= ip)
+                        fi++;
+                    funcBounds[ip] = (fi + 1 < functionEntries.Count) ? functionEntries[fi + 1].EntryIP : count;
+                }
+            }
 
             for (int i = 0; i < count; i++)
             {
@@ -2550,6 +2778,21 @@ namespace FFVM.Compiler
                 if (ins.Code == OpCode.MOVE && next.Code == OpCode.MOVE
                     && next.A == ins.B && next.B == ins.A)
                 {
+                    eliminated[i + 1] = true;
+                    continue;
+                }
+
+                // P5: compare-and-branch fusion — CMP_* rT,B,C ; JUMP_IF_ZERO/NOT_ZERO tgt,rT
+                // → JUMP_IF_* tgt,B,C (single fused instruction, eliminates CMP + saves 1 dispatch)
+                // Note: after FO6 remap, temps are below TempRegBase, so we use a liveness scan
+                // to verify the CMP dest register is dead after the pair.
+                if (IsCmpOp(ins.Code)
+                    && (next.Code == OpCode.JUMP_IF_ZERO || next.Code == OpCode.JUMP_IF_NOT_ZERO)
+                    && next.B == ins.A
+                    && !IsRegUsedAsSourceAfter(ins.A, i + 2, funcBounds, functionEntries, count))
+                {
+                    OpCode fused = FusedJumpFor(ins.Code, next.Code == OpCode.JUMP_IF_ZERO);
+                    _instructions[i] = new Instruction(fused, next.A, ins.B, ins.C);
                     eliminated[i + 1] = true;
                     continue;
                 }

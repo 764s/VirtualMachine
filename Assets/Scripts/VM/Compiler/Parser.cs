@@ -263,7 +263,8 @@ namespace FFVM.Compiler
         {
             switch (Current().Type)
             {
-                case TokenType.Var:    return ParseVarDecl();
+                case TokenType.Var:    return ParseVarDecl(false);
+                case TokenType.Const:  return ParseVarDecl(true);
                 case TokenType.If:     return ParseIf();
                 case TokenType.While:  return ParseWhile();
                 case TokenType.For:    return ParseFor();
@@ -278,11 +279,11 @@ namespace FFVM.Compiler
             }
         }
 
-        private VarDeclStmt ParseVarDecl()
+        private VarDeclStmt ParseVarDecl(bool isConst)
         {
             int line = Current().Line, col = Current().Column;
-            Advance(); // consume 'var'
-            string name = Expect(TokenType.Identifier, "after 'var'").Text ?? "?";
+            Advance(); // consume 'var' or 'const'
+            string name = Expect(TokenType.Identifier, isConst ? "after 'const'" : "after 'var'").Text ?? "?";
             Expect(TokenType.Colon, "after variable name");
             string typeName = Expect(TokenType.Identifier, "for variable type").Text ?? "int";
 
@@ -291,8 +292,12 @@ namespace FFVM.Compiler
             {
                 initializer = ParseExpression();
             }
+            else if (isConst)
+            {
+                Error("'const' declaration requires an initializer");
+            }
 
-            var stmt = new VarDeclStmt(name, typeName, initializer);
+            var stmt = new VarDeclStmt(name, typeName, initializer, isConst);
             stmt.Line = line;
             stmt.Column = col;
             return stmt;
@@ -342,7 +347,9 @@ namespace FFVM.Compiler
             if (!Check(TokenType.Semicolon))
             {
                 if (Check(TokenType.Var))
-                    init = ParseVarDecl();
+                    init = ParseVarDecl(false);
+                else if (Check(TokenType.Const))
+                    init = ParseVarDecl(true);
                 else
                     init = ParseExprStatement();
             }

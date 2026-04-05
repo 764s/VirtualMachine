@@ -215,19 +215,22 @@ namespace FFVM.AST
     }
 
     /// <summary>
-    /// Variable declaration: var name: type = initializer;
+    /// Variable declaration: var/const name: type = initializer;
     /// TypeName is used for compile-time struct flattening.
+    /// IsConst enables compile-time constant propagation (B-ε3).
     /// </summary>
     public class VarDeclStmt : Stmt
     {
         public string Name { get; }
         public string TypeName { get; }
         public Expr Initializer { get; }
-        public VarDeclStmt(string name, string typeName, Expr initializer) : base(NodeKind.VarDecl)
+        public bool IsConst { get; }
+        public VarDeclStmt(string name, string typeName, Expr initializer, bool isConst = false) : base(NodeKind.VarDecl)
         {
             Name = name;
             TypeName = typeName;
             Initializer = initializer;
+            IsConst = isConst;
         }
     }
 

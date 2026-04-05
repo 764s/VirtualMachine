@@ -75,6 +75,9 @@
 | **FIX1** | Fix64 模式 (`USE_FIXPOINT`) 独立构建验证 | 正式测试前 | [§11.2 T5](../VM_Summary.md#112-测试缺口) |
 | **DM1** | VM 编排表现脚本（双轨模式：部分实例不参与快照） | 需要复杂镜头/特效序列时 | [§3.4](../VM_Summary.md#34-全程-fix64表现走-syscall) |
 | **B1** | Unity Editor DAP（EditorApplication.update 轮询模式 + DR5） | 可选，需要编辑器内调试时 | 原 B-δ6，转入展望 |
+| **Pε-F1** | while 循环 FORLOOP 识别 | while 循环是主要循环形式时 | [B-ε](Step_B_Epsilon_Perf.md) |
+| **Pε-F2** | FORLOOP 变步长支持（step ≠ 1） | 非单位步长循环出现时 | [B-ε](Step_B_Epsilon_Perf.md) |
+| **Pε-F3** | `<=` 条件的 FORLOOP | `for(i=0; i<=N; ...)` 模式出现时 | [B-ε](Step_B_Epsilon_Perf.md) |
 
 ### 2.5 脚本调试（DBG 系列）
 
@@ -265,16 +268,16 @@ LSP1（LSP Server 核心框架）           ← 所有 LSP 功能的通信基础
 
 | # | 串行步骤 | 名称 | 核心改动 | 复杂度 | 状态 |
 |---|---------|------|---------|--------|------|
-| **P0** | B-ε1 | Unsafe.Add 消除边界检查 | `ref Unsafe.Add` 替代 `ref code[IP]` | 极低 | ⭐ 当前位置 |
-| **P1** | B-ε2 | Compare&Branch fusion | Peephole P5 + 6 fused OpCodes | 中 | ⏳ |
-| **P2** | B-ε3 | const + 常量传播 + 条件 DCE | `const` 关键字 + 传播 + 死分支消除 | 中 | ⏳ |
-| **P3** | B-ε4 | FORLOOP 超级指令 | 循环控制 4→1 指令 | 中-高 | ⏳ |
+| **P0** | B-ε1 | fixed pin 消除边界检查 | `fixed (Instruction*)` pin 指令/常量数组 | 极低 | ✅ |
+| **P1** | B-ε2 | Compare&Branch fusion | Peephole P5 + 6 fused OpCodes | 中 | ✅ |
+| **P2** | B-ε3 | const + 常量传播 + 条件 DCE | `const` 关键字 + 传播 + 死分支消除 | 中 | ✅ |
+| **P3** | B-ε4 | FORLOOP 超级指令 | 循环控制 4→1 指令 | 中 | ✅ |
 
-**推荐顺序**：O1 ✅ → O2 ✅ → O6 ✅ → O15 ✅ → **P0 → P1 → P2 → P3** → 视需要 O8。B3 Tier 1 详情见 [Step_B3_Optimization_Tier1.md](Step_B3_Optimization_Tier1.md)。
+**推荐顺序**：O1 ✅ → O2 ✅ → O6 ✅ → O15 ✅ → P0 ✅ → P1 ✅ → P2 ✅ → P3 ✅ → 视需要 O8。B3 Tier 1 详情见 [Step_B3_Optimization_Tier1.md](Step_B3_Optimization_Tier1.md)。
 
-> **O15 已完成** — 串行计划 B-γ4（2026-04-04）。SENTINEL 哨兵操作码 + AggressiveOptimization + MaxStepsPerTick 局部缓存。
-> 全部 6 项 benchmark VM 时间 -32%~-80%（平均 ~53%），超过目标 ≥30%。
-> 详见 [Step_B_Gamma4_O15_HotLoop.md](Step_B_Gamma4_O15_HotLoop.md)。
+> **B-ε 串行优化计划已全部完成** — B-ε1~ε4（4/4 ✅）。
+> 累计收益：B01-B06 平均 ~43% 时间优化，指令数平均减少 ~4 条。
+> 详见 [Step_B_Epsilon_Perf.md](Step_B_Epsilon_Perf.md)。
 
 > **O15 详情**（来源：[P001 §4.2](../Practice/P001_Performance_Baseline_Rebuild.md)）：
 > 1. **哨兵指令**：VMProgram 构造函数追加 SENTINEL 操作码，switch-case 中触发 PanicOutOfBounds，安全移除逐指令边界检查。需同步 SourceMap + InstructionCount 属性。
@@ -389,6 +392,14 @@ LSP1（LSP Server 核心框架）           ← 所有 LSP 功能的通信基础
 |----|------|------|------|
 | **R-O9-1** | swap-remove 改变 ActiveList 遍历顺序 | Tick 遍历顺序 = 最近 spawn 顺序，语义上无保证；Snapshot 恢复确定性由 Array.Copy 保证 | [B-β3](Step_B_Beta3_O9_ActiveList.md) |
 | **R-O9-2** | Tick 内 Syscall 调用 Spawn/Destroy | 当前单线程设计无此问题；若未来支持 Tick 内 spawn 需在循环后追加 | [B-β3](Step_B_Beta3_O9_ActiveList.md) |
+
+### 4.6 B-ε 风险（性能优化串行计划）
+
+| ID | 风险 | 影响 | 缓解 | 来源 |
+|----|------|------|------|------|
+| **Rε1** | FORLOOP pattern 仅匹配精确的 `i < limit; i = i + 1` | 非标准 for 循环不受益 | Fallback 到标准编译保证正确性 | [B-ε](Step_B_Epsilon_Perf.md) |
+| **Rε2** | 隐藏 limit 变量 `$fl{N}` 占用变量寄存器 | 变量寄存器空间稍减 | TempRegBase=48 下最多 32 个 var slot，for 循环通常 ≤3 层 | [B-ε](Step_B_Epsilon_Perf.md) |
+| **Rε3** | Benchmark 改用 for 循环后与旧基线不直接可比 | 历史对比需注明循环类型 | 同时保留 B-ε2 基线（while）和 B-ε4 数据（for） | [B-ε](Step_B_Epsilon_Perf.md) |
 
 ---
 

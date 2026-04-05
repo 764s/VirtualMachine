@@ -14,7 +14,7 @@ namespace FFVM.Compiler
         Identifier,
 
         // Keywords
-        Func, Var, If, Else, While, For, Return,
+        Func, Var, Const, If, Else, While, For, Return,
         Wait, WaitFor, Yield, Defer, Using,
         True, False, Struct,
 
@@ -65,6 +65,7 @@ namespace FFVM.Compiler
         {
             { "func",     TokenType.Func },
             { "var",      TokenType.Var },
+            { "const",    TokenType.Const },
             { "if",       TokenType.If },
             { "else",     TokenType.Else },
             { "while",    TokenType.While },

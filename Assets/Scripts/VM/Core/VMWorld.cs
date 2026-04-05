@@ -174,7 +174,11 @@ namespace FFVM
             // O1: Pin registers once for the entire execution burst.
             // Previously each Get/Set call did its own fixed pin/unpin — the single
             // largest per-instruction overhead in the dispatch loop.
+            // B-ε1: Pin code & consts arrays alongside registers — pointer arithmetic
+            // skips CLR bounds check on every instruction fetch and constant load.
             fixed (Number* regs = &inst.Registers.R00)
+            fixed (Instruction* codeBase = code)
+            fixed (Number* constBase = consts)
             {
                 while (steps < maxSteps)
                 {
@@ -193,7 +197,7 @@ namespace FFVM
                         }
                     }
 
-                    ref Instruction op = ref code[inst.IP];
+                    ref Instruction op = ref codeBase[inst.IP];
                     int rb = inst.RegisterBase;
                     steps++;
 
@@ -242,7 +246,7 @@ namespace FFVM
                             break;
 
                         case OpCode.LOAD_CONST:
-                            regs[Reg(op.A, rb)] = consts[op.B];
+                            regs[Reg(op.A, rb)] = constBase[op.B];
                             inst.IP++;
                             break;
 
@@ -556,6 +560,63 @@ namespace FFVM
                                 inst.IP = inst.LeafReturnIP;
                                 inst.RegisterBase = inst.LeafRegisterBase;
                             }
+                            break;
+                        }
+
+                        // --- P5: fused compare-and-branch (B-ε2) ---
+
+                        case OpCode.JUMP_IF_EQ:
+                            if (regs[Reg(op.B, rb)] == regs[Reg(op.C, rb)])
+                                inst.IP = op.A;
+                            else
+                                inst.IP++;
+                            break;
+
+                        case OpCode.JUMP_IF_NEQ:
+                            if (regs[Reg(op.B, rb)] != regs[Reg(op.C, rb)])
+                                inst.IP = op.A;
+                            else
+                                inst.IP++;
+                            break;
+
+                        case OpCode.JUMP_IF_LT:
+                            if (regs[Reg(op.B, rb)] < regs[Reg(op.C, rb)])
+                                inst.IP = op.A;
+                            else
+                                inst.IP++;
+                            break;
+
+                        case OpCode.JUMP_IF_LTE:
+                            if (regs[Reg(op.B, rb)] <= regs[Reg(op.C, rb)])
+                                inst.IP = op.A;
+                            else
+                                inst.IP++;
+                            break;
+
+                        case OpCode.JUMP_IF_GT:
+                            if (regs[Reg(op.B, rb)] > regs[Reg(op.C, rb)])
+                                inst.IP = op.A;
+                            else
+                                inst.IP++;
+                            break;
+
+                        case OpCode.JUMP_IF_GTE:
+                            if (regs[Reg(op.B, rb)] >= regs[Reg(op.C, rb)])
+                                inst.IP = op.A;
+                            else
+                                inst.IP++;
+                            break;
+
+                        // --- B-ε4: FORLOOP super-instruction ---
+
+                        case OpCode.FORLOOP:
+                        {
+                            int cr = Reg(op.B, rb);
+                            regs[cr] = regs[cr] + Number.One;
+                            if (regs[cr] < regs[Reg(op.C, rb)])
+                                inst.IP = op.A;
+                            else
+                                inst.IP++;
                             break;
                         }
 

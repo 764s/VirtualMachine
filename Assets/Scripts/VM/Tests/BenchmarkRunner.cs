@@ -149,16 +149,14 @@ public static class BenchmarkRunner
     {
         Script = $@"
 func main() {{
-    var i: int = 0
     var limit: int = {n}
     var acc: int = 0
-    while (i < limit) {{
+    for var i: int = 0; i < limit; i = i + 1 {{
         var x: int = i + 0.5
         acc = acc + x
         var temp: int = x * 2.0
         temp = temp - 1.0
         acc = acc + temp
-        i = i + 1
     }}
     Result(acc)
 }}",
@@ -196,12 +194,10 @@ func main() {{
 func main() {{
     var a: int = 0
     var b: int = 1
-    var i: int = 0
-    while (i < {n}) {{
+    for var i: int = 0; i < {n}; i = i + 1 {{
         var temp: int = b
         b = a + b
         a = temp
-        i = i + 1
     }}
     Result(a)
 }}",
@@ -233,14 +229,10 @@ func main() {{
         Script = $@"
 func main() {{
     var acc: int = 0
-    var i: int = 0
-    while (i < {n}) {{
-        var j: int = 0
-        while (j < {n}) {{
+    for var i: int = 0; i < {n}; i = i + 1 {{
+        for var j: int = 0; j < {n}; j = j + 1 {{
             acc = acc + (i + 0.5) * (j + 0.5)
-            j = j + 1
         }}
-        i = i + 1
     }}
     Result(acc)
 }}",
@@ -270,8 +262,7 @@ func main() {{
         Script = $@"
 func main() {{
     var acc: int = 0
-    var i: int = 0
-    while (i < {n}) {{
+    for var i: int = 0; i < {n}; i = i + 1 {{
         var x: int = i * 0.5
         var m: int = i % 4
         if (m == 0) {{
@@ -283,7 +274,6 @@ func main() {{
         }} else {{
             acc = acc + x * 4.0
         }}
-        i = i + 1
     }}
     Result(acc)
 }}",
@@ -321,10 +311,8 @@ func main() {{
         Script = $@"
 func main() {{
     var sum: int = 0
-    var i: int = 0
-    while (i < {n}) {{
+    for var i: int = 0; i < {n}; i = i + 1 {{
         sum = sum + i * 0.5
-        i = i + 1
     }}
     Result(sum)
 }}",
@@ -359,10 +347,8 @@ func add_one(x: int): int {{
 
 func main() {{
     var sum: int = 0
-    var i: int = 0
-    while (i < {n}) {{
+    for var i: int = 0; i < {n}; i = i + 1 {{
         sum = sum + add_one(i)
-        i = i + 1
     }}
     Result(sum)
 }}",

@@ -791,7 +791,7 @@ public static class LspTests
                 if (items != null)
                 {
                     // Should have keywords (15) only
-                    Assert(items.Count == 15, $"LSP5-T04: 15 keyword items for empty file, got {items.Count}");
+                    Assert(items.Count == 16, $"LSP5-T04: 16 keyword items for empty file, got {items.Count}");
                     // All should be kind=14 (Keyword)
                     bool allKeywords = true;
                     foreach (var obj in items)

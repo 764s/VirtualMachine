@@ -637,7 +637,7 @@ skill TracerBullet
 | — | **B-δ4 SN2 结构体字面量构造语法** | **StructLiteralExpr AST + Parser `TypeName { field: expr }` + Compiler sugar 展开 + 嵌套字面量 + CS31-CS38 测试** | **990** | [B-δ4](Plan/Step_B_Delta4_SN2_StructLiteral.md) |
 | — | **B-δ5 C5 Cleanup 超时保护** | **MaxCleanupSteps 每块步数预算 + 超时跳过当前块继续剩余 cleanup + C5-01~C5-04 测试** | **1007** | [B-δ5](Plan/Step_B_Delta5_C5_CleanupTimeout.md) |
 
-**B 阶段全部完成。1007 项 Assert × 2 模式全通过。当前位置 → B-ε 性能优化串行计划。**
+**B 阶段全部完成。1007 项 Assert × 2 模式全通过。B-ε 性能优化串行计划全部完成（4/4）。当前位置 → C 阶段。**
 
 ---
 
@@ -661,10 +661,12 @@ B 阶段 20 个步骤（B-R1 → B-δ5）全部完成，已归入上方 A 区表
 
 | 序号 | 步骤 | 状态 | 内容 | 预期收益 | 复杂度 |
 |------|------|------|------|---------|--------|
-| B-ε1 | Unsafe.Add 消除边界检查 | ⭐ 当前位置 → | `ref Unsafe.Add(ref GetArrayDataReference(code), IP)` 替代 `ref code[IP]`，消除每条指令的 CLR bounds check | 每条指令省 1 次边界检查 | 极低（~3 行） |
-| B-ε2 | Compare&Branch fusion | ⏳ | Peephole P5：`CMP_* tmp,B,C` + `JUMP_IF_ZERO tgt,tmp` → `JUMP_IF_* tgt,B,C`；+6 OpCode + 6 VMWorld case | 分支指令数 2→1，if/while/for 热路径 -20~30% | 中（~80 行） |
-| B-ε3 | const + 常量传播 + 条件 DCE | ⏳ | `const` 关键字 + 编译期常量传播 + 死分支消除 | 减少 LOAD_CONST + 消除不可达代码 | 中（~150 行） |
-| B-ε4 | FORLOOP 超级指令 | ⏳ | `FORLOOP dst,limit,step,loopTop`；编译器 pattern-match `for(init;cmp;step)` | 循环控制 4→1 指令，数值循环 -40~50% | 中-高（~200 行） |
+| B-ε1 | fixed pin 消除边界检查 | ✅ | `fixed (Instruction* codeBase = code)` pin 指令/常量数组，指针算术替代托管索引，消除 CLR bounds check。实测 .NET 10 + 现代 CPU 分支预测下差异在噪声内（±2%），但消除了分支预测器饱和时的性能悬崖 | 理论 ~1 cycle/instr；实测噪声内 | 极低（~5 行） |
+| B-ε2 | Compare&Branch fusion | ✅ | Peephole P5：`CMP_* tmp,B,C` + `JUMP_IF_ZERO tgt,tmp` → `JUMP_IF_* tgt,B,C`；+6 OpCode + 6 VMWorld case + liveness-based dead-register 检查（FO6 remap 后 temp 不在 TempRegBase 以上） | 实测 B01-B06 全面提升 12-21%，每个 if/while/for 省 1 条指令 | 中（~120 行） |
+| B-ε3 | const + 常量传播 + 条件 DCE | ✅ | `const` 关键字 + `TryFoldConstant` 识别 const 标识符 + `CompileIf`/`CompileWhile` 常量条件消除死分支；赋值 const 报错；LSP 自动支持 | 编译期消除 LOAD_CONST + 不可达代码 | 中（~60 行） |
+| B-ε4 | FORLOOP 超级指令 | ✅ | `FORLOOP loopTopIP, counterReg, limitReg`；编译器 pattern-match `for(var i=init; i<limit; i=i+1)` → JUMP_IF_GTE 初始检查 + body + FORLOOP；benchmark 全部改用 `for` 循环 | 实测 B01-B06: -22%/-50%/-34%/-22%/-46%/-29%，指令数 -2/-2/-4/-2/-2/-2 | 中（~80 行） |
+
+**当前位置 → B-ε 性能优化串行计划完成。**
 
 ---
 
