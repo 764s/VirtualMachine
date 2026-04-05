@@ -188,7 +188,7 @@
 ## 七、性能优化展望
 
 > 以下优化方向聚焦**函数调用路径**（CALL/RET_FUNC 引入的新开销）。
-> 与 [VM_Optimization_Outlook.md](../Refs/VM_Optimization_Outlook.md) 中的通用 VM 优化（O1-O14）互补但不重叠。
+> 与 [VM_Optimization_Outlook.md](../Reference/VM_Optimization_Outlook.md) 中的通用 VM 优化（O1-O14）互补但不重叠。
 > 暂无排期，待 benchmark 数据后按收益排序实施。
 
 ### FO1. 叶函数优化（Leaf Function Optimization）

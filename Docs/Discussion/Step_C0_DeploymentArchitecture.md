@@ -465,7 +465,7 @@ AI 被 Kill → defer 触发 KillInstance(skillId) → 技能的 defer 触发 Ki
 
 ### C1-β 扩展到完整技能
 
-1. 补齐碰撞/击退/硬直 Syscall（参考 Skills/README.md 协议）
+1. 补齐碰撞/击退/硬直 Syscall（参考 Reference/Skills/README.md 协议）
 2. 跑通"飞燕旋风腿"完整 56 帧技能
 3. 仍不需要 MI-2~MI-5
 

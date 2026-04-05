@@ -9,14 +9,13 @@
 ```
 Docs/
   VM_Summary.md              ← 本文（唯一入口文档）
-  Refs/                      ← 子文件：当前活跃的引用文档
-    VM_Architecture_Rules.md         架构硬约束（20 条纪律）
-    VM_Runtime_Layout.md             运行时内存布局
-    VM_OpCodes_Draft.md              OpCode 设计草案
-    VM_Tracer_Bullet.md              曳光弹验证方案
-    VM_Optimization_Outlook.md       性能优化展望（14 项通用优化方向）
-    VM_Script_Language_Decision.md   脚本语言选型决策（候选对比 + AI 友好性分析）
-  Plan/                      ← 计划文件
+  Discussion/                ← 讨论区：设计探讨 / 方案对比 / 决策记录
+    README.md                        索引表（状态：💬 讨论中 / ✅ 已完成）
+    VMScript.md ~ VMScript4.md       早期需求与设计讨论（✅ 已完成，内容已压缩入本文）
+    Step_C0_DeploymentArchitecture.md  C0 实战部署架构讨论（💬 讨论中）
+    Step_DIST_Distribution.md        DIST 分发架构讨论（💬 讨论中）
+    D_RuntimeCompilation.md          游戏内运行时动态编译讨论（💬 讨论中）
+  Plan/                      ← 计划区：确定步骤 / 无脑执行
     TracerBullet_Checklist.md        曳光弹检查清单
     Step7_Using_PairedSyscall_Checklist.md   步骤 7 检查清单
     Step8_FunctionCall.md            步骤 8 完整文档（设计 + 实施 + 展望 + 风险）
@@ -28,25 +27,31 @@ Docs/
     Step_B3_Optimization_Tier1.md    B3 调整型优化 Tier 1（O1 fixed pin + O2 连续 OpCode）
     Step_R1_FFScript_Rename.md       B-R1 FFScript 正式命名 + .ffs 后缀统一
     Step_B_Gamma7_SN1_NestedStruct.md  B-γ7 SN1 嵌套结构体（递归拍平 + 循环引用检测）
-    Step_C0_DeploymentArchitecture.md  C0 实战部署架构（VM 分配策略 + 多实例交互 + MI 系列）
-    Step_DIST_Distribution.md        DIST 分发计划（独立类库 + CLI 入口 + 单文件发布 + 扩展打包）
-  Skills/                    ← 技能脚本复现示例
-    skill_114feiyanxuanfengtui.ffs    飞燕旋风腿（56 帧攻击技能）
-    skill_25shangpanbeijizhong.ffs    上盘被击中（30 帧受击技能）
-    README.md                        Syscall 协议 + 能力评估
-  Emergency/                 ← 紧急独立任务区（恶性 / 影响深远缺陷的修复通道）
+  Emergency/                 ← 紧急区：恶性 / 影响深远缺陷的修复通道
     README.md                        工作流定义 + 任务总览 + 风险汇总
     E001_Register_Lifecycle_Bug.md   编译器寄存器生命周期 Bug
     E002_Syscall_Register_Convention.md  Syscall 寄存器约定隐患
-  Archive/                   ← 归档：早期讨论稿（已被本文压缩替代）
-    VMScript.md ~ VMScript4.md   初期需求与设计讨论
+  Practice/                  ← 实践区：探索性实践记录
+    P001_Performance_Baseline_Rebuild.md  性能基线重建
+    P002_Sandbox_Build.md                 Sandbox 构建实践
+  Reference/                 ← 参考区：技术规格 / 架构约束 / 示例脚本
+    VM_Architecture_Rules.md         架构硬约束（20 条纪律）
+    VM_Runtime_Layout.md             运行时内存布局
+    VM_OpCodes_Draft.md              OpCode 设计草案
+    VM_Tracer_Bullet.md              曳光弹验证方案
+    VM_Optimization_Outlook.md       性能优化展望（14 项通用优化方向）
+    VM_Script_Language_Decision.md   脚本语言选型决策（候选对比 + AI 友好性分析）
+    Skills/                          技能脚本参考实现
+      skill_114feiyanxuanfengtui.ffs   飞燕旋风腿（56 帧攻击技能）
+      skill_25shangpanbeijizhong.ffs   上盘被击中（30 帧受击技能）
+      README.md                        Syscall 协议 + 能力评估
 ```
 
-- **Refs/**：VM_Summary.md 引用的子文档，包含各专题的详细说明。
-- **Plan/**：计划与检查清单。
-- **Skills/**：真实技能脚本的复现示例与分析。
-- **Emergency/**：紧急独立任务区，恶性/影响深远缺陷的修复通道。详见 §十五。
-- **Archive/**：早期分散的讨论稿，内容已合并入本文，保留仅供追溯。
+- **Discussion/**：讨论区。设计探讨、方案对比、决策记录。状态：💬 讨论中 / ✅ 已完成讨论（可再次激活）。详见 [Discussion/README.md](Discussion/README.md)。
+- **Plan/**：计划区。确定步骤与检查清单，无脑执行。状态：⏳ 等待中 / 🔄 进行中 / ✅ 已完成。
+- **Emergency/**：紧急区。恶性/影响深远缺陷的独立修复通道。详见 §十五。
+- **Practice/**：实践区。串行计划之外的探索性实践。详见 §十四。
+- **Reference/**：参考区。技术规格、架构约束、示例脚本等长期引用文档。
 
 ---
 
@@ -76,7 +81,7 @@ Docs/
 
 #### 技能效果器流水线模式
 
-> 来源：Archive/VMScript.md §7.1
+> 来源：Discussion/VMScript.md §7.1
 
 现有技能系统的内层已经形成了一条稳定的**效果器执行流水线**：
 
@@ -568,7 +573,7 @@ skill TracerBullet
 
 ### 7.0 成功标准与验收维度
 
-> 来源：Archive/VMScript4.md §1.4
+> 来源：Discussion/VMScript4.md §1.4
 
 新系统如果要被认为是成功的，至少应满足以下五个维度：
 
@@ -580,7 +585,7 @@ skill TracerBullet
 
 ### 7.0b 设计验证递进轴线
 
-> 来源：Archive/VMScript4.md §六 → 实际执行见下方 A/B 区间
+> 来源：Discussion/VMScript4.md §六 → 实际执行见下方 A/B 区间
 
 项目按 **曳光弹 → 编辑器/工具链 → 实战接入** 三阶段递进验证：
 
@@ -708,11 +713,11 @@ B 阶段 20 个步骤（B-R1 → B-δ5）全部完成，已归入上方 A 区表
 ### C. 待执行阶段（宿主集成侧 — 生产必经路径）
 
 以下步骤依赖真实游戏宿主环境，是从"引擎可用"到"生产上线"的关键差距。
-部署架构决策（VM 分配策略、多实例交互、数据读取方案）详见 [Step_C0_DeploymentArchitecture.md](Plan/Step_C0_DeploymentArchitecture.md)。
+部署架构决策（VM 分配策略、多实例交互、数据读取方案）详见 [Step_C0_DeploymentArchitecture.md](Discussion/Step_C0_DeploymentArchitecture.md)。
 
 | 序号 | 步骤 | 状态 | 内容 | 前置条件 | 说明 |
 |------|------|------|------|----------|------|
-| C0 | 部署架构决策 | ✅ | VM 分配策略（稳赚/模糊/稳亏边界）、多实例调试（MI-1）、数据读取（MI-4）、多 VM 交互（MI-2/3/5） | — | [详情](Plan/Step_C0_DeploymentArchitecture.md) |
+| C0 | 部署架构决策 | ✅ | VM 分配策略（稳赚/模糊/稳亏边界）、多实例调试（MI-1）、数据读取（MI-4）、多 VM 交互（MI-2/3/5） | — | [详情](Discussion/Step_C0_DeploymentArchitecture.md) |
 | C1 | 真实 Syscall 接入 ECS | ⚪ | 将 stub Syscall 替换为真实宿主实现（碰撞检测、伤害、击退、特效、黑板读写等） | 宿主 ECS 框架就绪 | **最关键的生产差距**：当前全部 Syscall 均为 mock，技能脚本无法与真实游戏世界交互 |
 | C2 | V5 帧内 Profiler 验证 | ⚪ | 含真实 ECS 交互开销的 Tick 耗时测量，确认帧预算可行 | C1 完成 | Unity Profiler Timeline 观察 VM Tick marker，GC.Alloc = 0 |
 | C3 | 技能资源管线 | ⚪ | .ffs 文件加载/编译/缓存/热更新策略 | C1 完成 | 编译后 VMProgram 的序列化与缓存，运行时按需加载 |
@@ -728,7 +733,7 @@ B 阶段 20 个步骤（B-R1 → B-δ5）全部完成，已归入上方 A 区表
 > 目标：让其他人在自己的项目中使用 FFVM 时，心智负担和操作负担最小化——力求单文件 / 单次点击。
 > 关键发现：VM 核心代码（Core / Compiler / AST / Interpreter）已零 Unity 依赖。
 > 关键决策：LSP/DAP 服务器 = `ffvm` CLI 的子命令（`ffvm lsp` / `ffvm dap`），VS Code 扩展仅为薄客户端。
-> 详细设计见 [Step_DIST_Distribution.md](Plan/Step_DIST_Distribution.md)。
+> 详细设计见 [Step_DIST_Distribution.md](Discussion/Step_DIST_Distribution.md)。
 
 | 序号 | 步骤 | 状态 | 内容 | 前置条件 | 说明 |
 |------|------|------|------|----------|------|
@@ -773,7 +778,7 @@ B 阶段 20 个步骤（B-R1 → B-δ5）全部完成，已归入上方 A 区表
 
 ## 八、架构硬约束速查
 
-以下是 [VM_Architecture_Rules.md](Refs/VM_Architecture_Rules.md) 中的 20 条硬纪律的浓缩速查：
+以下是 [VM_Architecture_Rules.md](Reference/VM_Architecture_Rules.md) 中的 20 条硬纪律的浓缩速查：
 
 1. 脚本文本 = 唯一真理源
 2. UI = await 驱动的视图投影
@@ -803,7 +808,7 @@ B 阶段 20 个步骤（B-R1 → B-δ5）全部完成，已归入上方 A 区表
 
 ## 九、脚本语言选型决策：为什么使用自定义 DSL
 
-> 详见 [VM_Script_Language_Decision.md](Refs/VM_Script_Language_Decision.md)
+> 详见 [VM_Script_Language_Decision.md](Reference/VM_Script_Language_Decision.md)
 
 **结论**：选择自定义 DSL，语法风格借鉴 Go（`func`/`var`/`defer`/`if`/`for`/`{}`），关键字约 12 个，完整 BNF ~80 行。
 
@@ -820,7 +825,7 @@ B 阶段 20 个步骤（B-R1 → B-δ5）全部完成，已归入上方 A 区表
 
 ### 9.2 历史失败教训与约束推导
 
-> 来源：Archive/VMScript2.md §五
+> 来源：Discussion/VMScript2.md §五
 
 以下历史失败尝试直接推导出了本项目的设计约束：
 
@@ -840,7 +845,7 @@ B 阶段 20 个步骤（B-R1 → B-δ5）全部完成，已归入上方 A 区表
 
 ## 十、性能优化
 
-> 通用 VM 优化详见 [VM_Optimization_Outlook.md](Refs/VM_Optimization_Outlook.md)
+> 通用 VM 优化详见 [VM_Optimization_Outlook.md](Reference/VM_Optimization_Outlook.md)
 > 函数调用路径专项优化详见 [Step8_FunctionCall.md §七](Plan/Step8_FunctionCall.md#七性能优化展望)
 > 结构体路径潜在优化详见 [Step9_StructFlatten.md §七](Plan/Step9_StructFlatten.md#七性能优化展望)
 > 全部展望与风险的统一索引详见 [Plan/Outlook_And_Risks.md](Plan/Outlook_And_Risks.md)
@@ -945,7 +950,7 @@ Instruction 16B → 4B（1B opcode + 3×1B operand），全场景 10-20% L1 缓�
 
 ### 11.3 文档缺口（来自档案交叉审查）
 
-以下内容存在于 Archive 早期讨论稿中，已全部合并入本文（B-γ8 完成）：
+以下内容存在于 Discussion 早期讨论稿（原 Archive）中，已全部合并入本文（B-γ8 完成）：
 
 | # | 来源 | 内容 | 合并位置 |
 |---|------|------|---------|
