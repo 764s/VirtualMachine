@@ -145,7 +145,9 @@ namespace FFVM
             return r < 16 ? r : r + regBase;
         }
 
+#if !FFVM_LEGACY_CSHARP
         [MethodImpl(MethodImplOptions.AggressiveOptimization)]
+#endif
         private unsafe void ExecuteInstance(ref VMInstanceState inst)
         {
             VMProgram program = Modules.Get(inst.ModuleSlot);

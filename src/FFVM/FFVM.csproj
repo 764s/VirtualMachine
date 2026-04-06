@@ -1,6 +1,6 @@
 <Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
-    <TargetFramework>net8.0</TargetFramework>
+    <TargetFrameworks>netstandard2.1;net8.0</TargetFrameworks>
     <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
     <LangVersion>latest</LangVersion>
@@ -11,6 +11,9 @@
     <Description>FFVM — A register-based bytecode virtual machine for game scripting. Includes compiler, interpreter, LSP and DAP servers.</Description>
     <Authors>764s</Authors>
     <PackageTags>vm;bytecode;scripting;game;ffscript</PackageTags>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(TargetFramework)' == 'netstandard2.1'">
+    <DefineConstants>$(DefineConstants);FFVM_LEGACY_CSHARP</DefineConstants>
   </PropertyGroup>
   <ItemGroup>
     <InternalsVisibleTo Include="StandaloneRunner" />

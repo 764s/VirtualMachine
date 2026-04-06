@@ -13,7 +13,7 @@ Docs/
     README.md                        索引表（状态：💬 讨论中 / ✅ 已完成）
     VMScript.md ~ VMScript4.md       早期需求与设计讨论（✅ 已完成，内容已压缩入本文）
     Step_C0_DeploymentArchitecture.md  C0 实战部署架构讨论（💬 讨论中）
-    Step_DIST_Distribution.md        DIST 分发架构讨论（✅ 已完成；§七 .NET 多版本兼容 💬 讨论中）
+    Step_DIST_Distribution.md        DIST 分发架构讨论（✅ 已完成；§七 .NET 多版本兼容 ✅ 已完成）
     D_RuntimeCompilation.md          游戏内运行时动态编译讨论（💬 讨论中）
     D_TracerBullet.md                曳光弹范围、目标与验证（✅ 已完成，从本文 §四 抽取）
     VM_Tracer_Bullet.md              曳光弹原始详细设计讨论（✅ 已完成，从 Reference/ 迁入）
@@ -31,6 +31,7 @@ Docs/
     Step_B_Gamma7_SN1_NestedStruct.md  B-γ7 SN1 嵌套结构体（递归拍平 + 循环引用检测）
     Step_DIST_Distribution.md        DIST-1~DIST-3 分发基础设施（独立类库 + CLI + 单文件发布）
     Step_DIST8_DIST9_EmbeddableDapServer.md  DIST-8+DIST-9 EmbeddableDapServer 提取 + Sandbox 改造
+    Step_DIST10_DotNetMultiVersion.md  DIST-10 .NET 多版本兼容策略（双目标 + RollForward）
   Emergency/                 ← 紧急区：恶性 / 影响深远缺陷的修复通道
     README.md                        工作流定义 + 任务总览 + 风险汇总
     E001_Register_Lifecycle_Bug.md   编译器寄存器生命周期 Bug
@@ -468,7 +469,7 @@ Docs/
 | — | **B-δ4 SN2 结构体字面量构造语法** | **StructLiteralExpr AST + Parser `TypeName { field: expr }` + Compiler sugar 展开 + 嵌套字面量 + CS31-CS38 测试** | **990** | [B-δ4](Plan/Step_B_Delta4_SN2_StructLiteral.md) |
 | — | **B-δ5 C5 Cleanup 超时保护** | **MaxCleanupSteps 每块步数预算 + 超时跳过当前块继续剩余 cleanup + C5-01~C5-04 测试** | **1007** | [B-δ5](Plan/Step_B_Delta5_C5_CleanupTimeout.md) |
 
-**B 阶段全部完成。1007 项 Assert × 2 模式全通过。B-ε 性能优化串行计划全部完成（4/4）。B-ζ 分支场景优化串行计划全部完成（3/3）。B-η O8 指令压缩完成（O8-1~O8-3/O8-5 ✅，O8-4 ⏸）。D 阶段分发基础设施 DIST-1~DIST-9 ✅，DIST-10 ⏳。当前位置 → DIST-10（C 阶段⚪宿主阻塞期间可推进）。**
+**B 阶段全部完成。1007 项 Assert × 2 模式全通过。B-ε 性能优化串行计划全部完成（4/4）。B-ζ 分支场景优化串行计划全部完成（3/3）。B-η O8 指令压缩完成（O8-1~O8-3/O8-5 ✅，O8-4 ⏸）。D 阶段分发基础设施全部完成（DIST-1~DIST-10 ✅）。当前位置 → C 阶段（⚪ 宿主阻塞）。**
 
 ---
 
@@ -513,7 +514,7 @@ B 阶段 20 个步骤（B-R1 → B-δ5）全部完成，已归入上方 A 区表
 | B-ζ2 | CMP-immediate 指令 | ✅ | +6 OpCode `JUMP_IF_EQ_K` ~ `JUMP_IF_GTE_K`：`A=targetIP, B=reg, C=constIndex`，一条指令完成"与常量比较并跳转"，替代 `LOAD_CONST tmp` + `JUMP_IF_*`。Peephole 识别 + 编译器直接 emit | ~15-20% B04 加速；所有含常量比较的分支受益 | 中（+6 OpCode + VMWorld case + Peephole/Compiler 识别） |
 | B-ζ3 | SWITCH 跳转表指令 | ✅ | 编译器识别连续 if-else if 链中所有条件为同一变量对连续整数常量（从 0 起）比较时，生成 `SWITCH defaultIP, testReg, jumpTableIdx` 跳转表指令；O(N) 串行测试 → O(1) 分派。+1 OpCode + VMProgram.JumpTables + 编译器 TryCompileSwitch + Peephole 跳转表重映射 | B04↓40-47%（含高方差环境） | 中高（AST 模式识别 + 跳转表编码 + 新 OpCode + 仅对连续 0-based 整数常量有效） |
 
-**B-ζ 分支场景优化串行计划完成（3/3 ✅）。B-η O8 指令压缩完成（O8-1~O8-3/O8-5 ✅，O8-4 临时妥协 ⏸）。D 阶段分发基础设施 DIST-1~DIST-9 ✅，DIST-10 ⏳。当前位置 → DIST-10（C 阶段⚪宿主阻塞期间可推进）。**
+**B-ζ 分支场景优化串行计划完成（3/3 ✅）。B-η O8 指令压缩完成（O8-1~O8-3/O8-5 ✅，O8-4 临时妥协 ⏸）。D 阶段分发基础设施全部完成（DIST-1~DIST-10 ✅）。当前位置 → C 阶段（⚪ 宿主阻塞）。**
 
 ---
 
@@ -561,14 +562,14 @@ B 阶段 20 个步骤（B-R1 → B-δ5）全部完成，已归入上方 A 区表
 
 | 序号 | 步骤 | 状态 | 内容 | 前置条件 | 说明 |
 |------|------|------|------|----------|------|
-| DIST-1 | 创建独立 FFVM 类库项目 | ✅ | `src/FFVM/FFVM.csproj`（net8.0 类库），`dotnet pack` 产生 `FFVM.0.1.0.nupkg`，StandaloneRunner/Sandbox 改为 ProjectReference | 无 | CI 适配完成，1007 Assert 全通过 |
+| DIST-1 | 创建独立 FFVM 类库项目 | ✅ | `src/FFVM/FFVM.csproj`（双目标 `netstandard2.1;net8.0` 类库 —— DIST-10 升级），`dotnet pack` 产生含双 TFM 的 `FFVM.0.1.0.nupkg`，StandaloneRunner/Sandbox 改为 ProjectReference | 无 | CI 适配完成，1007 Assert 全通过 |
 | DIST-2 | 统一 CLI 入口 | ✅ | `src/FFVM.Cli/`：`ffvm-cli run/compile/lsp/dap/version` 子命令，内置 CliSyscalls | DIST-1 | `ffvm-cli run script.ffs` 正确执行 |
 | DIST-3 | 单文件发布 + 扩展适配 | ✅ | PublishSingleFile 跨平台可执行（35MB linux-x64）+ VS Code 扩展改用 `ffvm.executablePath` 设置 | DIST-2 | 扩展 LSP/DAP 调用 `ffvm-cli lsp` / `ffvm-cli dap` |
 | DIST-8 | 提取 EmbeddableDapServer 到 FFVM 库 | ✅ | `DapServerBase` 抽取共享 DAP 协议处理器（initialize/threads/stackTrace/scopes/variables/evaluate/setBreakpoints/sendResponse/sendEvent）。`DapServer`（launch）继承 base。新增 `EmbeddableDapServer`（attach）到 `FFVM.Debug` 命名空间，支持正常 attach + 定制 attach（WaitForConnection + StopOnEntry 可选） | DIST-1 | [D10 讨论](Discussion/D_DapAttachMode.md) |
 | DIST-9 | Sandbox 改造：消费分发库 attach API | ✅ | 删除 `Sandbox/EmbeddedDapServer.cs`（774 行），`SandboxRunner` 改用 `FFVM.Debug.EmbeddableDapServer`；沙盒定制行为（WaitForConnection + StopOnEntry）保留。1007 项 Assert 全通过 + Sandbox 构建 0 错误 | DIST-8 | 验证分发库 API 可用性的"吃自己狗粮"步骤 |
-| DIST-10 | .NET 多版本兼容策略 | ⏳ | FFVM.csproj 双目标 `netstandard2.1;net8.0` + CLI RollForward + CI 多版本矩阵验证。核心代码零改动（条件编译已就绪），纯项目配置 | DIST-1 | [D11 讨论](Discussion/Step_DIST_Distribution.md) §七 |
+| DIST-10 | .NET 多版本兼容策略 | ✅ | FFVM.csproj 双目标 `netstandard2.1;net8.0`（NuGet 包含两个 TFM 程序集），netstandard2.1 目标自动定义 `FFVM_LEGACY_CSHARP` 切换条件编译。VMWorld.cs `AggressiveOptimization` 用条件编译隔离。CLI 追加 `RollForward=LatestMajor`。KOF98 + StandaloneRunner 构建通过，1007 Assert 全通过 | DIST-1 | [D11 讨论](Discussion/Step_DIST_Distribution.md) §七；[KOF98 覆盖验证](Discussion/Step_DIST_Distribution.md) §7.6 |
 
-**DIST-1~DIST-3 ✅ 已完成。DIST-8~DIST-9 ✅ 已完成。DIST-10 ⏳ 待执行（.NET 多版本兼容）。当前位置 → DIST-10（C 阶段⚪宿主阻塞期间可推进）。**
+**DIST-1~DIST-3 ✅ 已完成。DIST-8~DIST-9 ✅ 已完成。DIST-10 ✅ 已完成。D 阶段分发基础设施全部完成。当前位置 → C 阶段（⚪ 宿主阻塞）。**
 
 ---
 
@@ -582,7 +583,7 @@ B 阶段 20 个步骤（B-R1 → B-δ5）全部完成，已归入上方 A 区表
 | Handle64 批处理 | C4 ✅ 已纳入 | 原为展望项 H1 |
 | 帧同步集成验证 | C5 🆕 新增 | 原计划**未覆盖**。V2 验证了离线快照回滚正确性，但真实网络帧同步场景未验证 |
 | 编辑器流程图 | C6 ✅ 已纳入 | 原步骤 10 |
-| 分发基础设施（独立类库 + CLI + 打包 + attach 调试） | D 大部完成 | DIST-1~DIST-3 ✅ + DIST-8~DIST-9 ✅ + DIST-10 ⏳：.NET 多版本兼容（双目标 + RollForward + CI 矩阵） |
+| 分发基础设施（独立类库 + CLI + 打包 + attach 调试 + 多版本兼容） | D ✅ 全部完成 | DIST-1~DIST-3 ✅ + DIST-8~DIST-9 ✅ + DIST-10 ✅：双目标 NuGet（netstandard2.1 + net8.0）、CLI RollForward、KOF98 全场景覆盖验证 |
 | LSP 语言服务 | B-α ✅ 已纳入 | LSP6 声明协议 + LSP7 参数提示，细化为 B-α1/α2 |
 | 调整型优化 | B-β ✅ 已纳入 | O6 peephole + FO1 叶函数 + O9 活跃链表，细化为 B-β1/β2/β3 |
 | 功能完整性 | B-γ ✅ 已纳入 | FO6 + FF5 + S4 + C6 + SN1 + GR3，细化为 B-γ1~γ6 |
