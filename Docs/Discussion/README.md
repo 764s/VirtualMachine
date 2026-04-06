@@ -21,3 +21,5 @@
 | D5 | [Step_C0_DeploymentArchitecture.md](Step_C0_DeploymentArchitecture.md) | 实战部署架构（VM 分配策略 + 多实例交互） | 💬 讨论中 | 2026-04-05 | C 阶段前置讨论 |
 | D6 | [Step_DIST_Distribution.md](Step_DIST_Distribution.md) | 分发计划（独立类库 + CLI + 单文件发布） | 💬 讨论中 | 2026-04-05 | 三层分发架构讨论 |
 | D7 | [D_RuntimeCompilation.md](D_RuntimeCompilation.md) | 游戏内运行时动态编译 | 💬 讨论中 | 2026-04-05 | 当前 DIST 架构对动态编译的支持评估 |
+| D8 | [D_TracerBullet.md](D_TracerBullet.md) | 曳光弹：范围、目标与验证 | ✅ 已完成 | 早期 | 从 VM_Summary.md §四 抽取 |
+| D9 | [VM_Tracer_Bullet.md](VM_Tracer_Bullet.md) | 曳光弹原始详细设计讨论 | ✅ 已完成 | 早期 | 从 Reference/ 迁入 |
