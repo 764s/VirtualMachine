@@ -4,6 +4,7 @@ using System.IO;
 using System.Threading;
 using FFVM;
 using FFVM.Compiler;
+using FFVM.Debug;
 
 namespace Sandbox
 {
@@ -37,7 +38,7 @@ namespace Sandbox
         private int _frameCount;
 
         // Debug state
-        private EmbeddedDapServer _dapServer;
+        private EmbeddableDapServer _dapServer;
 
         /// <summary>Target frames per second for the run loop (default: 60).</summary>
         public int TargetFps = 60;
@@ -60,7 +61,7 @@ namespace Sandbox
         /// </summary>
         public void EnableDebug(int port = 4711)
         {
-            _dapServer = new EmbeddedDapServer(port);
+            _dapServer = new EmbeddableDapServer(port);
             _dapServer.StartListening();
             Console.WriteLine($"[DEBUG] DAP server listening on port {port}");
             Console.WriteLine("[DEBUG] In VS Code: F5 → \"Attach to Sandbox\" to connect.");

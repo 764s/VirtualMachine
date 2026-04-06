@@ -30,6 +30,7 @@ Docs/
     Step_R1_FFScript_Rename.md       B-R1 FFScript 正式命名 + .ffs 后缀统一
     Step_B_Gamma7_SN1_NestedStruct.md  B-γ7 SN1 嵌套结构体（递归拍平 + 循环引用检测）
     Step_DIST_Distribution.md        DIST-1~DIST-3 分发基础设施（独立类库 + CLI + 单文件发布）
+    Step_DIST8_DIST9_EmbeddableDapServer.md  DIST-8+DIST-9 EmbeddableDapServer 提取 + Sandbox 改造
   Emergency/                 ← 紧急区：恶性 / 影响深远缺陷的修复通道
     README.md                        工作流定义 + 任务总览 + 风险汇总
     E001_Register_Lifecycle_Bug.md   编译器寄存器生命周期 Bug
@@ -467,7 +468,7 @@ Docs/
 | — | **B-δ4 SN2 结构体字面量构造语法** | **StructLiteralExpr AST + Parser `TypeName { field: expr }` + Compiler sugar 展开 + 嵌套字面量 + CS31-CS38 测试** | **990** | [B-δ4](Plan/Step_B_Delta4_SN2_StructLiteral.md) |
 | — | **B-δ5 C5 Cleanup 超时保护** | **MaxCleanupSteps 每块步数预算 + 超时跳过当前块继续剩余 cleanup + C5-01~C5-04 测试** | **1007** | [B-δ5](Plan/Step_B_Delta5_C5_CleanupTimeout.md) |
 
-**B 阶段全部完成。1007 项 Assert × 2 模式全通过。B-ε 性能优化串行计划全部完成（4/4）。B-ζ 分支场景优化串行计划全部完成（3/3）。B-η O8 指令压缩完成（O8-1~O8-3/O8-5 ✅，O8-4 ⏸）。D 阶段分发基础设施 DIST-1~DIST-3 ✅，DIST-8~DIST-9 ⏳（attach 模式提取）。当前位置 → C 阶段（⚪ 宿主阻塞）。**
+**B 阶段全部完成。1007 项 Assert × 2 模式全通过。B-ε 性能优化串行计划全部完成（4/4）。B-ζ 分支场景优化串行计划全部完成（3/3）。B-η O8 指令压缩完成（O8-1~O8-3/O8-5 ✅，O8-4 ⏸）。D 阶段分发基础设施全部完成（DIST-1~DIST-3 + DIST-8~DIST-9 ✅）。当前位置 → C 阶段（⚪ 宿主阻塞）。**
 
 ---
 
@@ -512,7 +513,7 @@ B 阶段 20 个步骤（B-R1 → B-δ5）全部完成，已归入上方 A 区表
 | B-ζ2 | CMP-immediate 指令 | ✅ | +6 OpCode `JUMP_IF_EQ_K` ~ `JUMP_IF_GTE_K`：`A=targetIP, B=reg, C=constIndex`，一条指令完成"与常量比较并跳转"，替代 `LOAD_CONST tmp` + `JUMP_IF_*`。Peephole 识别 + 编译器直接 emit | ~15-20% B04 加速；所有含常量比较的分支受益 | 中（+6 OpCode + VMWorld case + Peephole/Compiler 识别） |
 | B-ζ3 | SWITCH 跳转表指令 | ✅ | 编译器识别连续 if-else if 链中所有条件为同一变量对连续整数常量（从 0 起）比较时，生成 `SWITCH defaultIP, testReg, jumpTableIdx` 跳转表指令；O(N) 串行测试 → O(1) 分派。+1 OpCode + VMProgram.JumpTables + 编译器 TryCompileSwitch + Peephole 跳转表重映射 | B04↓40-47%（含高方差环境） | 中高（AST 模式识别 + 跳转表编码 + 新 OpCode + 仅对连续 0-based 整数常量有效） |
 
-**B-ζ 分支场景优化串行计划完成（3/3 ✅）。B-η O8 指令压缩完成（O8-1~O8-3/O8-5 ✅，O8-4 临时妥协 ⏸）。D 阶段分发基础设施 DIST-1~DIST-3 ✅，DIST-8~DIST-9 ⏳（attach 模式提取）。当前位置 → C 阶段（⚪ 宿主阻塞）。**
+**B-ζ 分支场景优化串行计划完成（3/3 ✅）。B-η O8 指令压缩完成（O8-1~O8-3/O8-5 ✅，O8-4 临时妥协 ⏸）。D 阶段分发基础设施全部完成（DIST-1~DIST-3 + DIST-8~DIST-9 ✅）。当前位置 → C 阶段（⚪ 宿主阻塞）。**
 
 ---
 
@@ -563,10 +564,10 @@ B 阶段 20 个步骤（B-R1 → B-δ5）全部完成，已归入上方 A 区表
 | DIST-1 | 创建独立 FFVM 类库项目 | ✅ | `src/FFVM/FFVM.csproj`（net8.0 类库），`dotnet pack` 产生 `FFVM.0.1.0.nupkg`，StandaloneRunner/Sandbox 改为 ProjectReference | 无 | CI 适配完成，1007 Assert 全通过 |
 | DIST-2 | 统一 CLI 入口 | ✅ | `src/FFVM.Cli/`：`ffvm-cli run/compile/lsp/dap/version` 子命令，内置 CliSyscalls | DIST-1 | `ffvm-cli run script.ffs` 正确执行 |
 | DIST-3 | 单文件发布 + 扩展适配 | ✅ | PublishSingleFile 跨平台可执行（35MB linux-x64）+ VS Code 扩展改用 `ffvm.executablePath` 设置 | DIST-2 | 扩展 LSP/DAP 调用 `ffvm-cli lsp` / `ffvm-cli dap` |
-| DIST-8 | 提取 EmbeddableDapServer 到 FFVM 库 | ⏳ | 从 Sandbox `EmbeddedDapServer` 提取共享 DAP 协议基类 + TCP attach 模式服务器到 `FFVM.Debug` 命名空间，成为分发库公开 API。区分正常 attach（不阻塞执行）与定制 attach（WaitForConnection + StopOnEntry 可选组合） | DIST-1 | [D10 讨论](Discussion/D_DapAttachMode.md) |
-| DIST-9 | Sandbox 改造：消费分发库 attach API | ⏳ | Sandbox 删除私有 `EmbeddedDapServer`，改用 `FFVM.Debug.EmbeddableDapServer`；保留沙盒定制行为（WaitForConnection + StopOnEntry）。现有 97 项 DAP 测试 + attach 调试流程不变 | DIST-8 | 验证分发库 API 可用性的"吃自己狗粮"步骤 |
+| DIST-8 | 提取 EmbeddableDapServer 到 FFVM 库 | ✅ | `DapServerBase` 抽取共享 DAP 协议处理器（initialize/threads/stackTrace/scopes/variables/evaluate/setBreakpoints/sendResponse/sendEvent）。`DapServer`（launch）继承 base。新增 `EmbeddableDapServer`（attach）到 `FFVM.Debug` 命名空间，支持正常 attach + 定制 attach（WaitForConnection + StopOnEntry 可选） | DIST-1 | [D10 讨论](Discussion/D_DapAttachMode.md) |
+| DIST-9 | Sandbox 改造：消费分发库 attach API | ✅ | 删除 `Sandbox/EmbeddedDapServer.cs`（774 行），`SandboxRunner` 改用 `FFVM.Debug.EmbeddableDapServer`；沙盒定制行为（WaitForConnection + StopOnEntry）保留。1007 项 Assert 全通过 + Sandbox 构建 0 错误 | DIST-8 | 验证分发库 API 可用性的"吃自己狗粮"步骤 |
 
-**DIST-1~DIST-3 ✅ 已完成。DIST-8~DIST-9 ⏳ 待执行。当前位置 → C 阶段（⚪ 宿主阻塞）。**
+**DIST-1~DIST-3 ✅ 已完成。DIST-8~DIST-9 ✅ 已完成。D 阶段分发基础设施全部完成。当前位置 → C 阶段（⚪ 宿主阻塞）。**
 
 ---
 

@@ -4,23 +4,31 @@ using System.IO;
 using System.Net;
 using System.Net.Sockets;
 using System.Threading;
-using FFVM;
-using FFVM.Compiler;
-using FFVM.Debug;
 
-namespace Sandbox
+namespace FFVM.Debug
 {
     /// <summary>
-    /// Embedded DAP server for Sandbox.
-    /// Listens on TCP, attaches to the Sandbox's own VMWorld.
-    /// Designed for the workflow: Sandbox runs → VS Code attaches → breakpoints work.
+    /// Embeddable DAP server for attach-mode debugging — public API for FFVM consumers.
+    /// Listens on TCP, attaches to a host application's VMWorld.
+    /// Designed for the workflow: Host app runs → VS Code attaches → breakpoints work.
     ///
     /// Threading model:
-    ///   Main thread  — Sandbox game loop (Tick), pauses on breakpoint via ManualResetEvent.
+    ///   Main thread  — Host game loop (Tick), pauses on breakpoint via ManualResetEvent.
     ///   DAP thread   — Reads DAP messages from TCP, handles inspect/continue/step requests.
     ///   When paused, main thread is blocked; DAP thread reads VM state safely.
+    ///
+    /// Usage:
+    ///   var dap = new EmbeddableDapServer(port: 4711);
+    ///   dap.StartListening();
+    ///   // ... compile program, create world, spawn instance ...
+    ///   dap.AttachToWorld(world, program, instanceId, "script.ffs");
+    ///   // Normal attach (no blocking): debugger connects whenever, VM keeps running
+    ///   // Custom attach (sandbox mode): dap.WaitForConnection(); dap.StopOnEntry();
+    ///   // Game loop: world.Tick(); dap.CheckBreakpointAndWait();
+    ///   dap.DetachFromWorld();
+    ///   dap.Dispose();
     /// </summary>
-    public class EmbeddedDapServer : IDisposable
+    public class EmbeddableDapServer : DapServerBase, IDisposable
     {
         private readonly int _port;
         private TcpListener _listener;
@@ -31,39 +39,28 @@ namespace Sandbox
         private volatile bool _listening;
         private volatile bool _connected;
         private volatile bool _running;
-        private int _seq;
 
         // --- Synchronisation with main thread ---
         private readonly ManualResetEventSlim _resumeEvent = new ManualResetEventSlim(true); // starts signalled
         private readonly ManualResetEventSlim _configDoneEvent = new ManualResetEventSlim(false); // wait for configurationDone
         private volatile bool _paused;
 
-        // --- VM references (set by Sandbox before Run, or on attach) ---
-        private VMWorld _world;
-        private VMProgram _program;
-        private ScriptDebugger _debugger;
-        private int _instanceId = -1;
-        private string _scriptPath;
-
         // --- Breakpoint state ---
-        private volatile bool _hitBreakpoint;
-        private int _hitLine;
-        private int _hitIP;
         private string _pendingStopReason;
 
         // --- Buffered breakpoints (set before program is compiled) ---
         private readonly List<int> _bufferedBreakpointLines = new List<int>();
 
-        // --- Variables reference management ---
-        private List<(string[] fieldNames, Number[] fieldValues)> _structExpansions;
-
         // --- Stop on entry ---
         private volatile bool _stopOnEntry;
 
+        /// <summary>Whether a VS Code client is currently connected.</summary>
         public bool IsConnected => _connected;
+
+        /// <summary>Whether the VM is currently paused at a breakpoint.</summary>
         public bool IsPaused => _paused;
 
-        public EmbeddedDapServer(int port = 4711)
+        public EmbeddableDapServer(int port = 4711)
         {
             _port = port;
         }
@@ -72,20 +69,20 @@ namespace Sandbox
         // Lifecycle
         // ============================================================
 
-        /// <summary>Start listening on TCP. Call once at Sandbox startup.</summary>
+        /// <summary>Start listening on TCP. Call once at host startup.</summary>
         public void StartListening()
         {
             _listener = new TcpListener(IPAddress.Loopback, _port);
             _listener.Server.SetSocketOption(
-                System.Net.Sockets.SocketOptionLevel.Socket,
-                System.Net.Sockets.SocketOptionName.ReuseAddress, true);
+                SocketOptionLevel.Socket,
+                SocketOptionName.ReuseAddress, true);
             try
             {
                 _listener.Start();
             }
             catch (SocketException ex) when (ex.SocketErrorCode == SocketError.AddressAlreadyInUse)
             {
-                Console.Error.WriteLine($"[DEBUG] Port {_port} is already in use. Is another Sandbox running?");
+                Console.Error.WriteLine($"[DEBUG] Port {_port} is already in use. Is another instance running?");
                 Console.Error.WriteLine("[DEBUG] Close the other instance first, then retry.");
                 throw;
             }
@@ -101,19 +98,23 @@ namespace Sandbox
 
         /// <summary>
         /// Block until VS Code connects. Call from main thread before running the script.
+        /// This is an optional call for "custom attach" (sandbox mode).
+        /// Normal attach does not require this — the debugger connects whenever it's ready.
         /// </summary>
         public void WaitForConnection()
         {
-            Console.WriteLine("[DEBUG] Waiting for VS Code to attach... (F5 → \"Attach to Sandbox\")");
+            Console.WriteLine("[DEBUG] Waiting for VS Code to attach...");
             while (!_connected && _listening)
                 Thread.Sleep(100);
             if (_connected)
-                Console.WriteLine("[DEBUG] VS Code attached. Starting script...");
+                Console.WriteLine("[DEBUG] VS Code attached.");
         }
 
         /// <summary>
         /// Pause at the first instruction. Call after AttachToWorld, before the game loop.
         /// Sends "stopped on entry" and blocks until VS Code sends continue.
+        /// This is an optional call for "custom attach" (sandbox mode).
+        /// Normal attach does not require this.
         /// </summary>
         public void StopOnEntry()
         {
@@ -140,7 +141,7 @@ namespace Sandbox
         }
 
         /// <summary>
-        /// Attach the debugger to a live VMWorld. Called by SandboxRunner after compile + world setup.
+        /// Attach the debugger to a live VMWorld. Called by host after compile + world setup.
         /// </summary>
         public void AttachToWorld(VMWorld world, VMProgram program, int instanceId, string scriptPath)
         {
@@ -217,6 +218,38 @@ namespace Sandbox
 
             try { _client?.Close(); } catch { }
             try { _listener?.Stop(); } catch { }
+        }
+
+        // ============================================================
+        // DapServerBase overrides
+        // ============================================================
+
+        protected override void WriteMessage(string json)
+        {
+            if (_stream == null) return;
+
+            lock (_stream)
+            {
+                ContentLengthStream.WriteMessage(_stream, json);
+            }
+        }
+
+        protected override bool OnBreakpointNotVerifiable(int line)
+        {
+            // Program not compiled yet — buffer the breakpoint, mark as verified optimistically
+            lock (_bufferedBreakpointLines) { _bufferedBreakpointLines.Add(line); }
+            return true;
+        }
+
+        protected override void OnClearBufferedBreakpoints()
+        {
+            lock (_bufferedBreakpointLines) { _bufferedBreakpointLines.Clear(); }
+        }
+
+        protected override void OnBreakpointHitCallback(int instanceId, int ip, int line)
+        {
+            Console.WriteLine($"[DAP] Breakpoint hit: ip={ip} line={line}");
+            base.OnBreakpointHitCallback(instanceId, ip, line);
         }
 
         // ============================================================
@@ -300,13 +333,14 @@ namespace Sandbox
                 switch (command)
                 {
                     case "initialize":
-                        responseBody = HandleInitialize();
+                        responseBody = HandleInitialize(true);
                         break;
                     case "attach":
-                        responseBody = HandleAttach(arguments);
+                        // Nothing to do — the VM is managed by the host, not by us.
+                        // Breakpoints may already be buffered from setBreakpoints.
                         break;
                     case "setBreakpoints":
-                        responseBody = HandleSetBreakpoints(arguments);
+                        responseBody = HandleSetBreakpointsCore(arguments);
                         break;
                     case "setFunctionBreakpoints":
                         // VS Code sends this during config — return empty list
@@ -324,16 +358,16 @@ namespace Sandbox
                         responseBody = HandleThreads();
                         break;
                     case "continue":
-                        responseBody = HandleContinue();
+                        responseBody = HandleContinueAttach();
                         break;
                     case "next":
-                        responseBody = HandleNext();
+                        responseBody = HandleNextAttach();
                         break;
                     case "stepIn":
-                        responseBody = HandleStepIn();
+                        responseBody = HandleStepInAttach();
                         break;
                     case "stepOut":
-                        responseBody = HandleStepOut();
+                        responseBody = HandleStepOutAttach();
                         break;
                     case "stackTrace":
                         responseBody = HandleStackTrace();
@@ -375,101 +409,16 @@ namespace Sandbox
         }
 
         // ============================================================
-        // Handlers
+        // Attach-mode specific handlers
         // ============================================================
 
-        private JsonObject HandleInitialize()
-        {
-            var body = new JsonObject();
-            body.Set("supportsConfigurationDoneRequest", true);
-            body.Set("supportsFunctionBreakpoints", false);
-            body.Set("supportsConditionalBreakpoints", false);
-            body.Set("supportsEvaluateForHovers", true);
-            body.Set("supportsStepBack", false);
-            body.Set("supportsSetVariable", false);
-            return body;
-        }
-
-        private JsonObject HandleAttach(JsonObject arguments)
-        {
-            // Nothing to do — the VM is managed by Sandbox, not by us.
-            // Breakpoints may already be buffered from setBreakpoints.
-            return null;
-        }
-
-        private JsonObject HandleSetBreakpoints(JsonObject arguments)
-        {
-            var body = new JsonObject();
-            var breakpointsList = new List<object>();
-
-            // Clear existing breakpoints
-            _debugger?.ClearBreakpoints();
-            lock (_bufferedBreakpointLines) { _bufferedBreakpointLines.Clear(); }
-
-            var source = arguments?.GetObject("source");
-            string sourcePath = source?.GetString("path");
-
-            var breakpointsArr = arguments?.GetArray("breakpoints");
-            if (breakpointsArr != null)
-            {
-                foreach (var bpObj in breakpointsArr)
-                {
-                    int line = 0;
-                    if (bpObj is JsonObject bpJson)
-                        line = bpJson.GetInt("line");
-
-                    bool verified = false;
-
-                    if (_program?.SourceMap != null && line > 0)
-                    {
-                        // Program is compiled — verify against source map
-                        for (int ip = 0; ip < _program.SourceMap.Length; ip++)
-                        {
-                            if (_program.SourceMap[ip] == line)
-                            {
-                                verified = true;
-                                break;
-                            }
-                        }
-                        if (verified)
-                            _debugger?.AddBreakpoint(line);
-                    }
-                    else if (line > 0)
-                    {
-                        // Program not compiled yet — buffer the breakpoint, mark as verified optimistically
-                        lock (_bufferedBreakpointLines) { _bufferedBreakpointLines.Add(line); }
-                        verified = true;
-                    }
-
-                    var bp = new JsonObject();
-                    bp.Set("verified", verified);
-                    bp.Set("line", line);
-                    breakpointsList.Add(bp);
-                }
-            }
-
-            body.Set("breakpoints", breakpointsList);
-            return body;
-        }
-
-        private JsonObject HandleThreads()
-        {
-            var thread = new JsonObject();
-            thread.Set("id", 1);
-            thread.Set("name", "FFVM Main Thread");
-
-            var body = new JsonObject();
-            body.Set("threads", new List<object> { thread });
-            return body;
-        }
-
-        private JsonObject HandleContinue()
+        private JsonObject HandleContinueAttach()
         {
             ResumeExecution("breakpoint");
             return new JsonObject();
         }
 
-        private JsonObject HandleNext()
+        private JsonObject HandleNextAttach()
         {
             if (_debugger != null && _program != null && _instanceId >= 0)
             {
@@ -483,7 +432,7 @@ namespace Sandbox
             return new JsonObject();
         }
 
-        private JsonObject HandleStepIn()
+        private JsonObject HandleStepInAttach()
         {
             if (_debugger != null && _program != null && _instanceId >= 0)
             {
@@ -518,7 +467,7 @@ namespace Sandbox
             return new JsonObject();
         }
 
-        private JsonObject HandleStepOut()
+        private JsonObject HandleStepOutAttach()
         {
             if (_debugger != null && _program != null && _instanceId >= 0)
             {
@@ -539,236 +488,11 @@ namespace Sandbox
             _resumeEvent.Set(); // unblock main thread
         }
 
-        private JsonObject HandleStackTrace()
-        {
-            var body = new JsonObject();
-            var stackFrames = new List<object>();
-
-            if (_debugger != null && _program != null && _instanceId >= 0)
-            {
-                var callStack = _debugger.GetCallStack(_program, ref _world.Pool.Instances[_instanceId]);
-                for (int i = 0; i < callStack.Count; i++)
-                {
-                    var entry = callStack[i];
-                    var frame = new JsonObject();
-                    frame.Set("id", i);
-                    frame.Set("name", entry.FunctionName);
-                    frame.Set("line", entry.SourceLine);
-                    frame.Set("column", 1);
-
-                    if (!string.IsNullOrEmpty(_scriptPath))
-                    {
-                        var source = new JsonObject();
-                        source.Set("name", Path.GetFileName(_scriptPath));
-                        source.Set("path", Path.GetFullPath(_scriptPath));
-                        frame.Set("source", source);
-                    }
-
-                    stackFrames.Add(frame);
-                }
-            }
-
-            body.Set("stackFrames", stackFrames);
-            body.Set("totalFrames", stackFrames.Count);
-            return body;
-        }
-
-        private JsonObject HandleScopes()
-        {
-            _structExpansions = new List<(string[], Number[])>();
-
-            var scope = new JsonObject();
-            scope.Set("name", "Locals");
-            scope.Set("variablesReference", 1);
-            scope.Set("expensive", false);
-
-            var body = new JsonObject();
-            body.Set("scopes", new List<object> { scope });
-            return body;
-        }
-
-        private JsonObject HandleVariables(JsonObject arguments)
-        {
-            int varRef = arguments?.GetInt("variablesReference") ?? 0;
-            var variablesList = new List<object>();
-
-            if (varRef == 1 && _debugger != null && _program != null && _instanceId >= 0)
-            {
-                _structExpansions = _structExpansions ?? new List<(string[], Number[])>();
-                var vars = _debugger.GetVariables(_program, ref _world.Pool.Instances[_instanceId]);
-
-                foreach (var v in vars)
-                {
-                    var variable = new JsonObject();
-                    variable.Set("name", v.Name);
-                    variable.Set("value", FormatNumber(v.Value));
-                    variable.Set("type", v.IsStruct ? "struct" : "int");
-
-                    if (v.IsStruct && v.FieldNames != null && v.FieldValues != null)
-                    {
-                        int refId = 1000 + _structExpansions.Count;
-                        _structExpansions.Add((v.FieldNames, v.FieldValues));
-                        variable.Set("variablesReference", refId);
-                    }
-                    else
-                    {
-                        variable.Set("variablesReference", 0);
-                    }
-
-                    variablesList.Add(variable);
-                }
-            }
-            else if (varRef >= 1000 && _structExpansions != null)
-            {
-                int index = varRef - 1000;
-                if (index >= 0 && index < _structExpansions.Count)
-                {
-                    var (fieldNames, fieldValues) = _structExpansions[index];
-                    for (int i = 0; i < fieldNames.Length; i++)
-                    {
-                        var variable = new JsonObject();
-                        variable.Set("name", fieldNames[i]);
-                        variable.Set("value", FormatNumber(fieldValues[i]));
-                        variable.Set("type", "int");
-                        variable.Set("variablesReference", 0);
-                        variablesList.Add(variable);
-                    }
-                }
-            }
-
-            var body = new JsonObject();
-            body.Set("variables", variablesList);
-            return body;
-        }
-
-        private JsonObject HandleEvaluate(JsonObject arguments)
-        {
-            string expression = arguments?.GetString("expression")?.Trim();
-            if (string.IsNullOrEmpty(expression))
-                throw new Exception("Empty expression");
-
-            if (_debugger == null || _program == null || _instanceId < 0)
-                throw new Exception("Not paused");
-
-            var vars = _debugger.GetVariables(_program, ref _world.Pool.Instances[_instanceId]);
-
-            // Field access: "varName.fieldName"
-            int dotIdx = expression.IndexOf('.');
-            if (dotIdx > 0)
-            {
-                string varName = expression.Substring(0, dotIdx);
-                string fieldName = expression.Substring(dotIdx + 1);
-                int vi = vars.FindIndex(x => x.Name == varName);
-                if (vi < 0)
-                    throw new Exception($"Unknown variable '{varName}'");
-                var v = vars[vi];
-                if (!v.IsStruct || v.FieldNames == null)
-                    throw new Exception($"'{varName}' is not a struct");
-                for (int i = 0; i < v.FieldNames.Length; i++)
-                {
-                    if (v.FieldNames[i] == fieldName)
-                    {
-                        var body = new JsonObject();
-                        body.Set("result", FormatNumber(v.FieldValues[i]));
-                        body.Set("variablesReference", 0);
-                        return body;
-                    }
-                }
-                throw new Exception($"'{varName}' has no field '{fieldName}'");
-            }
-
-            // Simple variable name lookup
-            int fi = vars.FindIndex(x => x.Name == expression);
-            if (fi >= 0)
-            {
-                var found = vars[fi];
-                var body = new JsonObject();
-                body.Set("result", FormatNumber(found.Value));
-                body.Set("type", found.IsStruct ? "struct" : "int");
-
-                if (found.IsStruct && found.FieldNames != null && found.FieldValues != null)
-                {
-                    _structExpansions = _structExpansions ?? new List<(string[], Number[])>();
-                    int refId = 1000 + _structExpansions.Count;
-                    _structExpansions.Add((found.FieldNames, found.FieldValues));
-                    body.Set("variablesReference", refId);
-                }
-                else
-                {
-                    body.Set("variablesReference", 0);
-                }
-                return body;
-            }
-
-            // Unsupported expression
-            throw new Exception($"Expression evaluation not supported: '{expression}'");
-        }
-
         private void HandleDisconnect()
         {
             _running = false;
             _paused = false;
             _resumeEvent.Set();
-        }
-
-        // ============================================================
-        // Helpers
-        // ============================================================
-
-        private void OnBreakpointHitCallback(int instanceId, int ip, int line)
-        {
-            Console.WriteLine($"[DAP] Breakpoint hit: ip={ip} line={line}");
-            _hitBreakpoint = true;
-            _hitIP = ip;
-            _hitLine = line;
-        }
-
-        private void SendResponse(string command, int requestSeq, bool success, JsonObject body, string errorMessage)
-        {
-            if (_stream == null) return;
-
-            var response = new JsonObject();
-            response.Set("seq", _seq++);
-            response.Set("type", "response");
-            response.Set("request_seq", requestSeq);
-            response.Set("success", success);
-            response.Set("command", command);
-
-            if (body != null)
-                response.Set("body", body);
-            if (!success && errorMessage != null)
-                response.Set("message", errorMessage);
-
-            lock (_stream)
-            {
-                ContentLengthStream.WriteMessage(_stream, response.ToJson());
-            }
-        }
-
-        private void SendEvent(string eventName, JsonObject body)
-        {
-            if (_stream == null) return;
-
-            var evt = new JsonObject();
-            evt.Set("seq", _seq++);
-            evt.Set("type", "event");
-            evt.Set("event", eventName);
-
-            if (body != null)
-                evt.Set("body", body);
-
-            lock (_stream)
-            {
-                ContentLengthStream.WriteMessage(_stream, evt.ToJson());
-            }
-        }
-
-        private static string FormatNumber(Number n)
-        {
-            int intVal = n.ToInt();
-            if (Number.FromInt(intVal) == n)
-                return intVal.ToString();
-            return n.ToString();
         }
     }
 }
