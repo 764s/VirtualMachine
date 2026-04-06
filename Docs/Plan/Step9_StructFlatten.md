@@ -309,7 +309,7 @@ struct TypeName {
 ## 七、性能优化展望
 
 > 以下优化方向聚焦**结构体操作路径**（步骤 9 引入的新开销）。
-> 与 [VM_Optimization_Outlook.md](../Refs/VM_Optimization_Outlook.md) 中的通用 VM 优化（O1-O14）互补但不重叠。
+> 与 [VM_Optimization_Outlook.md](../Reference/VM_Optimization_Outlook.md) 中的通用 VM 优化（O1-O14）互补但不重叠。
 > 已同步录入 [Outlook_And_Risks.md §3.3](Outlook_And_Risks.md#33-结构体路径潜在优化来源step9)。
 
 ### SO1. COPY_BLOCK OpCode（替代 N 条 MOVE 的结构体赋值）

@@ -78,16 +78,16 @@
 | **Pε-F1** | while 循环 FORLOOP 识别 | while 循环是主要循环形式时 | [B-ε](Step_B_Epsilon_Perf.md) |
 | **Pε-F2** | FORLOOP 变步长支持（step ≠ 1） | 非单位步长循环出现时 | [B-ε](Step_B_Epsilon_Perf.md) |
 | **Pε-F3** | `<=` 条件的 FORLOOP | `for(i=0; i<=N; ...)` 模式出现时 | [B-ε](Step_B_Epsilon_Perf.md) |
-| **MI-1** | DAP 多实例线程映射（每实例 → 伪线程） | C1-γ 接入 AI 层时 | [C0](Step_C0_DeploymentArchitecture.md) |
-| **MI-2** | SpawnScript Syscall（父实例启动子实例） | 需要技能脚本派生特效实例时 | [C0](Step_C0_DeploymentArchitecture.md) |
-| **MI-3** | KillInstance Syscall（显式终止指定实例） | 需要取消/打断子实例时 | [C0](Step_C0_DeploymentArchitecture.md) |
-| **MI-4** | VMInspector 宿主数据读取辅助（ReadVar / ReadStruct） | 宿主需要从外部读取实例状态时 | [C0](Step_C0_DeploymentArchitecture.md) |
-| **MI-5** | 实例间事件总线（EmitEvent / PollEvent） | 多实例需要松耦合通信时 | [C0](Step_C0_DeploymentArchitecture.md) |
+| **MI-1** | DAP 多实例线程映射（每实例 → 伪线程） | C1-γ 接入 AI 层时 | [C0](../Discussion/Step_C0_DeploymentArchitecture.md) |
+| **MI-2** | SpawnScript Syscall（父实例启动子实例） | 需要技能脚本派生特效实例时 | [C0](../Discussion/Step_C0_DeploymentArchitecture.md) |
+| **MI-3** | KillInstance Syscall（显式终止指定实例） | 需要取消/打断子实例时 | [C0](../Discussion/Step_C0_DeploymentArchitecture.md) |
+| **MI-4** | VMInspector 宿主数据读取辅助（ReadVar / ReadStruct） | 宿主需要从外部读取实例状态时 | [C0](../Discussion/Step_C0_DeploymentArchitecture.md) |
+| **MI-5** | 实例间事件总线（EmitEvent / PollEvent） | 多实例需要松耦合通信时 | [C0](../Discussion/Step_C0_DeploymentArchitecture.md) |
 
 ### 2.5 分发基础设施（DIST 系列）
 
 > 来源：2026-04-05 讨论。目标：让其他人在自己的项目中使用 FFVM 时，心智负担和操作负担最小化。
-> 详细设计见 [Step_DIST_Distribution.md](Step_DIST_Distribution.md)。
+> 详细设计见 [Step_DIST_Distribution.md](../Discussion/Step_DIST_Distribution.md)。
 
 | ID | 内容 | 触发时机 | 复杂度 |
 |----|------|----------|--------|
@@ -240,7 +240,7 @@ LSP1（LSP Server 核心框架）           ← 所有 LSP 功能的通信基础
 
 ### 2.9 部署架构与多实例交互（MI 系列）
 
-> 来源：[Step_C0_DeploymentArchitecture.md](Step_C0_DeploymentArchitecture.md)
+> 来源：[Step_C0_DeploymentArchitecture.md](../Discussion/Step_C0_DeploymentArchitecture.md)
 >
 > 讨论 FFVM 在游戏架构各层（场景→角色→AI→技能→效果器）的分配策略、
 > 多实例调试、宿主数据读取、以及实例间交互模式。
@@ -276,7 +276,7 @@ LSP1（LSP Server 核心框架）           ← 所有 LSP 功能的通信基础
 
 这些优化是计划内工作（尤其 F4 寄存器生命周期分析 + 编译器成熟化）的自然副产品，边际成本极低，应在实现对应功能时一并完成。
 
-> 详细方案：通用优化见 [VM_Optimization_Outlook.md](../Refs/VM_Optimization_Outlook.md)；函数调用优化见 [Step8_FunctionCall.md §七](Step8_FunctionCall.md#七性能优化展望)
+> 详细方案：通用优化见 [VM_Optimization_Outlook.md](../Reference/VM_Optimization_Outlook.md)；函数调用优化见 [Step8_FunctionCall.md §七](Step8_FunctionCall.md#七性能优化展望)
 
 | ID | 内容 | 预期收益 | 复杂度 | 自然来源 | 状态 |
 |----|------|---------|--------|----------|------|
@@ -292,7 +292,7 @@ LSP1（LSP Server 核心框架）           ← 所有 LSP 功能的通信基础
 
 ### 3.2 调整型优化 — 解释器热路径（Benchmark 驱动）
 
-> 详细方案与代码示例见 [VM_Optimization_Outlook.md](../Refs/VM_Optimization_Outlook.md)
+> 详细方案与代码示例见 [VM_Optimization_Outlook.md](../Reference/VM_Optimization_Outlook.md)
 
 | Tier | ID | 内容 | 预期收益 | 复杂度 | 状态 |
 |------|----|------|---------|--------|------|
@@ -457,10 +457,10 @@ LSP1（LSP Server 核心框架）           ← 所有 LSP 功能的通信基础
 
 | ID | 风险 | 影响 | 缓解 | 来源 |
 |----|------|------|------|------|
-| **R-MI2-1** | SpawnScript 递归派生导致实例池耗尽 | 128 上限后静默失败 | 编译期 `maxSpawn` 标注 + 运行时 Syscall 返回错误码 | [C0](Step_C0_DeploymentArchitecture.md) |
-| **R-MI3-1** | KillInstance 越权终止非子实例 | 安全与调试困难 | parentId 校验 — 仅允许 kill 自己的子树 | [C0](Step_C0_DeploymentArchitecture.md) |
-| **R-MI5-1** | 事件总线环形缓冲溢出丢失事件 | 高频事件被静默丢弃 | 溢出时 warning log + 可配置容量（默认 64） | [C0](Step_C0_DeploymentArchitecture.md) |
-| **R-MI5-2** | PollEvent 顺序依赖导致帧间行为不确定 | 多实例读取同一事件的顺序不可控 | 事件为广播语义（所有 Poll 者均可见），消费后标记而非删除 | [C0](Step_C0_DeploymentArchitecture.md) |
+| **R-MI2-1** | SpawnScript 递归派生导致实例池耗尽 | 128 上限后静默失败 | 编译期 `maxSpawn` 标注 + 运行时 Syscall 返回错误码 | [C0](../Discussion/Step_C0_DeploymentArchitecture.md) |
+| **R-MI3-1** | KillInstance 越权终止非子实例 | 安全与调试困难 | parentId 校验 — 仅允许 kill 自己的子树 | [C0](../Discussion/Step_C0_DeploymentArchitecture.md) |
+| **R-MI5-1** | 事件总线环形缓冲溢出丢失事件 | 高频事件被静默丢弃 | 溢出时 warning log + 可配置容量（默认 64） | [C0](../Discussion/Step_C0_DeploymentArchitecture.md) |
+| **R-MI5-2** | PollEvent 顺序依赖导致帧间行为不确定 | 多实例读取同一事件的顺序不可控 | 事件为广播语义（所有 Poll 者均可见），消费后标记而非删除 | [C0](../Discussion/Step_C0_DeploymentArchitecture.md) |
 
 ---
 

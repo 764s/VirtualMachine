@@ -2,7 +2,7 @@
 
 ## 一、技能执行流程推测
 
-根据归档文件 (`Archive/VMScript.md`) 中描述的遗留系统层次结构：
+根据讨论文件 (`Discussion/VMScript.md`) 中描述的遗留系统层次结构：
 
 ```
 SkillBehaviour (技能管理器)
