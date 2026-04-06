@@ -1,0 +1,214 @@
+using System;
+using System.Collections.Generic;
+using FFVM;
+using FFVM.Compiler;
+
+namespace KOF98
+{
+    /// <summary>
+    /// Bridge between the KOF98 game framework and FFVM.
+    ///
+    /// Responsibilities:
+    /// - Owns the VMWorld instance
+    /// - Manages VM instance ↔ game entity mapping
+    /// - Compiles .ffs scripts and loads them as VM modules
+    /// - Drives VM execution each frame (Tick)
+    /// - Handles skill activation → VM instance spawn
+    /// - Handles skill deactivation → VM instance kill
+    ///
+    /// VM Application Points (where FFVM instances are used):
+    /// 1. Skill execution: each active skill → 1 VM instance
+    /// 2. AI: each AI-controlled character → 1 VM instance (future)
+    /// 3. Persistent effects: DOT/buff → 1 VM instance (future)
+    /// 4. Projectile behavior: complex projectiles → 1 VM instance (future)
+    /// </summary>
+    public class GameVMBridge
+    {
+        private readonly GameScene _scene;
+        public VMWorld World { get; }
+
+        /// <summary>
+        /// Maps VM instance ID → owning character ID.
+        /// Used by syscalls to resolve "self" references.
+        /// </summary>
+        private readonly Dictionary<int, int> _instanceToOwner = new();
+
+        /// <summary>
+        /// Maps (charId, skillDefId) → VM instance ID.
+        /// Used to look up active skill VM instances.
+        /// </summary>
+        private readonly Dictionary<(int charId, int skillId), int> _skillToInstance = new();
+
+        /// <summary>Next available module slot for auto-loading scripts.</summary>
+        private int _nextModuleSlot;
+
+        public GameVMBridge(GameScene scene)
+        {
+            _scene = scene;
+            World = new VMWorld();
+            GameSyscalls.RegisterAll(World.Syscalls);
+            RegisterManagementSyscalls();
+        }
+
+        // ── Module Loading ───────────────────────────────────────
+
+        /// <summary>
+        /// Compile an .ffs script and register it as a VM module.
+        /// Returns the module slot index, or -1 on failure.
+        /// </summary>
+        public int LoadScript(string scriptPath)
+        {
+            try
+            {
+                string source = System.IO.File.ReadAllText(scriptPath);
+                return CompileAndLoad(source, scriptPath);
+            }
+            catch (Exception ex)
+            {
+                Console.Error.WriteLine($"[VMBridge] Failed to load script {scriptPath}: {ex.Message}");
+                return -1;
+            }
+        }
+
+        /// <summary>
+        /// Compile source code and register as a VM module.
+        /// Returns the module slot index.
+        /// </summary>
+        public int CompileAndLoad(string source, string name = "inline")
+        {
+            var syscallMap = GameSyscalls.GetSyscallMap();
+            var compiler = new BytecodeCompiler();
+            var result = compiler.Compile(source, "main", syscallMap, World.Syscalls);
+
+            if (!result.Success)
+            {
+                Console.Error.WriteLine($"[VMBridge] Compilation failed for {name}");
+                if (result.Errors != null)
+                    foreach (var err in result.Errors)
+                        Console.Error.WriteLine($"  {err}");
+                return -1;
+            }
+
+            int slot = _nextModuleSlot++;
+            World.Modules.Load(slot, result.Program);
+            return slot;
+        }
+
+        // ── Skill Activation / Deactivation ──────────────────────
+
+        /// <summary>
+        /// Spawn a VM instance for a skill activation.
+        /// Call when a character activates a VM-driven skill.
+        /// </summary>
+        public int ActivateSkillVM(int charId, SkillInstance skill)
+        {
+            if (skill.Def.VMModuleSlot < 0) return -1;
+
+            int vmId = World.SpawnInstance(skill.Def.VMModuleSlot, 0);
+            if (vmId < 0)
+            {
+                Console.Error.WriteLine($"[VMBridge] VM pool exhausted for char {charId} skill {skill.Def.Name}");
+                return -1;
+            }
+
+            skill.VMInstanceId = vmId;
+            _instanceToOwner[vmId] = charId;
+            _skillToInstance[(charId, skill.Def.Id)] = vmId;
+
+            return vmId;
+        }
+
+        /// <summary>
+        /// Kill the VM instance for a deactivating skill.
+        /// The VM will execute its defer/cleanup blocks before termination.
+        /// </summary>
+        public void DeactivateSkillVM(int charId, SkillInstance skill)
+        {
+            if (skill.VMInstanceId < 0) return;
+
+            int vmId = skill.VMInstanceId;
+            ref var inst = ref World.Pool.Instances[vmId];
+            if (inst.IsAlive && (inst.StateFlags & VMStateFlags.Completed) == 0)
+            {
+                inst.StateFlags |= VMStateFlags.Killed;
+            }
+
+            _instanceToOwner.Remove(vmId);
+            _skillToInstance.Remove((charId, skill.Def.Id));
+            skill.VMInstanceId = -1;
+        }
+
+        // ── Per-Frame Tick ───────────────────────────────────────
+
+        /// <summary>
+        /// Tick the VM world. Call once per frame during the "process skills" phase.
+        /// </summary>
+        public void TickVMWorld()
+        {
+            GameSyscalls.SetContext(_scene);
+            GameSyscalls.VMBridge = this;
+
+            // Use VMWorld.Tick() which handles all lifecycle (wait, kill, cleanup).
+            // Syscalls resolve owner via VMBridge.GetOwnerForInstance(instanceId).
+            World.Tick();
+
+            // Post-tick: clean up completed instance mappings
+            var pool = World.Pool;
+            for (int i = pool.ActiveListCount - 1; i >= 0; i--)
+            {
+                int id = pool.ActiveList[i];
+                ref var inst = ref pool.Instances[id];
+                if ((inst.StateFlags & VMStateFlags.Completed) != 0)
+                {
+                    _instanceToOwner.Remove(id);
+                }
+            }
+
+            GameSyscalls.VMBridge = null;
+        }
+
+        // ── MI-2 / MI-3: SpawnScript / KillInstance ──────────────
+
+        private void RegisterManagementSyscalls()
+        {
+            // MI-2: SpawnScript(moduleSlot, entryIP) → newInstanceId
+            World.Syscalls.Register(GameConstants.SYS_SPAWN_SCRIPT, "SpawnScript",
+                (ref VMInstanceState s) =>
+                {
+                    var args = new SyscallArgs(ref s);
+                    int moduleSlot = args.GetInt(0);
+                    int entryIP = args.GetInt(1);
+                    int newId = World.SpawnInstance(moduleSlot, entryIP);
+
+                    // Inherit owner from parent
+                    if (newId >= 0 && _instanceToOwner.TryGetValue(s.InstanceId, out int ownerId))
+                    {
+                        _instanceToOwner[newId] = ownerId;
+                    }
+
+                    args.SetReturnInt(newId >= 0 ? newId : -1);
+                });
+
+            // MI-3: KillInstance(instanceId)
+            World.Syscalls.Register(GameConstants.SYS_KILL_INSTANCE, "KillInstance",
+                (ref VMInstanceState s) =>
+                {
+                    var args = new SyscallArgs(ref s);
+                    int targetId = args.GetInt(0);
+                    if (targetId >= 0 && targetId < World.Pool.Instances.Length)
+                    {
+                        ref var target = ref World.Pool.Instances[targetId];
+                        if (target.IsAlive && (target.StateFlags & VMStateFlags.Completed) == 0)
+                            target.StateFlags |= VMStateFlags.Killed;
+                    }
+                });
+        }
+
+        // ── Queries ──────────────────────────────────────────────
+
+        public int GetOwnerForInstance(int vmInstanceId)
+        {
+            return _instanceToOwner.TryGetValue(vmInstanceId, out int ownerId) ? ownerId : -1;
+        }
+    }
+}
