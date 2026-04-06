@@ -23,4 +23,4 @@
 | D7 | [D_RuntimeCompilation.md](D_RuntimeCompilation.md) | 游戏内运行时动态编译 | 💬 讨论中 | 2026-04-05 | 当前 DIST 架构对动态编译的支持评估 |
 | D8 | [D_TracerBullet.md](D_TracerBullet.md) | 曳光弹：范围、目标与验证 | ✅ 已完成 | 早期 | 从 VM_Summary.md §四 抽取 |
 | D9 | [VM_Tracer_Bullet.md](VM_Tracer_Bullet.md) | 曳光弹原始详细设计讨论 | ✅ 已完成 | 早期 | 从 Reference/ 迁入 |
-| D10 | [D_DapAttachMode.md](D_DapAttachMode.md) | DAP Attach 模式：分发机制的功能缺口 | 💬 讨论中 | 2026-04-06 | launch 已分发但 attach 未分发，核心嵌入场景需要 attach |
+| D10 | [D_DapAttachMode.md](D_DapAttachMode.md) | DAP Attach 模式：分发机制的功能缺口 | ✅ 已完成 | 2026-04-06 | DIST-8+DIST-9 已实现：DapServerBase + EmbeddableDapServer 提取到 FFVM 库，Sandbox 消费分发库 API |
