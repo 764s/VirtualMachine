@@ -65,7 +65,7 @@ if errorlevel 1 (
     echo    - Check .NET SDK version: dotnet --version
     echo    - If "net8.0 not supported", edit KOF98\KOF98.csproj
     echo      and change TargetFramework to match your SDK version.
-    echo    - Ensure src\FFVM\FFVM.csproj exists (FFVM core library).
+    echo    - Ensure src\FFVM\FFVM.csproj exists ^(FFVM core library^).
     echo.
     pause
     exit /b 1
