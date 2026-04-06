@@ -26,6 +26,38 @@
 
 <!-- HISTORY_START — CI 自动追加区域，请勿手动编辑此标记 -->
 
+### 2026-04-06 14:31 UTC — `e926978695615f18ef3a10343eb84ad7e47fc2f3`
+
+> .NET 8.0.25 | Unix | 4 cores
+
+| Benchmark | VM (μs) | C# (μs) | Ratio | Δ VM | Δ Ratio |
+|-----------|---------|---------|-------|------|---------|
+| B01_ArithLoop | 397.9 | 102.9 | 3.87x | -1074.7 (↓73%) | -2.13x ✅ |
+| B02_Fibonacci | 0.9 | 0.5 | 2.00x | -0.7 (↓44%) | -2.92x ✅ |
+| B03_NestedLoop | 299.2 | 59.0 | 5.07x | -215.6 (↓42%) | -12.15x ✅ |
+| B04_Branching | 540.7 | 65.0 | 8.31x | -806.6 (↓60%) | +2.67x ⚠️ |
+| B05_Accumulator | 673.3 | 47.3 | 14.24x | -1443.4 (↓68%) | -21.04x ✅ |
+| B06_FuncCall | 219.3 | 14.9 | 14.68x | -335.3 (↓60%) | -5.80x ✅ |
+
+⚠️ **Regression detected**: VM/C# ratio increased >10% on one or more benchmarks.
+
+
+### 2026-04-06 13:34 UTC — `edf2f130da5992a81e1e07014e81a6caef7de171`
+
+> .NET 8.0.25 | Unix | 4 cores
+
+| Benchmark | VM (μs) | C# (μs) | Ratio | Δ VM | Δ Ratio |
+|-----------|---------|---------|-------|------|---------|
+| B01_ArithLoop | 278.0 | 71.8 | 3.87x | -1194.6 (↓81%) | -2.13x ✅ |
+| B02_Fibonacci | 0.9 | 0.5 | 1.90x | -0.7 (↓44%) | -3.02x ✅ |
+| B03_NestedLoop | 224.2 | 58.9 | 3.81x | -290.6 (↓56%) | -13.41x ✅ |
+| B04_Branching | 514.6 | 12.9 | 39.99x | -832.7 (↓62%) | +34.35x ⚠️ |
+| B05_Accumulator | 654.9 | 47.2 | 13.88x | -1461.8 (↓69%) | -21.40x ✅ |
+| B06_FuncCall | 217.7 | 16.0 | 13.62x | -336.9 (↓61%) | -6.86x ✅ |
+
+⚠️ **Regression detected**: VM/C# ratio increased >10% on one or more benchmarks.
+
+
 ### 2026-04-06 12:45 UTC — `e85e5403b38610a959e21c3940eefdd8efd46d90`
 
 > .NET 8.0.25 | Unix | 4 cores

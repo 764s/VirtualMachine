@@ -1,7 +1,7 @@
 # Task: 显示模块切换 (Display Module Switch)
 
 > **状态**：🔄 基础完成, 待优化
-> **父任务**：[Overview.md](Overview.md)
+> **父任务**：[KOF_Summary.md](../KOF_Summary.md)
 > **日期**：2026-04-06
 
 ---

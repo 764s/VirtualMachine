@@ -1,7 +1,7 @@
 # Task: 角色控制问题排查 (Character Control Investigation)
 
 > **状态**：🔄 根因已修, 待验证完整流程
-> **父任务**：[Overview.md](Overview.md)
+> **父任务**：[KOF_Summary.md](../KOF_Summary.md)
 > **日期**：2026-04-06
 
 ---

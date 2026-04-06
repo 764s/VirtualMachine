@@ -1,4 +1,4 @@
-# KOF 探索 — 专用总览 (Overview)
+# KOF 探索 — 总览
 
 > **状态**：🔄 进行中
 > **目标**：通过复刻 KOF98 核心机制，探索 FFVM 游戏应用
@@ -66,18 +66,59 @@
 | 轻拳攻击 | ✅ | LightPunch (含碰撞框数据) |
 | 架构文档 | ✅ | D_GameArchitecture.md |
 
-### 进行中 🔄 / 待开始 ⬚
+### 已完成子任务（已归档）
 
-详见子任务文件：
+以下子任务已在 Phase 0/1 中实际执行完成，跳过后续子计划流程：
 
 | 子任务 | 文件 | 状态 |
 |--------|------|------|
-| 显示模块切换 | [Task_DisplayModule.md](Task_DisplayModule.md) | 🔄 基础完成, 待优化 |
-| 角色控制问题排查 | [Task_CharacterControl.md](Task_CharacterControl.md) | 🔄 根因已修, 待验证完整流程 |
+| 显示模块切换 (Raylib) | [Plan/Task_DisplayModule.md](Plan/Task_DisplayModule.md) | ✅ 基础完成 |
+| 角色控制问题排查 | [Plan/Task_CharacterControl.md](Plan/Task_CharacterControl.md) | ✅ 根因已修 |
 
 ---
 
-## 三、阶段路线图
+## 三、串行任务列表
+
+> **流程**：讨论 → 总览排期 → 制定子任务 → 执行
+
+当前位置 → **KOF-T1**
+
+| ID | 任务 | 状态 | 完成条件 | 依赖 | 讨论/计划 |
+|----|------|------|---------|------|----------|
+| KOF-T1 | 界面设计（常驻 HUD + 控制界面） | ⏳ 等待中 | 常驻 HUD 显示角色名/血量/能量；控制界面覆盖场景，含 AI 开关、重新开始、自动复活开关 | — | [D_UIDesign.md](Discussion/D_UIDesign.md) |
+| KOF-T2 | 受击反应技能 | ⬚ 待排期 | 实现 Hit 技能，验证完整攻击→受击→恢复流程 | — | — |
+| KOF-T3 | 多目标命中测试 | ⬚ 待排期 | 扩展 CheckAttackHit 返回多个目标 | KOF-T2 | — |
+| KOF-T4 | VM-driven 技能（轻拳 .ffs） | ⬚ 待排期 | 编写 .ffs 技能脚本，通过 GameVMBridge 加载执行 | KOF-T2 | — |
+| KOF-T5 | AI 脚本化 | ⬚ 待排期 | AI 决策 .ffs 脚本 + spawn 技能实例 | KOF-T4 | — |
+| KOF-T6 | 弹幕与效果器脚本化 | ⬚ 待排期 | 弹幕 VM 脚本化 + 持续效果器 | KOF-T4 | — |
+
+---
+
+## 四、讨论区索引
+
+> **定位**：对新需求的讨论。讨论收敛后转化为串行任务列表中的排期项。
+> **文件位置**：`KOF98/Docs/Discussion/`
+
+| # | 文档 | 主题 | 状态 | 日期 |
+|---|------|------|------|------|
+| KD1 | [D_GameArchitecture.md](Discussion/D_GameArchitecture.md) | 游戏架构讨论（帧执行模型、技能状态机、VM 应用分级、视图层设计） | ✅ 已完成 | 2026-04-06 |
+| KD2 | [D_UIDesign.md](Discussion/D_UIDesign.md) | 界面设计讨论（常驻 HUD + 控制界面） | 💬 讨论中 | 2026-04-06 |
+
+---
+
+## 五、计划区索引
+
+> **定位**：由串行任务列表 + 讨论结论共同决定的子任务执行计划。
+> **文件位置**：`KOF98/Docs/Plan/`
+
+| # | 文档 | 主题 | 状态 | 日期 |
+|---|------|------|------|------|
+| KP1 | [Task_DisplayModule.md](Plan/Task_DisplayModule.md) | 显示模块切换 (Raylib 图形化视图) | ✅ 基础完成 | 2026-04-06 |
+| KP2 | [Task_CharacterControl.md](Plan/Task_CharacterControl.md) | 角色控制问题排查 (移动技能 + 输入修复) | ✅ 根因已修 | 2026-04-06 |
+
+---
+
+## 六、阶段路线图
 
 ### Phase 0: 框架搭建 ✅
 - [x] 核心类型（FVec2, FRect, GameConstants）
@@ -133,20 +174,30 @@
 
 ---
 
-## 四、依赖关系
+## 七、展望与风险
 
-```
-Phase 0 (框架) ← 无外部依赖                           ✅ DONE
-Phase 1 (Host技能) ← Phase 0                          🔄 IN PROGRESS
-Phase 2 (VM技能) ← Phase 1 + FFVM 编译器
-Phase 3 (AI脚本) ← Phase 2 + MI-2 (SpawnScript) + MI-3 (KillInstance)
-Phase 4 (弹幕/效果) ← Phase 2
-Phase 5 (完善) ← Phase 3 + Phase 4
-```
+### 功能展望
+
+| ID | 展望 | 来源 | 说明 |
+|----|------|------|------|
+| KO-1 | 角色精灵渲染（替代矩形简笔画） | Task_DisplayModule | 后续优化 |
+| KO-2 | 碰撞框显示开关 | Task_DisplayModule | 可单独显示/隐藏各类框 |
+| KO-3 | 摄像机跟随 | Task_DisplayModule | 场景滚动时需要 |
+| KO-4 | 暂停/逐帧前进 | Task_DisplayModule | 调试用 |
+| KO-5 | 特效粒子 | Task_DisplayModule | 命中火花、格挡闪光 |
+| KO-6 | 控制界面扩展（切换角色、创建友军/怪物、无限蓝等） | D_UIDesign | 控制界面未来功能 |
+
+### 风险点
+
+| ID | 风险 | 影响 | 缓解 |
+|----|------|------|------|
+| KR-1 | ExecuteInstance 不是 VMWorld 公开 API | VMBridge 无法逐实例 Tick | 需确认 API 可用性 |
+| KR-2 | float 非确定性 | 帧同步不可靠 | 开发期使用 float，发布期切换 Fix64 |
+| KR-3 | 碰撞框数据硬编码 | 维护困难 | 将来从 JSON/资源文件加载 |
 
 ---
 
-## 五、碰撞框颜色方案
+## 八、碰撞框颜色方案
 
 Raylib 视图中的碰撞框使用以下配色方案（美观变体色）：
 
@@ -159,7 +210,7 @@ Raylib 视图中的碰撞框使用以下配色方案（美观变体色）：
 
 ---
 
-## 六、外部依赖
+## 九、外部依赖
 
 | 依赖 | 版本 | 用途 | 兼容性 |
 |------|------|------|--------|
