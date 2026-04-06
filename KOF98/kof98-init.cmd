@@ -94,7 +94,7 @@ echo [OK] KOF98 build succeeded.
     echo echo  Controls: WASD/Arrows = move, J = LP, K = HP, U = LK, I = HK
     echo echo  Ctrl+C to stop
     echo echo.
-    echo KOF98\bin\Release\net8.0\KOF98.exe
+    echo KOF98\bin\Release\net8.0\KOF98.exe --raylib
     echo echo.
     echo pause
 ) > KOF98\run-kof98.cmd
