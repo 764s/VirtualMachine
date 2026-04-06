@@ -41,6 +41,7 @@ namespace KOF98
 
             // ── Create scene ─────────────────────────────────────
             var scene = new GameScene();
+            var settings = new GameSettings();
 
             // ── Create VM bridge (optional — comment out to run host-only) ──
             var vmBridge = new GameVMBridge(scene);
@@ -62,7 +63,7 @@ namespace KOF98
             if (headless)
                 view = null;
             else if (useRaylib)
-                view = new RaylibGameView();
+                view = new RaylibGameView(settings);
             else
                 view = new ConsoleGameView();
             view?.Initialize(scene);
@@ -83,7 +84,36 @@ namespace KOF98
                 if (maxFrames >= 0 && scene.FrameNumber >= maxFrames)
                     break;
 
-                if (scene.IsRoundOver)
+                // ── Handle restart request ───────────────────────
+                if (settings.RestartRequested)
+                {
+                    settings.RestartRequested = false;
+                    settings.PanelOpen = false;
+                    scene.ResetRound(new FVec2(-3f, 0f), new FVec2(3f, 0f));
+                }
+
+                // ── Auto-revive: revive dead characters ──────────
+                if (settings.AutoRevive && scene.IsRoundOver)
+                {
+                    for (int i = 0; i < scene.Characters.Count; i++)
+                    {
+                        var ch = scene.Characters.Characters[i];
+                        if (ch != null && !ch.IsAlive)
+                        {
+                            ch.HP = ch.Data.MaxHP;
+                            ch.IsAlive = true;
+                            ch.HitstunFrames = 0;
+                            ch.BlockstunFrames = 0;
+                            ch.IsKnockedDown = false;
+                            ch.ClearAllTags();
+                            ch.ClearHitBoxes();
+                            ch.SkillMgr.ClearAll();
+                        }
+                    }
+                    scene.ResetRound(new FVec2(-3f, 0f), new FVec2(3f, 0f));
+                }
+
+                if (scene.IsRoundOver && !settings.AutoRevive)
                 {
                     view?.Render(scene);
                     if (!useRaylib)
@@ -94,9 +124,17 @@ namespace KOF98
                     scene.ResetRound(new FVec2(-3f, 0f), new FVec2(3f, 0f));
                 }
 
+                // ── Pause when control panel is open ─────────────
+                scene.IsPaused = settings.PanelOpen;
+
                 // ── Collect P1 input ─────────────────────────────
                 PlayerInput p1Input;
-                if (useRaylib)
+                if (settings.PanelOpen)
+                {
+                    // Don't collect game input while panel is open
+                    p1Input = PlayerInput.Empty;
+                }
+                else if (useRaylib)
                 {
                     // Raylib: proper simultaneous key detection
                     p1Input = RaylibGameView.CollectInput(prevP1);
@@ -119,8 +157,22 @@ namespace KOF98
                     p1Input = PlayerInput.Empty;
                 }
 
+                // ── AI toggle: supply empty input when AI disabled ──
                 frameInput.Clear();
                 frameInput.SetInput(0, p1Input);
+
+                if (!settings.AIEnabled)
+                {
+                    // Override AI characters with empty input to disable AI
+                    for (int i = 0; i < scene.Characters.Count; i++)
+                    {
+                        var ch = scene.Characters.Characters[i];
+                        if (ch != null && ch.Team != 0 && !frameInput.CharacterInputs.ContainsKey(ch.Id))
+                        {
+                            frameInput.SetInput(ch.Id, PlayerInput.Empty);
+                        }
+                    }
+                }
 
                 // ── Step simulation ──────────────────────────────
                 scene.Step(frameInput);
