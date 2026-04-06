@@ -24,7 +24,7 @@ set "INTERACTIVE=0"
 
 :: Direct command mode: run once and exit
 if "%CMD%"=="sandbox"   goto :do_sandbox
-if "%CMD%"=="kof98"    goto :do_kof98
+if "%CMD%"=="kof98"     goto :do_kof98
 if "%CMD%"=="test"      goto :do_test
 if "%CMD%"=="bench"     goto :do_bench
 if "%CMD%"=="bench-all"   goto :do_bench_all
