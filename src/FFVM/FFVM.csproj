@@ -1,0 +1,28 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <LangVersion>latest</LangVersion>
+
+    <!-- NuGet package metadata -->
+    <PackageId>FFVM</PackageId>
+    <Version>0.1.0</Version>
+    <Description>FFVM — A register-based bytecode virtual machine for game scripting. Includes compiler, interpreter, LSP and DAP servers.</Description>
+    <Authors>764s</Authors>
+    <PackageTags>vm;bytecode;scripting;game;ffscript</PackageTags>
+  </PropertyGroup>
+  <ItemGroup>
+    <InternalsVisibleTo Include="StandaloneRunner" />
+  </ItemGroup>
+  <ItemGroup>
+    <!-- VM core sources (exclude Tests/) -->
+    <Compile Include="../../Assets/Scripts/VM/Core/**/*.cs" />
+    <Compile Include="../../Assets/Scripts/VM/Compiler/**/*.cs" />
+    <Compile Include="../../Assets/Scripts/VM/AST/**/*.cs" />
+    <Compile Include="../../Assets/Scripts/VM/Interpreter/**/*.cs" />
+    <Compile Include="../../Assets/Scripts/VM/Debug/**/*.cs" />
+    <!-- Unity API stub for non-Unity environments -->
+    <Compile Include="../../StandaloneRunner/UnityStub.cs" />
+  </ItemGroup>
+</Project>
