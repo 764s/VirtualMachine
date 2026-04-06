@@ -84,10 +84,13 @@
 | **MI-4** | VMInspector 宿主数据读取辅助（ReadVar / ReadStruct） | 宿主需要从外部读取实例状态时 | [C0](../Discussion/Step_C0_DeploymentArchitecture.md) |
 | **MI-5** | 实例间事件总线（EmitEvent / PollEvent） | 多实例需要松耦合通信时 | [C0](../Discussion/Step_C0_DeploymentArchitecture.md) |
 
-### 2.5 分发基础设施（DIST 系列） ✅ 已完成
+### 2.5 分发基础设施（DIST 系列）
 
 > 来源：2026-04-05 讨论。目标：让其他人在自己的项目中使用 FFVM 时，心智负担和操作负担最小化。
 > 详细设计见 [Step_DIST_Distribution.md](../Discussion/Step_DIST_Distribution.md)。
+> Attach 模式缺口分析见 [D_DapAttachMode.md](../Discussion/D_DapAttachMode.md)。
+
+**已完成**（DIST-1~DIST-3）：
 
 | ID | 内容 | 状态 | 说明 |
 |----|------|------|------|
@@ -97,6 +100,20 @@
 
 **关键决策**：LSP/DAP 服务器 = `ffvm-cli` CLI 的子命令（`ffvm-cli lsp` / `ffvm-cli dap`），VS Code 扩展仅为薄客户端。
 与 rust-analyzer、gopls、clangd 模式一致。
+
+**待执行**（DIST-8~DIST-9，attach 模式提取）：
+
+| ID | 内容 | 状态 | 说明 |
+|----|------|------|------|
+| **DIST-8** | 提取 EmbeddableDapServer 到 FFVM 库 | ⏳ | 从 Sandbox `EmbeddedDapServer` 提取共享协议基类 + TCP attach 服务器到 `FFVM.Debug`。区分正常 attach（以目标执行状态为主，不阻塞）与定制 attach（`WaitForConnection` + `StopOnEntry` 可选组合）。前置：DIST-1 |
+| **DIST-9** | Sandbox 改造：消费分发库 attach API | ⏳ | 删除 Sandbox 私有 `EmbeddedDapServer`，改用 `FFVM.Debug.EmbeddableDapServer` + 沙盒定制行为（WaitForConnection + StopOnEntry）。97 项 DAP 测试不变。前置：DIST-8 |
+
+> **DIST-8 设计要点**：
+> - **正常 attach**：调试器连接时 VM 可能已在运行，不自动暂停（除非用户设置 stopOnEntry）。
+> - **定制 attach（沙盒模式）**：`WaitForConnection()` 阻塞等连接 + `StopOnEntry()` 阻塞等 configurationDone，确保从第一条指令起可调试。
+> - 两种模式通过可选方法调用区分，分发库默认为正常 attach，宿主按需选用定制行为。
+> - 远程调试：TCP 传输天然支持，监听地址从 `127.0.0.1` 改为 `0.0.0.0` 即可。
+> - 多实例调试：与 MI-1（DAP 多实例线程映射）共享同一 TCP DAP 会话。
 
 **后续展望**（DIST-4~DIST-7，业务驱动激活）：
 | ID | 内容 | 触发时机 |
