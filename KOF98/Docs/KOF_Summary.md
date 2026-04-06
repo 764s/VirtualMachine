@@ -103,6 +103,7 @@
 |---|------|------|------|------|
 | KD1 | [D_GameArchitecture.md](Discussion/D_GameArchitecture.md) | 游戏架构讨论（帧执行模型、技能状态机、VM 应用分级、视图层设计） | ✅ 已完成 | 2026-04-06 |
 | KD2 | [D_UIDesign.md](Discussion/D_UIDesign.md) | 界面设计讨论（常驻 HUD + 控制界面） | 💬 讨论中 | 2026-04-06 |
+| KD3 | [D_SkillScripting.md](Discussion/D_SkillScripting.md) | 技能 FFS 脚本化讨论（首批脚本范围、参数模式、宿主侧变更） | 💬 讨论中 | 2026-04-06 |
 
 ---
 
