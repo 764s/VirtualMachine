@@ -137,6 +137,8 @@ namespace KOF98
             Console.WriteLine("\nKOF98 Practice ended.");
         }
 
+        private const int JumpTimeoutFrames = 120;
+
         private static CharacterData CreateDefaultCharacterData(int id, string name)
         {
             // ── Idle skill (host-driven, looping) ─────────────────
@@ -166,7 +168,11 @@ namespace KOF98
                 // Determine raw world direction from input
                 bool right = input.IsHeld(InputButton.Right);
                 bool left = input.IsHeld(InputButton.Left);
-                if (right == left) { ch.Body.Velocity = new FVec2(0, ch.Body.Velocity.Y); return; }
+                if (right == left)
+                {
+                    ch.Body.Velocity = new FVec2(0, ch.Body.Velocity.Y);
+                    return;
+                }
 
                 int rawDir = right ? 1 : -1;
                 int fwd = input.GetForwardDir(ch.Facing);
@@ -176,7 +182,7 @@ namespace KOF98
 
             // ── Jump skill (finite, ends on landing) ──────────────
             var jumpSkill = new SkillDef(
-                id: 2, name: "Jump", totalFrames: 120,  // Safety timeout
+                id: 2, name: "Jump", totalFrames: JumpTimeoutFrames,
                 priority: GameConstants.PRIORITY_MOVEMENT,
                 tags: (1 << GameConstants.TAG_JUMP) | (1 << GameConstants.TAG_AIR_STATE));
             jumpSkill.CanActivate = (ch, input) =>

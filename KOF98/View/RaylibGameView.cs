@@ -31,6 +31,14 @@ namespace KOF98
         private const int StageWidth = StageRight - StageLeft;
         private const int StageHeight = StageBottom - StageTop;
 
+        // ── Character rendering ─────────────────────────────────
+        private const int CharacterWidth = 16;
+        private const int CharacterHeight = 44;
+
+        // ── Coordinate mapping ───────────────────────────────────
+        private const int GroundMargin = 40;
+        private const float VisibleWorldUnits = 4f;
+
         // ── Collision box colors (semi-transparent fill + solid outline) ──
         private static readonly Color PushBoxFill    = new Color(74, 144, 217, 40);
         private static readonly Color PushBoxOutline  = new Color(74, 144, 217, 160);
@@ -168,14 +176,12 @@ namespace KOF98
             }
 
             // Character capsule (simple rectangle representing body)
-            int charW = 16;
-            int charH = 44;
-            Raylib.DrawRectangle(cx - charW / 2, cy - charH, charW, charH, bodyColor);
-            Raylib.DrawRectangleLines(cx - charW / 2, cy - charH, charW, charH, outlineColor);
+            Raylib.DrawRectangle(cx - CharacterWidth / 2, cy - CharacterHeight, CharacterWidth, CharacterHeight, bodyColor);
+            Raylib.DrawRectangleLines(cx - CharacterWidth / 2, cy - CharacterHeight, CharacterWidth, CharacterHeight, outlineColor);
 
             // Facing indicator (small triangle)
             int tipX = cx + ch.FacingSign * 14;
-            int tipY = cy - charH / 2;
+            int tipY = cy - CharacterHeight / 2;
             Raylib.DrawTriangle(
                 new Vector2(tipX, tipY),
                 new Vector2(cx + ch.FacingSign * 4, tipY - 5),
@@ -186,7 +192,7 @@ namespace KOF98
             string label = isP1 ? "P1" : "P2";
             if (ch.Data?.Name != null) label = ch.Data.Name;
             int textW = Raylib.MeasureText(label, 12);
-            Raylib.DrawText(label, cx - textW / 2, cy - charH - 14, 12, outlineColor);
+            Raylib.DrawText(label, cx - textW / 2, cy - CharacterHeight - 14, 12, outlineColor);
 
             // State indicator
             string state = "";
@@ -398,8 +404,8 @@ namespace KOF98
         private int WorldToScreenY(float worldY)
         {
             // Ground (Y=0) is at StageBottom - margin
-            int groundScreen = StageBottom - 20;
-            float pixelsPerUnit = (float)(StageHeight - 40) / 4f;  // ~4 world units visible above ground
+            int groundScreen = StageBottom - (int)GroundMargin;
+            float pixelsPerUnit = (float)(StageHeight - (int)GroundMargin) / VisibleWorldUnits;
             return groundScreen - (int)(worldY * pixelsPerUnit);
         }
     }
