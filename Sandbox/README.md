@@ -116,7 +116,7 @@ dotnet run --project Sandbox/Sandbox.csproj -- --run       # 编译并运行
 | Slot | 名称 | 签名 | 功能 |
 |------|------|------|------|
 | 0 | `print` | `print(value)` | 打印数值到控制台 |
-| 1 | `print_str` | `print_str(labelId, value)` | 打印带标签的数值 |
+| 1 | `print_str` | `print_str(label, value)` | 打印带标签的数值（使用字符串常量） |
 | 2 | `time` | `time() → int` | 返回运行开始后的毫秒数 |
 | 3 | `delta_time` | `delta_time() → int` | 返回上一 Tick 到当前的毫秒差 |
 | 4 | `random` | `random(upperBound) → int` | 返回 [0, upperBound) 的随机整数 |
@@ -128,26 +128,15 @@ dotnet run --project Sandbox/Sandbox.csproj -- --run       # 编译并运行
 | 10 | `frame_count` | `frame_count() → int` | 当前帧号 |
 | 11 | `exit` | `exit()` | 请求退出运行循环 |
 
-### print_str 标签表
+### print_str 用法
 
-| labelId | 标签 |
-|---------|------|
-| 0 | result |
-| 1 | value |
-| 2 | count |
-| 3 | time |
-| 4 | delta |
-| 5 | frame |
-| 6 | error |
-| 7 | debug |
-| 8 | x |
-| 9 | y |
-| 10 | sum |
-| 11 | diff |
-| 12 | product |
-| 13 | quotient |
-| 14 | min |
-| 15 | max |
+`print_str` 使用编译器的字符串常量池（StringConstants），第一个参数为字符串字面量：
+
+```ffs
+print_str("result", 100)    // 输出: result = 100
+print_str("x", 25)          // 输出: x = 25
+print_str("time", time())   // 输出: time = <elapsed_ms>
+```
 
 ### LSP 支持
 
@@ -169,10 +158,10 @@ func main() {
     var i: int = 0
     while i < 300 {
         var f: int = frame_count()
-        print_str(5, f)
+        print_str("frame", f)
 
         var t: int = time()
-        print_str(3, t)
+        print_str("time", t)
 
         wait 1
         i = i + 1
@@ -207,7 +196,7 @@ Sandbox/
 
 ## 已知限制
 
-1. **仅数值类型** — FFScript 只支持 `Number` 类型（整数或定点数），没有字符串。`print_str` 通过标签 ID 映射打印文本。
+1. **仅数值类型** — FFScript 只支持 `Number` 类型（整数或定点数）。`print_str` 通过编译器字符串常量池实现标签显示。
 2. **单文件编译** — 当前编译器为单文件模式，不支持 `#include` 或多模块导入。
 3. **无热重载** — 修改脚本后需手动重新编译并运行。
 4. **无文件 I/O** — 沙盒聚焦于纯逻辑和性能验证，不提供文件读写 SysCall。

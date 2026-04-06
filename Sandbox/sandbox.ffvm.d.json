@@ -9,11 +9,11 @@
         },
         "print_str": {
             "params": [
-                { "name": "labelId", "type": "int" },
+                { "name": "label", "type": "string" },
                 { "name": "value", "type": "number" }
             ],
             "returnType": "void",
-            "description": "Print a labeled value (labelId: 0=result, 1=value, 2=count, 3=time, 4=delta, 5=frame, 6=error, 7=debug, 8=x, 9=y, 10=sum)"
+            "description": "Print a labeled value to the console"
         },
         "time": {
             "params": [],

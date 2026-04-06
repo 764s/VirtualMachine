@@ -21,37 +21,34 @@ func main() {
     print(42)
     print(3.14)
 
-    // --- Labeled printing ---
-    // Label IDs: 0=result, 1=value, 2=count, 3=time, 4=delta, 5=frame,
-    //   6=error, 7=debug, 8=x, 9=y, 10=sum, 11=diff, 12=product,
-    //   13=quotient, 14=min, 15=max
-    print_str(0, 100)
-    print_str(8, 25)
-    print_str(9, 50)
+    // --- Labeled printing (using string constants) ---
+    print_str("result", 100)
+    print_str("x", 25)
+    print_str("y", 50)
 
     // --- Math syscalls ---
     var neg: int = -7
     var pos: int = abs(neg)
-    print_str(0, pos)
+    print_str("result", pos)
 
-    print_str(14, min(10, 20))
-    print_str(15, max(10, 20))
+    print_str("min", min(10, 20))
+    print_str("max", max(10, 20))
 
-    print_str(0, clamp(50, 0, 30))
-    print_str(0, sqrt(144))
+    print_str("result", clamp(50, 0, 30))
+    print_str("result", sqrt(144))
 
     // --- Random ---
-    print_str(0, random(100))
+    print_str("result", random(100))
 
     // --- Time ---
-    print_str(3, time())
+    print_str("time", time())
 
     // --- Frame count ---
-    print_str(5, frame_count())
+    print_str("frame", frame_count())
 
     // --- Function call example ---
     var added: int = add(17, 25)
-    print_str(0, added)
+    print_str("result", added)
 
     // --- Computation example: sum 1..100 (while loop) ---
     var sum: int = 0
@@ -60,14 +57,14 @@ func main() {
         sum = sum + i
         i = i + 1
     }
-    print_str(10, sum)
+    print_str("sum", sum)
 
     // --- For loop example: factorial of 5 ---
     var fact: int = 1
     for var j: int = 1; j <= 5; j = j + 1 {
         fact = fact * j
     }
-    print_str(0, fact)
+    print_str("result", fact)
 
     print(0)
 }
