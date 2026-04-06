@@ -37,7 +37,7 @@ VM 桥接层已就绪（`GameVMBridge` + `GameSyscalls` ~40 syscall），但 `KO
 
 ---
 
-## 三、首批 FFS 脚本建议
+## 三、首批 FFS 脚本 ✅
 
 ### 3.1 选择原则
 
@@ -50,18 +50,20 @@ VM 桥接层已就绪（`GameVMBridge` + `GameSyscalls` ~40 syscall），但 `KO
 | **暂不涉及复杂系统** | 抓投（需双方协调）、闪避（需无敌帧标记）暂不纳入首批 |
 | **不以 skill_114/skill_25 为目标** | 提取其参数表示模式作为参考，首批脚本针对基础技能 |
 
-### 3.2 建议首批脚本（8 个）
+### 3.2 首批脚本（8 个） ✅
 
-| # | 技能 | 分类 | 脚本模式 | 选择理由 |
-|---|------|------|---------|---------|
-| S01 | 站立待机 (Idle) | 基础移动 | 循环 + 输入监听 | 最基础状态，验证循环脚本 + yield |
-| S02 | 前进 (WalkForward) | 基础移动 | 循环 + 每帧速度设置 | 验证 SetVelocity + 输入条件退出 |
-| S03 | 跳 (Jump) | 基础移动 | 有限帧 + 物理驱动 | 验证垂直运动 + IsGrounded 条件 |
-| S04 | 近拳 (LightPunch) | 基本攻击 | 有限帧 + 命中检测 | 验证 CheckAttackHit + ApplyDamage 完整攻击流程 |
-| S05 | 蹲拳 (CrouchPunch) | 基本攻击 | 有限帧 + 蹲姿攻击 | 验证蹲状态下的攻击判定 |
-| S06 | 上受击 (HitHigh) | 受击 | 有限帧 + 被动触发 | 验证受击脚本（参考 skill_25 模式） |
-| S07 | 硬倒地 (HardKnockdown) | 倒地 | 有限帧 + 无敌 | 验证倒地状态 + 起身衔接 |
-| S08 | 原地起身 (StandUp) | 起身 | 有限帧 + 恢复 | 验证倒地→起身→idle 完整恢复流程 |
+| # | 技能 | 分类 | 脚本模式 | 文件名 |
+|---|------|------|---------|--------|
+| S01 | 站立待机 (Idle) | 基础移动 | 循环 + 输入监听 | `skill_idle.ffs` |
+| S02 | 前进 (WalkForward) | 基础移动 | 循环 + 每帧速度设置 | `skill_walk_forward.ffs` |
+| S03 | 跳 (Jump) | 基础移动 | 有限帧 + 物理驱动 | `skill_jump.ffs` |
+| S04 | 近拳 (LightPunch) | 基本攻击 | 有限帧 + 命中检测 | `skill_light_punch.ffs` |
+| S05 | 蹲拳 (CrouchPunch) | 基本攻击 | 有限帧 + 蹲姿攻击 | `skill_crouch_punch.ffs` |
+| S06 | 上受击 (HitHigh) | 受击 | 有限帧 + 被动触发 | `skill_hit_high.ffs` |
+| S07 | 硬倒地 (HardKnockdown) | 倒地 | 有限帧 + 无敌 | `skill_hard_knockdown.ffs` |
+| S08 | 原地起身 (StandUp) | 起身 | 有限帧 + 恢复 | `skill_stand_up.ffs` |
+
+> 命名规则已确认：`skill_<英文名>.ffs`
 
 ### 3.3 脚本模式分类
 
@@ -173,6 +175,15 @@ SetEnergyCoeff(multiplier)
 
 ## 五、首批脚本伪代码示例
 
+### 5.0 脚本书写风格约定
+
+> 对于字面量，适当使用变量声明。但脚本有其特殊性，写多了也啰嗦，因此设定大致标准适当权衡。
+
+**标准**：
+- **必须提取为变量**：多次引用的值（帧数 `totalFrames`、攻击窗口边界）
+- **可内联**：仅出现一次的常量参数（effectId, groupId, damageType 等），在注释中说明含义
+- **特别注意**：`while f < N` 中的 `N` 若在 `BeginAction` 中已声明则应统一变量，避免两处字面量不一致
+
 ### S01 — 站立待机 (Idle)
 
 ```ffs
@@ -181,27 +192,26 @@ func main() {
     defer { EndAction() }
 
     while true {
-        // 空循环, 等待宿主切换层检测到输入后切换技能
+        // 空循环, 等待宿主裁决层检测到条件后切换技能
         yield
     }
 }
 ```
 
-**要点**：循环型技能最简形式。宿主 `SkillManager.TryActivateSkill()` 负责切换。
+**要点**：循环型技能最简形式。退出由宿主裁决层控制（Kill VM 实例）。
 
 ### S04 — 近拳 (LightPunch)
 
 ```ffs
 func main() {
+    var frames: int = 20
 
-  // 对于字面量, 适当使用变量声明. 但脚本有其特殊性, 写多了也啰嗦, 因此设定大致标准适当权衡.
-
-    BeginAction(101, 20)   // actionId=101, 20帧
+    BeginAction(101, frames)      // actionId=101
     defer { EndAction() }
 
     var hit: int = 0
     var f: int = 0
-    while f < 20 {
+    while f < frames {
         // 攻击窗口: 帧 [4, 8)
         if f >= 4 && f < 8 && hit == 0 {
             var t: int = CheckAttackHit(1001)
@@ -219,19 +229,21 @@ func main() {
 }
 ```
 
-**要点**：单段攻击不需要互斥变量（只有一个窗口），`hit` 变量防止重复命中。
+**要点**：`frames` 变量统一 `BeginAction` 和 `while` 循环的帧数。单次参数（damageType=102 等）内联 + 注释。
 
 ### S06 — 上受击 (HitHigh)
 
 ```ffs
 func main() {
-    BeginAction(25, 20)   // actionId=25, 20帧
+    var frames: int = 20
+
+    BeginAction(25, frames)       // actionId=25
     defer { EndAction() }
 
-    SpawnEffectSelf(4001, 60)   // 受击特效
+    SpawnEffectSelf(4001, 60)     // 受击特效
 
     var f: int = 0
-    while f < 20 {
+    while f < frames {
         f = f + 1
         yield
     }
@@ -242,7 +254,145 @@ func main() {
 
 ---
 
-## 六、新增 Syscall 需求评估
+## 六、讨论：硬直实现机制 💬
+
+> 来源：Syscall 需求评估时发现硬直机制需要更深入讨论。
+
+### 6.1 当前状态
+
+`ApplyHitstun` 由攻击方脚本调用，宿主侧设置 `Character.HitstunFrames`。
+但硬直期间角色的具体行为（不可操作、不可被打断、硬直结束后自动恢复）由谁控制？
+
+### 6.2 两种实现思路
+
+| 方案 | 描述 | 优点 | 缺点 |
+|------|------|------|------|
+| **A: 宿主倒计时** | 宿主每帧递减 `HitstunFrames`，期间屏蔽输入，结束后自动恢复 idle | 简单、确定性强 | 硬直期间的变化（如硬直中被再次命中）需要额外逻辑 |
+| **B: 受击技能驱动** | 受击技能脚本 (`skill_hit_high.ffs`) 的帧循环即为硬直持续时间，脚本结束=硬直结束 | 统一模型、可自定义 | 需要攻击方通知的硬直帧数与受击脚本帧数协调 |
+
+### 6.3 建议方案（待确认）
+
+**两层配合**：
+1. 攻击方 `ApplyHitstun()` → 宿主记录硬直参数 → 触发受击技能切换
+2. 受击技能脚本的帧数 = 硬直持续帧数（由宿主在 spawn 脚本时通过参数或黑板传入）
+3. 宿主 `HitstunFrames` 作为安全倒计时（脚本异常时的兜底）
+
+这样硬直的"不可操作"由受击技能的优先级保证（受击优先级 > 移动/攻击），不需要额外的输入屏蔽逻辑。
+
+---
+
+## 七、讨论：技能条件与裁决机制 💬
+
+> 来源：对 `CanActivate` 是否迁移到 VM 的分歧。
+
+### 7.1 分歧说明
+
+| 观点 | 描述 |
+|------|------|
+| **原方案（Agent）** | `CanActivate` 保留在宿主 C#，技能条件是纯判断（≤3行），属于"稳亏"场景。脚本假设条件已通过 |
+| **用户倾向** | 技能条件也进 VM。并且条件逻辑应在**技能 VM 内部**（而非独立的裁决 VM 实例） |
+
+### 7.2 技能条件位置的候选方案
+
+| 方案 | 描述 | 示意 |
+|------|------|------|
+| **A: 宿主 C#** | 条件由 `SkillDef.CanActivate` lambda 判断，与当前实现一致 | `(ch, input) => input.HasButton(BTN_LP) && ch.IsGrounded` |
+| **B: 独立裁决 VM** | 一个专门的"裁决脚本"每帧运行，决定切换到哪个技能 | `skill_arbiter.ffs` → `SpawnScript("skill_light_punch")` |
+| **C: 技能内条件** | 条件写在技能脚本开头，不满足则立即退出 | 脚本第一帧检查条件，失败 → `return`，宿主回退到 idle |
+
+### 7.3 方案 C 展开：技能内条件
+
+```ffs
+// skill_light_punch.ffs
+func main() {
+    // --- 条件检查 (第一帧) ---
+    var input: int = GetInput()
+    var grounded: int = IsGrounded()
+    if (input & INPUT_LP) == 0 || grounded == 0 {
+        return    // 条件不满足, 立即退出
+    }
+
+    // --- 条件通过, 执行技能 ---
+    var frames: int = 20
+    BeginAction(101, frames)
+    defer { EndAction() }
+    // ...
+}
+```
+
+**优点**：
+- 条件和执行在同一脚本中，便于阅读和调试
+- 不需要额外的裁决 VM 实例
+- 条件变化时只改一个文件
+
+**需要解决**：
+- 条件不满足时脚本立即 return，宿主需要检测"脚本在第 0 帧就结束了"并回退
+- 多个技能的条件评估顺序（优先级）仍需宿主裁决
+
+### 7.4 裁决机制设计 💬
+
+> 用户倾向：宿主提供进入/退出功能，进入后由脚本控制细节。裁决思路分为通用 + 特殊。
+
+**裁决 = 宿主决定"尝试哪些技能" + 脚本决定"是否真正激活"**
+
+```
+宿主裁决层 (每帧):
+  1. 按优先级排序候选技能列表
+  2. 通用规则过滤 (例: 硬直中不可切换攻击, 空中不可使用地面技能)
+  3. 尝试 spawn 最高优先级技能的 VM 实例
+  4. 脚本第一帧执行条件检查:
+     - 通过 → 脚本继续 (BeginAction...)
+     - 失败 → 脚本 return → 宿主检测到立即完成 → 尝试下一个候选
+  5. 全部失败 → 保持当前技能
+```
+
+**通用规则**（宿主侧，所有技能共享）：
+- 优先级判断（高优先级可打断低优先级）
+- 状态互斥（硬直中、倒地中、死亡中的技能切换限制）
+- 基础标签检查（空中/地面状态）
+
+**特殊规则**（脚本侧，技能自定义）：
+- 具体输入要求（需要某个按键组合）
+- 距离/位置条件（如投技需要近距离）
+- 资源条件（如超必杀需要能量）
+- 连招窗口（如取消窗口内才可衔接）
+
+这样裁决机制既有宿主的统一管控，又有脚本的灵活定制。
+
+---
+
+## 八、讨论：碰撞框数据来源 💬
+
+> 来源：SK3 决定碰撞框暂时在脚本内设置。
+
+### 8.1 决定
+
+碰撞框数据暂由脚本内 Syscall 设置（而非宿主 `CollisionFrames` 静态定义）。
+
+### 8.2 影响
+
+- 需要新增 Syscall：`SetHitbox(groupId, x, y, w, h)`, `SetHurtbox(x, y, w, h)` 等
+- 脚本内碰撞框定义可能较冗长，需考虑**书写便利性**
+- 将来可能用到 FFVM 自定义结构体来封装碰撞框参数，减少 Syscall 参数数量
+
+### 8.3 示例：脚本内碰撞框
+
+```ffs
+// 方案 A: 逐参数 Syscall
+if f >= 4 && f < 8 {
+    SetHitbox(1001, 0.2, 0.3, 0.4, 0.3)   // groupId, x, y, w, h
+}
+
+// 方案 B: 结构体参数 (需要 FFVM 结构体支持)
+// var box: HitboxDef = { groupId: 1001, x: 0.2, y: 0.3, w: 0.4, h: 0.3 }
+// SetHitbox(box)
+```
+
+> 结构体方案取决于 FFVM 当前的结构体支持程度。B-γ7 (SN1 嵌套结构体) 已在计划中。
+
+---
+
+## 九、新增 Syscall 需求评估
 
 对照首批 8 个脚本所需的 Syscall，与当前已有的 ~40 个 Syscall 对比：
 
@@ -255,48 +405,47 @@ func main() {
 | 输入查询 | GetInput, GetInputDir | ✅ 足够 |
 | 落地检测 | IsGrounded | ✅ 足够 |
 | 效果 | SpawnEffectHit, SpawnEffectSelf | ✅ 足够 |
-| 蹲姿切换 | — | ❓ 可能需要 `SetPushBox` 或 `SetStance` |
+| 碰撞框设置 | — | 🆕 需要 `SetHitbox`, `SetHurtbox`, `ClearHitbox` |
+| 蹲姿切换 | — | ❓ 可能需要 `SetStance` 或 `SetPushBox` |
 | 倒地状态 | — | ❓ 可能需要 `SetKnockdownState` / `SetInvincible` |
-| 起身衔接 | — | ❓ 可能需要 `RequestSkillChange` |
+| 技能条件查询 | GetInput, IsGrounded 等 | ✅ 足够（条件在脚本内） |
 
-// 需要补充讨论硬直的实现机制
-
-**初步结论**：前 4 个脚本（S01~S04）可直接用现有 Syscall 实现。S05~S08 可能需要少量新增。
+**结论**：前 4 个脚本（S01~S04）可直接用现有 Syscall 实现（碰撞框用现有 `CollisionFrames` 过渡）。S05~S08 及碰撞框脚本化需要新增少量 Syscall。
 
 ---
 
-## 七、宿主侧变更评估
+## 十、宿主侧变更评估
 
 将技能从 host-side 迁移到 FFS 脚本需要宿主侧的配合：
 
 | 变更 | 说明 | 影响范围 |
 |------|------|---------|
 | `SkillDef.VMModuleSlot` 设置 | 技能定义指向已编译的 .ffs 模块 | CharacterData 技能注册 |
-| `CanActivate` 保留 | 技能切换条件仍由宿主 C# 判断 | 不变 |
-| `CanContinue` 保留/迁移 | 循环技能的退出条件；可选保留在宿主或迁移到脚本 | 待定 |
-| `OnFrame` 移除 | 每帧逻辑由 FFS 脚本 `yield` 循环驱动 | 不再需要 |
-| `CollisionFrames` 保留 | 碰撞框数据仍由宿主静态定义 | 不变 |
+| `CanActivate` → 脚本内条件 | 技能条件迁移到脚本第一帧检查（§七方案 C） | SkillManager 需检测"第 0 帧完成"并回退 |
+| `CanContinue` → 脚本控制 | 循环技能退出由脚本决定（通过结束/return）或宿主 Kill | SkillManager 裁决层 |
+| `OnFrame` → 删除 | 每帧逻辑由 FFS 脚本 `yield` 循环驱动 | 不再需要 |
+| `CollisionFrames` → 脚本内设置 | 碰撞框数据迁移到脚本 Syscall（§八） | 需新增 Syscall |
 | `GameVMBridge.ActivateSkillVM` | 技能激活时自动 spawn VM 实例 | 已实现 |
-
-**关键设计选择**：`CanActivate`（技能切换条件）是否也迁移到 FFS？
-
-// 技能条件进虚拟机. 另外我发现你默认技能条件在独立的虚拟机里. 我原先默认技能条件在技能虚拟机里. 看起来这里我们有分歧, 需要讨论
-- **建议保留在宿主**：切换条件是纯条件判断（≤3行），属于"稳亏"场景
-- FFS 脚本假设条件已通过，只负责技能执行（与 skill_25 头注释一致）
+| 裁决层改造 | 实现通用+特殊裁决机制（§七.4） | SkillManager 重构 |
 
 ---
 
-## 八、待决
+## 十一、已决事项汇总
+
+| ID | 问题 | 决定 |
+|----|------|------|
+| SK1 | 首批脚本范围 | ✅ 8 个，范围合适 |
+| SK4 | 蹲/倒地等姿态 Syscall | ✅ 可以新增 |
+| SK5 | 脚本文件命名规则 | ✅ `skill_<英文名>.ffs`，例: `skill_idle.ffs` |
+
+---
+
+## 十二、待决
 
 | ID | 问题 | 候选方案 | 当前倾向 |
 |----|------|---------|---------|
-| SK1 | 首批脚本范围是否合适？ | 8个 / 减少到4个 / 增加 | 8 个（覆盖主要模式） |
-| SK2 | 循环技能（Idle/Walk）退出由谁控制？ | A: 宿主 CanContinue / B: 脚本内 GetInput 判断 / C: 两者配合 | A（保持现有机制） |
-| SK3 | 碰撞框数据来源？ | A: 宿主 CollisionFrames / B: 脚本内 Syscall 设置 / C: 外部 JSON | A（现阶段） |
-| SK4 | 蹲/倒地等姿态切换是否需要新增 Syscall？ | 新增 SetStance / 复用 Tag 系统 | 待首批实现时确认 |
-| SK5 | 脚本文件命名规则？ | `skill_idle.ffs` / `s01_idle.ffs` / `idle.ffs` | 待定 |
-SK1: 合适
-SK2: 宿主提供进入退出功能, 进入后由脚本控制细节. 因此需要讨论裁决机制. 裁决由宿主提供, 也可以考虑脚本(倾向), 裁决思路大致为分为通用+特殊
-SK3: 暂时脚本内设置, 因此需要略微考虑书写方便(可能要用到自定义结构体)
-SK4: 可
-SK5: skill_idle.ffs
+| SK2 | 裁决机制详细设计 | §七.4 的"宿主通用+脚本特殊"方案 | 倾向脚本侧裁决 |
+| SK3 | 碰撞框 Syscall 参数设计 | A: 逐参数 / B: 结构体参数 | 待 FFVM 结构体支持确认 |
+| SK6 | 硬直实现机制 | §六的两层配合方案 | 待确认 |
+| SK7 | 脚本条件失败时的宿主回退逻辑 | §七.3 的"第 0 帧 return"检测 | 待实现验证 |
+| SK8 | 碰撞框 Syscall 新增范围 | SetHitbox / SetHurtbox / ClearHitbox / SetPushBox | 待设计 |
