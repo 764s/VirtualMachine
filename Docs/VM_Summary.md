@@ -45,6 +45,8 @@ Docs/
     VM_OpCodes_Draft.md              OpCode 设计草案
     VM_Optimization_Outlook.md       性能优化展望（14 项通用优化方向）
     VM_Script_Language_Decision.md   脚本语言选型决策（候选对比 + AI 友好性分析）
+    FFS_Syntax.md                    FFScript 语法参考（关键字 + EBNF 文法 + 示例）
+    FFS_QuickRef.md                  FFScript 快速上手（C# 开发者简化版）
     Skills/                          技能脚本参考实现
       skill_114feiyanxuanfengtui.ffs   飞燕旋风腿（56 帧攻击技能）
       skill_25shangpanbeijizhong.ffs   上盘被击中（30 帧受击技能）
