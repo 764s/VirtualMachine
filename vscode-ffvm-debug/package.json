@@ -20,13 +20,20 @@
         "vscode-languageclient": "^9.0.1"
     },
     "contributes": {
+        "configuration": {
+            "title": "FFVM",
+            "properties": {
+                "ffvm.executablePath": {
+                    "type": "string",
+                    "default": "ffvm-cli",
+                    "description": "Path to the ffvm-cli executable. Defaults to searching in PATH."
+                }
+            }
+        },
         "debuggers": [
             {
                 "type": "ffvm",
                 "label": "FFVM Script",
-                "program": "${workspaceFolder}/StandaloneRunner/bin/Release/net10.0/StandaloneRunner",
-                "args": ["--dap"],
-                "runtime": "",
                 "languages": ["ffvm"],
                 "configurationAttributes": {
                     "launch": {

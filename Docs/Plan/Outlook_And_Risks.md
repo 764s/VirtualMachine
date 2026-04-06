@@ -84,19 +84,27 @@
 | **MI-4** | VMInspector 宿主数据读取辅助（ReadVar / ReadStruct） | 宿主需要从外部读取实例状态时 | [C0](../Discussion/Step_C0_DeploymentArchitecture.md) |
 | **MI-5** | 实例间事件总线（EmitEvent / PollEvent） | 多实例需要松耦合通信时 | [C0](../Discussion/Step_C0_DeploymentArchitecture.md) |
 
-### 2.5 分发基础设施（DIST 系列）
+### 2.5 分发基础设施（DIST 系列） ✅ 已完成
 
 > 来源：2026-04-05 讨论。目标：让其他人在自己的项目中使用 FFVM 时，心智负担和操作负担最小化。
 > 详细设计见 [Step_DIST_Distribution.md](../Discussion/Step_DIST_Distribution.md)。
 
-| ID | 内容 | 触发时机 | 复杂度 |
-|----|------|----------|--------|
-| **DIST-1** | 创建独立 FFVM 类库项目（`src/FFVM/FFVM.csproj`，netstandard2.1，public API 收窄） | C1 宿主阻塞期间可推进 | 低 |
-| **DIST-2** | 统一 CLI 入口（`ffvm run/compile/lsp/dap`，整合 Sandbox + DAP + LSP） | DIST-1 完成后 | 中 |
-| **DIST-3** | 单文件发布 + VS Code 扩展 .vsix 打包（PublishSingleFile + vsce package） | DIST-2 完成后 | 中 |
+| ID | 内容 | 状态 | 说明 |
+|----|------|------|------|
+| **DIST-1** | 创建独立 FFVM 类库项目（`src/FFVM/FFVM.csproj`，net8.0） | ✅ | `dotnet pack` → `FFVM.0.1.0.nupkg`，ProjectReference 替代 Compile Include |
+| **DIST-2** | 统一 CLI 入口（`ffvm-cli run/compile/lsp/dap/version`） | ✅ | 内置 CliSyscalls，整合 LSP/DAP stdio |
+| **DIST-3** | 单文件发布 + VS Code 扩展适配 | ✅ | PublishSingleFile（35MB linux-x64），扩展使用 `ffvm.executablePath` 设置 |
 
-**关键决策**：LSP/DAP 服务器 = `ffvm` CLI 的子命令（`ffvm lsp` / `ffvm dap`），VS Code 扩展仅为薄客户端。
+**关键决策**：LSP/DAP 服务器 = `ffvm-cli` CLI 的子命令（`ffvm-cli lsp` / `ffvm-cli dap`），VS Code 扩展仅为薄客户端。
 与 rust-analyzer、gopls、clangd 模式一致。
+
+**后续展望**（DIST-4~DIST-7，业务驱动激活）：
+| ID | 内容 | 触发时机 |
+|----|------|----------|
+| DIST-4 | `dotnet tool install -g ffvm-cli` 全局工具安装 | NuGet 发布后 |
+| DIST-5 | GitHub Release 自动化（CI 产出三平台可执行） | 首次 Release 时 |
+| DIST-6 | `vsce package` 产出 `.vsix` 并发布到 Marketplace | 扩展功能稳定后 |
+| DIST-7 | UPM 包（Unity Package Manager git URL 安装） | C 阶段 Unity 集成验证后 |
 
 ### 2.6 脚本调试（DBG 系列）
 
@@ -473,7 +481,7 @@ LSP1（LSP Server 核心框架）           ← 所有 LSP 功能的通信基础
 | **步骤 10 前必须** | C4, F4, G5, G6, V5 |
 | **步骤 10 前如需** | S4 |
 | **业务驱动** | FF1-FF5, H1, BB1, PR1, FIX1, DM1, MI-1~MI-5 |
-| **分发基础设施** | DIST-1~DIST-3（独立类库 + CLI 入口 + 单文件发布 + 扩展打包） |
+| **分发基础设施** | ✅ DIST-1~DIST-3 已完成（独立类库 + CLI 入口 + 单文件发布 + 扩展适配） |
 | **自然优化（随功能实现）** | O3, O4, O5, O7, FO4, FO5, FO7 |
 | **调整型优化（Benchmark 驱动）** | O1, O2, O6, O8, O9, O10, O11, O12, O13, O14, O15, FO1, FO2, FO3, FO6, SO1 |
 | **CI / Benchmark 基础设施** | BM1 |
@@ -485,9 +493,9 @@ LSP1（LSP Server 核心框架）           ← 所有 LSP 功能的通信基础
 
 | 复杂度 | 条目 |
 |--------|------|
-| 低 | C4, G6, O1, O2, O3, O5, O7, O9, FO4, FO5, SN2, DBG3, DBG5, DBG6, LSP2, MI-1, MI-2, MI-4, DIST-1 |
+| 低 | C4, G6, O1, O2, O3, O5, O7, O9, FO4, FO5, SN2, DBG3, DBG5, DBG6, LSP2, MI-1, MI-2, MI-4 |
 | 低~中 | O15, BM1 |
-| 中 | F4, S4, O4, O6, O10, O11, O14, FO1, FO6, FO7, FO2, FF1, FF2, FF4, FF5, SO1, SN1, H1, DBG1, DBG2, DBG4, DBG7, LSP1, LSP3, LSP4, LSP5, LSP6, LSP7, MI-5, DIST-2, DIST-3 |
+| 中 | F4, S4, O4, O6, O10, O11, O14, FO1, FO6, FO7, FO2, FF1, FF2, FF4, FF5, SO1, SN1, H1, DBG1, DBG2, DBG4, DBG7, LSP1, LSP3, LSP4, LSP5, LSP6, LSP7, MI-5 |
 | 高 | O8, O13, FO3 |
 
 ### 按风险等级（§六 降级后）
