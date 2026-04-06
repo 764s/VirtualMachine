@@ -181,3 +181,138 @@ DIST-1~DIST-3 完成后发现：launch 模式 DAP（stdio）已随库分发，�
 - **DIST-9**：Sandbox 改造为消费分发库 attach API，删除私有实现
 
 详细步骤见 [Plan/Step_DIST_Distribution.md](../Plan/Step_DIST_Distribution.md)。
+
+---
+
+## 七、.NET 多版本兼容策略（DIST-10）
+
+> 来源：2026-04-06 推演。审查三层分发架构在不同 .NET 版本消费者场景下的兼容性。
+
+### 7.1 现状诊断
+
+| 分发层 | 消费方式 | TFM 现状 | .NET 版本问题 |
+|--------|---------|----------|--------------|
+| L1 CLI 单文件 | 下载 `ffvm` 可执行 | `net8.0` + SelfContained | **无**——运行时内嵌，无外部依赖 |
+| L2 NuGet 库 | `dotnet add package FFVM` | `net8.0` only | **❌ 缺口**——`netstandard2.1` / `net6.0` 消费者无法引用；未来 `net10.0` LTS 切换后 `net8.0` 出支持期 |
+| L2 dotnet tool | `dotnet tool install -g ffvm` | 框架依赖 `net8.0` | **❌ 缺口**——未配置 `RollForward`，在仅安装 `net9.0+` SDK 的环境找不到 `net8.0` 运行时 |
+| L3 UPM 源码 | Package Manager git URL | 源码编译 | **⚠️ 部分已处理**——`SyscallArgs` 的 `ref field`（C# 11）已有 `FFVM_REF_FIELD` / `FFVM_LEGACY_CSHARP` 条件编译；但缺少整体审计与文档 |
+| CI 验证 | GitHub Actions | `dotnet-version: '8.0.x'` | **❌ 缺口**——仅在 `net8.0` 测试，不验证 `netstandard2.1` 目标或更高版本运行时兼容性 |
+
+### 7.2 代码特性依赖审计
+
+| 特性 | 最低要求 | netstandard2.1 可用 | 当前使用位置 | 处理方案 |
+|------|---------|--------------------|-----------|---------| 
+| `unsafe` / `fixed` | C# 1.0 + AllowUnsafeBlocks | ✅ | VMWorld、VMInstanceState、SyscallArgs | 无需处理 |
+| `ref struct` | C# 7.2 | ✅ | SyscallArgs | 无需处理 |
+| `ref field`（`ref T _field`） | C# 11 / net7.0+ | ❌ | SyscallArgs 现代路径 | ✅ 已有条件编译 `FFVM_REF_FIELD` / `FFVM_LEGACY_CSHARP` |
+| `StructLayout` / `FieldOffset` | .NET Standard 1.0+ | ✅ | Number、Instruction、VMInstanceState | 无需处理 |
+| `MethodImpl(AggressiveOptimization)` | .NET Core 3.0 | **❌** | VMWorld.ExecuteInstance | ⚠️ **需条件编译**——netstandard2.1 ref assembly 不含此 enum 值（实测 CS0117）。用 `#if !FFVM_LEGACY_CSHARP` 隔离 |
+| `MethodImpl(AggressiveInlining)` | .NET 4.5+ | ✅ | BenchmarkRunner（测试代码，不入库） | 无需处理 |
+| `Array.Empty<T>()` | .NET 4.6+ / netstandard1.3+ | ✅ | SyscallSignature 等 | 无需处理 |
+
+**结论**：核心代码的 `netstandard2.1` 兼容性障碍极低——仅 `AggressiveOptimization` 需 1 处条件编译（`ref field` 已有条件编译）。可安全添加 `netstandard2.1` TFM。
+
+### 7.3 对策方案
+
+#### A. FFVM.csproj 双目标（核心动作）
+
+```xml
+<!-- 改前 -->
+<TargetFramework>net8.0</TargetFramework>
+
+<!-- 改后 -->
+<TargetFrameworks>netstandard2.1;net8.0</TargetFrameworks>
+```
+
+效果：
+- `netstandard2.1`：覆盖 .NET Core 3.0+ / .NET 5+ / .NET 6~10+ / Unity 2021+ 包引用场景
+- `net8.0`：保留完整优化（JIT 内联提示、TieredPGO 等），CI 主测试路径
+- NuGet 包自动包含两个目标的程序集，消费者 SDK 自动选最优匹配
+
+条件编译策略（`FFVM.csproj` 已有模式可复用）：
+```xml
+<PropertyGroup Condition="'$(TargetFramework)' == 'netstandard2.1'">
+  <DefineConstants>$(DefineConstants);FFVM_LEGACY_CSHARP</DefineConstants>
+</PropertyGroup>
+```
+
+- `SyscallArgs` 的 `ref field` 路径已通过 `FFVM_LEGACY_CSHARP` 切换到 `unsafe` 指针路径 ✅
+- 未来若引入更多 net8.0+ 专属 API，统一用 `#if !FFVM_LEGACY_CSHARP` 隔离
+
+#### B. CLI dotnet tool RollForward
+
+```xml
+<!-- FFVM.Cli.csproj 追加 -->
+<RollForward>LatestMajor</RollForward>
+```
+
+效果：`dotnet tool install -g ffvm` 在仅安装 `net9.0` 或 `net10.0` SDK 的环境也能运行。
+不影响 SelfContained 单文件发布（该属性对 self-contained 无效）。
+
+#### C. CI 多版本验证（低成本高收益）
+
+在现有 CI matrix 中追加一个 `net9.0`（或未来 `net10.0`）构建验证 job：
+
+```yaml
+strategy:
+  matrix:
+    dotnet-version: ['8.0.x', '9.0.x']
+```
+
+验证内容：
+1. `dotnet build src/FFVM/FFVM.csproj`（双目标）构建通过
+2. StandaloneRunner 在 `net9.0` 运行时上测试通过（前向兼容）
+3. `dotnet pack` 产生的 nupkg 包含两个 TFM 的程序集
+
+#### D. .NET 版本生命周期感知
+
+| .NET 版本 | 类型 | 支持截止 | FFVM 影响 |
+|-----------|------|---------|----------|
+| net6.0 | LTS | 2024-11-12 ❌ 已过期 | 不支持（消费者应升级） |
+| net7.0 | STS | 2024-05-14 ❌ 已过期 | 不支持 |
+| net8.0 | LTS | 2026-11-10 | ✅ 当前主目标 |
+| net9.0 | STS | 2026-05-12 | ✅ 前向兼容（消费 net8.0 目标） |
+| net10.0 | LTS | ~2028-11 | ✅ netstandard2.1 + net8.0 双目标自动适配 |
+
+策略：
+- 当 `net8.0` 接近 EOL 时（~2026 Q3），将 `net8.0` 升级为 `net10.0`（新 LTS）
+- `netstandard2.1` 作为永久兜底目标，确保老版本 + Unity 兼容性
+- 单文件 CLI 发布同步切换到 `net10.0` 目标（SelfContained 不受影响）
+
+### 7.4 复杂度评估
+
+| 子任务 | 复杂度 | 改动范围 |
+|--------|--------|---------|
+| FFVM.csproj 双目标 + 条件编译 | 极低 | ~5 行 csproj 改动 |
+| FFVM.Cli RollForward | 极低 | 1 行 |
+| CI matrix 扩展 | 低 | ci.yml ~3 行 |
+| 测试验证（双目标 build + pack） | 低 | 运行现有测试即可 |
+
+**总复杂度**：低。无核心代码改动，纯项目配置 + CI 配置。
+
+### 7.5 风险
+
+| ID | 风险 | 影响 | 缓解 |
+|----|------|------|------|
+| R-DIST10-1 | netstandard2.1 目标缺少某些 API（如未来新增的 net8.0+ 专属调用） | 编译失败 | CI 双目标构建自动拦截；条件编译隔离 |
+| R-DIST10-2 | Unity 2021 的 C# 9 编译器不支持某些语法 | UPM 用户编译失败 | 条件编译 `FFVM_LEGACY_CSHARP` 已覆盖已知特性；Unity 路径为源码编译而非 NuGet，TFM 无关 |
+| R-DIST10-3 | dotnet tool RollForward 到 net10.0 运行时行为差异 | 极低概率的运行时行为变化 | CI 多版本测试覆盖；SelfContained CLI 作为稳定后备 |
+
+### 7.6 KOF98 实践区覆盖验证
+
+> 来源：2026-04-06 推演。验证 DIST-10 对策是否完整覆盖 KOF98 的三种消费场景。
+
+KOF98 是 FFVM 的参考消费者——若分发机制对 KOF98 有效，则对其他消费者同样有效。
+
+| 场景 | FFVM 消费方式 | DIST-10 前 | DIST-10 后 | 结论 |
+|------|-------------|-----------|-----------|------|
+| KOF98 裸 .NET (net8.0) | `ProjectReference` → FFVM.csproj | ✅ FFVM net8.0 精确匹配 | ✅ 双目标 net8.0 精确匹配 | 无变化 |
+| KOF98 裸 .NET (net10.0) | `ProjectReference` → FFVM.csproj | ❌ KOF98 TFM=net10.0 时引用 net8.0 单目标可编译但无 ns2.1 兜底 | ✅ MSBuild 自动选 net8.0（前向兼容）；`netstandard2.1` 作兜底 | DIST-10 解决 |
+| KOF98 Unity 源码编译 | FFVM 源码 `Assets/Scripts/VM/` 直接编译入 Unity 项目 | ✅ `FFVM_LEGACY_CSHARP` 条件编译已就绪 | ✅ 不变（Unity 路径为源码编译，TFM 无关） | 已覆盖 |
+| KOF98 Unity NuGet/DLL | FFVM.nupkg 的 netstandard2.1 DLL | ❌ 仅 net8.0 目标，Unity 无法引用 | ✅ netstandard2.1 目标 DLL 可被 Unity 2021+ 引用 | DIST-10 解决 |
+
+**KOF98 侧需配合的最小变更**（DIST-10 完成后）：
+- **裸 .NET 10 场景**：`KOF98.csproj.template` 中 `<TargetFramework>net8.0</TargetFramework>` 改为 `net10.0`。这是 KOF98 实践区的一行配置变更，不属于 FFVM 分发机制范畴。
+- **Unity 场景**：KOF98 游戏代码（Character / Combat / Physics 等）已为纯 C#，无 Unity 依赖（视图层通过 `IGameView` 接口隔离）。可直接复制到 Unity Assets/ 或以 asmdef 组织。这属于 KOF98 实践区后续工作，不需要额外 DIST 步骤。
+
+**结论**：DIST-10 完整覆盖 KOF98 的全部场景。不需要新增额外 DIST 步骤。

@@ -1,10 +1,12 @@
 # DIST 分发基础设施
 
 > **DIST-1~DIST-3 状态**：✅ 已完成（2026-04-06）
-> **DIST-8~DIST-9 状态**：⏳ 待执行
+> **DIST-8~DIST-9 状态**：✅ 已完成（2026-04-06）
+> **DIST-10 状态**：✅ 已完成（2026-04-06）
 > **Assert 数**：1007（未变化）
 > **详细设计**：[Discussion/Step_DIST_Distribution.md](../Discussion/Step_DIST_Distribution.md)
 > **Attach 模式讨论**：[Discussion/D_DapAttachMode.md](../Discussion/D_DapAttachMode.md)
+> **多版本兼容**：[Discussion/Step_DIST_Distribution.md §七](../Discussion/Step_DIST_Distribution.md)；[计划文件](Step_DIST10_DotNetMultiVersion.md)
 
 ---
 
@@ -12,7 +14,7 @@
 
 ### DIST-1：独立 FFVM 类库项目
 
-- `src/FFVM/FFVM.csproj`（net8.0 class library）
+- `src/FFVM/FFVM.csproj`（双目标 `netstandard2.1;net8.0` class library —— DIST-10 升级）
 - 通过 `<Compile Include>` 引用 `Assets/Scripts/VM/` 下 Core / Compiler / AST / Interpreter / Debug 目录
 - 包含 `StandaloneRunner/UnityStub.cs` 作为 Unity API 桩
 - `dotnet pack` 产生 `FFVM.0.1.0.nupkg`
@@ -20,7 +22,7 @@
 - StandaloneRunner / Sandbox 改为 `<ProjectReference>` 引用（取代 `<Compile Include>` 散引用）
 - CI 工作流三个 Job 全部适配新项目结构
 
-**设计决策**：目标框架使用 net8.0 而非 netstandard2.1。原因：代码使用 `AggressiveOptimization`、`StructLayout(Explicit, Size=4)`、`ref struct` with ref fields 等现代 C# 特性，netstandard2.1 不完全支持（风险 R-DIST1-2 已确认）。
+**设计决策**：~~目标框架使用 net8.0 而非 netstandard2.1~~ → DIST-10 已升级为双目标 `netstandard2.1;net8.0`。`AggressiveOptimization` 通过 `#if !FFVM_LEGACY_CSHARP` 条件编译隔离（netstandard2.1 ref assembly 不含该 enum 值）。`ref struct` with ref fields 通过已有的 `FFVM_LEGACY_CSHARP` 条件编译切换到 unsafe 指针路径。风险 R-DIST1-2 ✅ 已消除。
 
 ### DIST-2：统一 CLI 入口
 
@@ -121,5 +123,5 @@ dap.StopOnEntry();         // 可选：阻塞等 configurationDone
 | ID | 风险 | 状态 | 说明 |
 |----|------|------|------|
 | R-DIST1-1 | public API 表面过宽 | 🟡 已知 | 当前所有类型均为 public（历史原因），未来需收窄为仅暴露必要类型 |
-| R-DIST1-2 | netstandard2.1 不兼容 | ✅ 已确认 | 使用 net8.0 替代，放弃 .NET Framework 兼容 |
+| R-DIST1-2 | netstandard2.1 不兼容 | ✅ 已消除 | DIST-10：双目标 `netstandard2.1;net8.0`，`AggressiveOptimization` + `ref field` 通过条件编译隔离 |
 | R-DIST2-1 | CliSyscalls 与 SandboxSyscalls 重复 | 🟡 临时妥协 | 当前可接受，未来提取共享包时消除 |

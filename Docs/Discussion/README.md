@@ -24,3 +24,4 @@
 | D8 | [D_TracerBullet.md](D_TracerBullet.md) | 曳光弹：范围、目标与验证 | ✅ 已完成 | 早期 | 从 VM_Summary.md §四 抽取 |
 | D9 | [VM_Tracer_Bullet.md](VM_Tracer_Bullet.md) | 曳光弹原始详细设计讨论 | ✅ 已完成 | 早期 | 从 Reference/ 迁入 |
 | D10 | [D_DapAttachMode.md](D_DapAttachMode.md) | DAP Attach 模式：分发机制的功能缺口 | ✅ 已完成 | 2026-04-06 | DIST-8+DIST-9 已实现：DapServerBase + EmbeddableDapServer 提取到 FFVM 库，Sandbox 消费分发库 API |
+| D11 | [Step_DIST_Distribution.md](Step_DIST_Distribution.md) §七 | .NET 多版本兼容策略：分发机制对不同 .NET 版本的应对 | ✅ 已完成 | 2026-04-06 | DIST-10 ✅：双目标 TFM + CLI RollForward + KOF98 覆盖验证。AggressiveOptimization 条件编译修复 |

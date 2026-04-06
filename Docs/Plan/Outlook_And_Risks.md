@@ -94,26 +94,20 @@
 
 | ID | 内容 | 状态 | 说明 |
 |----|------|------|------|
-| **DIST-1** | 创建独立 FFVM 类库项目（`src/FFVM/FFVM.csproj`，net8.0） | ✅ | `dotnet pack` → `FFVM.0.1.0.nupkg`，ProjectReference 替代 Compile Include |
+| **DIST-1** | 创建独立 FFVM 类库项目（`src/FFVM/FFVM.csproj`，双目标 `netstandard2.1;net8.0`） | ✅ | `dotnet pack` → 含双 TFM 的 `FFVM.0.1.0.nupkg`，ProjectReference 替代 Compile Include |
 | **DIST-2** | 统一 CLI 入口（`ffvm-cli run/compile/lsp/dap/version`） | ✅ | 内置 CliSyscalls，整合 LSP/DAP stdio |
 | **DIST-3** | 单文件发布 + VS Code 扩展适配 | ✅ | PublishSingleFile（35MB linux-x64），扩展使用 `ffvm.executablePath` 设置 |
 
 **关键决策**：LSP/DAP 服务器 = `ffvm-cli` CLI 的子命令（`ffvm-cli lsp` / `ffvm-cli dap`），VS Code 扩展仅为薄客户端。
 与 rust-analyzer、gopls、clangd 模式一致。
 
-**待执行**（DIST-8~DIST-9，attach 模式提取）：
+**已完成**（DIST-8~DIST-10）：
 
 | ID | 内容 | 状态 | 说明 |
 |----|------|------|------|
-| **DIST-8** | 提取 EmbeddableDapServer 到 FFVM 库 | ⏳ | 从 Sandbox `EmbeddedDapServer` 提取共享协议基类 + TCP attach 服务器到 `FFVM.Debug`。区分正常 attach（以目标执行状态为主，不阻塞）与定制 attach（`WaitForConnection` + `StopOnEntry` 可选组合）。前置：DIST-1 |
-| **DIST-9** | Sandbox 改造：消费分发库 attach API | ⏳ | 删除 Sandbox 私有 `EmbeddedDapServer`，改用 `FFVM.Debug.EmbeddableDapServer` + 沙盒定制行为（WaitForConnection + StopOnEntry）。97 项 DAP 测试不变。前置：DIST-8 |
-
-> **DIST-8 设计要点**：
-> - **正常 attach**：调试器连接时 VM 可能已在运行，不自动暂停（除非用户设置 stopOnEntry）。
-> - **定制 attach（沙盒模式）**：`WaitForConnection()` 阻塞等连接 + `StopOnEntry()` 阻塞等 configurationDone，确保从第一条指令起可调试。
-> - 两种模式通过可选方法调用区分，分发库默认为正常 attach，宿主按需选用定制行为。
-> - 远程调试：TCP 传输天然支持，监听地址从 `127.0.0.1` 改为 `0.0.0.0` 即可。
-> - 多实例调试：与 MI-1（DAP 多实例线程映射）共享同一 TCP DAP 会话。
+| **DIST-8** | 提取 EmbeddableDapServer 到 FFVM 库 | ✅ | 共享协议基类 `DapServerBase` + TCP attach `EmbeddableDapServer` 到 `FFVM.Debug`。正常 attach / 定制 attach 可选 |
+| **DIST-9** | Sandbox 改造：消费分发库 attach API | ✅ | 删除 Sandbox 私有 `EmbeddedDapServer`，改用 `FFVM.Debug.EmbeddableDapServer`。97 项 DAP 测试不变 |
+| **DIST-10** | .NET 多版本兼容策略 | ✅ | FFVM.csproj 双目标 `netstandard2.1;net8.0`，`AggressiveOptimization` 条件编译隔离，CLI `RollForward=LatestMajor`。KOF98 裸 .NET + Unity 全场景覆盖验证 |
 
 **后续展望**（DIST-4~DIST-7，业务驱动激活）：
 | ID | 内容 | 触发时机 |
@@ -498,7 +492,7 @@ LSP1（LSP Server 核心框架）           ← 所有 LSP 功能的通信基础
 | **步骤 10 前必须** | C4, F4, G5, G6, V5 |
 | **步骤 10 前如需** | S4 |
 | **业务驱动** | FF1-FF5, H1, BB1, PR1, FIX1, DM1, MI-1~MI-5 |
-| **分发基础设施** | ✅ DIST-1~DIST-3 已完成（独立类库 + CLI 入口 + 单文件发布 + 扩展适配） |
+| **分发基础设施** | ✅ DIST-1~DIST-10 全部完成（独立类库 + CLI 入口 + 单文件发布 + 扩展适配 + attach DAP + 多版本兼容） |
 | **自然优化（随功能实现）** | O3, O4, O5, O7, FO4, FO5, FO7 |
 | **调整型优化（Benchmark 驱动）** | O1, O2, O6, O8, O9, O10, O11, O12, O13, O14, O15, FO1, FO2, FO3, FO6, SO1 |
 | **CI / Benchmark 基础设施** | BM1 |
