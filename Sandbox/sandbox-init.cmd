@@ -1,5 +1,5 @@
 @echo off
-setlocal enabledelayedexpansion
+setlocal
 
 :: ============================================================
 ::  FFScript Sandbox — One-Click Initialization (Windows)
@@ -66,10 +66,10 @@ echo [OK] Sandbox build succeeded.
     echo @echo off
     echo cd /d "%%~dp0.."
     echo echo.
-    echo echo  [1/2] Building Sandbox (C#^) ...
+    echo echo  [1/2] Building Sandbox ^(C#^) ...
     echo echo.
     echo dotnet build Sandbox\Sandbox.csproj -c Release --nologo -v q
-    echo if errorlevel 1 (
+    echo if errorlevel 1 ^(
     echo     echo.
     echo     echo  [ERROR] C# build failed!
     echo     echo.

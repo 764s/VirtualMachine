@@ -1,5 +1,5 @@
 @echo off
-setlocal enabledelayedexpansion
+setlocal
 
 :: ============================================================
 ::  KOF98 Practice — One-Click Console (Windows)
@@ -78,10 +78,10 @@ echo [OK] KOF98 build succeeded.
     echo @echo off
     echo cd /d "%%~dp0.."
     echo echo.
-    echo echo  [1/2] Building KOF98 (C#^) ...
+    echo echo  [1/2] Building KOF98 ^(C#^) ...
     echo echo.
     echo dotnet build KOF98\KOF98.csproj -c Release --nologo -v q
-    echo if errorlevel 1 (
+    echo if errorlevel 1 ^(
     echo     echo.
     echo     echo  [ERROR] C# build failed!
     echo     echo.
