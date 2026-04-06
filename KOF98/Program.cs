@@ -193,12 +193,19 @@ namespace KOF98
 
         private static CharacterData CreateDefaultCharacterData(int id, string name)
         {
+            // Stance arrays (shared references, no per-skill allocation)
+            var groundOnly = new[] { Stance.Grounded };
+            var groundAndCrouch = new[] { Stance.Grounded, Stance.Crouching };
+
             // ── Idle skill (host-driven, looping) ─────────────────
             var idleSkill = new SkillDef(
                 id: 0, name: "Idle", totalFrames: -1,
                 priority: GameConstants.PRIORITY_IDLE,
                 tags: (1 << GameConstants.TAG_IDLE),
                 looping: true);
+            idleSkill.AllowedStances = groundOnly;
+            idleSkill.ActivationPriority = 900;   // Lowest — fallback
+            idleSkill.InterruptPriority = 900;
 
             // ── Walk skill (looping, deactivates when direction released) ──
             var walkSkill = new SkillDef(
@@ -206,6 +213,9 @@ namespace KOF98
                 priority: GameConstants.PRIORITY_MOVEMENT,
                 tags: (1 << GameConstants.TAG_WALK),
                 looping: true);
+            walkSkill.AllowedStances = groundOnly;
+            walkSkill.ActivationPriority = 500;   // Movement tier
+            walkSkill.InterruptPriority = 500;
             walkSkill.CanActivate = (ch, input) =>
                 input.HasAny(InputButton.Left | InputButton.Right)
                 && !input.IsHeld(InputButton.Up)  // Don't walk when jumping
@@ -237,6 +247,9 @@ namespace KOF98
                 id: 2, name: "Jump", totalFrames: JumpTimeoutFrames,
                 priority: GameConstants.PRIORITY_MOVEMENT,
                 tags: (1 << GameConstants.TAG_JUMP) | (1 << GameConstants.TAG_AIR_STATE));
+            jumpSkill.AllowedStances = groundAndCrouch;
+            jumpSkill.ActivationPriority = 400;   // Jump > walk
+            jumpSkill.InterruptPriority = 500;
             jumpSkill.CanActivate = (ch, input) =>
                 input.IsPressed(InputButton.Up)
                 && ch.IsGrounded
@@ -267,6 +280,9 @@ namespace KOF98
                 priority: GameConstants.PRIORITY_MOVEMENT,
                 tags: (1 << GameConstants.TAG_CROUCH));
             crouchSkill.IsLooping = true;
+            crouchSkill.AllowedStances = groundOnly;
+            crouchSkill.ActivationPriority = 450;  // Crouch between walk and jump
+            crouchSkill.InterruptPriority = 500;
             crouchSkill.CanActivate = (ch, input) =>
                 input.IsHeld(InputButton.Down)
                 && !input.IsHeld(InputButton.Up)
@@ -289,6 +305,9 @@ namespace KOF98
                 id: 10, name: "LightPunch", totalFrames: 20,
                 priority: GameConstants.PRIORITY_ATTACK,
                 tags: (1 << GameConstants.TAG_ATTACK));
+            lpSkill.AllowedStances = groundOnly;
+            lpSkill.ActivationPriority = 200;     // Attack tier
+            lpSkill.InterruptPriority = 200;
             lpSkill.CanActivate = (ch, input) =>
                 input.IsPressed(InputButton.LP) && ch.IsGrounded && ch.HitstunFrames <= 0;
             lpSkill.CollisionFrames = new[]

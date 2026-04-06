@@ -56,6 +56,56 @@ namespace FFVM
         }
 
         /// <summary>
+        /// Execute a single instance for one tick (condition probe use-case).
+        /// Does NOT advance the global frame number or affect other instances.
+        /// Used by the host to probe a script's activation condition:
+        /// spawn → TickInstance → check if completed (condition failed) or yielded (condition passed).
+        /// </summary>
+        public void TickInstance(int instanceId)
+        {
+            ref VMInstanceState inst = ref Pool.Instances[instanceId];
+            if (!inst.IsAlive || inst.ErrorFlag != VMError.None)
+                return;
+            if ((inst.StateFlags & VMStateFlags.Completed) != 0)
+                return;
+
+            // Handle killed → cleanup path
+            if ((inst.StateFlags & VMStateFlags.Killed) != 0 &&
+                (inst.StateFlags & VMStateFlags.InCleanup) == 0)
+            {
+                if (inst.CleanupDepth > 0)
+                {
+                    inst.StateFlags |= VMStateFlags.InCleanup;
+                    inst.CleanupDepth--;
+                    inst.IP = inst.CleanupStack.Get(inst.CleanupDepth).CleanupEntryIP;
+                }
+                else
+                {
+                    inst.StateFlags |= VMStateFlags.Completed;
+                    return;
+                }
+            }
+
+            // Wait counter
+            if (inst.WaitCounter > 0 && (inst.StateFlags & VMStateFlags.Killed) == 0)
+            {
+                inst.WaitCounter--;
+                return;
+            }
+
+            // Wait-for target
+            if (inst.WaitTargetInstanceId >= 0 && (inst.StateFlags & VMStateFlags.Killed) == 0)
+            {
+                ref VMInstanceState target = ref Pool.Instances[inst.WaitTargetInstanceId];
+                if (target.IsAlive && (target.StateFlags & VMStateFlags.Completed) == 0)
+                    return;
+                inst.WaitTargetInstanceId = -1;
+            }
+
+            ExecuteInstance(ref inst);
+        }
+
+        /// <summary>
         /// Save current state to snapshot ring buffer.
         /// </summary>
         public void SaveState()

@@ -81,6 +81,24 @@ namespace KOF98
         // ── Helpers ──────────────────────────────────────────────
         public int FacingSign => GameConstants.FacingSign(Facing);
         public bool IsGrounded => Body.IsGrounded;
+
+        /// <summary>
+        /// Compute the current stance from runtime state.
+        /// Used by the layered candidate pool (SK2) for stance-based skill grouping.
+        /// Note: TAG_CROUCH is only set by the Crouch skill which requires IsGrounded,
+        /// so the Airborne check before TAG_CROUCH is safe — an airborne character
+        /// will never have TAG_CROUCH active.
+        /// </summary>
+        public Stance GetStance()
+        {
+            if (!IsAlive) return Stance.Dead;
+            if (IsKnockedDown) return Stance.Knockdown;
+            if (HitstunFrames > 0) return Stance.Hitstun;
+            if (!Body.IsGrounded) return Stance.Airborne;
+            if (HasTag(GameConstants.TAG_CROUCH)) return Stance.Crouching;
+            return Stance.Grounded;
+        }
+
         public bool HasTag(int tagBit) => (ActiveTags & (1 << tagBit)) != 0;
         public void SetTag(int tagBit) => ActiveTags |= (1 << tagBit);
         public void ClearTag(int tagBit) => ActiveTags &= ~(1 << tagBit);

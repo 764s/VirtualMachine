@@ -65,6 +65,7 @@
 | **基础移动** | ✅ | **Walk/Jump/Crouch 技能 (host-driven)** |
 | 轻拳攻击 | ✅ | LightPunch (含碰撞框数据) |
 | **界面设计** | ✅ | **GameSettings + 控制界面 (Tab 开关, AI/自动复活/重新开始)** |
+| **技能脚本化基础设施** | ✅ | **Stance 枚举 + SkillDef 扩展 (AllowedStances/ActivationPriority/InterruptPriority) + 分层候选池裁决 + ProbeSkillCondition 条件入口 + VMWorld.TickInstance** |
 | 架构文档 | ✅ | D_GameArchitecture.md |
 
 ### 已完成子任务（已归档）
@@ -82,13 +83,13 @@
 
 > **流程**：讨论 → 总览排期 → 制定子任务 → 执行
 
-当前位置 → **KOF-T2**
+当前位置 → **KOF-T3**
 
 | ID | 任务 | 状态 | 完成条件 | 依赖 | 讨论/计划 |
 |----|------|------|---------|------|----------|
 | KOF-T1 | 界面设计（常驻 HUD + 控制界面） | ✅ 已完成 | 常驻 HUD 显示角色名/血量/能量；控制界面覆盖场景，含 AI 开关、重新开始、自动复活开关 | — | [D_UIDesign.md](Discussion/D_UIDesign.md) |
-| KOF-T2 | 技能脚本化基础设施 | ⏳ 等待中 | SkillDef 扩展（AllowedStances/Priority/VMModuleSlot）+ 裁决层重构（分层候选池）+ 条件入口机制 | KOF-T1 ✅ | [D_SkillScripting.md](Discussion/D_SkillScripting.md) §七 |
-| KOF-T3 | 首批 FFS 脚本 — 前 4 个 (S01~S04) | ⬚ 待排期 | 编写 skill_idle/walk_forward/jump/light_punch.ffs，GameVMBridge 加载执行，现有 Syscall 足够 | KOF-T2 | [D_SkillScripting.md](Discussion/D_SkillScripting.md) §五 |
+| KOF-T2 | 技能脚本化基础设施 | ✅ 已完成 | SkillDef 扩展（AllowedStances/ActivationPriority/InterruptPriority）+ 裁决层重构（分层候选池）+ 条件入口机制（ProbeSkillCondition）+ Stance 枚举 + Character.GetStance() + VMWorld.TickInstance() | KOF-T1 ✅ | [D_SkillScripting.md](Discussion/D_SkillScripting.md) §七 |
+| KOF-T3 | 首批 FFS 脚本 — 前 4 个 (S01~S04) | ⏳ 等待中 | 编写 skill_idle/walk_forward/jump/light_punch.ffs，GameVMBridge 加载执行，现有 Syscall 足够 | KOF-T2 ✅ | [D_SkillScripting.md](Discussion/D_SkillScripting.md) §五 |
 | KOF-T4 | Syscall 扩展 + 碰撞框脚本化 | ⬚ 待排期 | 新增 SetHitbox/SetHurtbox/ClearHitbox/SetPushBox + ApplyHitReaction；碰撞框由脚本设置 | KOF-T3 | [D_SkillScripting.md](Discussion/D_SkillScripting.md) §八~§九 |
 | KOF-T5 | 首批 FFS 脚本 — 后 4 个 (S05~S08) | ⬚ 待排期 | 编写 skill_crouch_punch/hit_high/hard_knockdown/stand_up.ffs；验证完整攻击→受击→倒地→起身流程 | KOF-T4 | [D_SkillScripting.md](Discussion/D_SkillScripting.md) §五 |
 | KOF-T6 | 多目标命中 + 硬直机制 | ⬚ 待排期 | CheckAttackHit 多目标返回 + 时间轴暂停硬直实现 | KOF-T5 | [D_SkillScripting.md](Discussion/D_SkillScripting.md) §六 |
@@ -121,7 +122,7 @@
 |---|------|------|------|------|
 | KP1 | [Task_DisplayModule.md](Plan/Task_DisplayModule.md) | 显示模块切换 (Raylib 图形化视图) | ✅ 基础完成 | 2026-04-06 |
 | KP2 | [Task_CharacterControl.md](Plan/Task_CharacterControl.md) | 角色控制问题排查 (移动技能 + 输入修复) | ✅ 根因已修 | 2026-04-06 |
-| KP3 | [Step_SkillScripting.md](Plan/Step_SkillScripting.md) | 技能 FFS 脚本化实施计划 (KOF-T2~T10) | ⏳ 等待 KOF-T1 | 2026-04-06 |
+| KP3 | [Step_SkillScripting.md](Plan/Step_SkillScripting.md) | 技能 FFS 脚本化实施计划 (KOF-T2~T10) | ⏳ T2 ✅, T3 待开始 | 2026-04-06 |
 
 ---
 
@@ -149,10 +150,12 @@
 - [x] Raylib 图形化视图（碰撞框颜色可视化）
 - [x] 界面设计（常驻 HUD + 控制界面）— **KOF-T1** ✅
 
-### Phase 2: 技能脚本化基础设施
-- [ ] SkillDef 扩展（AllowedStances/Priority/VMModuleSlot）— **KOF-T2**
-- [ ] 裁决层重构（分层候选池 §七.4）— **KOF-T2**
-- [ ] 条件入口机制（专有条件检测阶段 §七.5）— **KOF-T2**
+### Phase 2: 技能脚本化基础设施 ✅
+- [x] SkillDef 扩展（AllowedStances/ActivationPriority/InterruptPriority）— **KOF-T2**
+- [x] Stance 枚举 + Character.GetStance() — **KOF-T2**
+- [x] 裁决层重构（分层候选池 §七.4）— **KOF-T2**
+- [x] 条件入口机制（ProbeSkillCondition + VMWorld.TickInstance）— **KOF-T2**
+- [x] 现有技能迁移至 AllowedStances + ActivationPriority — **KOF-T2**
 
 ### Phase 3: 首批 FFS 脚本
 - [ ] 前 4 个脚本 (S01~S04: idle/walk/jump/light_punch) — **KOF-T3**
@@ -197,7 +200,7 @@
 
 | ID | 风险 | 影响 | 缓解 |
 |----|------|------|------|
-| KR-1 | ExecuteInstance 不是 VMWorld 公开 API | VMBridge 无法逐实例 Tick | 需确认 API 可用性 |
+| KR-1 | ~~ExecuteInstance 不是 VMWorld 公开 API~~ | ~~VMBridge 无法逐实例 Tick~~ | ✅ 已解决：新增 VMWorld.TickInstance() 公开 API |
 | KR-2 | float 非确定性 | 帧同步不可靠 | 开发期使用 float，发布期切换 Fix64 |
 | KR-3 | 碰撞框数据硬编码 | 维护困难 | 将来从 JSON/资源文件加载 |
 
