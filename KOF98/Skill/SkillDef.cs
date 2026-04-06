@@ -12,7 +12,7 @@ namespace KOF98
         /// <summary>Total frames of the skill action (-1 = infinite/looping like idle).</summary>
         public int TotalFrames;
 
-        /// <summary>Skill priority (higher can interrupt lower).</summary>
+        /// <summary>Skill priority (higher can interrupt lower). Used by legacy flat scan.</summary>
         public int Priority;
 
         /// <summary>Tag bitflags applied when this skill is active.</summary>
@@ -27,12 +27,35 @@ namespace KOF98
         /// </summary>
         public int VMModuleSlot = -1;
 
+        // ── Layered Candidate Pool Fields (SK2) ──────────────────
+
+        /// <summary>
+        /// Stances in which this skill is a valid candidate.
+        /// Null or empty = no stance restriction (legacy host-driven behavior).
+        /// </summary>
+        public Stance[] AllowedStances;
+
+        /// <summary>
+        /// Activation priority within the candidate pool.
+        /// Lower value = higher priority (tried first). Default = 100.
+        /// Different from legacy <see cref="Priority"/> which is used for interrupt checking.
+        /// </summary>
+        public int ActivationPriority = 100;
+
+        /// <summary>
+        /// Interrupt priority — this skill can only activate if its value
+        /// is greater than or equal to the current skill's ActivationPriority.
+        /// Default = 100.
+        /// </summary>
+        public int InterruptPriority = 100;
+
         // ── Activation Conditions ────────────────────────────────
 
         /// <summary>
-        /// Condition callback: returns true if this skill can activate.
+        /// [Legacy] Condition callback: returns true if this skill can activate.
         /// Parameters: (character, input). Null = always activatable.
-        /// Host-side skill transitions use this.
+        /// Host-side skill transitions use this. New skills should use VM conditions
+        /// (script first-frame return pattern) + AllowedStances instead.
         /// </summary>
         public System.Func<Character, PlayerInput, bool> CanActivate;
 

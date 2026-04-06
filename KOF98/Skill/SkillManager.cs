@@ -63,10 +63,18 @@ namespace KOF98
         /// <summary>
         /// Try to activate a new skill based on character input and state.
         /// Called after TryDeactivateSkill.
+        ///
+        /// Uses a 4-layer candidate pool (SK2):
+        ///   Layer 1: Stance grouping — filter by AllowedStances matching current stance
+        ///   Layer 2: Interrupt check — InterruptPriority vs current skill's ActivationPriority
+        ///   Layer 3: Condition check — CanActivate callback (host) or VM first-frame (script)
+        ///   Layer 4: Priority sorting — pick best by ActivationPriority (ascending = higher priority)
+        ///
+        /// Legacy skills without AllowedStances fall back to the old flat scan.
         /// </summary>
         public void TryActivateSkill(PlayerInput input)
         {
-            // Check pending skill first
+            // Check pending skill first (force-activation bypass)
             if (PendingSkillDef != null)
             {
                 ActivateSkill(PendingSkillDef);
@@ -74,27 +82,59 @@ namespace KOF98
                 return;
             }
 
-            // Iterate through character's skill catalog, find the highest-priority
-            // skill whose conditions are met
             var skills = _owner.Data.Skills;
+            if (skills.Length == 0) return;
+
+            var stance = _owner.GetStance();
+            int currentActPriority = ActiveSkill?.Def?.ActivationPriority ?? int.MaxValue;
+            bool hasActiveSkill = ActiveSkill != null && ActiveSkill.IsActive;
+
+            // ── Build sorted candidate list (stack-allocated for small counts) ──
+            // We use a simple insertion-sort approach since skill catalogs are small (< 20).
             SkillDef best = null;
-            int currentPriority = ActiveSkill?.Def?.Priority ?? -1;
+            int bestActivationPriority = int.MaxValue;
 
             for (int i = 0; i < skills.Length; i++)
             {
                 var def = skills[i];
                 if (def == null) continue;
 
-                // Skip if lower priority than current (unless current ended)
-                if (ActiveSkill != null && ActiveSkill.IsActive && def.Priority <= currentPriority)
-                    continue;
+                // ── Layer 1: Stance grouping ──
+                if (def.AllowedStances != null && def.AllowedStances.Length > 0)
+                {
+                    bool stanceMatch = false;
+                    for (int s = 0; s < def.AllowedStances.Length; s++)
+                    {
+                        if (def.AllowedStances[s] == stance) { stanceMatch = true; break; }
+                    }
+                    if (!stanceMatch) continue;
+                }
 
-                // Check activation condition
+                // ── Layer 2: Interrupt check ──
+                // A new skill can only interrupt the current skill if its InterruptPriority
+                // is >= the current skill's ActivationPriority (lower ActivationPriority = harder to interrupt).
+                if (hasActiveSkill && def.InterruptPriority < currentActPriority)
+                {
+                    // Also check legacy Priority for backward compat: if new skill has
+                    // higher legacy priority, allow it through.
+                    if (def.Priority <= (ActiveSkill.Def?.Priority ?? -1))
+                        continue;
+                }
+
+                // ── Layer 3: Condition check (host callback) ──
                 if (def.CanActivate != null && !def.CanActivate(_owner, input))
                     continue;
 
-                if (best == null || def.Priority > best.Priority)
+                // ── Layer 4: Priority sorting — pick lowest ActivationPriority ──
+                // Among candidates that pass all filters, pick the one with lowest
+                // ActivationPriority (= highest priority). Ties broken by legacy Priority (higher wins).
+                if (def.ActivationPriority < bestActivationPriority
+                    || (def.ActivationPriority == bestActivationPriority
+                        && (best == null || def.Priority > best.Priority)))
+                {
                     best = def;
+                    bestActivationPriority = def.ActivationPriority;
+                }
             }
 
             if (best != null)

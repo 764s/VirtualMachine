@@ -64,6 +64,8 @@
 | FFVM 集成 | ✅ | GameSyscalls (~40), GameVMBridge |
 | **基础移动** | ✅ | **Walk/Jump/Crouch 技能 (host-driven)** |
 | 轻拳攻击 | ✅ | LightPunch (含碰撞框数据) |
+| **界面设计** | ✅ | **GameSettings + 控制界面 (Tab 开关, AI/自动复活/重新开始)** |
+| **技能脚本化基础设施** | ✅ | **Stance 枚举 + SkillDef 扩展 (AllowedStances/ActivationPriority/InterruptPriority) + 分层候选池裁决 + ProbeSkillCondition 条件入口 + VMWorld.TickInstance** |
 | 架构文档 | ✅ | D_GameArchitecture.md |
 
 ### 已完成子任务（已归档）
@@ -81,16 +83,20 @@
 
 > **流程**：讨论 → 总览排期 → 制定子任务 → 执行
 
-当前位置 → **KOF-T1**
+当前位置 → **KOF-T3**
 
 | ID | 任务 | 状态 | 完成条件 | 依赖 | 讨论/计划 |
 |----|------|------|---------|------|----------|
-| KOF-T1 | 界面设计（常驻 HUD + 控制界面） | ⏳ 等待中 | 常驻 HUD 显示角色名/血量/能量；控制界面覆盖场景，含 AI 开关、重新开始、自动复活开关 | — | [D_UIDesign.md](Discussion/D_UIDesign.md) |
-| KOF-T2 | 受击反应技能 | ⬚ 待排期 | 实现 Hit 技能，验证完整攻击→受击→恢复流程 | — | — |
-| KOF-T3 | 多目标命中测试 | ⬚ 待排期 | 扩展 CheckAttackHit 返回多个目标 | KOF-T2 | — |
-| KOF-T4 | VM-driven 技能（轻拳 .ffs） | ⬚ 待排期 | 编写 .ffs 技能脚本，通过 GameVMBridge 加载执行 | KOF-T2 | — |
-| KOF-T5 | AI 脚本化 | ⬚ 待排期 | AI 决策 .ffs 脚本 + spawn 技能实例 | KOF-T4 | — |
-| KOF-T6 | 弹幕与效果器脚本化 | ⬚ 待排期 | 弹幕 VM 脚本化 + 持续效果器 | KOF-T4 | — |
+| KOF-T1 | 界面设计（常驻 HUD + 控制界面） | ✅ 已完成 | 常驻 HUD 显示角色名/血量/能量；控制界面覆盖场景，含 AI 开关、重新开始、自动复活开关 | — | [D_UIDesign.md](Discussion/D_UIDesign.md) |
+| KOF-T2 | 技能脚本化基础设施 | ✅ 已完成 | SkillDef 扩展（AllowedStances/ActivationPriority/InterruptPriority）+ 裁决层重构（分层候选池）+ 条件入口机制（ProbeSkillCondition）+ Stance 枚举 + Character.GetStance() + VMWorld.TickInstance() | KOF-T1 ✅ | [D_SkillScripting.md](Discussion/D_SkillScripting.md) §七 |
+| KOF-T3 | 首批 FFS 脚本 — 前 4 个 (S01~S04) | ⏳ 等待中 | 编写 skill_idle/walk_forward/jump/light_punch.ffs，GameVMBridge 加载执行，现有 Syscall 足够 | KOF-T2 ✅ | [D_SkillScripting.md](Discussion/D_SkillScripting.md) §五 |
+| KOF-T4 | Syscall 扩展 + 碰撞框脚本化 | ⬚ 待排期 | 新增 SetHitbox/SetHurtbox/ClearHitbox/SetPushBox + ApplyHitReaction；碰撞框由脚本设置 | KOF-T3 | [D_SkillScripting.md](Discussion/D_SkillScripting.md) §八~§九 |
+| KOF-T5 | 首批 FFS 脚本 — 后 4 个 (S05~S08) | ⬚ 待排期 | 编写 skill_crouch_punch/hit_high/hard_knockdown/stand_up.ffs；验证完整攻击→受击→倒地→起身流程 | KOF-T4 | [D_SkillScripting.md](Discussion/D_SkillScripting.md) §五 |
+| KOF-T6 | 多目标命中 + 硬直机制 | ⬚ 待排期 | CheckAttackHit 多目标返回 + 时间轴暂停硬直实现 | KOF-T5 | [D_SkillScripting.md](Discussion/D_SkillScripting.md) §六 |
+| KOF-T7 | 连招 V1（黑板变量） | ⬚ 待排期 | 通过 GetBlackboard/SetBlackboard 实现连招计数器+递减系数，写法朝理想方案 C 靠拢 | KOF-T5 | [D_SkillScripting.md](Discussion/D_SkillScripting.md) §十三.1 |
+| KOF-T8 | AI 脚本化 | ⬚ 待排期 | AI 决策 .ffs 脚本 + spawn 技能实例 + wait_for + 多目标威胁评估 | KOF-T5 | — |
+| KOF-T9 | 弹幕与效果器脚本化 | ⬚ 待排期 | 弹幕 VM 脚本化 + 持续效果器 VM 脚本化 | KOF-T5 | — |
+| KOF-T10 | SK3 碰撞框交互方式验证 | ⬚ 待排期 | 验证 VM↔宿主交互性能；决定 push vs query 最终方案 | KOF-T4 | [D_SkillScripting.md](Discussion/D_SkillScripting.md) §十二 |
 
 ---
 
@@ -102,7 +108,8 @@
 | # | 文档 | 主题 | 状态 | 日期 |
 |---|------|------|------|------|
 | KD1 | [D_GameArchitecture.md](Discussion/D_GameArchitecture.md) | 游戏架构讨论（帧执行模型、技能状态机、VM 应用分级、视图层设计） | ✅ 已完成 | 2026-04-06 |
-| KD2 | [D_UIDesign.md](Discussion/D_UIDesign.md) | 界面设计讨论（常驻 HUD + 控制界面） | 💬 讨论中 | 2026-04-06 |
+| KD2 | [D_UIDesign.md](Discussion/D_UIDesign.md) | 界面设计讨论（常驻 HUD + 控制界面） | ✅ 已完成 | 2026-04-06 |
+| KD3 | [D_SkillScripting.md](Discussion/D_SkillScripting.md) | 技能 FFS 脚本化讨论（SK1~SK12 全部收敛，仅 SK3 待验证） | ✅ 讨论完成 | 2026-04-06 |
 
 ---
 
@@ -115,6 +122,7 @@
 |---|------|------|------|------|
 | KP1 | [Task_DisplayModule.md](Plan/Task_DisplayModule.md) | 显示模块切换 (Raylib 图形化视图) | ✅ 基础完成 | 2026-04-06 |
 | KP2 | [Task_CharacterControl.md](Plan/Task_CharacterControl.md) | 角色控制问题排查 (移动技能 + 输入修复) | ✅ 根因已修 | 2026-04-06 |
+| KP3 | [Step_SkillScripting.md](Plan/Step_SkillScripting.md) | 技能 FFS 脚本化实施计划 (KOF-T2~T10) | ⏳ T2 ✅, T3 待开始 | 2026-04-06 |
 
 ---
 
@@ -136,35 +144,36 @@
 - [x] 入口点 + 项目模板
 - [x] 架构文档
 
-### Phase 1: Host-driven 技能演示 🔄
+### Phase 1: Host-driven 基础 + UI ✅
 - [x] 实现基础移动技能（idle, walk, crouch, jump）
 - [x] 实现轻拳攻击流程（含碰撞框）
 - [x] Raylib 图形化视图（碰撞框颜色可视化）
-- [ ] 实现受击反应技能
-- [ ] 验证完整攻击→受击→恢复流程
-- [ ] 多目标命中测试（扩展 CheckAttackHit 返回多个目标）
+- [x] 界面设计（常驻 HUD + 控制界面）— **KOF-T1** ✅
 
-### Phase 2: VM-driven 技能
-- [ ] 编写第一个 .ffs 技能脚本（轻拳）
-- [ ] 通过 GameVMBridge 加载和执行
-- [ ] 验证 Syscall 桥接正确性
-- [ ] 复刻飞燕旋风腿（skill_114）
-- [ ] 复刻上盘被击中（skill_25）
+### Phase 2: 技能脚本化基础设施 ✅
+- [x] SkillDef 扩展（AllowedStances/ActivationPriority/InterruptPriority）— **KOF-T2**
+- [x] Stance 枚举 + Character.GetStance() — **KOF-T2**
+- [x] 裁决层重构（分层候选池 §七.4）— **KOF-T2**
+- [x] 条件入口机制（ProbeSkillCondition + VMWorld.TickInstance）— **KOF-T2**
+- [x] 现有技能迁移至 AllowedStances + ActivationPriority — **KOF-T2**
 
-### Phase 3: AI 脚本化
-- [ ] 编写 AI 决策 .ffs 脚本
-- [ ] AI spawn 技能实例 + wait_for
-- [ ] defer 级联 Kill 验证
-- [ ] 多目标威胁评估 AI（选择敌人 + 目标过滤）
+### Phase 3: 首批 FFS 脚本
+- [ ] 前 4 个脚本 (S01~S04: idle/walk/jump/light_punch) — **KOF-T3**
+- [ ] Syscall 扩展 + 碰撞框脚本化 — **KOF-T4**
+- [ ] 后 4 个脚本 (S05~S08: crouch_punch/hit_high/hard_knockdown/stand_up) — **KOF-T5**
+- [ ] 验证完整攻击→受击→倒地→起身流程
 
-### Phase 4: 弹幕与效果器
-- [ ] 弹幕 VM 脚本化（波动拳类）
-- [ ] 持续效果器 VM 脚本化（DOT）
-- [ ] 事件总线（MI-5）验证
-- [ ] AOE 弹幕命中多目标
+### Phase 4: 扩展机制
+- [ ] 多目标命中 + 时间轴暂停硬直 — **KOF-T6**
+- [ ] 连招 V1（黑板变量）— **KOF-T7**
+- [ ] SK3 碰撞框交互方式验证 — **KOF-T10**
+
+### Phase 5: AI 脚本化 + 弹幕
+- [ ] AI 决策 .ffs 脚本 — **KOF-T8**
+- [ ] 弹幕与效果器脚本化 — **KOF-T9**
 
 ### Phase 5: 完善与优化
-- [ ] 完整角色技能集
+- [ ] 完整角色技能集（飞燕旋风腿、上盘被击中等高级技能复刻）
 - [ ] 多角色对战（3v3 验证多目标架构）
 - [ ] 帧同步/回滚验证
 - [ ] 性能基线测量
@@ -191,7 +200,7 @@
 
 | ID | 风险 | 影响 | 缓解 |
 |----|------|------|------|
-| KR-1 | ExecuteInstance 不是 VMWorld 公开 API | VMBridge 无法逐实例 Tick | 需确认 API 可用性 |
+| KR-1 | ~~ExecuteInstance 不是 VMWorld 公开 API~~ | ~~VMBridge 无法逐实例 Tick~~ | ✅ 已解决：新增 VMWorld.TickInstance() 公开 API |
 | KR-2 | float 非确定性 | 帧同步不可靠 | 开发期使用 float，发布期切换 Fix64 |
 | KR-3 | 碰撞框数据硬编码 | 维护困难 | 将来从 JSON/资源文件加载 |
 

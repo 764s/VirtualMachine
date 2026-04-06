@@ -119,6 +119,50 @@ namespace KOF98
         }
 
         /// <summary>
+        /// Probe a VM-driven skill's activation condition (SK7 / T2-4).
+        ///
+        /// Spawns a VM instance, sets context, executes its first tick:
+        ///   - If the script returns/completes on the first frame → condition FAILED (returns false).
+        ///   - If the script yields/continues → condition PASSED (returns true).
+        ///
+        /// On failure: the instance is killed and cleaned up.
+        /// On success: the instance remains alive and its ID is stored in the out parameter
+        /// for the caller to attach to a SkillInstance.
+        /// </summary>
+        public bool ProbeSkillCondition(int charId, SkillDef def, out int vmInstanceId)
+        {
+            vmInstanceId = -1;
+            if (def.VMModuleSlot < 0) return false;
+
+            int vmId = World.SpawnInstance(def.VMModuleSlot, 0);
+            if (vmId < 0) return false;
+
+            _instanceToOwner[vmId] = charId;
+
+            // Set context so syscalls can resolve "self"
+            GameSyscalls.SetContext(_scene);
+            GameSyscalls.VMBridge = this;
+
+            // Execute the first tick — the script's condition check runs here
+            World.TickInstance(vmId);
+
+            GameSyscalls.VMBridge = null;
+
+            // Check if the instance completed (returned) on first tick
+            ref var inst = ref World.Pool.Instances[vmId];
+            if ((inst.StateFlags & VMStateFlags.Completed) != 0 || !inst.IsAlive)
+            {
+                // Condition failed — clean up
+                _instanceToOwner.Remove(vmId);
+                return false;
+            }
+
+            // Condition passed — instance is alive and yielded
+            vmInstanceId = vmId;
+            return true;
+        }
+
+        /// <summary>
         /// Kill the VM instance for a deactivating skill.
         /// The VM will execute its defer/cleanup blocks before termination.
         /// </summary>

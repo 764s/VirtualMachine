@@ -41,6 +41,7 @@ namespace KOF98
 
             // ── Create scene ─────────────────────────────────────
             var scene = new GameScene();
+            var settings = new GameSettings();
 
             // ── Create VM bridge (optional — comment out to run host-only) ──
             var vmBridge = new GameVMBridge(scene);
@@ -62,7 +63,7 @@ namespace KOF98
             if (headless)
                 view = null;
             else if (useRaylib)
-                view = new RaylibGameView();
+                view = new RaylibGameView(settings);
             else
                 view = new ConsoleGameView();
             view?.Initialize(scene);
@@ -83,7 +84,36 @@ namespace KOF98
                 if (maxFrames >= 0 && scene.FrameNumber >= maxFrames)
                     break;
 
-                if (scene.IsRoundOver)
+                // ── Handle restart request ───────────────────────
+                if (settings.RestartRequested)
+                {
+                    settings.RestartRequested = false;
+                    settings.PanelOpen = false;
+                    scene.ResetRound(new FVec2(-3f, 0f), new FVec2(3f, 0f));
+                }
+
+                // ── Auto-revive: revive dead characters ──────────
+                if (settings.AutoRevive && scene.IsRoundOver)
+                {
+                    for (int i = 0; i < scene.Characters.Count; i++)
+                    {
+                        var ch = scene.Characters.Characters[i];
+                        if (ch != null && !ch.IsAlive)
+                        {
+                            ch.HP = ch.Data.MaxHP;
+                            ch.IsAlive = true;
+                            ch.HitstunFrames = 0;
+                            ch.BlockstunFrames = 0;
+                            ch.IsKnockedDown = false;
+                            ch.ClearAllTags();
+                            ch.ClearHitBoxes();
+                            ch.SkillMgr.ClearAll();
+                        }
+                    }
+                    scene.ResetRound(new FVec2(-3f, 0f), new FVec2(3f, 0f));
+                }
+
+                if (scene.IsRoundOver && !settings.AutoRevive)
                 {
                     view?.Render(scene);
                     if (!useRaylib)
@@ -94,9 +124,17 @@ namespace KOF98
                     scene.ResetRound(new FVec2(-3f, 0f), new FVec2(3f, 0f));
                 }
 
+                // ── Pause when control panel is open ─────────────
+                scene.IsPaused = settings.PanelOpen;
+
                 // ── Collect P1 input ─────────────────────────────
                 PlayerInput p1Input;
-                if (useRaylib)
+                if (settings.PanelOpen)
+                {
+                    // Don't collect game input while panel is open
+                    p1Input = PlayerInput.Empty;
+                }
+                else if (useRaylib)
                 {
                     // Raylib: proper simultaneous key detection
                     p1Input = RaylibGameView.CollectInput(prevP1);
@@ -119,8 +157,22 @@ namespace KOF98
                     p1Input = PlayerInput.Empty;
                 }
 
+                // ── AI toggle: supply empty input when AI disabled ──
                 frameInput.Clear();
                 frameInput.SetInput(0, p1Input);
+
+                if (!settings.AIEnabled)
+                {
+                    // Override AI characters with empty input to disable AI
+                    for (int i = 0; i < scene.Characters.Count; i++)
+                    {
+                        var ch = scene.Characters.Characters[i];
+                        if (ch != null && ch.Team != 0 && !frameInput.CharacterInputs.ContainsKey(ch.Id))
+                        {
+                            frameInput.SetInput(ch.Id, PlayerInput.Empty);
+                        }
+                    }
+                }
 
                 // ── Step simulation ──────────────────────────────
                 scene.Step(frameInput);
@@ -141,12 +193,19 @@ namespace KOF98
 
         private static CharacterData CreateDefaultCharacterData(int id, string name)
         {
+            // Stance arrays (shared references, no per-skill allocation)
+            var groundOnly = new[] { Stance.Grounded };
+            var groundAndCrouch = new[] { Stance.Grounded, Stance.Crouching };
+
             // ── Idle skill (host-driven, looping) ─────────────────
             var idleSkill = new SkillDef(
                 id: 0, name: "Idle", totalFrames: -1,
                 priority: GameConstants.PRIORITY_IDLE,
                 tags: (1 << GameConstants.TAG_IDLE),
                 looping: true);
+            idleSkill.AllowedStances = groundOnly;
+            idleSkill.ActivationPriority = 900;   // Lowest — fallback
+            idleSkill.InterruptPriority = 900;
 
             // ── Walk skill (looping, deactivates when direction released) ──
             var walkSkill = new SkillDef(
@@ -154,6 +213,9 @@ namespace KOF98
                 priority: GameConstants.PRIORITY_MOVEMENT,
                 tags: (1 << GameConstants.TAG_WALK),
                 looping: true);
+            walkSkill.AllowedStances = groundOnly;
+            walkSkill.ActivationPriority = 500;   // Movement tier
+            walkSkill.InterruptPriority = 500;
             walkSkill.CanActivate = (ch, input) =>
                 input.HasAny(InputButton.Left | InputButton.Right)
                 && !input.IsHeld(InputButton.Up)  // Don't walk when jumping
@@ -185,6 +247,9 @@ namespace KOF98
                 id: 2, name: "Jump", totalFrames: JumpTimeoutFrames,
                 priority: GameConstants.PRIORITY_MOVEMENT,
                 tags: (1 << GameConstants.TAG_JUMP) | (1 << GameConstants.TAG_AIR_STATE));
+            jumpSkill.AllowedStances = groundAndCrouch;
+            jumpSkill.ActivationPriority = 400;   // Jump > walk
+            jumpSkill.InterruptPriority = 500;
             jumpSkill.CanActivate = (ch, input) =>
                 input.IsPressed(InputButton.Up)
                 && ch.IsGrounded
@@ -215,6 +280,9 @@ namespace KOF98
                 priority: GameConstants.PRIORITY_MOVEMENT,
                 tags: (1 << GameConstants.TAG_CROUCH));
             crouchSkill.IsLooping = true;
+            crouchSkill.AllowedStances = groundOnly;
+            crouchSkill.ActivationPriority = 450;  // Crouch between walk and jump
+            crouchSkill.InterruptPriority = 500;
             crouchSkill.CanActivate = (ch, input) =>
                 input.IsHeld(InputButton.Down)
                 && !input.IsHeld(InputButton.Up)
@@ -237,6 +305,9 @@ namespace KOF98
                 id: 10, name: "LightPunch", totalFrames: 20,
                 priority: GameConstants.PRIORITY_ATTACK,
                 tags: (1 << GameConstants.TAG_ATTACK));
+            lpSkill.AllowedStances = groundOnly;
+            lpSkill.ActivationPriority = 200;     // Attack tier
+            lpSkill.InterruptPriority = 200;
             lpSkill.CanActivate = (ch, input) =>
                 input.IsPressed(InputButton.LP) && ch.IsGrounded && ch.HitstunFrames <= 0;
             lpSkill.CollisionFrames = new[]
