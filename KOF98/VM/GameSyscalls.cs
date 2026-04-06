@@ -13,6 +13,9 @@ namespace KOF98
     /// </summary>
     public static class GameSyscalls
     {
+        /// <summary>Shared random instance for syscalls (Unity 2022 compatible — no Random.Shared).</summary>
+        private static readonly Random _rng = new Random();
+
         /// <summary>Current scene context — set before each VMWorld.Tick().</summary>
         private static GameScene _scene;
         private static CharacterManager _chars;
@@ -445,7 +448,7 @@ namespace KOF98
             {
                 var args = new SyscallArgs(ref s);
                 int upper = args.GetInt(0);
-                args.SetReturnInt(upper > 0 ? Random.Shared.Next(upper) : 0);
+                args.SetReturnInt(upper > 0 ? _rng.Next(upper) : 0);
             });
 
             table.Register(GameConstants.SYS_ABS, "abs", (ref VMInstanceState s) =>

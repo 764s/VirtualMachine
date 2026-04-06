@@ -38,6 +38,20 @@ KOF98/
 
 ## 快速开始
 
+### 一键运行（推荐）
+
+**Windows:**
+1. 双击 `KOF98\kof98-init.cmd`（首次运行，自动完成初始化）
+2. 双击生成的 `KOF98\run-kof98.cmd`（后续运行）
+
+初始化脚本自动完成：
+- 检查 .NET SDK
+- 从模板生成 `KOF98.csproj`
+- 编译项目（Release）
+- 生成 `run-kof98.cmd` 启动脚本
+
+### 手动运行
+
 ```bash
 # 1. 从模板生成 .csproj
 cp KOF98.csproj.template KOF98.csproj
@@ -138,3 +152,23 @@ IGameView (接口)
 2. **近期**：编写 .ffs 技能脚本，通过 GameVMBridge 运行
 3. **中期**：AI 脚本化、弹幕脚本化、效果器脚本化
 4. **远期**：ECS 重构（确认 FFVM 功能完备后）
+
+---
+
+## Unity 2022 兼容性
+
+KOF98 游戏逻辑代码已确保 Unity 2022（C# 9 / .NET Standard 2.1）兼容：
+
+| 方面 | 状态 | 说明 |
+|------|------|------|
+| 语言特性 | ✅ 兼容 | 全部代码使用 C# 9 及以下特性，无 file-scoped namespace / global using / raw string 等 C# 10+ 特性 |
+| 运行时 API | ✅ 兼容 | 无 .NET 8+ 独有 API（`Random.Shared` 已替换为静态 `Random` 实例） |
+| 视图层隔离 | ✅ 已隔离 | `IGameView` 接口解耦，`ConsoleGameView` 仅用于独立运行，Unity 中替换为 `UnityGameView` |
+| FFVM 依赖 | ✅ 兼容 | FFVM 库双目标 `netstandard2.1;net8.0`，Unity 可用 `netstandard2.1` 目标 |
+
+### 迁移到 Unity 项目
+
+1. 复制 `KOF98/` 下除 `Program.cs`、`View/ConsoleGameView.cs` 以外的所有 `.cs` 文件到 Unity `Assets/`
+2. FFVM 核心代码已在 `Assets/Scripts/VM/` 中（Unity 项目自动编译）
+3. 实现 `IGameView` 接口的 Unity 版本（sprite 渲染 + 动画 + 相机）
+4. 视图层迁移计划将在后续更新中提供
