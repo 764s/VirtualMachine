@@ -10,5 +10,6 @@
   <ItemGroup>
     <Compile Include="**/*.cs" Exclude="obj/**" />
     <ProjectReference Include="../src/FFVM/FFVM.csproj" />
+    <PackageReference Include="Raylib-cs" Version="6.1.1" />
   </ItemGroup>
 </Project>

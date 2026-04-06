@@ -37,6 +37,14 @@ namespace KOF98
         {
             if (ActiveSkill == null || !ActiveSkill.IsActive) return;
 
+            // Check CanContinue callback (e.g., walk stops when input released)
+            if (ActiveSkill.Def.CanContinue != null
+                && !ActiveSkill.Def.CanContinue(_owner, _owner.CurrentInput))
+            {
+                DeactivateCurrentSkill();
+                return;
+            }
+
             // Non-looping skills end when their frames are exhausted
             // (VM-driven skills handle this via script completion)
             if (ActiveSkill.VMInstanceId < 0)
@@ -128,6 +136,9 @@ namespace KOF98
         public void EnterFrame()
         {
             if (ActiveSkill == null || !ActiveSkill.IsActive) return;
+
+            // Invoke per-frame callback (e.g., set walk velocity, apply jump physics)
+            ActiveSkill.Def.OnFrame?.Invoke(_owner, _owner.CurrentInput);
 
             // Update collision boxes from skill's action data
             UpdateCollisionBoxes(ActiveSkill);

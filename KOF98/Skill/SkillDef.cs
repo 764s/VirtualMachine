@@ -36,6 +36,21 @@ namespace KOF98
         /// </summary>
         public System.Func<Character, PlayerInput, bool> CanActivate;
 
+        /// <summary>
+        /// Condition callback: returns true if the skill should remain active.
+        /// Called each frame during TryDeactivateSkill for looping/continuous skills.
+        /// Null = skill uses default deactivation (frame count or VM completion).
+        /// Example: Walk skill returns false when directional input is released.
+        /// </summary>
+        public System.Func<Character, PlayerInput, bool> CanContinue;
+
+        /// <summary>
+        /// Per-frame callback invoked during EnterFrame for host-driven skills.
+        /// Used to apply per-frame effects like setting walk velocity or jump physics.
+        /// Null = no per-frame callback.
+        /// </summary>
+        public System.Action<Character, PlayerInput> OnFrame;
+
         // ── Collision Box Frames (static action data) ────────────
         /// <summary>
         /// Collision box timeline for this skill's action.
