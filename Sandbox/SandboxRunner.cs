@@ -165,7 +165,7 @@ namespace Sandbox
             // Set up VM world
             _world = new VMWorld();
             _world.MaxStepsPerTick = MaxStepsPerTick;
-            SandboxSyscalls.RegisterAll(_world.Syscalls);
+            SandboxSyscalls.RegisterAll(_world.Syscalls, _program.StringConstants);
             _world.Modules.Load(0, _program);
             _instanceId = _world.SpawnInstance(0, 0);
 

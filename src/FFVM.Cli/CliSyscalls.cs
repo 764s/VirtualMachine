@@ -10,14 +10,6 @@ namespace FFVM.Cli
     /// </summary>
     internal static class CliSyscalls
     {
-        private static readonly Dictionary<int, string> StringLabels = new Dictionary<int, string>
-        {
-            { 0, "result" }, { 1, "value" }, { 2, "count" }, { 3, "time" },
-            { 4, "delta" }, { 5, "frame" }, { 6, "error" }, { 7, "debug" },
-            { 8, "x" }, { 9, "y" }, { 10, "sum" }, { 11, "diff" },
-            { 12, "product" }, { 13, "quotient" }, { 14, "min" }, { 15, "max" },
-        };
-
         private static long _startTimeMs;
         private static long _lastTickTimeMs;
         private static long _currentTickTimeMs;
@@ -62,8 +54,10 @@ namespace FFVM.Cli
             };
         }
 
-        public static void RegisterAll(SyscallTable table)
+        public static void RegisterAll(SyscallTable table, string[] stringConstants = null)
         {
+            var strTable = stringConstants ?? Array.Empty<string>();
+
             table.Register(0, "print", (ref VMInstanceState s) =>
             {
                 var args = new SyscallArgs(ref s);
@@ -76,13 +70,12 @@ namespace FFVM.Cli
             table.Register(1, "print_str", (ref VMInstanceState s) =>
             {
                 var args = new SyscallArgs(ref s);
-                int labelId = args.GetInt(0);
+                string label = args.GetString(0, strTable);
                 var val = args.GetNumber(1);
-                string label = StringLabels.TryGetValue(labelId, out var l) ? l : $"#{labelId}";
                 Console.WriteLine($"{label} = {val}");
             });
             table.RegisterSignature(1, new SyscallSignature(
-                new[] { new SyscallParamInfo("labelId", "int"), new SyscallParamInfo("value", "number") },
+                new[] { new SyscallParamInfo("label", "string"), new SyscallParamInfo("value", "number") },
                 "void", "Print a labeled value"));
 
             table.Register(2, "time", (ref VMInstanceState s) =>

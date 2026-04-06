@@ -167,3 +167,17 @@
 - DIST-1/DIST-2 可在 C1 宿主阻塞期间推进。
 - DIST-3 的 UPM 包部分依赖 C 阶段 Unity 集成验证（可后置）。
 - 三个 DIST 步骤完成后，C3（技能资源管线）的 .ffs 加载/缓存策略可基于 FFVM NuGet 包的 public API 设计。
+
+---
+
+## 六、Attach 模式缺口补全（DIST-8~DIST-9）
+
+> 来源：[D_DapAttachMode.md](D_DapAttachMode.md)（2026-04-06 讨论）
+
+DIST-1~DIST-3 完成后发现：launch 模式 DAP（stdio）已随库分发，但 attach 模式 DAP（TCP）仍为 Sandbox 私有实现。第 2/3 层用户（.NET 集成者 / Unity 用户）嵌入宿主的核心场景无法使用 launch 模式，需要 attach。
+
+**行动**：
+- **DIST-8**：提取 `EmbeddableDapServer` 到 FFVM 库（`FFVM.Debug` 命名空间），含共享协议基类 + TCP attach 服务器
+- **DIST-9**：Sandbox 改造为消费分发库 attach API，删除私有实现
+
+详细步骤见 [Plan/Step_DIST_Distribution.md](../Plan/Step_DIST_Distribution.md)。

@@ -1,9 +1,10 @@
-# DIST-1~DIST-3：分发基础设施
+# DIST 分发基础设施
 
-> **状态**：✅ 已完成
-> **完成日期**：2026-04-06
+> **DIST-1~DIST-3 状态**：✅ 已完成（2026-04-06）
+> **DIST-8~DIST-9 状态**：⏳ 待执行
 > **Assert 数**：1007（未变化）
 > **详细设计**：[Discussion/Step_DIST_Distribution.md](../Discussion/Step_DIST_Distribution.md)
+> **Attach 模式讨论**：[Discussion/D_DapAttachMode.md](../Discussion/D_DapAttachMode.md)
 
 ---
 
@@ -39,6 +40,68 @@
   - LSP：调用 `ffvm-cli lsp`（stdio）
   - DAP：launch 模式调用 `ffvm-cli dap`；attach 模式仍连接 TCP 端口
 - 移除了对 `StandaloneRunner/bin/Release/...` 硬编码路径的依赖
+
+---
+
+## 待执行步骤
+
+### DIST-8：提取 EmbeddableDapServer 到 FFVM 库
+
+**背景**：DIST-1~DIST-3 完成后，launch 模式 DAP（`DapServer`，stdio）已随 FFVM 库分发，但 attach 模式 DAP（`EmbeddedDapServer`，TCP）仍为 Sandbox 私有实现。FFVM 的核心用户（第 2/3 层：.NET 集成者 / Unity 用户）需要 attach 模式调试嵌入在宿主帧循环中的 VM 实例。详见 [D_DapAttachMode.md](../Discussion/D_DapAttachMode.md)。
+
+**内容**：
+1. 提取 `DapServer` 与 `EmbeddedDapServer` 的共享 DAP 协议处理器（约 65-70% 代码重叠）到 `DapServerBase` 基类
+2. 在 `Assets/Scripts/VM/Debug/` 新增 `EmbeddableDapServer.cs`（TCP attach 模式，`FFVM.Debug` 命名空间）
+3. 重构 `DapServer` 继承 `DapServerBase`
+
+**关键设计——正常 attach 与定制 attach**：
+
+| 行为 | 正常 attach（默认） | 定制 attach（沙盒模式） |
+|------|---------------------|----------------------|
+| 目标状态 | 以目标执行状态为主，连上时 VM 可能已在运行 | 等待调试器连接后才开始执行 |
+| 初始暂停 | 不暂停（除非用户设置 stopOnEntry） | 自动 WaitForConnection + StopOnEntry |
+| 断点设置时机 | 动态设置 | 在 StopOnEntry 期间设好再继续 |
+
+分发库默认为正常 attach。宿主通过可选方法调用实现定制行为：
+```csharp
+// 正常 attach
+dap.AttachToWorld(world, program, id, "script.ffs");
+
+// 定制 attach（沙盒模式）
+dap.AttachToWorld(world, program, id, "script.ffs");
+dap.WaitForConnection();   // 可选：阻塞等连接
+dap.StopOnEntry();         // 可选：阻塞等 configurationDone
+```
+
+**前置**：DIST-1
+
+**完成条件**：
+1. `FFVM.Debug.EmbeddableDapServer` 在 FFVM.csproj 内编译通过
+2. 外部项目可通过 NuGet 包使用 attach 模式 DAP
+3. 正常 attach 和定制 attach 均可用
+4. 远程调试（非 localhost）可通过构造函数参数支持
+
+**复杂度**：中（重构提取 + 保持向后兼容）
+
+---
+
+### DIST-9：Sandbox 改造——消费分发库 attach API
+
+**内容**：
+1. 删除 `Sandbox/EmbeddedDapServer.cs`（774 行私有实现）
+2. `SandboxRunner` 改用 `FFVM.Debug.EmbeddableDapServer`
+3. 保留沙盒定制行为（WaitForConnection + StopOnEntry）
+
+**前置**：DIST-8
+
+**完成条件**：
+1. 现有 97 项 DAP 测试全通过
+2. Sandbox `--debug` 模式 attach 调试流程不变
+3. `Sandbox/EmbeddedDapServer.cs` 文件已删除
+
+**复杂度**：低（API 消费替换，逻辑不变）
+
+**意义**：作为分发库 attach API 的"吃自己狗粮"验证——如果 Sandbox 自身能顺利迁移，外部消费者同样可以。
 
 ---
 

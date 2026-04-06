@@ -10,27 +10,6 @@ namespace Sandbox
     /// </summary>
     public static class SandboxSyscalls
     {
-        // --- String label table for print_str ---
-        private static readonly Dictionary<int, string> StringLabels = new Dictionary<int, string>
-        {
-            { 0, "result" },
-            { 1, "value" },
-            { 2, "count" },
-            { 3, "time" },
-            { 4, "delta" },
-            { 5, "frame" },
-            { 6, "error" },
-            { 7, "debug" },
-            { 8, "x" },
-            { 9, "y" },
-            { 10, "sum" },
-            { 11, "diff" },
-            { 12, "product" },
-            { 13, "quotient" },
-            { 14, "min" },
-            { 15, "max" },
-        };
-
         // --- Runtime state shared with SandboxRunner ---
         private static long _startTimeMs;
         private static long _lastTickTimeMs;
@@ -96,8 +75,12 @@ namespace Sandbox
         /// Register all sandbox syscall handlers on the given SyscallTable.
         /// Also registers LSP6 signature metadata for editor support.
         /// </summary>
-        public static void RegisterAll(SyscallTable table)
+        /// <param name="table">The SyscallTable to register handlers on.</param>
+        /// <param name="stringConstants">String constant pool from the compiled VMProgram. Used by print_str to resolve string labels.</param>
+        public static void RegisterAll(SyscallTable table, string[] stringConstants = null)
         {
+            var strTable = stringConstants ?? Array.Empty<string>();
+
             // Slot 0: print(value)  — print a numeric value
             table.Register(0, "print", (ref VMInstanceState s) =>
             {
@@ -108,18 +91,17 @@ namespace Sandbox
                 new[] { new SyscallParamInfo("value", "number") },
                 "void", "Print a numeric value to the console"));
 
-            // Slot 1: print_str(labelId, value) — print a labeled value
+            // Slot 1: print_str(label, value) — print a labeled value using string constant pool
             table.Register(1, "print_str", (ref VMInstanceState s) =>
             {
                 var args = new SyscallArgs(ref s);
-                int labelId = args.GetInt(0);
+                string label = args.GetString(0, strTable);
                 var val = args.GetNumber(1);
-                string label = StringLabels.TryGetValue(labelId, out var labelText) ? labelText : $"#{labelId}";
                 LogOutput($"{label} = {val}");
             });
             table.RegisterSignature(1, new SyscallSignature(
-                new[] { new SyscallParamInfo("labelId", "int"), new SyscallParamInfo("value", "number") },
-                "void", "Print a labeled value (labelId: 0=result,1=value,2=count,3=time,4=delta,5=frame,6=error,7=debug,8=x,9=y,10=sum)"));
+                new[] { new SyscallParamInfo("label", "string"), new SyscallParamInfo("value", "number") },
+                "void", "Print a labeled value to the console"));
 
             // Slot 2: time() → elapsed ms since run start
             table.Register(2, "time", (ref VMInstanceState s) =>
@@ -238,12 +220,5 @@ namespace Sandbox
                 "void", "Request the sandbox to stop running"));
         }
 
-        /// <summary>
-        /// Register a custom string label for use with print_str.
-        /// </summary>
-        public static void RegisterStringLabel(int id, string label)
-        {
-            StringLabels[id] = label;
-        }
     }
 }

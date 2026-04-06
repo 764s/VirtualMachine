@@ -112,7 +112,7 @@ namespace FFVM.Cli
             // Run
             var world = new VMWorld();
             world.MaxStepsPerTick = 10_000_000;
-            CliSyscalls.RegisterAll(world.Syscalls);
+            CliSyscalls.RegisterAll(world.Syscalls, result.Program.StringConstants);
             world.Modules.Load(0, result.Program);
             int instanceId = world.SpawnInstance(0, 0);
 
