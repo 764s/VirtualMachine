@@ -35,6 +35,7 @@
 ExportedObj/
 .consulo/
 *.csproj
+!src/**/*.csproj
 *.unityproj
 *.sln
 *.suo
@@ -87,6 +88,8 @@ crashlytics-build.properties
 /Sandbox/run-sandbox.cmd
 /Sandbox/run-sandbox.sh
 /StandaloneRunner/StandaloneRunner.csproj
+/src/**/bin/
+/src/**/obj/
 vscode-ffvm-debug/node_modules/
 vscode-ffvm-debug/package-lock.json
 vscode-ffvm-debug/*.vsix

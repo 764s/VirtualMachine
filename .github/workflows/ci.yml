@@ -39,8 +39,9 @@ jobs:
               <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
             </PropertyGroup>
             <ItemGroup>
-              <Compile Include="**/*.cs" />
-              <Compile Include="../Assets/Scripts/VM/**/*.cs" />
+              <Compile Include="**/*.cs" Exclude="UnityStub.cs;obj/**" />
+              <Compile Include="../Assets/Scripts/VM/Tests/**/*.cs" />
+              <ProjectReference Include="../src/FFVM/FFVM.csproj" />
             </ItemGroup>
           </Project>
           EOF
@@ -97,8 +98,9 @@ jobs:
               <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
             </PropertyGroup>
             <ItemGroup>
-              <Compile Include="**/*.cs" />
-              <Compile Include="../Assets/Scripts/VM/**/*.cs" />
+              <Compile Include="**/*.cs" Exclude="UnityStub.cs;obj/**" />
+              <Compile Include="../Assets/Scripts/VM/Tests/**/*.cs" />
+              <ProjectReference Include="../src/FFVM/FFVM.csproj" />
             </ItemGroup>
           </Project>
           EOF
@@ -170,8 +172,9 @@ jobs:
               <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
             </PropertyGroup>
             <ItemGroup>
-              <Compile Include="**/*.cs" />
-              <Compile Include="../Assets/Scripts/VM/**/*.cs" />
+              <Compile Include="**/*.cs" Exclude="UnityStub.cs;obj/**" />
+              <Compile Include="../Assets/Scripts/VM/Tests/**/*.cs" />
+              <ProjectReference Include="../src/FFVM/FFVM.csproj" />
             </ItemGroup>
           </Project>
           EOF

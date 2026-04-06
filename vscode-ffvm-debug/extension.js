@@ -4,11 +4,28 @@ const path = require("path");
 let client;
 let outputChannel;
 
+/**
+ * Resolve the ffvm-cli executable path from settings.
+ * Falls back to looking in workspace StandaloneRunner for legacy compat.
+ */
+function resolveExecutablePath() {
+    const config = vscode.workspace.getConfiguration("ffvm");
+    const configuredPath = config.get("executablePath", "ffvm-cli");
+
+    // If user set an absolute path or explicit name, use it directly
+    if (configuredPath && configuredPath !== "ffvm-cli") {
+        return configuredPath;
+    }
+
+    // Default: try "ffvm-cli" from PATH
+    return "ffvm-cli";
+}
+
 function activate(context) {
     outputChannel = vscode.window.createOutputChannel("FFVM Debug");
     outputChannel.appendLine("[FFVM] Extension activating...");
 
-    // --- DAP: register adapter descriptor factory for attach mode (always register first) ---
+    // --- DAP: register adapter descriptor factory ---
     context.subscriptions.push(
         vscode.debug.registerDebugAdapterDescriptorFactory("ffvm", {
             createDebugAdapterDescriptor(session, executable) {
@@ -18,9 +35,10 @@ function activate(context) {
                     outputChannel.appendLine(`[FFVM] Returning DebugAdapterServer on port ${port}`);
                     return new vscode.DebugAdapterServer(port);
                 }
-                outputChannel.appendLine("[FFVM] Returning default executable (launch mode)");
-                // launch mode: use the declared executable (StandaloneRunner --dap)
-                return executable;
+                // launch mode: use ffvm-cli dap
+                const ffvmPath = resolveExecutablePath();
+                outputChannel.appendLine(`[FFVM] Launch mode: using ${ffvmPath} dap`);
+                return new vscode.DebugAdapterExecutable(ffvmPath, ["dap"]);
             }
         })
     );
@@ -140,18 +158,11 @@ function activate(context) {
     try {
         const { LanguageClient, TransportKind } = require("vscode-languageclient/node");
 
-        // Resolve StandaloneRunner relative to workspace, not extension install path
-        const workspaceFolders = vscode.workspace.workspaceFolders;
-        if (!workspaceFolders || workspaceFolders.length === 0) return;
-
-        const serverCommand = path.join(
-            workspaceFolders[0].uri.fsPath,
-            "StandaloneRunner", "bin", "Release", "net10.0", "StandaloneRunner"
-        );
+        const serverCommand = resolveExecutablePath();
 
         const serverOptions = {
             command: serverCommand,
-            args: ["--lsp"],
+            args: ["lsp"],
             transport: TransportKind.stdio
         };
 

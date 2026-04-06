@@ -7,8 +7,7 @@
   </PropertyGroup>
   <ItemGroup>
     <Compile Include="**/*.cs" Exclude="obj/**" />
-    <Compile Include="../StandaloneRunner/UnityStub.cs" />
-    <Compile Include="../Assets/Scripts/VM/**/*.cs" />
+    <ProjectReference Include="../src/FFVM/FFVM.csproj" />
     <None Include="sandbox.json" CopyToOutputDirectory="PreserveNewest" />
     <None Include="sandbox.ffvm.d.json" CopyToOutputDirectory="PreserveNewest" />
     <None Include="scripts/**" CopyToOutputDirectory="PreserveNewest" LinkBase="scripts" />
