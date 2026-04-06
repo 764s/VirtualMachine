@@ -1,4 +1,5 @@
 using System;
+using System.IO;
 using Raylib_cs;
 using System.Numerics;
 
@@ -13,6 +14,9 @@ namespace KOF98
     ///   - Hurtbox:  Muted green (#5CB85C / 92,184,92)  — passive, can-be-hit
     ///   - Hitbox:   Warm red (#D9534F / 217,83,79)     — aggressive, deals damage
     ///   - Blockbox: Amber yellow (#F0AD4E / 240,173,78) — defensive, guarding
+    ///
+    /// Font: Attempts to load a system CJK font for Chinese label support.
+    /// Falls back to Raylib default font if no CJK font is available.
     ///
     /// Window also handles keyboard input via Raylib.IsKeyDown() which correctly
     /// detects simultaneously held keys — fixing the console single-key limitation.
@@ -65,11 +69,35 @@ namespace KOF98
         private static readonly Color BgColor   = new Color(30, 32, 36, 255);
         private static readonly Color DebugText = new Color(180, 180, 180, 255);
 
+        // ── Font ─────────────────────────────────────────────────
+        private Font _font;
+        private bool _fontLoaded;
+
+        // Common system CJK font paths (tried in order)
+        private static readonly string[] CjkFontPaths = new[]
+        {
+            // Windows
+            @"C:\Windows\Fonts\msyh.ttc",    // Microsoft YaHei
+            @"C:\Windows\Fonts\msyh.ttf",
+            @"C:\Windows\Fonts\simsun.ttc",   // SimSun
+            @"C:\Windows\Fonts\simhei.ttf",   // SimHei
+            // macOS
+            "/System/Library/Fonts/PingFang.ttc",
+            "/System/Library/Fonts/STHeiti Light.ttc",
+            // Linux
+            "/usr/share/fonts/truetype/noto/NotoSansCJK-Regular.ttc",
+            "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
+            "/usr/share/fonts/noto-cjk/NotoSansCJK-Regular.ttc",
+            "/usr/share/fonts/truetype/wqy/wqy-microhei.ttc",
+            "/usr/share/fonts/truetype/droid/DroidSansFallbackFull.ttf",
+        };
+
         public void Initialize(GameScene scene)
         {
             Raylib.SetTraceLogLevel(TraceLogLevel.Warning);
             Raylib.InitWindow(ScreenWidth, ScreenHeight, "KOF98 Practice — FFVM Exploration");
             Raylib.SetTargetFPS(60);
+            LoadCjkFont();
         }
 
         public void Render(GameScene scene)
@@ -88,6 +116,7 @@ namespace KOF98
 
         public void Shutdown()
         {
+            if (_fontLoaded) Raylib.UnloadFont(_font);
             Raylib.CloseWindow();
         }
 
@@ -191,23 +220,23 @@ namespace KOF98
             // Name label
             string label = isP1 ? "P1" : "P2";
             if (ch.Data?.Name != null) label = ch.Data.Name;
-            int textW = Raylib.MeasureText(label, 12);
-            Raylib.DrawText(label, cx - textW / 2, cy - CharacterHeight - 14, 12, outlineColor);
+            int textW = MeasureTextF(label, 12);
+            DrawTextF(label, cx - textW / 2, cy - CharacterHeight - 14, 12, outlineColor);
 
             // State indicator
             string state = "";
-            if (!ch.IsAlive) state = "K.O.";
-            else if (ch.HitstunFrames > 0) state = "HIT";
-            else if (ch.HasTag(GameConstants.TAG_BLOCK)) state = "BLOCK";
-            else if (ch.HasTag(GameConstants.TAG_ATTACK)) state = "ATK";
-            else if (ch.HasTag(GameConstants.TAG_CROUCH)) state = "CROUCH";
-            else if (ch.HasTag(GameConstants.TAG_JUMP)) state = "JUMP";
-            else if (ch.HasTag(GameConstants.TAG_WALK)) state = "WALK";
+            if (!ch.IsAlive) state = "击倒";
+            else if (ch.HitstunFrames > 0) state = "受击";
+            else if (ch.HasTag(GameConstants.TAG_BLOCK)) state = "防御";
+            else if (ch.HasTag(GameConstants.TAG_ATTACK)) state = "攻击";
+            else if (ch.HasTag(GameConstants.TAG_CROUCH)) state = "蹲下";
+            else if (ch.HasTag(GameConstants.TAG_JUMP)) state = "跳跃";
+            else if (ch.HasTag(GameConstants.TAG_WALK)) state = "移动";
 
             if (state.Length > 0)
             {
-                int stateW = Raylib.MeasureText(state, 10);
-                Raylib.DrawText(state, cx - stateW / 2, cy + 4, 10, outlineColor);
+                int stateW = MeasureTextF(state, 10);
+                DrawTextF(state, cx - stateW / 2, cy + 4, 10, outlineColor);
             }
         }
 
@@ -286,10 +315,10 @@ namespace KOF98
             var p2 = scene.Characters.Get(1);
 
             // Title
-            Raylib.DrawText("KOF98 PRACTICE", 10, 8, 20, new Color(220, 200, 160, 255));
-            string frameText = $"Frame: {scene.FrameNumber}  Round: {scene.RoundNumber}";
-            int ftw = Raylib.MeasureText(frameText, 16);
-            Raylib.DrawText(frameText, ScreenWidth - ftw - 10, 10, 16, DebugText);
+            DrawTextF("KOF98 练习模式", 10, 8, 20, new Color(220, 200, 160, 255));
+            string frameText = $"帧: {scene.FrameNumber}  回合: {scene.RoundNumber}";
+            int ftw = MeasureTextF(frameText, 16);
+            DrawTextF(frameText, ScreenWidth - ftw - 10, 10, 16, DebugText);
 
             // HP bars
             int barW = 300;
@@ -300,7 +329,7 @@ namespace KOF98
             if (p1 != null)
             {
                 DrawHPBar(StageLeft, barY, barW, barH, p1.HP, p1.Data.MaxHP, false);
-                Raylib.DrawText(p1.Data?.Name ?? "P1", StageLeft, barY - 16, 16, P1Color);
+                DrawTextF(p1.Data?.Name ?? "P1", StageLeft, barY - 16, 16, P1Color);
 
                 // Power meter
                 DrawPowerBar(StageLeft, barY + barH + 4, 120, 8, p1.Power, p1.Data.MaxPower);
@@ -311,8 +340,8 @@ namespace KOF98
             {
                 DrawHPBar(StageRight - barW, barY, barW, barH, p2.HP, p2.Data.MaxHP, true);
                 string p2Name = p2.Data?.Name ?? "P2";
-                int nameW = Raylib.MeasureText(p2Name, 16);
-                Raylib.DrawText(p2Name, StageRight - nameW, barY - 16, 16, P2Color);
+                int nameW = MeasureTextF(p2Name, 16);
+                DrawTextF(p2Name, StageRight - nameW, barY - 16, 16, P2Color);
 
                 // Power meter
                 DrawPowerBar(StageRight - 120, barY + barH + 4, 120, 8, p2.Power, p2.Data.MaxPower);
@@ -320,14 +349,14 @@ namespace KOF98
 
             // Box color legend
             int legendY = StageBottom + 8;
-            DrawLegendEntry(StageLeft, legendY, PushBoxOutline, "Pushbox");
-            DrawLegendEntry(StageLeft + 100, legendY, HurtBoxOutline, "Hurtbox");
-            DrawLegendEntry(StageLeft + 200, legendY, HitBoxOutline, "Hitbox");
-            DrawLegendEntry(StageLeft + 300, legendY, BlockBoxOutline, "Blockbox");
+            DrawLegendEntry(StageLeft, legendY, PushBoxOutline, "推箱");
+            DrawLegendEntry(StageLeft + 100, legendY, HurtBoxOutline, "受击框");
+            DrawLegendEntry(StageLeft + 200, legendY, HitBoxOutline, "攻击框");
+            DrawLegendEntry(StageLeft + 300, legendY, BlockBoxOutline, "防御框");
 
             // Controls hint
-            Raylib.DrawText("WASD:Move  J:LP  K:HP  U:LK  I:HK  ESC:Quit",
-                StageLeft + 440, legendY, 12, new Color(120, 120, 120, 255));
+            DrawTextF("WASD:移动  J:轻拳  K:重拳  U:轻脚  I:重脚  ESC:退出",
+                StageLeft + 420, legendY, 12, new Color(120, 120, 120, 255));
         }
 
         private void DrawHPBar(int x, int y, int w, int h, float hp, float maxHP, bool reverse)
@@ -345,8 +374,8 @@ namespace KOF98
             Raylib.DrawRectangleLines(x, y, w, h, new Color(160, 160, 160, 200));
 
             string hpText = $"{hp:F0}/{maxHP:F0}";
-            int textW = Raylib.MeasureText(hpText, 14);
-            Raylib.DrawText(hpText, x + (w - textW) / 2, y + 3, 14, Color.White);
+            int textW = MeasureTextF(hpText, 14);
+            DrawTextF(hpText, x + (w - textW) / 2, y + 3, 14, Color.White);
         }
 
         private void DrawPowerBar(int x, int y, int w, int h, float power, float maxPower)
@@ -357,10 +386,10 @@ namespace KOF98
             Raylib.DrawRectangleLines(x, y, w, h, new Color(100, 100, 100, 180));
         }
 
-        private static void DrawLegendEntry(int x, int y, Color color, string label)
+        private void DrawLegendEntry(int x, int y, Color color, string label)
         {
             Raylib.DrawRectangle(x, y + 2, 12, 12, color);
-            Raylib.DrawText(label, x + 16, y, 14, color);
+            DrawTextF(label, x + 16, y, 14, color);
         }
 
         // ── Debug Info ───────────────────────────────────────────
@@ -377,17 +406,17 @@ namespace KOF98
 
                 string skillName = ch.SkillMgr.ActiveSkill?.Def?.Name ?? "none";
                 int skillFrame = ch.SkillMgr.ActiveSkill?.Frame ?? 0;
-                string info = $"[{(ch.Team == 0 ? "P1" : "P2")}] pos=({ch.Body.Position.X:F2},{ch.Body.Position.Y:F2}) " +
-                    $"vel=({ch.Body.Velocity.X:F2},{ch.Body.Velocity.Y:F2}) " +
-                    $"facing={ch.Facing} grounded={ch.IsGrounded} " +
-                    $"skill={skillName}(f{skillFrame}) hitstun={ch.HitstunFrames}";
+                string info = $"[{(ch.Team == 0 ? "P1" : "P2")}] 位置=({ch.Body.Position.X:F2},{ch.Body.Position.Y:F2}) " +
+                    $"速度=({ch.Body.Velocity.X:F2},{ch.Body.Velocity.Y:F2}) " +
+                    $"朝向={ch.Facing} 着地={ch.IsGrounded} " +
+                    $"技能={skillName}(帧{skillFrame}) 硬直={ch.HitstunFrames}";
 
-                Raylib.DrawText(info, StageLeft, y, 12, DebugText);
+                DrawTextF(info, StageLeft, y, 12, DebugText);
                 y += 16;
             }
 
-            string counts = $"Effects: {scene.Effects.Count}  Projectiles: {scene.Projectiles.Count}";
-            Raylib.DrawText(counts, StageLeft, y, 12, DebugText);
+            string counts = $"效果: {scene.Effects.Count}  弹幕: {scene.Projectiles.Count}";
+            DrawTextF(counts, StageLeft, y, 12, DebugText);
         }
 
         // ── Coordinate Mapping ───────────────────────────────────
@@ -407,6 +436,67 @@ namespace KOF98
             int groundScreen = StageBottom - (int)GroundMargin;
             float pixelsPerUnit = (float)(StageHeight - (int)GroundMargin) / VisibleWorldUnits;
             return groundScreen - (int)(worldY * pixelsPerUnit);
+        }
+
+        // ── Font Loading ─────────────────────────────────────────
+
+        private void LoadCjkFont()
+        {
+            // Collect all unique characters used in the game UI
+            string uiChars = "KOF98练习模式帧回合击倒受击防御攻击蹲下跳跃移动推箱框" +
+                             "位置速度朝向着地技能硬直效果弹幕轻拳重脚退出";
+            // Build codepoints: ASCII (32-126) + UI Chinese characters
+            int asciiStart = 32, asciiEnd = 126;
+            int asciiCount = asciiEnd - asciiStart + 1;
+            int cjkCount = uiChars.Length;
+            int count = asciiCount + cjkCount;
+            int[] codepoints = new int[count];
+            int idx = 0;
+
+            for (int c = asciiStart; c <= asciiEnd; c++) codepoints[idx++] = c;
+            for (int i = 0; i < uiChars.Length; i++) codepoints[idx++] = uiChars[i];
+
+            foreach (string path in CjkFontPaths)
+            {
+                if (!File.Exists(path)) continue;
+                _font = Raylib.LoadFontEx(path, 24, codepoints, count);
+                if (_font.GlyphCount > 0)
+                {
+                    _fontLoaded = true;
+                    Raylib.SetTextureFilter(_font.Texture, TextureFilter.Bilinear);
+                    return;
+                }
+            }
+
+            // Fallback: use default font
+            _font = Raylib.GetFontDefault();
+            _fontLoaded = false;
+        }
+
+        // ── Text Helpers ─────────────────────────────────────────
+
+        /// <summary>Draw text using the loaded CJK font (or fallback).</summary>
+        private void DrawTextF(string text, int x, int y, int fontSize, Color color)
+        {
+            if (_fontLoaded)
+            {
+                Raylib.DrawTextEx(_font, text, new Vector2(x, y), fontSize, 1, color);
+            }
+            else
+            {
+                Raylib.DrawText(text, x, y, fontSize, color);
+            }
+        }
+
+        /// <summary>Measure text width using the loaded CJK font (or fallback).</summary>
+        private int MeasureTextF(string text, int fontSize)
+        {
+            if (_fontLoaded)
+            {
+                Vector2 size = Raylib.MeasureTextEx(_font, text, fontSize, 1);
+                return (int)size.X;
+            }
+            return Raylib.MeasureText(text, fontSize);
         }
     }
 }
