@@ -10,6 +10,20 @@ namespace KOF98
     }
 
     /// <summary>
+    /// Character stance — determines which skills are eligible for activation.
+    /// Used by the layered candidate pool (SK2) for stance-based skill grouping.
+    /// </summary>
+    public enum Stance : byte
+    {
+        Grounded = 0,
+        Airborne = 1,
+        Crouching = 2,
+        Knockdown = 3,
+        Hitstun = 4,
+        Dead = 5,
+    }
+
+    /// <summary>
     /// 2D vector using float. Future: replace with Fix64 for deterministic simulation.
     /// </summary>
     public struct FVec2
