@@ -62,9 +62,9 @@ namespace KOF98
             }
             else
             {
-                // In range: occasionally attack
+                // In range: occasionally attack using simple LCG for deterministic randomness
                 _actionTimer++;
-                _seed = (_seed * 1103515245 + 12345) & 0x7FFFFFFF;
+                _seed = (_seed * 1103515245 + 12345) & 0x7FFFFFFF; // LCG (glibc constants)
                 if (_actionTimer > 30 && (_seed % 4) == 0)
                 {
                     held |= InputButton.LP;

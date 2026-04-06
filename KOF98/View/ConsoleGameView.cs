@@ -215,20 +215,22 @@ namespace KOF98
 
         // ── Coordinate Mapping ───────────────────────────────────
 
+        private const int ScreenMargin = 2;
+        private const float VerticalScale = 3.5f;
+
         /// <summary>Map world X to screen column.</summary>
         private int WorldToScreenX(float worldX)
         {
-            // Map [StageLeftBound, StageRightBound] → [2, ViewWidth-3]
             float range = GameConstants.StageRightBound - GameConstants.StageLeftBound;
             float t = (worldX - GameConstants.StageLeftBound) / range;
-            return Math.Clamp((int)(2 + t * (ViewWidth - 5)), 0, ViewWidth - 1);
+            int usable = ViewWidth - ScreenMargin * 2 - 1;
+            return Math.Clamp((int)(ScreenMargin + t * usable), 0, ViewWidth - 1);
         }
 
         /// <summary>Map world Y to screen row (inverted: higher Y = lower row number).</summary>
         private int WorldToScreenY(float worldY)
         {
-            // Map [0, 3.0] → [StageRow, StageRow-10]
-            int row = StageRow - (int)(worldY * 3.5f);
+            int row = StageRow - (int)(worldY * VerticalScale);
             return Math.Clamp(row, 0, ViewHeight - 1);
         }
 

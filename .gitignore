@@ -87,6 +87,9 @@ crashlytics-build.properties
 /Sandbox/Sandbox.csproj
 /Sandbox/run-sandbox.cmd
 /Sandbox/run-sandbox.sh
+/KOF98/bin/
+/KOF98/obj/
+/KOF98/KOF98.csproj
 /StandaloneRunner/StandaloneRunner.csproj
 /src/**/bin/
 /src/**/obj/

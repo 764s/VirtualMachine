@@ -445,7 +445,7 @@ namespace KOF98
             {
                 var args = new SyscallArgs(ref s);
                 int upper = args.GetInt(0);
-                args.SetReturnInt(upper > 0 ? new Random().Next(upper) : 0);
+                args.SetReturnInt(upper > 0 ? Random.Shared.Next(upper) : 0);
             });
 
             table.Register(GameConstants.SYS_ABS, "abs", (ref VMInstanceState s) =>
