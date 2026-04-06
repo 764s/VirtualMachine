@@ -442,22 +442,19 @@ namespace KOF98
 
         private void LoadCjkFont()
         {
-            // Build codepoints: ASCII (32-126) + common CJK Unified Ideographs subset
-            // We include a practical subset of Chinese characters for game UI
+            // Collect all unique characters used in the game UI
+            string uiChars = "KOF98练习模式帧回合击倒受击防御攻击蹲下跳跃移动推箱框" +
+                             "位置速度朝向着地技能硬直效果弹幕轻拳重脚退出";
+            // Build codepoints: ASCII (32-126) + UI Chinese characters
             int asciiStart = 32, asciiEnd = 126;
-            int cjkStart = 0x4E00, cjkEnd = 0x9FFF; // CJK Unified Ideographs
-            int puncStart = 0x3000, puncEnd = 0x303F; // CJK Symbols and Punctuation
-            int fwStart = 0xFF00, fwEnd = 0xFF5E;     // Fullwidth Forms
-
-            int count = (asciiEnd - asciiStart + 1) + (cjkEnd - cjkStart + 1) +
-                        (puncEnd - puncStart + 1) + (fwEnd - fwStart + 1);
+            int asciiCount = asciiEnd - asciiStart + 1;
+            int cjkCount = uiChars.Length;
+            int count = asciiCount + cjkCount;
             int[] codepoints = new int[count];
             int idx = 0;
 
             for (int c = asciiStart; c <= asciiEnd; c++) codepoints[idx++] = c;
-            for (int c = cjkStart; c <= cjkEnd; c++) codepoints[idx++] = c;
-            for (int c = puncStart; c <= puncEnd; c++) codepoints[idx++] = c;
-            for (int c = fwStart; c <= fwEnd; c++) codepoints[idx++] = c;
+            for (int i = 0; i < uiChars.Length; i++) codepoints[idx++] = uiChars[i];
 
             foreach (string path in CjkFontPaths)
             {
