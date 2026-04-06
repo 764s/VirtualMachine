@@ -8,6 +8,7 @@ cd /d "%~dp0"
 ::
 ::  Commands:
 ::    sandbox    Build & run Sandbox (with DAP debug server)
+::    kof98      Build & run KOF98 Practice
 ::    test       Run VM unit tests
 ::    bench      Run benchmarks (results only)
 ::    bench-all  Run benchmarks + update performance history
@@ -23,6 +24,7 @@ set "INTERACTIVE=0"
 
 :: Direct command mode: run once and exit
 if "%CMD%"=="sandbox"   goto :do_sandbox
+if "%CMD%"=="kof98"     goto :do_kof98
 if "%CMD%"=="test"      goto :do_test
 if "%CMD%"=="bench"     goto :do_bench
 if "%CMD%"=="bench-all"   goto :do_bench_all
@@ -44,6 +46,7 @@ echo   FFVM - Master Command Menu
 echo  ============================================================
 echo.
 echo   ffvm sandbox     Build ^& run Sandbox (with DAP debug)
+echo   ffvm kof98       Build ^& run KOF98 Practice
 echo   ffvm test        Run VM unit tests (StandaloneRunner)
 echo   ffvm bench       Run benchmarks (update results only)
 echo   ffvm bench-all   Run benchmarks + update perf history
@@ -62,21 +65,23 @@ echo   FFVM - Master Command Menu
 echo  ============================================================
 echo.
 echo   [1]  sandbox     Build ^& run Sandbox (with DAP debug)
-echo   [2]  test        Run VM unit tests (StandaloneRunner)
-echo   [3]  bench       Run benchmarks (update results only)
-echo   [4]  bench-all   Run benchmarks + update perf history
-echo   [5]  cross-lang  Cross-language performance comparison
-echo   [6]  init        First-time Sandbox initialization
+echo   [2]  kof98       Build ^& run KOF98 Practice
+echo   [3]  test        Run VM unit tests (StandaloneRunner)
+echo   [4]  bench       Run benchmarks (update results only)
+echo   [5]  bench-all   Run benchmarks + update perf history
+echo   [6]  cross-lang  Cross-language performance comparison
+echo   [7]  init        First-time Sandbox initialization
 echo   [Q]  quit
 echo.
-set /p "CHOICE=  Select [1-6, Q]: "
+set /p "CHOICE=  Select [1-7, Q]: "
 
 if "%CHOICE%"=="1" goto :do_sandbox
-if "%CHOICE%"=="2" goto :do_test
-if "%CHOICE%"=="3" goto :do_bench
-if "%CHOICE%"=="4" goto :do_bench_all
-if "%CHOICE%"=="5" goto :do_cross_lang
-if "%CHOICE%"=="6" goto :do_init
+if "%CHOICE%"=="2" goto :do_kof98
+if "%CHOICE%"=="3" goto :do_test
+if "%CHOICE%"=="4" goto :do_bench
+if "%CHOICE%"=="5" goto :do_bench_all
+if "%CHOICE%"=="6" goto :do_cross_lang
+if "%CHOICE%"=="7" goto :do_init
 if /i "%CHOICE%"=="Q" goto :done
 echo.
 echo  [!] Invalid choice.
@@ -95,6 +100,26 @@ if errorlevel 1 (
 )
 echo.
 Sandbox\bin\Release\net10.0\Sandbox.exe --debug
+goto :after_cmd
+
+:do_kof98
+echo.
+echo  [FFVM] Building ^& launching KOF98 Practice...
+echo.
+if not exist "KOF98\KOF98.csproj" (
+    copy /y "KOF98\KOF98.csproj.template" "KOF98\KOF98.csproj" >nul
+    echo  [OK] Generated KOF98\KOF98.csproj
+)
+dotnet build KOF98\KOF98.csproj -c Release --nologo -v q
+if errorlevel 1 (
+    echo  [ERROR] KOF98 build failed!
+    goto :after_cmd
+)
+echo.
+echo  Controls: WASD/Arrows = move, J = LP, K = HP, U = LK, I = HK
+echo  Ctrl+C to stop
+echo.
+KOF98\bin\Release\net8.0\KOF98.exe
 goto :after_cmd
 
 :do_test

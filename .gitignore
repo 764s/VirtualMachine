@@ -90,6 +90,7 @@ crashlytics-build.properties
 /KOF98/bin/
 /KOF98/obj/
 /KOF98/KOF98.csproj
+/KOF98/run-kof98.cmd
 /StandaloneRunner/StandaloneRunner.csproj
 /src/**/bin/
 /src/**/obj/
