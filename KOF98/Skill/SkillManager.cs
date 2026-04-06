@@ -11,6 +11,12 @@ namespace KOF98
     {
         private readonly Character _owner;
 
+        /// <summary>
+        /// VM bridge reference for spawning/killing VM skill instances.
+        /// Set by GameScene before skill transitions each frame.
+        /// </summary>
+        public GameVMBridge VMBridge;
+
         /// <summary>Currently active main skill (determines character state).</summary>
         public SkillInstance ActiveSkill;
 
@@ -99,6 +105,9 @@ namespace KOF98
                 var def = skills[i];
                 if (def == null) continue;
 
+                // Skip re-activation of the currently active skill
+                if (ActiveSkill != null && def == ActiveSkill.Def) continue;
+
                 // ── Layer 1: Stance grouping ──
                 if (def.AllowedStances != null && def.AllowedStances.Length > 0)
                 {
@@ -152,7 +161,11 @@ namespace KOF98
             _owner.ClearAllTags();
             _owner.ActiveTags = def.Tags;
 
-            // VM instance creation is handled by GameVMBridge
+            // Spawn VM instance for script-driven skills
+            if (VMBridge != null && def.VMModuleSlot >= 0)
+            {
+                VMBridge.ActivateSkillVM(_owner.Id, ActiveSkill);
+            }
         }
 
         /// <summary>Deactivate the current main skill.</summary>
@@ -160,7 +173,12 @@ namespace KOF98
         {
             if (ActiveSkill == null) return;
 
-            // VM instance cleanup is handled by GameVMBridge (Kill → defer)
+            // Kill VM instance for script-driven skills
+            if (VMBridge != null && ActiveSkill.VMInstanceId >= 0)
+            {
+                VMBridge.DeactivateSkillVM(_owner.Id, ActiveSkill);
+            }
+
             ActiveSkill.IsActive = false;
             ActiveSkill = null;
 

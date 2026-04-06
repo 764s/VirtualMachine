@@ -47,9 +47,20 @@ namespace KOF98
             var vmBridge = new GameVMBridge(scene);
             scene.VMBridge = vmBridge;
 
+            // ── Load FFS skill scripts ───────────────────────────
+            string scriptsDir = System.IO.Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "..", "..", "..", "Scripts");
+            // Fallback: try relative to working directory
+            if (!System.IO.Directory.Exists(scriptsDir))
+                scriptsDir = System.IO.Path.Combine("KOF98", "Scripts");
+            // Final fallback: try absolute path relative to project
+            if (!System.IO.Directory.Exists(scriptsDir))
+                scriptsDir = "Scripts";
+
+            var vmSlots = LoadSkillScripts(vmBridge, scriptsDir);
+
             // ── Define characters ────────────────────────────────
-            var p1Data = CreateDefaultCharacterData(1, "Kyo");
-            var p2Data = CreateDefaultCharacterData(2, "Iori");
+            var p1Data = CreateDefaultCharacterData(1, "Kyo", vmSlots);
+            var p2Data = CreateDefaultCharacterData(2, "Iori", vmSlots);
 
             // ── Initial scene setup via commands ─────────────────
             var initInput = new SceneInput();
@@ -191,13 +202,51 @@ namespace KOF98
 
         private const int JumpTimeoutFrames = 120;
 
-        private static CharacterData CreateDefaultCharacterData(int id, string name)
+        /// <summary>
+        /// VM module slot indices for loaded skill scripts.
+        /// -1 = script not loaded (fall back to host-driven behavior).
+        /// </summary>
+        private struct VMSlots
+        {
+            public int Idle;
+            public int Walk;
+            public int Jump;
+            public int LightPunch;
+        }
+
+        /// <summary>Load FFS skill scripts and return their module slot indices.</summary>
+        private static VMSlots LoadSkillScripts(GameVMBridge bridge, string scriptsDir)
+        {
+            var slots = new VMSlots { Idle = -1, Walk = -1, Jump = -1, LightPunch = -1 };
+
+            string idlePath = System.IO.Path.Combine(scriptsDir, "skill_idle.ffs");
+            string walkPath = System.IO.Path.Combine(scriptsDir, "skill_walk_forward.ffs");
+            string jumpPath = System.IO.Path.Combine(scriptsDir, "skill_jump.ffs");
+            string lpPath = System.IO.Path.Combine(scriptsDir, "skill_light_punch.ffs");
+
+            if (System.IO.File.Exists(idlePath))
+                slots.Idle = bridge.LoadScript(idlePath);
+            if (System.IO.File.Exists(walkPath))
+                slots.Walk = bridge.LoadScript(walkPath);
+            if (System.IO.File.Exists(jumpPath))
+                slots.Jump = bridge.LoadScript(jumpPath);
+            if (System.IO.File.Exists(lpPath))
+                slots.LightPunch = bridge.LoadScript(lpPath);
+
+            int loaded = (slots.Idle >= 0 ? 1 : 0) + (slots.Walk >= 0 ? 1 : 0)
+                + (slots.Jump >= 0 ? 1 : 0) + (slots.LightPunch >= 0 ? 1 : 0);
+            Console.WriteLine($"[KOF98] Loaded {loaded}/4 skill scripts from {scriptsDir}");
+
+            return slots;
+        }
+
+        private static CharacterData CreateDefaultCharacterData(int id, string name, VMSlots vmSlots)
         {
             // Stance arrays (shared references, no per-skill allocation)
             var groundOnly = new[] { Stance.Grounded };
             var groundAndCrouch = new[] { Stance.Grounded, Stance.Crouching };
 
-            // ── Idle skill (host-driven, looping) ─────────────────
+            // ── Idle skill (VM-driven, looping) ──────────────────
             var idleSkill = new SkillDef(
                 id: 0, name: "Idle", totalFrames: -1,
                 priority: GameConstants.PRIORITY_IDLE,
@@ -206,8 +255,9 @@ namespace KOF98
             idleSkill.AllowedStances = groundOnly;
             idleSkill.ActivationPriority = 900;   // Lowest — fallback
             idleSkill.InterruptPriority = 900;
+            idleSkill.VMModuleSlot = vmSlots.Idle;
 
-            // ── Walk skill (looping, deactivates when direction released) ──
+            // ── Walk skill (VM-driven, looping, deactivates when direction released) ──
             var walkSkill = new SkillDef(
                 id: 1, name: "Walk", totalFrames: -1,
                 priority: GameConstants.PRIORITY_MOVEMENT,
@@ -216,6 +266,7 @@ namespace KOF98
             walkSkill.AllowedStances = groundOnly;
             walkSkill.ActivationPriority = 500;   // Movement tier
             walkSkill.InterruptPriority = 500;
+            walkSkill.VMModuleSlot = vmSlots.Walk;
             walkSkill.CanActivate = (ch, input) =>
                 input.HasAny(InputButton.Left | InputButton.Right)
                 && !input.IsHeld(InputButton.Up)  // Don't walk when jumping
@@ -225,24 +276,9 @@ namespace KOF98
                 input.HasAny(InputButton.Left | InputButton.Right)
                 && ch.IsGrounded
                 && ch.HitstunFrames <= 0;
-            walkSkill.OnFrame = (ch, input) =>
-            {
-                // Determine raw world direction from input
-                bool right = input.IsHeld(InputButton.Right);
-                bool left = input.IsHeld(InputButton.Left);
-                if (right == left)
-                {
-                    ch.Body.Velocity = new FVec2(0, ch.Body.Velocity.Y);
-                    return;
-                }
+            // OnFrame replaced by VM script (skill_walk_forward.ffs)
 
-                int rawDir = right ? 1 : -1;
-                int fwd = input.GetForwardDir(ch.Facing);
-                float speed = fwd > 0 ? ch.Data.WalkSpeed : ch.Data.BackWalkSpeed;
-                ch.Body.Velocity = new FVec2(speed * rawDir, ch.Body.Velocity.Y);
-            };
-
-            // ── Jump skill (finite, ends on landing) ──────────────
+            // ── Jump skill (VM-driven, finite, ends on landing) ────
             var jumpSkill = new SkillDef(
                 id: 2, name: "Jump", totalFrames: JumpTimeoutFrames,
                 priority: GameConstants.PRIORITY_MOVEMENT,
@@ -250,29 +286,13 @@ namespace KOF98
             jumpSkill.AllowedStances = groundAndCrouch;
             jumpSkill.ActivationPriority = 400;   // Jump > walk
             jumpSkill.InterruptPriority = 500;
+            jumpSkill.VMModuleSlot = vmSlots.Jump;
             jumpSkill.CanActivate = (ch, input) =>
                 input.IsPressed(InputButton.Up)
                 && ch.IsGrounded
                 && ch.HitstunFrames <= 0;
-            jumpSkill.CanContinue = (ch, input) =>
-            {
-                // Stay active until we land (after the initial launch frames)
-                if (ch.SkillMgr.ActiveSkill == null) return false;
-                return ch.SkillMgr.ActiveSkill.Frame < 4 || !ch.IsGrounded;
-            };
-            jumpSkill.OnFrame = (ch, input) =>
-            {
-                if (ch.SkillMgr.ActiveSkill == null) return;
-                if (ch.SkillMgr.ActiveSkill.Frame == 0)
-                {
-                    // Launch: set Y velocity, optionally X for directional jump
-                    float vx = 0f;
-                    if (input.IsHeld(InputButton.Right)) vx = ch.Data.WalkSpeed;
-                    else if (input.IsHeld(InputButton.Left)) vx = -ch.Data.WalkSpeed;
-                    ch.Body.Velocity = new FVec2(vx, ch.Data.JumpSpeedY);
-                    ch.Body.IsGrounded = false;
-                }
-            };
+            // CanContinue not needed — script returns when character lands
+            // OnFrame replaced by VM script (skill_jump.ffs)
 
             // ── Crouch skill (looping, deactivates when Down released) ──
             var crouchSkill = new SkillDef(
@@ -300,7 +320,7 @@ namespace KOF98
                 ch.PushBox = ch.Data.CrouchPushBox;
             };
 
-            // ── Light Punch (host-driven, 20 frames) ──────────────
+            // ── Light Punch (VM-driven, 20 frames) ────────────────
             var lpSkill = new SkillDef(
                 id: 10, name: "LightPunch", totalFrames: 20,
                 priority: GameConstants.PRIORITY_ATTACK,
@@ -308,6 +328,7 @@ namespace KOF98
             lpSkill.AllowedStances = groundOnly;
             lpSkill.ActivationPriority = 200;     // Attack tier
             lpSkill.InterruptPriority = 200;
+            lpSkill.VMModuleSlot = vmSlots.LightPunch;
             lpSkill.CanActivate = (ch, input) =>
                 input.IsPressed(InputButton.LP) && ch.IsGrounded && ch.HitstunFrames <= 0;
             lpSkill.CollisionFrames = new[]

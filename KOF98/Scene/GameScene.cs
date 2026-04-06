@@ -64,6 +64,9 @@ namespace KOF98
                 var ch = Characters.Characters[i];
                 if (ch == null || !ch.IsAlive) continue;
 
+                // Ensure SkillManager has access to VM bridge
+                ch.SkillMgr.VMBridge = VMBridge;
+
                 ch.SkillMgr.TryDeactivateSkill();
                 ch.SkillMgr.TryActivateSkill(ch.CurrentInput);
 
@@ -96,15 +99,40 @@ namespace KOF98
 
             // 7. Process skills (run VM instances)
             VMBridge?.TickVMWorld();
+
+            // Check for completed VM skill instances (script returned/killed)
             for (int i = 0; i < Characters.Count; i++)
             {
                 var ch = Characters.Characters[i];
                 if (ch == null || !ch.IsAlive) continue;
 
-                // Advance host-driven skill frames
-                if (ch.SkillMgr.ActiveSkill != null && ch.SkillMgr.ActiveSkill.VMInstanceId < 0)
+                var skill = ch.SkillMgr.ActiveSkill;
+                if (skill != null && VMBridge != null && skill.VMInstanceId >= 0
+                    && VMBridge.IsSkillVMCompleted(skill))
                 {
-                    ch.SkillMgr.ActiveSkill.AdvanceFrame();
+                    ch.SkillMgr.DeactivateCurrentSkill();
+                }
+            }
+
+            for (int i = 0; i < Characters.Count; i++)
+            {
+                var ch = Characters.Characters[i];
+                if (ch == null || !ch.IsAlive) continue;
+
+                // Advance skill frame counter
+                if (ch.SkillMgr.ActiveSkill != null)
+                {
+                    if (ch.SkillMgr.ActiveSkill.VMInstanceId < 0)
+                    {
+                        // Host-driven: advance and check for completion
+                        ch.SkillMgr.ActiveSkill.AdvanceFrame();
+                    }
+                    else
+                    {
+                        // VM-driven: advance frame counter for collision box tracking
+                        // but don't check for frame-count completion (script controls lifecycle)
+                        ch.SkillMgr.ActiveSkill.Frame++;
+                    }
                 }
 
                 // Decrement stun timers

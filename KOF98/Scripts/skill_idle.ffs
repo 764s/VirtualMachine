@@ -1,0 +1,13 @@
+// ============================================================
+// Skill: Idle (skill_idle)
+// Type: Looping  |  Priority: 900 (fallback)
+// ============================================================
+// Simplest looping script. Yields every frame.
+// Activated as fallback when no other skill is active.
+// Deactivated when any higher-priority skill activates.
+
+func main() {
+    while 1 {
+        yield
+    }
+}

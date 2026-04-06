@@ -254,5 +254,18 @@ namespace KOF98
         {
             return _instanceToOwner.TryGetValue(vmInstanceId, out int ownerId) ? ownerId : -1;
         }
+
+        /// <summary>
+        /// Check if a VM skill instance has completed (script returned or was killed).
+        /// Used by the host to detect when a VM-driven skill has finished.
+        /// </summary>
+        public bool IsSkillVMCompleted(SkillInstance skill)
+        {
+            if (skill == null || skill.VMInstanceId < 0) return false;
+            int vmId = skill.VMInstanceId;
+            if (vmId >= World.Pool.Instances.Length) return true;
+            ref var inst = ref World.Pool.Instances[vmId];
+            return (inst.StateFlags & VMStateFlags.Completed) != 0 || !inst.IsAlive;
+        }
     }
 }
