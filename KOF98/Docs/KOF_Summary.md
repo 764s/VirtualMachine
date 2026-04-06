@@ -64,6 +64,7 @@
 | FFVM 集成 | ✅ | GameSyscalls (~40), GameVMBridge |
 | **基础移动** | ✅ | **Walk/Jump/Crouch 技能 (host-driven)** |
 | 轻拳攻击 | ✅ | LightPunch (含碰撞框数据) |
+| **界面设计** | ✅ | **GameSettings + 控制界面 (Tab 开关, AI/自动复活/重新开始)** |
 | 架构文档 | ✅ | D_GameArchitecture.md |
 
 ### 已完成子任务（已归档）
@@ -81,12 +82,12 @@
 
 > **流程**：讨论 → 总览排期 → 制定子任务 → 执行
 
-当前位置 → **KOF-T1**
+当前位置 → **KOF-T2**
 
 | ID | 任务 | 状态 | 完成条件 | 依赖 | 讨论/计划 |
 |----|------|------|---------|------|----------|
-| KOF-T1 | 界面设计（常驻 HUD + 控制界面） | ⏳ 等待中 | 常驻 HUD 显示角色名/血量/能量；控制界面覆盖场景，含 AI 开关、重新开始、自动复活开关 | — | [D_UIDesign.md](Discussion/D_UIDesign.md) |
-| KOF-T2 | 技能脚本化基础设施 | ⬚ 待排期 | SkillDef 扩展（AllowedStances/Priority/VMModuleSlot）+ 裁决层重构（分层候选池）+ 条件入口机制 | KOF-T1 | [D_SkillScripting.md](Discussion/D_SkillScripting.md) §七 |
+| KOF-T1 | 界面设计（常驻 HUD + 控制界面） | ✅ 已完成 | 常驻 HUD 显示角色名/血量/能量；控制界面覆盖场景，含 AI 开关、重新开始、自动复活开关 | — | [D_UIDesign.md](Discussion/D_UIDesign.md) |
+| KOF-T2 | 技能脚本化基础设施 | ⏳ 等待中 | SkillDef 扩展（AllowedStances/Priority/VMModuleSlot）+ 裁决层重构（分层候选池）+ 条件入口机制 | KOF-T1 ✅ | [D_SkillScripting.md](Discussion/D_SkillScripting.md) §七 |
 | KOF-T3 | 首批 FFS 脚本 — 前 4 个 (S01~S04) | ⬚ 待排期 | 编写 skill_idle/walk_forward/jump/light_punch.ffs，GameVMBridge 加载执行，现有 Syscall 足够 | KOF-T2 | [D_SkillScripting.md](Discussion/D_SkillScripting.md) §五 |
 | KOF-T4 | Syscall 扩展 + 碰撞框脚本化 | ⬚ 待排期 | 新增 SetHitbox/SetHurtbox/ClearHitbox/SetPushBox + ApplyHitReaction；碰撞框由脚本设置 | KOF-T3 | [D_SkillScripting.md](Discussion/D_SkillScripting.md) §八~§九 |
 | KOF-T5 | 首批 FFS 脚本 — 后 4 个 (S05~S08) | ⬚ 待排期 | 编写 skill_crouch_punch/hit_high/hard_knockdown/stand_up.ffs；验证完整攻击→受击→倒地→起身流程 | KOF-T4 | [D_SkillScripting.md](Discussion/D_SkillScripting.md) §五 |
@@ -106,7 +107,7 @@
 | # | 文档 | 主题 | 状态 | 日期 |
 |---|------|------|------|------|
 | KD1 | [D_GameArchitecture.md](Discussion/D_GameArchitecture.md) | 游戏架构讨论（帧执行模型、技能状态机、VM 应用分级、视图层设计） | ✅ 已完成 | 2026-04-06 |
-| KD2 | [D_UIDesign.md](Discussion/D_UIDesign.md) | 界面设计讨论（常驻 HUD + 控制界面） | 💬 讨论中 | 2026-04-06 |
+| KD2 | [D_UIDesign.md](Discussion/D_UIDesign.md) | 界面设计讨论（常驻 HUD + 控制界面） | ✅ 已完成 | 2026-04-06 |
 | KD3 | [D_SkillScripting.md](Discussion/D_SkillScripting.md) | 技能 FFS 脚本化讨论（SK1~SK12 全部收敛，仅 SK3 待验证） | ✅ 讨论完成 | 2026-04-06 |
 
 ---
@@ -142,11 +143,11 @@
 - [x] 入口点 + 项目模板
 - [x] 架构文档
 
-### Phase 1: Host-driven 基础 + UI 🔄
+### Phase 1: Host-driven 基础 + UI ✅
 - [x] 实现基础移动技能（idle, walk, crouch, jump）
 - [x] 实现轻拳攻击流程（含碰撞框）
 - [x] Raylib 图形化视图（碰撞框颜色可视化）
-- [ ] 界面设计（常驻 HUD + 控制界面）— **KOF-T1**
+- [x] 界面设计（常驻 HUD + 控制界面）— **KOF-T1** ✅
 
 ### Phase 2: 技能脚本化基础设施
 - [ ] SkillDef 扩展（AllowedStances/Priority/VMModuleSlot）— **KOF-T2**

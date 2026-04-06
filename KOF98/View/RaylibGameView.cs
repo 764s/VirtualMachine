@@ -35,6 +35,24 @@ namespace KOF98
         private const int StageWidth = StageRight - StageLeft;
         private const int StageHeight = StageBottom - StageTop;
 
+        // ── Control Panel ────────────────────────────────────────
+        private const int PanelLeft = 120;
+        private const int PanelTop = 60;
+        private const int PanelWidth = 720;
+        private const int PanelHeight = 480;
+        private const int TabListWidth = 160;
+        private const int TabItemHeight = 40;
+        private const int ContentLeft = PanelLeft + TabListWidth + 1;
+        private const int ContentTop = PanelTop + 50;
+        private const int ContentWidth = PanelWidth - TabListWidth - 1;
+        private const int ButtonHeight = 36;
+        private const int ButtonWidth = 200;
+
+        // ── Settings reference ───────────────────────────────────
+        private GameSettings _settings;
+        private int _selectedTab;
+        private bool _prevTabKey;
+
         // ── Character rendering ─────────────────────────────────
         private const int CharacterWidth = 16;
         private const int CharacterHeight = 44;
@@ -69,6 +87,20 @@ namespace KOF98
         private static readonly Color BgColor   = new Color(30, 32, 36, 255);
         private static readonly Color DebugText = new Color(180, 180, 180, 255);
 
+        // ── Control Panel colors ─────────────────────────────────
+        private static readonly Color PanelOverlay    = new Color(0, 0, 0, 180);
+        private static readonly Color PanelBg         = new Color(40, 42, 50, 245);
+        private static readonly Color PanelBorder     = new Color(100, 100, 120, 255);
+        private static readonly Color TabBg           = new Color(50, 52, 62, 255);
+        private static readonly Color TabSelected     = new Color(70, 100, 160, 255);
+        private static readonly Color TabHover        = new Color(60, 65, 80, 255);
+        private static readonly Color BtnBg           = new Color(60, 65, 80, 255);
+        private static readonly Color BtnHover        = new Color(80, 90, 110, 255);
+        private static readonly Color BtnActive       = new Color(70, 130, 200, 255);
+        private static readonly Color BtnText         = new Color(220, 220, 230, 255);
+        private static readonly Color ToggleOn        = new Color(50, 180, 80, 255);
+        private static readonly Color ToggleOff       = new Color(120, 120, 130, 255);
+
         // ── Font ─────────────────────────────────────────────────
         private Font _font;
         private bool _fontLoaded;
@@ -92,6 +124,11 @@ namespace KOF98
             "/usr/share/fonts/truetype/droid/DroidSansFallbackFull.ttf",
         };
 
+        public RaylibGameView(GameSettings settings)
+        {
+            _settings = settings ?? new GameSettings();
+        }
+
         public void Initialize(GameScene scene)
         {
             Raylib.SetTraceLogLevel(TraceLogLevel.Warning);
@@ -102,6 +139,14 @@ namespace KOF98
 
         public void Render(GameScene scene)
         {
+            // Handle Tab key toggle for control panel
+            bool tabDown = Raylib.IsKeyDown(KeyboardKey.Tab);
+            if (tabDown && !_prevTabKey)
+            {
+                _settings.PanelOpen = !_settings.PanelOpen;
+            }
+            _prevTabKey = tabDown;
+
             Raylib.BeginDrawing();
             Raylib.ClearBackground(BgColor);
 
@@ -110,6 +155,11 @@ namespace KOF98
             DrawProjectiles(scene);
             DrawHUD(scene);
             DrawDebugInfo(scene);
+
+            if (_settings.PanelOpen)
+            {
+                DrawControlPanel();
+            }
 
             Raylib.EndDrawing();
         }
@@ -355,7 +405,7 @@ namespace KOF98
             DrawLegendEntry(StageLeft + 300, legendY, BlockBoxOutline, "防御框");
 
             // Controls hint
-            DrawTextF("WASD:移动  J:轻拳  K:重拳  U:轻脚  I:重脚  ESC:退出",
+            DrawTextF("WASD:移动  J:轻拳  K:重拳  U:轻脚  I:重脚  Tab:设置  ESC:退出",
                 StageLeft + 420, legendY, 12, new Color(120, 120, 120, 255));
         }
 
@@ -419,6 +469,163 @@ namespace KOF98
             DrawTextF(counts, StageLeft, y, 12, DebugText);
         }
 
+        // ── Control Panel ────────────────────────────────────────
+
+        private static readonly string[] TabNames = { "游戏设置" };
+
+        private void DrawControlPanel()
+        {
+            // Semi-transparent overlay
+            Raylib.DrawRectangle(0, 0, ScreenWidth, ScreenHeight, PanelOverlay);
+
+            // Panel background
+            Raylib.DrawRectangle(PanelLeft, PanelTop, PanelWidth, PanelHeight, PanelBg);
+            Raylib.DrawRectangleLines(PanelLeft, PanelTop, PanelWidth, PanelHeight, PanelBorder);
+
+            // Title
+            DrawTextF("控制界面", PanelLeft + PanelWidth / 2 - 40, PanelTop + 12, 22, Color.White);
+
+            // Close hint
+            string closeHint = "Tab / ESC 关闭";
+            int closeW = MeasureTextF(closeHint, 14);
+            DrawTextF(closeHint, PanelLeft + PanelWidth - closeW - 16, PanelTop + 16, 14, new Color(140, 140, 150, 255));
+
+            // Separator under title
+            Raylib.DrawLine(PanelLeft + 8, PanelTop + 44, PanelLeft + PanelWidth - 8, PanelTop + 44, PanelBorder);
+
+            // Tab list (left side)
+            DrawTabList();
+
+            // Vertical separator
+            int sepX = PanelLeft + TabListWidth;
+            Raylib.DrawLine(sepX, PanelTop + 44, sepX, PanelTop + PanelHeight - 8, PanelBorder);
+
+            // Content area (right side)
+            DrawTabContent();
+
+            // Handle ESC to close
+            if (Raylib.IsKeyPressed(KeyboardKey.Escape))
+            {
+                _settings.PanelOpen = false;
+            }
+        }
+
+        private void DrawTabList()
+        {
+            int mx = Raylib.GetMouseX();
+            int my = Raylib.GetMouseY();
+            bool clicked = Raylib.IsMouseButtonPressed(MouseButton.Left);
+
+            for (int i = 0; i < TabNames.Length; i++)
+            {
+                int tx = PanelLeft + 4;
+                int ty = PanelTop + 50 + i * TabItemHeight;
+                int tw = TabListWidth - 8;
+                int th = TabItemHeight - 4;
+
+                bool hover = mx >= tx && mx < tx + tw && my >= ty && my < ty + th;
+                bool selected = i == _selectedTab;
+
+                Color bg = selected ? TabSelected : (hover ? TabHover : TabBg);
+                Raylib.DrawRectangle(tx, ty, tw, th, bg);
+                if (selected)
+                    Raylib.DrawRectangle(tx, ty, 3, th, new Color(100, 160, 240, 255));
+
+                DrawTextF(TabNames[i], tx + 12, ty + (th - 16) / 2, 16, BtnText);
+
+                if (hover && clicked) _selectedTab = i;
+            }
+        }
+
+        private void DrawTabContent()
+        {
+            switch (_selectedTab)
+            {
+                case 0: DrawGameSettingsTab(); break;
+            }
+        }
+
+        private void DrawGameSettingsTab()
+        {
+            int x = ContentLeft + 24;
+            int y = ContentTop + 20;
+            int spacing = 56;
+
+            // AI Toggle
+            DrawToggle(x, y, "AI 开关", "控制 AI 角色是否自动行动", _settings.AIEnabled, v => _settings.AIEnabled = v);
+            y += spacing;
+
+            // Auto-Revive Toggle
+            DrawToggle(x, y, "自动满血复活", "血量归零时自动满血复活", _settings.AutoRevive, v => _settings.AutoRevive = v);
+            y += spacing;
+
+            // Restart Button
+            DrawButton(x, y, ButtonWidth, ButtonHeight, "重新开始", "重置场景到初始状态", () => _settings.RestartRequested = true);
+        }
+
+        private void DrawToggle(int x, int y, string label, string desc, bool value, Action<bool> onChanged)
+        {
+            int mx = Raylib.GetMouseX();
+            int my = Raylib.GetMouseY();
+            bool clicked = Raylib.IsMouseButtonPressed(MouseButton.Left);
+
+            // Label
+            DrawTextF(label, x, y, 18, Color.White);
+
+            // Description
+            DrawTextF(desc, x, y + 22, 12, new Color(140, 140, 150, 255));
+
+            // Toggle switch (right-aligned)
+            int toggleW = 48;
+            int toggleH = 24;
+            int toggleX = x + ButtonWidth + 80;
+            int toggleY = y + 4;
+
+            bool hover = mx >= toggleX && mx < toggleX + toggleW && my >= toggleY && my < toggleY + toggleH;
+
+            Color bg = value ? ToggleOn : ToggleOff;
+            if (hover) bg = value ? new Color(60, 200, 100, 255) : new Color(140, 140, 150, 255);
+
+            // Track
+            Raylib.DrawRectangleRounded(
+                new Rectangle(toggleX, toggleY, toggleW, toggleH), 0.5f, 8, bg);
+
+            // Knob
+            int knobR = toggleH / 2 - 3;
+            int knobX = value ? toggleX + toggleW - knobR - 5 : toggleX + knobR + 5;
+            int knobY = toggleY + toggleH / 2;
+            Raylib.DrawCircle(knobX, knobY, knobR, Color.White);
+
+            // Status text
+            string statusText = value ? "ON" : "OFF";
+            DrawTextF(statusText, toggleX + toggleW + 8, toggleY + 4, 14, bg);
+
+            if (hover && clicked) onChanged(!value);
+        }
+
+        private void DrawButton(int x, int y, int w, int h, string label, string desc, Action onClick)
+        {
+            int mx = Raylib.GetMouseX();
+            int my = Raylib.GetMouseY();
+            bool clicked = Raylib.IsMouseButtonPressed(MouseButton.Left);
+
+            bool hover = mx >= x && mx < x + w && my >= y && my < y + h;
+            bool pressing = hover && Raylib.IsMouseButtonDown(MouseButton.Left);
+
+            Color bg = pressing ? BtnActive : (hover ? BtnHover : BtnBg);
+            Raylib.DrawRectangleRounded(new Rectangle(x, y, w, h), 0.15f, 4, bg);
+            Raylib.DrawRectangleRoundedLines(new Rectangle(x, y, w, h), 0.15f, 4, 1f, PanelBorder);
+
+            int textW = MeasureTextF(label, 16);
+            DrawTextF(label, x + (w - textW) / 2, y + (h - 16) / 2, 16, BtnText);
+
+            // Description to the right of button
+            if (desc != null)
+                DrawTextF(desc, x + w + 16, y + (h - 12) / 2, 12, new Color(140, 140, 150, 255));
+
+            if (hover && clicked) onClick();
+        }
+
         // ── Coordinate Mapping ───────────────────────────────────
 
         /// <summary>Map world X to screen X pixel.</summary>
@@ -444,7 +651,10 @@ namespace KOF98
         {
             // Collect all unique characters used in the game UI
             string uiChars = "KOF98练习模式帧回合击倒受击防御攻击蹲下跳跃移动推箱框" +
-                             "位置速度朝向着地技能硬直效果弹幕轻拳重脚退出";
+                             "位置速度朝向着地技能硬直效果弹幕轻拳重脚退出" +
+                             "控制界面关闭游戏设置开关角色管理调试选项" +
+                             "自动满血复活重新开始场景到初始状态" +
+                             "是否行动量归零时";
             // Build codepoints: ASCII (32-126) + UI Chinese characters
             int asciiStart = 32, asciiEnd = 126;
             int asciiCount = asciiEnd - asciiStart + 1;
