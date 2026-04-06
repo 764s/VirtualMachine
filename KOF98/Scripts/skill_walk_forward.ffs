@@ -20,8 +20,11 @@ func main() {
 
         // Determine raw world direction (float for arithmetic)
         var rawDir: float = 0.0
-        if rightHeld != 0 && leftHeld == 0 { rawDir = 1.0 }
-        if leftHeld != 0 && rightHeld == 0 { rawDir = -1.0 }
+        if rightHeld != 0 && leftHeld == 0 {
+            rawDir = 1.0
+        } else if leftHeld != 0 && rightHeld == 0 {
+            rawDir = -1.0
+        }
 
         if rawDir == 0.0 {
             // Both directions held or none — zero velocity

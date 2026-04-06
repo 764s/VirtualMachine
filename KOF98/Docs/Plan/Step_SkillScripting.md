@@ -1,6 +1,6 @@
 # Plan: 技能 FFS 脚本化实施计划
 
-> **状态**：⏳ 等待前置任务 (KOF-T1) → ✅ T2-1~T2-5 基础设施就绪
+> **状态**：⏳ 等待前置任务 (KOF-T1) → ✅ T2-1~T2-5 基础设施就绪 → ✅ T3-1~T3-4 首批脚本就绪
 > **来源**：[D_SkillScripting.md](../Discussion/D_SkillScripting.md) 讨论结论
 > **日期**：2026-04-06
 

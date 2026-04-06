@@ -107,8 +107,8 @@ namespace KOF98
                 if (ch == null || !ch.IsAlive) continue;
 
                 var skill = ch.SkillMgr.ActiveSkill;
-                if (skill != null && skill.VMInstanceId >= 0
-                    && VMBridge != null && VMBridge.IsSkillVMCompleted(skill))
+                if (skill != null && VMBridge != null && skill.VMInstanceId >= 0
+                    && VMBridge.IsSkillVMCompleted(skill))
                 {
                     ch.SkillMgr.DeactivateCurrentSkill();
                 }

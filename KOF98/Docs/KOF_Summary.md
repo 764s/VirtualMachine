@@ -61,11 +61,12 @@
 | 场景调度 | ✅ | GameScene (13步帧执行), SceneInput, SceneCommand |
 | 控制台视图 | ✅ | ConsoleGameView (ASCII, 72×16) |
 | **Raylib 视图** | ✅ | **RaylibGameView (图形化, 碰撞框颜色可视化)** |
-| FFVM 集成 | ✅ | GameSyscalls (~40), GameVMBridge |
-| **基础移动** | ✅ | **Walk/Jump/Crouch 技能 (host-driven)** |
-| 轻拳攻击 | ✅ | LightPunch (含碰撞框数据) |
+| FFVM 集成 | ✅ | GameSyscalls (~42 含 IsInputHeld/IsInputPressed), GameVMBridge (含 IsSkillVMCompleted) |
+| **基础移动** | ✅ | **Walk/Jump/Crouch 技能 (Walk/Jump = VM-driven, Crouch = host-driven)** |
+| 轻拳攻击 | ✅ | LightPunch (VM-driven, 含碰撞框数据) |
 | **界面设计** | ✅ | **GameSettings + 控制界面 (Tab 开关, AI/自动复活/重新开始)** |
 | **技能脚本化基础设施** | ✅ | **Stance 枚举 + SkillDef 扩展 (AllowedStances/ActivationPriority/InterruptPriority) + 分层候选池裁决 + ProbeSkillCondition 条件入口 + VMWorld.TickInstance** |
+| **首批 FFS 脚本** | ✅ | **skill_idle/walk_forward/jump/light_punch.ffs — VM 脚本替代 host OnFrame; SkillManager 自动 spawn/kill VM 实例** |
 | 架构文档 | ✅ | D_GameArchitecture.md |
 
 ### 已完成子任务（已归档）
@@ -83,13 +84,13 @@
 
 > **流程**：讨论 → 总览排期 → 制定子任务 → 执行
 
-当前位置 → **KOF-T3**
+当前位置 → **KOF-T4**
 
 | ID | 任务 | 状态 | 完成条件 | 依赖 | 讨论/计划 |
 |----|------|------|---------|------|----------|
 | KOF-T1 | 界面设计（常驻 HUD + 控制界面） | ✅ 已完成 | 常驻 HUD 显示角色名/血量/能量；控制界面覆盖场景，含 AI 开关、重新开始、自动复活开关 | — | [D_UIDesign.md](Discussion/D_UIDesign.md) |
 | KOF-T2 | 技能脚本化基础设施 | ✅ 已完成 | SkillDef 扩展（AllowedStances/ActivationPriority/InterruptPriority）+ 裁决层重构（分层候选池）+ 条件入口机制（ProbeSkillCondition）+ Stance 枚举 + Character.GetStance() + VMWorld.TickInstance() | KOF-T1 ✅ | [D_SkillScripting.md](Discussion/D_SkillScripting.md) §七 |
-| KOF-T3 | 首批 FFS 脚本 — 前 4 个 (S01~S04) | ⏳ 等待中 | 编写 skill_idle/walk_forward/jump/light_punch.ffs，GameVMBridge 加载执行，现有 Syscall 足够 | KOF-T2 ✅ | [D_SkillScripting.md](Discussion/D_SkillScripting.md) §五 |
+| KOF-T3 | 首批 FFS 脚本 — 前 4 个 (S01~S04) | ✅ 已完成 | skill_idle/walk_forward/jump/light_punch.ffs 编写完成；SkillManager 自动 spawn/kill VM 实例；新增 IsInputHeld/IsInputPressed Syscall；GameScene 支持 VM 技能完成检测和帧计数 | KOF-T2 ✅ | [D_SkillScripting.md](Discussion/D_SkillScripting.md) §五 |
 | KOF-T4 | Syscall 扩展 + 碰撞框脚本化 | ⬚ 待排期 | 新增 SetHitbox/SetHurtbox/ClearHitbox/SetPushBox + ApplyHitReaction；碰撞框由脚本设置 | KOF-T3 | [D_SkillScripting.md](Discussion/D_SkillScripting.md) §八~§九 |
 | KOF-T5 | 首批 FFS 脚本 — 后 4 个 (S05~S08) | ⬚ 待排期 | 编写 skill_crouch_punch/hit_high/hard_knockdown/stand_up.ffs；验证完整攻击→受击→倒地→起身流程 | KOF-T4 | [D_SkillScripting.md](Discussion/D_SkillScripting.md) §五 |
 | KOF-T6 | 多目标命中 + 硬直机制 | ⬚ 待排期 | CheckAttackHit 多目标返回 + 时间轴暂停硬直实现 | KOF-T5 | [D_SkillScripting.md](Discussion/D_SkillScripting.md) §六 |
