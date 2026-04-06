@@ -115,6 +115,8 @@ namespace KOF98
         // 120-139: Input queries
         public const int SYS_GET_INPUT = 120;
         public const int SYS_GET_INPUT_DIR = 121;
+        public const int SYS_IS_INPUT_PRESSED = 122;
+        public const int SYS_IS_INPUT_HELD = 123;
 
         // 140-159: AI (reserved)
         public const int SYS_AI_FIND_NEAREST_ENEMY = 140;

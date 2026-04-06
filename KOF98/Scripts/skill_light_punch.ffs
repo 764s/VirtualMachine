@@ -1,0 +1,34 @@
+// ============================================================
+// Skill: Light Punch (skill_light_punch)
+// Type: Finite (attack)  |  Frames: 20  |  Priority: 200
+// ============================================================
+// 20-frame attack. Hitbox active during frames [5, 10).
+// Collision frames are defined on the SkillDef (host-side) and
+// applied via SkillManager.UpdateCollisionBoxes each frame.
+// This script checks for hit within the active window and applies damage.
+//
+// Activation condition handled by host (CanActivate: LP pressed + grounded).
+//
+// Syscalls used: BeginAction, EndAction, CheckAttackHit, ApplyDamage
+
+func main() {
+    BeginAction(10, 20)
+    defer {
+        EndAction()
+    }
+
+    var f: int = 0
+    var hitDone: int = 0
+    while f < 20 {
+        // Hitbox active during frames [5, 10) — group ID 1001
+        if f >= 5 && f < 10 && hitDone == 0 {
+            var target: int = CheckAttackHit(1001)
+            if target > 0 {
+                ApplyDamage(target, 1.0, 102)
+                hitDone = 1
+            }
+        }
+        f = f + 1
+        yield
+    }
+}

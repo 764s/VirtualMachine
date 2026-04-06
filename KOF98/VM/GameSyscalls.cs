@@ -90,6 +90,8 @@ namespace KOF98
                 // Input queries
                 { "GetInput", GameConstants.SYS_GET_INPUT },
                 { "GetInputDir", GameConstants.SYS_GET_INPUT_DIR },
+                { "IsInputPressed", GameConstants.SYS_IS_INPUT_PRESSED },
+                { "IsInputHeld", GameConstants.SYS_IS_INPUT_HELD },
 
                 // AI
                 { "FindNearestEnemy", GameConstants.SYS_AI_FIND_NEAREST_ENEMY },
@@ -415,6 +417,27 @@ namespace KOF98
                 var owner = GetOwner(ref s);
                 int dir = owner?.CurrentInput.GetForwardDir(owner.Facing) ?? 0;
                 args.SetReturnInt(dir);
+            });
+
+            // Button ID: 0=Up, 1=Down, 2=Left, 3=Right, 4=LP, 5=HP, 6=LK, 7=HK, 8=Start
+            table.Register(GameConstants.SYS_IS_INPUT_PRESSED, "IsInputPressed", (ref VMInstanceState s) =>
+            {
+                var args = new SyscallArgs(ref s);
+                int buttonId = args.GetInt(0);
+                var owner = GetOwner(ref s);
+                if (owner == null || buttonId < 0 || buttonId > 8) { args.SetReturnInt(0); return; }
+                var flag = (InputButton)(1 << buttonId);
+                args.SetReturnInt(owner.CurrentInput.IsPressed(flag) ? 1 : 0);
+            });
+
+            table.Register(GameConstants.SYS_IS_INPUT_HELD, "IsInputHeld", (ref VMInstanceState s) =>
+            {
+                var args = new SyscallArgs(ref s);
+                int buttonId = args.GetInt(0);
+                var owner = GetOwner(ref s);
+                if (owner == null || buttonId < 0 || buttonId > 8) { args.SetReturnInt(0); return; }
+                var flag = (InputButton)(1 << buttonId);
+                args.SetReturnInt(owner.CurrentInput.IsHeld(flag) ? 1 : 0);
             });
 
             // ── Blackboard ───────────────────────────────────────
