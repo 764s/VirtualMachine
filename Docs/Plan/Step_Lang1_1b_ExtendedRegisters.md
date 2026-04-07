@@ -4,7 +4,7 @@
 >
 > **前置**：Lang-1 ✅（模块变量）、Lang-1.1a ✅（MaxRegisters 常量配置化）
 >
-> **状态**：🔄 进行中
+> **状态**：✅ 完成
 >
 > **目标**：独立于 `NumberRegisters` 的按需扩展寄存器池（`Number[]` 堆数组）+ 专用 opcode 访问。不使用时零开销（不在 `fixed` 指针路径上）。
 
@@ -76,18 +76,18 @@ RequiredExtendedRegisters: int  — 编译器告知运行时需要的扩展寄�
 
 | # | 内容 | 文件 | 状态 |
 |---|------|------|------|
-| XR01 | OpCode 新增 LOAD_XREG / STORE_XREG | OpCode.cs | ⏳ |
-| XR02 | VMProgram 新增 RequiredExtendedRegisters | VMProgram.cs | ⏳ |
-| XR03 | InstancePool 新增 ExtendedRegs + Allocate 联动 | InstancePool.cs | ⏳ |
-| XR04 | VMWorld.SpawnInstance 预分配 + ExecuteInstance 处理器 | VMWorld.cs | ⏳ |
-| XR05 | Snapshot 深拷贝扩展寄存器 | Snapshot.cs | ⏳ |
-| XR06 | 编译器辅助方法 + ProcessModuleVariables 溢出 | BytecodeCompiler.cs | ⏳ |
-| XR07 | 编译器所有模块变量 emission site 改用辅助方法 | BytecodeCompiler.cs | ⏳ |
-| XR08 | Peephole 优化器 InstructionDestReg 支持新 opcode | BytecodeCompiler.cs | ⏳ |
-| XR09 | ScriptDebugger 扩展寄存器读取 | ScriptDebugger.cs | ⏳ |
-| XR10 | 测试用例 XR01-XR06 | Tests/ | ⏳ |
-| XR11 | 全量测试 + B01-B06 benchmark 无回归 | — | ⏳ |
-| XR12 | VM_Summary.md 更新 | Docs/ | ⏳ |
+| XR01 | OpCode 新增 LOAD_XREG / STORE_XREG | OpCode.cs | ✅ |
+| XR02 | VMProgram 新增 RequiredExtendedRegisters | VMProgram.cs | ✅ |
+| XR03 | InstancePool 新增 ExtendedRegs + Allocate 联动 | InstancePool.cs | ✅ |
+| XR04 | VMWorld.SpawnInstance 预分配 + ExecuteInstance 处理器 | VMWorld.cs | ✅ |
+| XR05 | Snapshot 深拷贝扩展寄存器 | Snapshot.cs | ✅ |
+| XR06 | 编译器辅助方法 + ProcessModuleVariables 溢出 | BytecodeCompiler.cs | ✅ |
+| XR07 | 编译器所有模块变量 emission site 改用辅助方法 | BytecodeCompiler.cs | ✅ |
+| XR08 | Peephole 优化器 InstructionDestReg 支持新 opcode | BytecodeCompiler.cs | ✅ |
+| XR09 | ScriptDebugger 扩展寄存器读取 | ScriptDebugger.cs | ✅ |
+| XR10 | 测试用例 XR01-XR06 | Tests/ | ✅ |
+| XR11 | 全量测试 + B01-B06 benchmark 无回归 | — | ✅ |
+| XR12 | VM_Summary.md 更新 | Docs/ | ✅ |
 
 ---
 

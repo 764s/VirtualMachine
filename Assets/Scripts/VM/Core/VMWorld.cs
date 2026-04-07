@@ -792,11 +792,13 @@ namespace FFVM
                         // --- Lang-1.1b: extended register access (heap-allocated) ---
 
                         case OpCode.LOAD_XREG:
+                            if (xregs == null) { inst.ErrorFlag = VMError.PanicIllegalInstruction; return; }
                             regs[Reg(op.A, rb)] = xregs[op.B | (op.C << 8)];
                             inst.IP++;
                             break;
 
                         case OpCode.STORE_XREG:
+                            if (xregs == null) { inst.ErrorFlag = VMError.PanicIllegalInstruction; return; }
                             xregs[op.A | (op.C << 8)] = regs[Reg(op.B, rb)];
                             inst.IP++;
                             break;

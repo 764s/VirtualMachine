@@ -5333,8 +5333,6 @@ func main() {
 }";
             var syscalls = new Dictionary<string, int> { { "Report", 0 } };
             var result = compiler.Compile(source, "main", syscalls);
-            if (!result.Success && result.Errors != null)
-                foreach (var e in result.Errors) Debug.Log($"XR01 error: {e}");
             Assert(result.Success, "XR01 compile success");
             Assert(result.Program.RequiredExtendedRegisters == 2, $"XR01: 2 extended regs needed, got {result.Program.RequiredExtendedRegisters}");
 
