@@ -1,8 +1,8 @@
 # FFVM Cross-Language Performance Comparison
 
-> Auto-generated: 2026-04-05 20:56:32
-> .NET 10.0.5 | Microsoft Windows NT 10.0.26200.0 | 20 cores
-> Node.js 24.14.1 | Lua 5.1.5 | Python 3.13.2
+> Auto-generated: 2026-04-07 20:32:10
+> .NET 8.0.25 | Microsoft Windows NT 10.0.19045.0 | 8 cores
+> Node.js 24.14.0 | Lua 5.1.4 | Python 3.7.7
 > 200 runs after warmup. All times in μs.
 
 ## Language Profiles
@@ -16,8 +16,8 @@ Languages that don't distinguish int/float degrade to their unified type.
 | **C#** | .NET RyuJIT | `int` | `Number` (double wrapper) | `int` for loops (same as raw), `Number` struct for float computation. Operator overloads add method-call overhead vs raw `double`. |
 | **FFVM** | C# bytecode interpreter | `Number` (degraded) | `Number` (degraded) | Stack-based VM. All values are `Number` (double) internally. `var x: int` is nominal typing only — no int/float distinction at runtime. |
 | **Node.js** | V8 multi-tier JIT | Smi (int31) | HeapNumber (double) | V8 uses Smi (tagged pointer) for small ints, HeapNumber for doubles. TurboFan speculates type feedback for int32/float64 fast paths. |
-| **Lua 5.1.5** | PUC-Rio register-based interpreter | `number` (degraded) | `number` (degraded) | **No integer type in Lua 5.1** — all numbers are C `double`. No int/float distinction. Lua 5.3+ added integer subtype. |
-| **Python 3.13.2** | CPython stack-based interpreter | `int` (boxed) | `float` (boxed C double) | `int` is arbitrary-precision (heap-allocated). `float` is a boxed C `double`. Both paths go through `ceval.c` dispatch. |
+| **Lua 5.1.4** | PUC-Rio register-based interpreter | `number` (degraded) | `number` (degraded) | **No integer type in Lua 5.1** — all numbers are C `double`. No int/float distinction. Lua 5.3+ added integer subtype. |
+| **Python 3.7.7** | CPython stack-based interpreter | `int` (boxed) | `float` (boxed C double) | `int` is arbitrary-precision (heap-allocated). `float` is a boxed C `double`. Both paths go through `ceval.c` dispatch. |
 
 ## Benchmarks
 
@@ -40,11 +40,11 @@ B02 is pure integer (classic Fibonacci). Each language uses its own supported ty
 
 | Benchmark | C# raw | C# | FFVM | Lua | Node.js | Python |
 |-----------|-------:|---:|-----:|----:|--------:|-------:|
-| B01_ArithLoop | 10.8 | 20.8 | 106.5 | 105.0 | 9.9 | 472.6 |
-| B02_Fibonacci | 0.4 | 0.4 | 0.4 | 0.0 | 0.4 | 0.7 |
-| B03_NestedLoop | 8.5 | 19.2 | 90.2 | 120.0 | 7.4 | 366.4 |
-| B04_Branching | 10.4 | 18.0 | 250.6 | 200.0 | 8.5 | 685.5 |
-| B05_Accumulator | 22.1 | 27.9 | 239.7 | 255.0 | 19.8 | 1402.8 |
+| B01_ArithLoop | 27.6 | 54.4 | 635.8 | 345.0 | 24.1 | 2085.9 |
+| B02_Fibonacci | 0.6 | 0.6 | 2.9 | 0.0 | 1.0 | 2.6 |
+| B03_NestedLoop | 22.2 | 53.4 | 582.1 | 580.0 | 14.8 | 1952.0 |
+| B04_Branching | 33.4 | 20.7 | 916.0 | 465.0 | 20.7 | 4457.0 |
+| B05_Accumulator | 63.7 | 59.1 | 1183.0 | 1920.0 | 59.3 | 8195.1 |
 
 ### Relative to C# (1.00x)
 
@@ -54,11 +54,11 @@ B02 is pure integer (classic Fibonacci). Each language uses its own supported ty
 
 | Benchmark | C# raw | C# | FFVM | Lua | Node.js | Python |
 |-----------|-------:|---:|-----:|----:|--------:|-------:|
-| B01_ArithLoop | 0.52x | 1.00x | 5.12x | 5.05x | 0.48x | 22.72x |
-| B02_Fibonacci | 1.00x | 1.00x | 1.00x | 0.00x | 1.00x | 1.75x |
-| B03_NestedLoop | 0.44x | 1.00x | 4.70x | 6.25x | 0.39x | 19.08x |
-| B04_Branching | 0.58x | 1.00x | 13.92x | 11.11x | 0.47x | 38.08x |
-| B05_Accumulator | 0.79x | 1.00x | 8.59x | 9.14x | 0.71x | 50.28x |
+| B01_ArithLoop | 0.51x | 1.00x | 11.69x | 6.34x | 0.44x | 38.34x |
+| B02_Fibonacci | 1.00x | 1.00x | 4.83x | 0.00x | 1.67x | 4.33x |
+| B03_NestedLoop | 0.42x | 1.00x | 10.90x | 10.86x | 0.28x | 36.55x |
+| B04_Branching | 1.61x | 1.00x | 44.25x | 22.46x | 1.00x | 215.31x |
+| B05_Accumulator | 1.08x | 1.00x | 20.02x | 32.49x | 1.00x | 138.66x |
 
 ---
 

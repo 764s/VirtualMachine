@@ -86,8 +86,12 @@ namespace FFVM
         // --- O8: wide IP prefix (instruction compression) ---
         EXTEND_AX    = 46,  // A=hi_byte → next instruction's A operand is extended to (hi<<8 | lo)
 
+        // --- Lang-1: module variable access (absolute addressing, bypasses Reg()) ---
+        LOAD_MVAR    = 47,  // A=destReg, B=mvarSlot → Reg[A] = ModuleVars[ModuleVarRegBase + B]
+        STORE_MVAR   = 48,  // A=mvarSlot, B=srcReg → ModuleVars[ModuleVarRegBase + A] = Reg[B]
+
         // --- O15: sentinel (never emitted by compiler) ---
-        SENTINEL     = 47,  // appended by VMProgram ctor; replaces per-instruction boundary check
+        SENTINEL     = 49,  // appended by VMProgram ctor; replaces per-instruction boundary check
     }
 
     /// <summary>

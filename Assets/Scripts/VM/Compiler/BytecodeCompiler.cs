@@ -402,6 +402,8 @@ namespace FFVM.Compiler
                     continue;
 
                 _currentLine = decl.Line;
+                int mvarSlot = reg - ModuleVarRegBase;
+                ResetTemps(); // reclaim temps between module var inits
 
                 // Struct module variable initialization
                 if (_moduleStructVarTypes.ContainsKey(decl.Name))
@@ -429,26 +431,29 @@ namespace FFVM.Compiler
                     }
                     else
                     {
-                        // Default init: zero all fields
+                        // Default init: zero all fields via STORE_MVAR
                         int zeroConst = AddConst(Number.Zero);
+                        int temp = AllocTemp();
+                        Emit(OpCode.LOAD_CONST, temp, zeroConst);
                         for (int f = 0; f < flatCount; f++)
-                            Emit(OpCode.LOAD_CONST, reg + f, zeroConst);
+                            Emit(OpCode.STORE_MVAR, mvarSlot + f, temp);
                     }
                     continue;
                 }
 
-                // Scalar module variable initialization
+                // Scalar module variable initialization via STORE_MVAR
                 if (decl.Initializer != null)
                 {
-                    int exprReg = CompileExpr(decl.Initializer, reg);
-                    if (exprReg != reg)
-                        Emit(OpCode.MOVE, reg, exprReg);
+                    int exprReg = CompileExpr(decl.Initializer);
+                    Emit(OpCode.STORE_MVAR, mvarSlot, exprReg);
                 }
                 else
                 {
                     // Default init: zero
                     int zeroConst = AddConst(Number.Zero);
-                    Emit(OpCode.LOAD_CONST, reg, zeroConst);
+                    int temp = AllocTemp();
+                    Emit(OpCode.LOAD_CONST, temp, zeroConst);
+                    Emit(OpCode.STORE_MVAR, mvarSlot, temp);
                 }
             }
         }
@@ -729,6 +734,10 @@ namespace FFVM.Compiler
                 // A = register
                 case OpCode.LOAD_CONST: return 1;    // A=destReg, B=constIndex
                 case OpCode.WAIT_FOR:   return 1;    // A=srcReg
+                case OpCode.LOAD_MVAR:  return 1;    // A=destReg, B=mvarSlot
+
+                // B = register (A is not a register)
+                case OpCode.STORE_MVAR: return 2;    // A=mvarSlot, B=srcReg
 
                 // A and B = registers
                 case OpCode.MOVE: return 3;           // A=dest, B=src
@@ -1220,6 +1229,8 @@ namespace FFVM.Compiler
             // Don't release variables that cross awaits — they must persist
             if (range.CrossesAwait) return;
             if (!_variables.TryGetValue(name, out int reg)) return;
+            // Lang-1: don't release module variable registers — they're shared across functions
+            if (IsModuleVarReg(reg)) return;
 
             int count = range.FieldCount > 0 ? range.FieldCount : 1;
             for (int i = 0; i < count; i++)
@@ -1232,6 +1243,14 @@ namespace FFVM.Compiler
                 return reg;
             _errors.Add($"Undefined variable '{name}'");
             return VarRegBase;
+        }
+
+        /// <summary>
+        /// Check if a register index belongs to the module variable region (r56-r63).
+        /// </summary>
+        private bool IsModuleVarReg(int reg)
+        {
+            return reg >= ModuleVarRegBase && reg < VMConstants.MaxRegisters;
         }
 
         /// <summary>
@@ -1380,14 +1399,37 @@ namespace FFVM.Compiler
         private void EmitStructCopy(int destBase, int srcBase, int count)
         {
             if (destBase == srcBase) return;
-            if (count >= 3)
+            bool destIsMVar = IsModuleVarReg(destBase);
+            bool srcIsMVar = IsModuleVarReg(srcBase);
+
+            if (!destIsMVar && !srcIsMVar)
             {
-                Emit(OpCode.COPY_BLOCK, destBase, srcBase, count);
+                // Original path — both are local/temp registers
+                if (count >= 3)
+                    Emit(OpCode.COPY_BLOCK, destBase, srcBase, count);
+                else
+                    for (int i = 0; i < count; i++)
+                        Emit(OpCode.MOVE, destBase + i, srcBase + i);
+                return;
             }
-            else
+
+            // At least one side is a module var — use per-field LOAD_MVAR/STORE_MVAR
+            for (int i = 0; i < count; i++)
             {
-                for (int i = 0; i < count; i++)
-                    Emit(OpCode.MOVE, destBase + i, srcBase + i);
+                if (srcIsMVar && destIsMVar)
+                {
+                    int temp = AllocTemp();
+                    Emit(OpCode.LOAD_MVAR, temp, (srcBase - ModuleVarRegBase) + i);
+                    Emit(OpCode.STORE_MVAR, (destBase - ModuleVarRegBase) + i, temp);
+                }
+                else if (srcIsMVar)
+                {
+                    Emit(OpCode.LOAD_MVAR, destBase + i, (srcBase - ModuleVarRegBase) + i);
+                }
+                else
+                {
+                    Emit(OpCode.STORE_MVAR, (destBase - ModuleVarRegBase) + i, srcBase + i);
+                }
             }
         }
 
@@ -1457,9 +1499,18 @@ namespace FFVM.Compiler
                 else
                 {
                     // Scalar field — compile expression into target register
-                    int valueReg = CompileExpr(valueExpr, destReg: baseReg + offset);
-                    if (valueReg != baseReg + offset)
-                        Emit(OpCode.MOVE, baseReg + offset, valueReg);
+                    int targetReg = baseReg + offset;
+                    if (IsModuleVarReg(targetReg))
+                    {
+                        int valueReg = CompileExpr(valueExpr);
+                        Emit(OpCode.STORE_MVAR, targetReg - ModuleVarRegBase, valueReg);
+                    }
+                    else
+                    {
+                        int valueReg = CompileExpr(valueExpr, destReg: targetReg);
+                        if (valueReg != targetReg)
+                            Emit(OpCode.MOVE, targetReg, valueReg);
+                    }
                     offset++;
                 }
             }
@@ -2340,12 +2391,28 @@ namespace FFVM.Compiler
                 {
                     return EmitLoadConst(AddConst(constVal), destReg);
                 }
-                return ResolveVar(ident.Name);
+                int reg = ResolveVar(ident.Name);
+                // Lang-1: module var → emit LOAD_MVAR to materialize value
+                if (IsModuleVarReg(reg))
+                {
+                    int dest = destReg >= 0 ? destReg : AllocTemp();
+                    Emit(OpCode.LOAD_MVAR, dest, reg - ModuleVarRegBase);
+                    return dest;
+                }
+                return reg;
             }
 
             if (expr is FieldAccessExpr fieldAccess)
             {
-                return ResolveFieldAccess(fieldAccess);
+                int reg = ResolveFieldAccess(fieldAccess);
+                // Lang-1: module struct field → emit LOAD_MVAR to materialize value
+                if (IsModuleVarReg(reg))
+                {
+                    int dest = destReg >= 0 ? destReg : AllocTemp();
+                    Emit(OpCode.LOAD_MVAR, dest, reg - ModuleVarRegBase);
+                    return dest;
+                }
+                return reg;
             }
 
             if (expr is BinaryExpr bin)
@@ -2461,10 +2528,17 @@ namespace FFVM.Compiler
 
                     // Scalar field assignment (original path)
                     int fieldReg = ResolveFieldAccess(fieldTarget);
+                    // Lang-1: module struct field → STORE_MVAR
+                    if (IsModuleVarReg(fieldReg))
+                    {
+                        int valueReg = CompileExpr(assign.Value);
+                        Emit(OpCode.STORE_MVAR, fieldReg - ModuleVarRegBase, valueReg);
+                        return valueReg;
+                    }
                     // O4: pass dest-reg hint for field assignment
-                    int valueReg = CompileExpr(assign.Value, destReg: fieldReg);
-                    if (valueReg != fieldReg)
-                        Emit(OpCode.MOVE, fieldReg, valueReg);
+                    int fvalueReg = CompileExpr(assign.Value, destReg: fieldReg);
+                    if (fvalueReg != fieldReg)
+                        Emit(OpCode.MOVE, fieldReg, fvalueReg);
                     return fieldReg;
                 }
 
@@ -2484,10 +2558,17 @@ namespace FFVM.Compiler
                         return destReg >= 0 ? destReg : AllocTemp();
                     }
                     int scalarTargetReg = ResolveVar(scalarTarget.Name);
+                    // Lang-1: module var → STORE_MVAR
+                    if (IsModuleVarReg(scalarTargetReg))
+                    {
+                        int scalarValueReg = CompileExpr(assign.Value);
+                        Emit(OpCode.STORE_MVAR, scalarTargetReg - ModuleVarRegBase, scalarValueReg);
+                        return scalarValueReg;
+                    }
                     // O4: pass dest-reg hint so expression writes directly into target register
-                    int scalarValueReg = CompileExpr(assign.Value, destReg: scalarTargetReg);
-                    if (scalarValueReg != scalarTargetReg)
-                        Emit(OpCode.MOVE, scalarTargetReg, scalarValueReg);
+                    int scalarValueReg2 = CompileExpr(assign.Value, destReg: scalarTargetReg);
+                    if (scalarValueReg2 != scalarTargetReg)
+                        Emit(OpCode.MOVE, scalarTargetReg, scalarValueReg2);
                     return scalarTargetReg;
                 }
                 {
