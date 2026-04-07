@@ -541,7 +541,7 @@ func step() {
 |------|---------------------|-------------------|
 | 条件入口 | main 的第一段代码 | 独立 `checkEnter()` 函数 |
 | 执行入口 | main yield 之后的代码 | 独立 `step()` 函数 |
-| probe 开销 | spawn 完整实例 → tick → 检查是否 completed | spawn 轻量实例 → 调用 checkEnter → 读返回值 → destroy |
+| probe 开销 | spawn 完整实例 → tick → 检查是否 completed | spawn 轻量实例（仅执行 checkEnter 的几条指令，不进入 step 循环）→ 读返回值 → 立即 destroy |
 | 可读性 | 条件和执行混合 | 职责分离 |
 | AI 复用 | 需要 spawn+tick 完整实例 | 可单独调用 checkEnter 查询可用性 |
 | 生命周期 | probe 通过的实例继续复用为执行实例 | probe 和执行是独立实例 |
@@ -924,7 +924,7 @@ func step() { ... }
 |------|------|
 | 实现复杂度 | ⭐ 低（文本拼接 + const 重定义支持） |
 | LSP 代码提示 | ✅ 展开后所有符号可见 |
-| 覆盖机制 | 需编译器允许 const 重定义（后定义覆盖先定义） |
+| 覆盖机制 | 需编译器允许 const 重定义（后定义覆盖先定义，规则草案见 §15.5） |
 | 命名冲突风险 | ⚠️ 中等（全局命名空间） |
 | 多级引入 | 支持（递归展开） |
 | AST 基础 | ✅ `ImportDecl` + `ModuleNode.Imports` 已存在于 AST |
