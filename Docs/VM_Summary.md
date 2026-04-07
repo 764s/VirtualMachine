@@ -342,12 +342,12 @@ Docs/
 | 解释器 | `TreeWalker`（Phase 2 原型，含 defer + Kill） | ✅ 完成 |
 | 词法分析 | `Lexer`（手写，16 关键字 + 运算符 + 字面量 + 注释，含 `struct` 关键字 + `.` 分隔符） | ✅ 完成 |
 | 语法分析 | `Parser`（手写递归下降，source → `ModuleNode` AST，含 using/wait_for/struct 声明/字段访问/错误恢复） | ✅ 完成 |
-| 编译器 | `BytecodeCompiler`（AST → `VMProgram`，寄存器分配：r0-15 scratch / r16-47 locals / r48-55 temps / r56-63 module vars，支持 using 配对 Syscall，支持多函数编译 + CALL emit，支持 struct 编译期拍平 → 连续寄存器槽位映射，F4 寄存器生命周期分析 + 复用，O4 dest-reg hint，O5 常量折叠，O7 Syscall 结果直达，FO5 返回值直达，FO7 调用栈深度静态分析，R7 >50 函数回填 Dictionary 切换，R8 Cleanup 块禁止函数调用，Lang-1 模块变量支持） | ✅ 完成 |
+| 编译器 | `BytecodeCompiler`（AST → `VMProgram`，寄存器分配由 VMConstants 派生：scratch / locals / temps / module vars，支持 using 配对 Syscall，支持多函数编译 + CALL emit，支持 struct 编译期拍平 → 连续寄存器槽位映射，F4 寄存器生命周期分析 + 复用，O4 dest-reg hint，O5 常量折叠，O7 Syscall 结果直达，FO5 返回值直达，FO7 调用栈深度静态分析，R7 >50 函数回填 Dictionary 切换，R8 Cleanup 块禁止函数调用，Lang-1 模块变量支持，Lang-1.1a 常量配置化） | ✅ 完成 |
 | 调试信息 | `VMProgram.SourceMap`（DBG1：IP→行号平行数组）+ `VMProgram.SymbolTable`（DBG2：变量名→寄存器+struct字段信息） | ✅ 完成 |
 | 运行时调试 | `ScriptDebugger`（DBG3 断点桥接 + DBG5 变量查看适配器 + DBG6 调用栈查看，Gate 0 命令行调试能力，HaltOnBreakpoint + SkipNextCheck DAP 暂停支持，DBG4 单步映射：临时断点 + FindNextLineIP/FindStepIntoIP/FindStepOutIP） | ✅ 完成 |
 | DAP 适配器 | `DapServer`（DBG7-A：12 消息 DAP 最小协议 + DBG7-B：next/stepIn/stepOut handler，stdin/stdout JSON-RPC + ContentLengthStream 分帧 + JsonHelper 手写 JSON），`StandaloneRunner --dap` 模式，Gate 1 + Gate 2 自动化验证通过 | ✅ Phase 3B 完成 |
 | VS Code 扩展 | `vscode-ffvm-debug/`（package.json + TextMate grammar + language-configuration.json + launch.json 模板） | ✅ 完成 |
-| 测试 | 1032 项 Assert 全部通过（112 TreeWalker + 531 Compiler + 44 Performance + 18 FFScript + 51 Debug + 97 DAP + 179 LSP），另有 6 项自动化性能基准 | ✅ Lang-1 通过 |
+| 测试 | 1032 项 Assert 全部通过（112 TreeWalker + 531 Compiler + 44 Performance + 18 FFScript + 51 Debug + 97 DAP + 179 LSP），另有 6 项自动化性能基准 | ✅ Lang-1.1a 通过 |
 | 性能基准 | `BenchmarkRunner`（6 组 VM vs C# 对比基准）+ `run-benchmarks.cmd` 自动化管线 → `benchmark_results.md` | ✅ 完成 |
 | 语言服务 | `LspServer`（LSP2 诊断 + LSP1 核心 + LSP3 实时诊断 + LSP4 符号分析 + LSP5 代码补全 + LSP6 Syscall 声明 + LSP7 参数提示） | ✅ 完成 |
 
@@ -472,7 +472,7 @@ Docs/
 | — | **B-δ4 SN2 结构体字面量构造语法** | **StructLiteralExpr AST + Parser `TypeName { field: expr }` + Compiler sugar 展开 + 嵌套字面量 + CS31-CS38 测试** | **990** | [B-δ4](Plan/Step_B_Delta4_SN2_StructLiteral.md) |
 | — | **B-δ5 C5 Cleanup 超时保护** | **MaxCleanupSteps 每块步数预算 + 超时跳过当前块继续剩余 cleanup + C5-01~C5-04 测试** | **1007** | [B-δ5](Plan/Step_B_Delta5_C5_CleanupTimeout.md) |
 
-**B 阶段全部完成。1007 项 Assert × 2 模式全通过。B-ε 性能优化串行计划全部完成（4/4）。B-ζ 分支场景优化串行计划全部完成（3/3）。B-η O8 指令压缩完成（O8-1~O8-3/O8-5 ✅，O8-4 ⏸）。D 阶段分发基础设施全部完成（DIST-1~DIST-10 ✅）。Lang-1 ✅ 完成。当前位置 → Lang-1.1a。**
+**B 阶段全部完成。1007 项 Assert × 2 模式全通过。B-ε 性能优化串行计划全部完成（4/4）。B-ζ 分支场景优化串行计划全部完成（3/3）。B-η O8 指令压缩完成（O8-1~O8-3/O8-5 ✅，O8-4 ⏸）。D 阶段分发基础设施全部完成（DIST-1~DIST-10 ✅）。Lang-1 ✅ 完成。Lang-1.1a ✅ 完成。当前位置 → Lang-1.1b。**
 
 ---
 
@@ -517,7 +517,7 @@ B 阶段 20 个步骤（B-R1 → B-δ5）全部完成，已归入上方 A 区表
 | B-ζ2 | CMP-immediate 指令 | ✅ | +6 OpCode `JUMP_IF_EQ_K` ~ `JUMP_IF_GTE_K`：`A=targetIP, B=reg, C=constIndex`，一条指令完成"与常量比较并跳转"，替代 `LOAD_CONST tmp` + `JUMP_IF_*`。Peephole 识别 + 编译器直接 emit | ~15-20% B04 加速；所有含常量比较的分支受益 | 中（+6 OpCode + VMWorld case + Peephole/Compiler 识别） |
 | B-ζ3 | SWITCH 跳转表指令 | ✅ | 编译器识别连续 if-else if 链中所有条件为同一变量对连续整数常量（从 0 起）比较时，生成 `SWITCH defaultIP, testReg, jumpTableIdx` 跳转表指令；O(N) 串行测试 → O(1) 分派。+1 OpCode + VMProgram.JumpTables + 编译器 TryCompileSwitch + Peephole 跳转表重映射 | B04↓40-47%（含高方差环境） | 中高（AST 模式识别 + 跳转表编码 + 新 OpCode + 仅对连续 0-based 整数常量有效） |
 
-**B-ζ 分支场景优化串行计划完成（3/3 ✅）。B-η O8 指令压缩完成（O8-1~O8-3/O8-5 ✅，O8-4 临时妥协 ⏸）。D 阶段分发基础设施全部完成（DIST-1~DIST-10 ✅）。Lang-1 ✅ 完成。当前位置 → Lang-1.1a。**
+**B-ζ 分支场景优化串行计划完成（3/3 ✅）。B-η O8 指令压缩完成（O8-1~O8-3/O8-5 ✅，O8-4 临时妥协 ⏸）。D 阶段分发基础设施全部完成（DIST-1~DIST-10 ✅）。Lang-1 ✅ 完成。Lang-1.1a ✅ 完成。当前位置 → Lang-1.1b。**
 
 ---
 
@@ -549,7 +549,7 @@ B 阶段 20 个步骤（B-R1 → B-δ5）全部完成，已归入上方 A 区表
 | 序号 | 步骤 | 状态 | 内容 | 对应痛点 | 改动范围 | 复杂度 |
 |------|------|------|------|---------|---------|--------|
 | Lang-1 | 模块变量 (L1) | ✅ | Parser 顶层 `var`/`const` + 编译器保留寄存器段（`ModuleVarSlots = (MaxRegisters / 64) * 8`，当前 = 8，即 r56~r63）。保留段跟随 MaxRegisters 变化，使用常量配置 | P1: 函数间无法共享变量 | 编译器 | ⭐⭐ |
-| Lang-1.1a | MaxRegisters 常量配置化 | ⏳ | `MaxRegisters` 从硬编码 64 改为可配置常量 + `NumberRegisters` 结构体同步扩展 + 内存预算注释更新。已确认：除客观内存占用外无性能区别 | — | VM 运行时 | ⭐ |
+| Lang-1.1a | MaxRegisters 常量配置化 | ✅ | VMConstants 新增 `ScratchZoneSize` / `TempSlots` / `LocalVarSlots` / `TempRegBase` 派生常量。`NumberRegisters` 改为 `fixed long Raw[MaxRegisters]`（自动跟随 MaxRegisters）。BytecodeCompiler / VMWorld / ScriptDebugger 所有硬编码边界改用 VMConstants 常量。修改 MaxRegisters（64 的倍数）后无需改动其他文件 | — | VM 运行时 | ⭐ |
 | Lang-1.1b | 扩展寄存器 | ⏳ | 独立于 `NumberRegisters` 的按需扩展寄存器池（`Number[]` 堆数组）+ 专用 opcode 访问。不使用时零开销（不在 `fixed` 指针路径上）。固定需求 | 寄存器容量兜底 | 编译器 + VM 运行时 | ⭐⭐ |
 | Lang-2 | include (L2) | ⏳ | 预处理器递归展开 + const/struct/func/var 重定义规则 | P2: 脚本间无法复用声明 | 编译器（新 Preprocessor） | ⭐⭐ |
 | Lang-3 | 黑板 Syscall 正式化 | ⏳ | Get/SetBlackboard(key, value) 标准 Syscall | P3: 跨脚本运行时数据共享 | 宿主 Syscall | ⭐ |
@@ -558,9 +558,9 @@ B 阶段 20 个步骤（B-R1 → B-δ5）全部完成，已归入上方 A 区表
 
 > 斜体 = 远期展望，当前阶段不排期，按需触发。Lang-1 和 Lang-2 无依赖关系，可并行实施。Lang-1.1a/b 在 Lang-1 之后，与 Lang-2 无依赖。
 >
-> **Lang-1 保留段决策**：保留 r56~r63 模块变量段，跟随 MaxRegisters 变化。公式 `ModuleVarSlots = (MaxRegisters / 64) * 8`（即每 64 寄存器保留 8 个 slot）。`ModuleVarRegBase = MaxRegisters - ModuleVarSlots`。全部使用 VMConstants 常量配置。模块变量通过专用 LOAD_MVAR/STORE_MVAR 指令绝对寻址，Reg() 保持最简形式 `r < 16 ? r : r + regBase`，热循环无额外分支。即使 Lang-1.1a/b 扩展寄存器后，固定寄存器文件内的保留段仍保留——扩展寄存器用于 locals/temps 溢出，模块变量始终在固定段内以保证绝对寻址。
+> **Lang-1 保留段决策**：保留 r56~r63 模块变量段，跟随 MaxRegisters 变化。公式 `ModuleVarSlots = (MaxRegisters / 64) * 8`（即每 64 寄存器保留 8 个 slot）。`ModuleVarRegBase = MaxRegisters - ModuleVarSlots`。全部使用 VMConstants 常量配置。模块变量通过专用 LOAD_MVAR/STORE_MVAR 指令绝对寻址，Reg() 保持最简形式 `r < ScratchZoneSize ? r : r + regBase`，热循环无额外分支。即使 Lang-1.1a/b 扩展寄存器后，固定寄存器文件内的保留段仍保留——扩展寄存器用于 locals/temps 溢出，模块变量始终在固定段内以保证绝对寻址。
 >
-> **Lang-1.1 分析结论**：MaxRegisters 64→128→const 对热循环零性能影响（`fixed (Number* regs = &inst.Registers.R00)` 后为裸指针偏移，JIT 生成 `ptr + index * 8`，不关心结构体总大小）。唯一客观影响为每实例内存增长（64 slots = 512B → 128 slots = 1024B）及快照 memcpy 体积，但 O10 仅拷贝活跃实例（典型 3-10 个），可忽略。因此 Lang-1.1a 直接常量配置化。Lang-1.1b 扩展寄存器为固定需求，不使用时对性能无影响。
+> **Lang-1.1 分析结论**：MaxRegisters 64→128→const 对热循环零性能影响（`fixed (long* rawRegs = inst.Registers.Raw)` 后为裸指针偏移，JIT 生成 `ptr + index * 8`，不关心数组总大小）。唯一客观影响为每实例内存增长（64 slots = 512B → 128 slots = 1024B）及快照 memcpy 体积，但 O10 仅拷贝活跃实例（典型 3-10 个），可忽略。Lang-1.1a 已完成常量配置化（NumberRegisters 改为 `fixed long Raw[MaxRegisters]`，所有边界常量化）。Lang-1.1b 扩展寄存器为固定需求，不使用时对性能无影响。
 >
 > ⚠️ **性能敏感**：每个 Lang 步骤完成后必须运行 B01-B06 benchmark，确认无性能回归。涉及 VM 运行时改动的步骤（Lang-4/5）需额外关注 ExecuteInstance 热循环影响。
 >
@@ -568,7 +568,7 @@ B 阶段 20 个步骤（B-R1 → B-δ5）全部完成，已归入上方 A 区表
 >
 > 详细需求背景、痛点分析、3 个建议方向的细则与待回复问题，见 [D_SkillScripting.md SK14](../KOF98/Docs/Discussion/D_SkillScripting.md)「向 VM/语言方提交的需求背景与建议方向」一节。
 
-**当前位置 → Lang-1.1a（MaxRegisters 常量配置化）。Lang-1 ✅ 完成（MV01-MV08 全通过）。**
+**当前位置 → Lang-1.1b（扩展寄存器）。Lang-1 ✅ 完成。Lang-1.1a ✅ 完成（MR01-MR08 全通过，1032 测试全通过，B01-B06 无回归）。**
 
 ---
 
@@ -606,7 +606,7 @@ B 阶段 20 个步骤（B-R1 → B-δ5）全部完成，已归入上方 A 区表
 | DIST-9 | Sandbox 改造：消费分发库 attach API | ✅ | 删除 `Sandbox/EmbeddedDapServer.cs`（774 行），`SandboxRunner` 改用 `FFVM.Debug.EmbeddableDapServer`；沙盒定制行为（WaitForConnection + StopOnEntry）保留。1007 项 Assert 全通过 + Sandbox 构建 0 错误 | DIST-8 | 验证分发库 API 可用性的"吃自己狗粮"步骤 |
 | DIST-10 | .NET 多版本兼容策略 | ✅ | FFVM.csproj 双目标 `netstandard2.1;net8.0`（NuGet 包含两个 TFM 程序集），netstandard2.1 目标自动定义 `FFVM_LEGACY_CSHARP` 切换条件编译。VMWorld.cs `AggressiveOptimization` 用条件编译隔离。CLI 追加 `RollForward=LatestMajor`。KOF98 + StandaloneRunner 构建通过，1007 Assert 全通过 | DIST-1 | [D11 讨论](Discussion/Step_DIST_Distribution.md) §七；[KOF98 覆盖验证](Discussion/Step_DIST_Distribution.md) §7.6 |
 
-**DIST-1~DIST-3 ✅ 已完成。DIST-8~DIST-9 ✅ 已完成。DIST-10 ✅ 已完成。D 阶段分发基础设施全部完成。Lang-1 ✅ 完成。当前位置 → Lang-1.1a。**
+**DIST-1~DIST-3 ✅ 已完成。DIST-8~DIST-9 ✅ 已完成。DIST-10 ✅ 已完成。D 阶段分发基础设施全部完成。Lang-1 ✅ 完成。Lang-1.1a ✅ 完成。当前位置 → Lang-1.1b。**
 
 ---
 
