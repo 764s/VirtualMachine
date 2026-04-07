@@ -13,17 +13,17 @@ namespace FFVM.Compiler
     /// <summary>
     /// Compiles a parsed AST (single function) into a VMProgram (bytecode + constants).
     ///
-    /// Register layout:
-    ///   r0..r15   — scratch zone: syscall arguments / return values (absolute)
-    ///   r16..r47  — local variables (32 slots, windowed)
-    ///   r48..r55  — expression temporaries (8 slots, windowed+remapped)
-    ///   r56..r63  — module variables (8 slots, absolute via LOAD_MVAR/STORE_MVAR)
+    /// Register layout (derived from VMConstants.MaxRegisters):
+    ///   r0..ScratchZoneSize-1                — scratch zone: syscall arguments / return values (absolute)
+    ///   ScratchZoneSize..TempRegBase-1        — local variables (LocalVarSlots slots, windowed)
+    ///   TempRegBase..ModuleVarRegBase-1       — expression temporaries (TempSlots slots, windowed+remapped)
+    ///   ModuleVarRegBase..MaxRegisters-1      — module variables (ModuleVarSlots slots, absolute via LOAD_MVAR/STORE_MVAR)
     /// </summary>
     public class BytecodeCompiler
     {
-        private const int VarRegBase = 16;
-        private const int TempRegBase = 48;
-        private const int ModuleVarRegBase = VMConstants.ModuleVarRegBase;  // r56 when MaxRegisters=64
+        private const int VarRegBase = VMConstants.ScratchZoneSize;
+        private const int TempRegBase = VMConstants.TempRegBase;
+        private const int ModuleVarRegBase = VMConstants.ModuleVarRegBase;
 
         private List<Instruction> _instructions;
         private List<int> _wideA;  // O8: full int A values parallel to _instructions (byte A may truncate for IP > 255)
@@ -2645,7 +2645,7 @@ namespace FFVM.Compiler
         /// <summary>
         /// Core: compile args → scratch zone, emit CALL instruction.
         /// S4: struct arguments expand to multiple consecutive scratch registers.
-        /// callerWindowSize = VarRegBase(16) + localVarCount for register window offset.
+        /// callerWindowSize = VarRegBase + localVarCount for register window offset.
         /// </summary>
         private void EmitUserCall(CallExpr call)
         {
@@ -2840,7 +2840,7 @@ namespace FFVM.Compiler
                 funcWindows[functionEntries[i].Name] = functionEntries[i].LocalRegCount;
 
             var windowVisited = new Dictionary<string, int>(); // funcName → max cumulative window (-1 = in progress)
-            int availableSlots = VMConstants.ModuleVarRegBase - VarRegBase; // 56 - 16 = 40
+            int availableSlots = VMConstants.ModuleVarRegBase - VarRegBase;
 
             int ComputeMaxWindow(string funcName)
             {

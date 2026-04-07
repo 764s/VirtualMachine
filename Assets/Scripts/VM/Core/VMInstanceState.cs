@@ -70,7 +70,7 @@ namespace FFVM
 
     /// <summary>
     /// Complete state of a single VM instance. Pure blittable struct for memcpy snapshot.
-    /// Size per instance ≈ 8*64 + 12*16 + overhead ≈ 740 bytes.
+    /// Size per instance ≈ MaxRegisters*8 + CallStack + CleanupStack + fields.
     /// </summary>
     [StructLayout(LayoutKind.Sequential)]
     public struct VMInstanceState
@@ -118,36 +118,29 @@ namespace FFVM
     }
 
     /// <summary>
-    /// Inline fixed-size register file. 64 × Number (8 bytes each) = 512 bytes.
-    /// Using explicit struct to keep blittable without unsafe.
+    /// Inline fixed-size register file. MaxRegisters × Number (8 bytes each).
+    /// Uses fixed-size buffer so size auto-follows VMConstants.MaxRegisters.
+    /// Number is LayoutKind.Explicit, Size=8 with long Raw at offset 0,
+    /// so long* and Number* are safely interchangeable via reinterpret cast.
     /// </summary>
     [StructLayout(LayoutKind.Sequential)]
-    public struct NumberRegisters
+    public unsafe struct NumberRegisters
     {
-        // We use a flat approach: fields r0..r63
-        // For indexed access, use the Get/Set methods via unsafe pointer or switch.
-        public Number R00, R01, R02, R03, R04, R05, R06, R07;
-        public Number R08, R09, R10, R11, R12, R13, R14, R15;
-        public Number R16, R17, R18, R19, R20, R21, R22, R23;
-        public Number R24, R25, R26, R27, R28, R29, R30, R31;
-        public Number R32, R33, R34, R35, R36, R37, R38, R39;
-        public Number R40, R41, R42, R43, R44, R45, R46, R47;
-        public Number R48, R49, R50, R51, R52, R53, R54, R55;
-        public Number R56, R57, R58, R59, R60, R61, R62, R63;
+        public fixed long Raw[VMConstants.MaxRegisters];
 
-        public unsafe Number Get(int index)
+        public Number Get(int index)
         {
-            fixed (Number* ptr = &R00)
+            fixed (long* ptr = Raw)
             {
-                return ptr[index];
+                return ((Number*)ptr)[index];
             }
         }
 
-        public unsafe void Set(int index, Number value)
+        public void Set(int index, Number value)
         {
-            fixed (Number* ptr = &R00)
+            fixed (long* ptr = Raw)
             {
-                ptr[index] = value;
+                ((Number*)ptr)[index] = value;
             }
         }
     }

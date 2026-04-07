@@ -188,12 +188,12 @@ namespace FFVM
 
         /// <summary>
         /// Resolve a logical register index to a physical register index.
-        /// r0-r15 (scratch zone) are absolute; r16+ are offset by RegisterBase.
+        /// r0..ScratchZoneSize-1 (scratch zone) are absolute; rest are offset by RegisterBase.
         /// Module variables use dedicated LOAD_MVAR/STORE_MVAR opcodes (absolute addressing).
         /// </summary>
         private static int Reg(int r, int regBase)
         {
-            return r < 16 ? r : r + regBase;
+            return r < VMConstants.ScratchZoneSize ? r : r + regBase;
         }
 
 #if !FFVM_LEGACY_CSHARP
@@ -229,10 +229,11 @@ namespace FFVM
             // largest per-instruction overhead in the dispatch loop.
             // B-ε1: Pin code & consts arrays alongside registers — pointer arithmetic
             // skips CLR bounds check on every instruction fetch and constant load.
-            fixed (Number* regs = &inst.Registers.R00)
+            fixed (long* rawRegs = inst.Registers.Raw)
             fixed (Instruction* codeBase = code)
             fixed (Number* constBase = consts)
             {
+                Number* regs = (Number*)rawRegs;
                 int extendedA = 0;  // O8: high byte accumulator for EXTEND_AX prefix
                 while (steps < maxSteps)
                 {

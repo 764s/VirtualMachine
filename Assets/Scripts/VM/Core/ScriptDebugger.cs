@@ -282,8 +282,8 @@ namespace FFVM
                     IsStruct = sym.FieldCount > 0
                 };
 
-                // r0-r15 (scratch zone) are absolute; r16+ are offset by RegisterBase
-                int physReg = sym.Register < 16 ? sym.Register : sym.Register + inst.RegisterBase;
+                // Scratch zone registers are absolute; windowed registers offset by RegisterBase
+                int physReg = sym.Register < VMConstants.ScratchZoneSize ? sym.Register : sym.Register + inst.RegisterBase;
 
                 if (sym.FieldCount > 0 && sym.FieldNames != null)
                 {
