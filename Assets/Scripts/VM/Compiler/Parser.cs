@@ -39,9 +39,19 @@ namespace FFVM.Compiler
                 {
                     module.Structs.Add(ParseStructDecl());
                 }
+                else if (Check(TokenType.Var))
+                {
+                    // Lang-1: Module-level variable declaration
+                    module.ModuleVariables.Add(ParseVarDecl(false));
+                }
+                else if (Check(TokenType.Const))
+                {
+                    // Lang-1: Module-level constant declaration
+                    module.ModuleVariables.Add(ParseVarDecl(true));
+                }
                 else
                 {
-                    Error($"Expected 'func' or 'struct', got '{Current().Text}'");
+                    Error($"Expected 'func', 'struct', 'var', or 'const', got '{Current().Text}'");
                     Advance();
                 }
             }

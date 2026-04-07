@@ -14,14 +14,16 @@ namespace FFVM.Compiler
     /// Compiles a parsed AST (single function) into a VMProgram (bytecode + constants).
     ///
     /// Register layout:
-    ///   r0..r15   — scratch zone: syscall arguments / return values
-    ///   r16..r47  — local variables (32 slots)
-    ///   r48..r63  — expression temporaries (16 slots)
+    ///   r0..r15   — scratch zone: syscall arguments / return values (absolute)
+    ///   r16..r47  — local variables (32 slots, windowed by RegisterBase)
+    ///   r48..r55  — expression temporaries (8 slots, windowed by RegisterBase)
+    ///   r56..r63  — module variables (8 slots, absolute — Lang-1)
     /// </summary>
     public class BytecodeCompiler
     {
         private const int VarRegBase = 16;
         private const int TempRegBase = 48;
+        private const int ModuleVarRegBase = VMConstants.ModuleVarRegBase; // 56 — Lang-1
 
         private List<Instruction> _instructions;
         private List<int> _wideA;  // O8: full int A values parallel to _instructions (byte A may truncate for IP > 255)
@@ -112,6 +114,12 @@ namespace FFVM.Compiler
         private int _maxTempUsed;                           // FO6: peak temp register used per function
         private int _stmtOrder;                             // current statement order counter for release tracking
 
+        // Lang-1: Module-level variable support
+        private Dictionary<string, int> _moduleVariables;       // name → absolute register (r56-r63)
+        private Dictionary<string, Number> _moduleConstValues;  // name → compile-time constant value
+        private Dictionary<string, string> _moduleStructVarTypes; // name → struct typeName (for module-level struct vars)
+        private int _nextModuleVarReg;                          // next available module var register
+
         /// <summary>
         /// Compile source text into a VMProgram.
         /// </summary>
@@ -163,6 +171,11 @@ namespace FFVM.Compiler
 
             // SN1: Build flattened struct info (recursive expansion + cycle detection)
             BuildFlatStructInfo();
+            if (_errors.Count > 0)
+                return new CompileResult { Errors = _errors };
+
+            // --- Lang-1: Process module-level variables ---
+            ProcessModuleVariables(module);
             if (_errors.Count > 0)
                 return new CompileResult { Errors = _errors };
 
@@ -325,6 +338,23 @@ namespace FFVM.Compiler
             // function's last line.
             _currentLine = func.Line;
 
+            // Lang-1: Pre-populate module-level variables and consts into function scope
+            if (_moduleVariables != null)
+            {
+                foreach (var kv in _moduleVariables)
+                    _variables[kv.Key] = kv.Value;
+            }
+            if (_moduleConstValues != null)
+            {
+                foreach (var kv in _moduleConstValues)
+                    _constValues[kv.Key] = kv.Value;
+            }
+            if (_moduleStructVarTypes != null)
+            {
+                foreach (var kv in _moduleStructVarTypes)
+                    _structVarTypes[kv.Key] = kv.Value;
+            }
+
             // F4: analyze variable lifetimes before compilation
             _liveRanges = AnalyzeVariableLifetimes(func);
 
@@ -354,6 +384,10 @@ namespace FFVM.Compiler
                     }
                 }
             }
+
+            // Lang-1: Emit module variable initialization in entry function
+            if (isEntry)
+                EmitModuleVarInit();
 
             // Compile function body
             CompileBlock(func.Body);
@@ -530,9 +564,10 @@ namespace FFVM.Compiler
                 bool changed = false;
 
                 byte mask = GetRegisterMask(instr.Code);
-                if ((mask & 1) != 0 && a >= TempRegBase) { a += shift; changed = true; }
-                if ((mask & 2) != 0 && b >= TempRegBase) { b += shift; changed = true; }
-                if ((mask & 4) != 0 && c >= TempRegBase) { c += shift; changed = true; }
+                // Lang-1: only remap temps (TempRegBase..ModuleVarRegBase-1), not module vars (r56+)
+                if ((mask & 1) != 0 && a >= TempRegBase && a < ModuleVarRegBase) { a += shift; changed = true; }
+                if ((mask & 2) != 0 && b >= TempRegBase && b < ModuleVarRegBase) { b += shift; changed = true; }
+                if ((mask & 4) != 0 && c >= TempRegBase && c < ModuleVarRegBase) { c += shift; changed = true; }
 
                 if (changed)
                     _instructions[ip] = new Instruction(instr.Code, a, b, c);
@@ -945,6 +980,162 @@ namespace FFVM.Compiler
             return currentType;
         }
 
+        // ===== Lang-1: Module variable processing =====
+
+        /// <summary>
+        /// Process module-level variable declarations: allocate registers r56-r63 for vars,
+        /// fold constants for consts. Called once before compiling any function.
+        /// </summary>
+        private void ProcessModuleVariables(ModuleNode module)
+        {
+            _moduleVariables = new Dictionary<string, int>();
+            _moduleConstValues = new Dictionary<string, Number>();
+            _moduleStructVarTypes = new Dictionary<string, string>();
+            _moduleVarDecls = new List<VarDeclStmt>();
+            _nextModuleVarReg = ModuleVarRegBase;
+
+            for (int i = 0; i < module.ModuleVariables.Count; i++)
+            {
+                var mv = module.ModuleVariables[i];
+
+                // Module-level const — fold to compile-time value, no register
+                if (mv.IsConst)
+                {
+                    if (mv.Initializer == null)
+                    {
+                        _errors.Add($"Module-level 'const' requires an initializer (line {mv.Line})");
+                        continue;
+                    }
+                    if (TryFoldConstant(mv.Initializer, out Number constVal))
+                    {
+                        if (_moduleConstValues.ContainsKey(mv.Name) || _moduleVariables.ContainsKey(mv.Name))
+                        {
+                            _errors.Add($"Duplicate module-level declaration '{mv.Name}' (line {mv.Line})");
+                            continue;
+                        }
+                        _moduleConstValues[mv.Name] = constVal;
+                    }
+                    else
+                    {
+                        _errors.Add($"Module-level 'const' initializer must be a compile-time constant (line {mv.Line})");
+                    }
+                    continue;
+                }
+
+                // Check for duplicate
+                if (_moduleVariables.ContainsKey(mv.Name) || _moduleConstValues.ContainsKey(mv.Name))
+                {
+                    _errors.Add($"Duplicate module-level declaration '{mv.Name}' (line {mv.Line})");
+                    continue;
+                }
+
+                // Module-level struct variable
+                if (_structTypes.ContainsKey(mv.TypeName))
+                {
+                    var flatInfo = _flatStructInfo[mv.TypeName];
+                    int flatCount = flatInfo.FlatFieldCount;
+                    if (_nextModuleVarReg + flatCount > VMConstants.MaxRegisters)
+                    {
+                        _errors.Add($"Too many module variables — struct '{mv.Name}' needs {flatCount} registers (max {VMConstants.MaxRegisters - ModuleVarRegBase})");
+                        continue;
+                    }
+                    int baseReg = _nextModuleVarReg;
+                    _nextModuleVarReg += flatCount;
+                    _moduleVariables[mv.Name] = baseReg;
+                    _moduleStructVarTypes[mv.Name] = mv.TypeName;
+                    _moduleVarDecls.Add(mv);
+
+                    // DBG2: symbol entry for module-level struct variable
+                    var fieldNames = new string[flatCount];
+                    for (int fi = 0; fi < flatCount; fi++)
+                        fieldNames[fi] = flatInfo.FlatFields[fi].DotPath;
+                    _symbolEntries.Add(new SymbolEntry(mv.Name, baseReg, flatCount, fieldNames, null));
+                    continue;
+                }
+
+                // Module-level scalar variable
+                if (_nextModuleVarReg >= VMConstants.MaxRegisters)
+                {
+                    _errors.Add($"Too many module variables (max {VMConstants.MaxRegisters - ModuleVarRegBase})");
+                    continue;
+                }
+                int reg = _nextModuleVarReg++;
+                _moduleVariables[mv.Name] = reg;
+                _moduleVarDecls.Add(mv);
+
+                // DBG2: symbol entry for module-level scalar variable (scope = null = module)
+                _symbolEntries.Add(new SymbolEntry(mv.Name, reg, 0, null, null));
+            }
+        }
+
+        /// <summary>
+        /// Emit module variable initialization code at the start of the entry function.
+        /// Module consts don't need initialization (compile-time folded).
+        /// Module vars get explicit initializer or default zero.
+        /// </summary>
+        private void EmitModuleVarInit()
+        {
+            if (_moduleVarDecls == null || _moduleVarDecls.Count == 0) return;
+
+            for (int i = 0; i < _moduleVarDecls.Count; i++)
+            {
+                var mv = _moduleVarDecls[i];
+                _currentLine = mv.Line;
+                int reg = _moduleVariables[mv.Name];
+
+                // Struct module variable
+                if (_moduleStructVarTypes != null && _moduleStructVarTypes.ContainsKey(mv.Name))
+                {
+                    string typeName = _moduleStructVarTypes[mv.Name];
+                    var flatInfo = _flatStructInfo[typeName];
+                    int flatCount = flatInfo.FlatFieldCount;
+
+                    if (mv.Initializer != null)
+                    {
+                        if (mv.Initializer is StructLiteralExpr literal)
+                        {
+                            CompileStructLiteral(literal, typeName, reg, mv.Line);
+                        }
+                        else if (mv.Initializer is IdentifierExpr srcIdent &&
+                                 _moduleStructVarTypes.TryGetValue(srcIdent.Name, out var srcType) &&
+                                 srcType == typeName)
+                        {
+                            int srcBase = _moduleVariables[srcIdent.Name];
+                            EmitStructCopy(reg, srcBase, flatCount);
+                        }
+                        else
+                        {
+                            _errors.Add($"Module struct variable '{mv.Name}' can only be initialized from struct literal or same-type struct (line {mv.Line})");
+                        }
+                    }
+                    else
+                    {
+                        // Default initialize all fields to 0
+                        int ci = AddConst(Number.Zero);
+                        for (int f = 0; f < flatCount; f++)
+                            Emit(OpCode.LOAD_CONST, reg + f, ci);
+                    }
+                    continue;
+                }
+
+                // Scalar module variable
+                if (mv.Initializer != null)
+                {
+                    int valueReg = CompileExpr(mv.Initializer, destReg: reg);
+                    if (valueReg != reg)
+                        Emit(OpCode.MOVE, reg, valueReg);
+                }
+                else
+                {
+                    // Default initialize to 0
+                    EmitLoadConst(AddConst(Number.Zero), reg);
+                }
+            }
+        }
+
+        // Storage for module variable AST nodes (set during ProcessModuleVariables, used by EmitModuleVarInit)
+        private List<VarDeclStmt> _moduleVarDecls;
+
         // ===== Variable management =====
 
         private int DeclareVar(string name)
@@ -1104,7 +1295,7 @@ namespace FFVM.Compiler
 
         private int AllocTemp()
         {
-            if (_tempTop >= VMConstants.MaxRegisters)
+            if (_tempTop >= ModuleVarRegBase)
             {
                 _errors.Add("Expression too complex (out of temp registers)");
                 return TempRegBase;
@@ -1358,6 +1549,18 @@ namespace FFVM.Compiler
 
         private void CompileVarDecl(VarDeclStmt stmt)
         {
+            // Lang-1: prevent local var/const from shadowing module-level declarations
+            if (_moduleVariables != null && _moduleVariables.ContainsKey(stmt.Name))
+            {
+                _errors.Add($"Local variable '{stmt.Name}' shadows module-level variable (line {stmt.Line})");
+                return;
+            }
+            if (_moduleConstValues != null && _moduleConstValues.ContainsKey(stmt.Name))
+            {
+                _errors.Add($"Local variable '{stmt.Name}' shadows module-level constant (line {stmt.Line})");
+                return;
+            }
+
             // Check if this is a struct variable
             if (_structTypes.TryGetValue(stmt.TypeName, out var structDecl))
             {
@@ -2604,7 +2807,8 @@ namespace FFVM.Compiler
                 funcWindows[functionEntries[i].Name] = functionEntries[i].LocalRegCount;
 
             var windowVisited = new Dictionary<string, int>(); // funcName → max cumulative window (-1 = in progress)
-            int availableSlots = VMConstants.MaxRegisters - VarRegBase; // 64 - 16 = 48
+            // Lang-1: windowed zone is r16..r55 (VarRegBase to ModuleVarRegBase-1)
+            int availableSlots = ModuleVarRegBase - VarRegBase; // 56 - 16 = 40
 
             int ComputeMaxWindow(string funcName)
             {
@@ -2639,7 +2843,7 @@ namespace FFVM.Compiler
             int maxWindow = callGraph.ContainsKey(entryFunc) ? ComputeMaxWindow(entryFunc) : 0;
             if (maxWindow > availableSlots)
             {
-                _errors.Add($"Static register window depth from '{entryFunc}' requires {maxWindow} registers, exceeding available {availableSlots} slots (MaxRegisters={VMConstants.MaxRegisters}). Reduce local variable usage or function nesting depth.");
+                _errors.Add($"Static register window depth from '{entryFunc}' requires {maxWindow} registers, exceeding available {availableSlots} slots (windowed zone r{VarRegBase}..r{ModuleVarRegBase - 1}). Reduce local variable usage or function nesting depth.");
             }
         }
 
@@ -3127,10 +3331,11 @@ namespace FFVM.Compiler
                 var next = _instructions[i + 1];
 
                 // P2: dest-redirect — OP rT,… ; MOVE rV,rT → OP rV,…
-                // Safety: only redirect when original dest (ins.A) is a temp register (≥ TempRegBase).
-                // Variable registers may be read later; redirecting away from them would break semantics.
+                // Safety: only redirect when original dest (ins.A) is a temp register (≥ TempRegBase, < ModuleVarRegBase).
+                // Variable registers and module variable registers may be read later;
+                // redirecting away from them would break semantics.
                 if (IsResultProducer(ins.Code) && next.Code == OpCode.MOVE
-                    && next.B == ins.A && ins.A >= TempRegBase)
+                    && next.B == ins.A && ins.A >= TempRegBase && ins.A < ModuleVarRegBase)
                 {
                     _instructions[i] = new Instruction(ins.Code, next.A, ins.B, ins.C);
                     _wideA[i] = next.A;  // O8: register value, always byte-safe

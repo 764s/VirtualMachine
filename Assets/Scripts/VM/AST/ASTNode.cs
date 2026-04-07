@@ -413,6 +413,8 @@ namespace FFVM.AST
         public List<ImportDecl> Imports { get; }
         public List<StructDecl> Structs { get; }
         public List<FuncDecl> Functions { get; }
+        /// <summary>Lang-1: Module-level variable declarations (file-scope, shared across all functions).</summary>
+        public List<VarDeclStmt> ModuleVariables { get; }
 
         public ModuleNode(string filePath) : base(NodeKind.Module)
         {
@@ -420,6 +422,7 @@ namespace FFVM.AST
             Imports = new List<ImportDecl>();
             Structs = new List<StructDecl>();
             Functions = new List<FuncDecl>();
+            ModuleVariables = new List<VarDeclStmt>();
         }
     }
 }

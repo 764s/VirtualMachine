@@ -5076,6 +5076,409 @@ func main() {
                 $"SO1-05: after rollback → (7,8,9), got ({string.Join(",", log)})");
         }
 
+        // ===== Lang-1: Module Variables =====
+
+        // Test L01: Basic module variable — read/write across functions
+        {
+            string source = @"
+var counter: int = 0
+
+func step() {
+    counter = counter + 1
+    Report(counter)
+    counter = counter + 1
+    Report(counter)
+}";
+            var syscalls = new Dictionary<string, int> { { "Report", 0 } };
+            var result = compiler.Compile(source, "step", syscalls);
+            Assert(result.Success, $"L01 compile success ({(result.Success ? "" : string.Join("; ", result.Errors))})");
+
+            var log = new List<string>();
+            var world = new VMWorld();
+            world.Modules.Load(0, result.Program);
+            world.Syscalls.Register(0, "Report", (ref VMInstanceState s) =>
+            {
+                log.Add(s.Registers.Get(0).ToInt().ToString());
+            });
+            world.SpawnInstance(0, 0);
+            world.Tick();
+            Assert(log.Count == 2 && log[0] == "1" && log[1] == "2",
+                $"L01: counter increments, got ({string.Join(",", log)}) expected (1,2)");
+        }
+
+        // Test L02: Module variable shared across two functions
+        {
+            string source = @"
+var state: int = 0
+
+func checkEnter(): int {
+    state = 42
+    return 1
+}
+
+func step() {
+    Report(state)
+}";
+            var syscalls = new Dictionary<string, int> { { "Report", 0 } };
+            var result = compiler.Compile(source, "checkEnter", syscalls);
+            Assert(result.Success, $"L02 compile success ({(result.Success ? "" : string.Join("; ", result.Errors))})");
+
+            var log = new List<string>();
+            var world = new VMWorld();
+            world.Modules.Load(0, result.Program);
+            world.Syscalls.Register(0, "Report", (ref VMInstanceState s) =>
+            {
+                log.Add(s.Registers.Get(0).ToInt().ToString());
+            });
+
+            // checkEnter sets state=42, then we call step which reports it
+            // Use TryGetFunction to get step's IP
+            Assert(result.Program.TryGetFunction("step", out var stepEntry), "L02: step function found");
+
+            int id = world.SpawnInstance(0, 0); // starts at checkEnter (IP 0)
+            world.Tick(); // runs checkEnter, completes
+
+            // Now read state register directly — module vars at r56+
+            int stateReg = 56; // first module var
+            int stateVal = world.Pool.Instances[id].Registers.Get(stateReg).ToInt();
+            Assert(stateVal == 42, $"L02: state=42 after checkEnter, got {stateVal}");
+        }
+
+        // Test L03: Module variable with explicit initializer
+        {
+            string source = @"
+var startValue: int = 100
+var offset: int = 5
+
+func main() {
+    Report(startValue + offset)
+}";
+            var syscalls = new Dictionary<string, int> { { "Report", 0 } };
+            var result = compiler.Compile(source, "main", syscalls);
+            Assert(result.Success, $"L03 compile success ({(result.Success ? "" : string.Join("; ", result.Errors))})");
+
+            var log = new List<string>();
+            var world = new VMWorld();
+            world.Modules.Load(0, result.Program);
+            world.Syscalls.Register(0, "Report", (ref VMInstanceState s) =>
+            {
+                log.Add(s.Registers.Get(0).ToInt().ToString());
+            });
+            world.SpawnInstance(0, 0);
+            world.Tick();
+            Assert(log.Count == 1 && log[0] == "105", $"L03: 100+5=105, got ({string.Join(",", log)})");
+        }
+
+        // Test L04: Module variable persistence across yield/wait
+        {
+            string source = @"
+var counter: int = 0
+
+func main() {
+    counter = 10
+    yield
+    counter = counter + 1
+    Report(counter)
+}";
+            var syscalls = new Dictionary<string, int> { { "Report", 0 } };
+            var result = compiler.Compile(source, "main", syscalls);
+            Assert(result.Success, $"L04 compile success ({(result.Success ? "" : string.Join("; ", result.Errors))})");
+
+            var log = new List<string>();
+            var world = new VMWorld();
+            world.Modules.Load(0, result.Program);
+            world.Syscalls.Register(0, "Report", (ref VMInstanceState s) =>
+            {
+                log.Add(s.Registers.Get(0).ToInt().ToString());
+            });
+            world.SpawnInstance(0, 0);
+            world.Tick(); // frame 1: counter=10, yield
+            world.Tick(); // frame 2: wait 1 countdown
+            world.Tick(); // frame 3: counter=11, Report
+            Assert(log.Count == 1 && log[0] == "11", $"L04: counter persists across yield, got ({string.Join(",", log)})");
+        }
+
+        // Test L05: Too many module variables
+        {
+            string source = @"
+var a: int = 0
+var b: int = 0
+var c: int = 0
+var d: int = 0
+var e: int = 0
+var f: int = 0
+var g: int = 0
+var h: int = 0
+var overflow: int = 0
+
+func main() {
+    Report(a)
+}";
+            var syscalls = new Dictionary<string, int> { { "Report", 0 } };
+            var result = compiler.Compile(source, "main", syscalls);
+            Assert(!result.Success, "L05: overflow module vars should fail");
+            Assert(result.Errors != null && result.Errors.Count > 0 && result.Errors[0].Contains("Too many module variables"),
+                $"L05: error message mentions overflow ({(result.Errors != null && result.Errors.Count > 0 ? result.Errors[0] : "no error")})");
+        }
+
+        // Test L06: Module-level const
+        {
+            string source = @"
+const MAX_COMBO: int = 5
+var comboCount: int = 0
+
+func main() {
+    comboCount = MAX_COMBO
+    Report(comboCount)
+}";
+            var syscalls = new Dictionary<string, int> { { "Report", 0 } };
+            var result = compiler.Compile(source, "main", syscalls);
+            Assert(result.Success, $"L06 compile success ({(result.Success ? "" : string.Join("; ", result.Errors))})");
+
+            var log = new List<string>();
+            var world = new VMWorld();
+            world.Modules.Load(0, result.Program);
+            world.Syscalls.Register(0, "Report", (ref VMInstanceState s) =>
+            {
+                log.Add(s.Registers.Get(0).ToInt().ToString());
+            });
+            world.SpawnInstance(0, 0);
+            world.Tick();
+            Assert(log.Count == 1 && log[0] == "5", $"L06: const MAX_COMBO=5, got ({string.Join(",", log)})");
+        }
+
+        // Test L07: Module variable + function call (windowing correctness)
+        {
+            string source = @"
+var shared: int = 0
+
+func helper(): int {
+    shared = shared + 10
+    return shared
+}
+
+func main() {
+    shared = 1
+    var result: int = helper()
+    Report(result)
+    Report(shared)
+}";
+            var syscalls = new Dictionary<string, int> { { "Report", 0 } };
+            var result = compiler.Compile(source, "main", syscalls);
+            Assert(result.Success, $"L07 compile success ({(result.Success ? "" : string.Join("; ", result.Errors))})");
+
+            var log = new List<string>();
+            var world = new VMWorld();
+            world.Modules.Load(0, result.Program);
+            world.Syscalls.Register(0, "Report", (ref VMInstanceState s) =>
+            {
+                log.Add(s.Registers.Get(0).ToInt().ToString());
+            });
+            world.SpawnInstance(0, 0);
+            world.Tick();
+            Assert(log.Count == 2 && log[0] == "11" && log[1] == "11",
+                $"L07: shared=1+10=11 across function call, got ({string.Join(",", log)})");
+        }
+
+        // Test L08: Module variable with snapshot/rollback
+        {
+            string source = @"
+var counter: int = 0
+
+func main() {
+    counter = counter + 1
+    Report(counter)
+    yield
+    counter = counter + 1
+    Report(counter)
+}";
+            var syscalls = new Dictionary<string, int> { { "Report", 0 } };
+            var result = compiler.Compile(source, "main", syscalls);
+            Assert(result.Success, $"L08 compile success ({(result.Success ? "" : string.Join("; ", result.Errors))})");
+
+            var log = new List<string>();
+            var world = new VMWorld();
+            world.Modules.Load(0, result.Program);
+            world.Syscalls.Register(0, "Report", (ref VMInstanceState s) =>
+            {
+                log.Add(s.Registers.Get(0).ToInt().ToString());
+            });
+            world.SpawnInstance(0, 0);
+            world.Tick(); // frame 1: counter=1, Report(1), yield
+            Assert(log.Count == 1 && log[0] == "1", $"L08: frame1 counter=1, got ({string.Join(",", log)})");
+
+            world.SaveState(); // snapshot after frame 1
+
+            log.Clear();
+            world.Tick(); // frame 2: wait 1 countdown
+            world.Tick(); // frame 3: counter=2, Report(2)
+            Assert(log.Count == 1 && log[0] == "2", $"L08: frame3 counter=2, got ({string.Join(",", log)})");
+
+            // Rollback to after frame 1
+            log.Clear();
+            bool loaded = world.LoadState(1);
+            Assert(loaded, "L08: rollback succeeded");
+
+            world.Tick(); // replay frame 2: wait countdown
+            world.Tick(); // replay frame 3: counter=2, Report(2)
+            Assert(log.Count == 1 && log[0] == "2",
+                $"L08: after rollback replay counter=2, got ({string.Join(",", log)})");
+        }
+
+        // Test L09: Local var shadowing module var — should error
+        {
+            string source = @"
+var count: int = 0
+
+func main() {
+    var count: int = 5
+    Report(count)
+}";
+            var syscalls = new Dictionary<string, int> { { "Report", 0 } };
+            var result = compiler.Compile(source, "main", syscalls);
+            Assert(!result.Success, "L09: local shadowing module var should fail");
+            Assert(result.Errors != null && result.Errors.Count > 0 && result.Errors[0].Contains("shadows"),
+                $"L09: error mentions shadowing ({(result.Errors != null && result.Errors.Count > 0 ? result.Errors[0] : "no error")})");
+        }
+
+        // Test L10: Module variable default initialization (no explicit init)
+        {
+            string source = @"
+var counter: int
+
+func main() {
+    Report(counter)
+    counter = 42
+    Report(counter)
+}";
+            var syscalls = new Dictionary<string, int> { { "Report", 0 } };
+            var result = compiler.Compile(source, "main", syscalls);
+            Assert(result.Success, $"L10 compile success ({(result.Success ? "" : string.Join("; ", result.Errors))})");
+
+            var log = new List<string>();
+            var world = new VMWorld();
+            world.Modules.Load(0, result.Program);
+            world.Syscalls.Register(0, "Report", (ref VMInstanceState s) =>
+            {
+                log.Add(s.Registers.Get(0).ToInt().ToString());
+            });
+            world.SpawnInstance(0, 0);
+            world.Tick();
+            Assert(log.Count == 2 && log[0] == "0" && log[1] == "42",
+                $"L10: default init=0, then 42, got ({string.Join(",", log)})");
+        }
+
+        // Test L11: Module-level const visible in multiple functions
+        {
+            string source = @"
+const BASE: int = 100
+
+func helper(): int {
+    return BASE + 1
+}
+
+func main() {
+    var result: int = helper()
+    Report(result)
+    Report(BASE)
+}";
+            var syscalls = new Dictionary<string, int> { { "Report", 0 } };
+            var result = compiler.Compile(source, "main", syscalls);
+            Assert(result.Success, $"L11 compile success ({(result.Success ? "" : string.Join("; ", result.Errors))})");
+
+            var log = new List<string>();
+            var world = new VMWorld();
+            world.Modules.Load(0, result.Program);
+            world.Syscalls.Register(0, "Report", (ref VMInstanceState s) =>
+            {
+                log.Add(s.Registers.Get(0).ToInt().ToString());
+            });
+            world.SpawnInstance(0, 0);
+            world.Tick();
+            Assert(log.Count == 2 && log[0] == "101" && log[1] == "100",
+                $"L11: const BASE=100 visible in helper and main, got ({string.Join(",", log)})");
+        }
+
+        // Test L12: Module struct variable
+        {
+            string source = @"
+struct Vec2 {
+    x: int
+    y: int
+}
+
+var pos: Vec2
+
+func main() {
+    pos.x = 10
+    pos.y = 20
+    Report(pos.x)
+    Report(pos.y)
+}";
+            var syscalls = new Dictionary<string, int> { { "Report", 0 } };
+            var result = compiler.Compile(source, "main", syscalls);
+            Assert(result.Success, $"L12 compile success ({(result.Success ? "" : string.Join("; ", result.Errors))})");
+
+            var log = new List<string>();
+            var world = new VMWorld();
+            world.Modules.Load(0, result.Program);
+            world.Syscalls.Register(0, "Report", (ref VMInstanceState s) =>
+            {
+                log.Add(s.Registers.Get(0).ToInt().ToString());
+            });
+            world.SpawnInstance(0, 0);
+            world.Tick();
+            Assert(log.Count == 2 && log[0] == "10" && log[1] == "20",
+                $"L12: struct module var, got ({string.Join(",", log)})");
+        }
+
+        // Test L13: Duplicate module variable declaration — should error
+        {
+            string source = @"
+var x: int = 0
+var x: int = 1
+
+func main() {
+    Report(x)
+}";
+            var syscalls = new Dictionary<string, int> { { "Report", 0 } };
+            var result = compiler.Compile(source, "main", syscalls);
+            Assert(!result.Success, "L13: duplicate module var should fail");
+            Assert(result.Errors != null && result.Errors.Count > 0 && result.Errors[0].Contains("Duplicate"),
+                $"L13: error mentions duplicate ({(result.Errors != null && result.Errors.Count > 0 ? result.Errors[0] : "no error")})");
+        }
+
+        // Test L14: Module variable mixed with functions (var before/between/after funcs)
+        {
+            string source = @"
+var a: int = 1
+
+func helper(): int {
+    return a + b
+}
+
+var b: int = 2
+
+func main() {
+    Report(helper())
+}";
+            var syscalls = new Dictionary<string, int> { { "Report", 0 } };
+            var result = compiler.Compile(source, "main", syscalls);
+            Assert(result.Success, $"L14 compile success ({(result.Success ? "" : string.Join("; ", result.Errors))})");
+
+            var log = new List<string>();
+            var world = new VMWorld();
+            world.Modules.Load(0, result.Program);
+            world.Syscalls.Register(0, "Report", (ref VMInstanceState s) =>
+            {
+                log.Add(s.Registers.Get(0).ToInt().ToString());
+            });
+            world.SpawnInstance(0, 0);
+            world.Tick();
+            Assert(log.Count == 1 && log[0] == "3",
+                $"L14: vars before/after funcs, a+b=3, got ({string.Join(",", log)})");
+        }
+
         // ===== Summary =====
         Debug.Log($"========================================");
         Debug.Log($"Compiler Tests: {passed} passed, {failed} failed");

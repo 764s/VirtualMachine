@@ -13,6 +13,8 @@ namespace FFVM
         //
         public const int MaxInstances = 128;
         public const int MaxRegisters = 64;
+        /// <summary>Lang-1: Module-level variables occupy r56-r63 (absolute, not windowed).</summary>
+        public const int ModuleVarRegBase = 56;
         public const int MaxCallDepth = 16;
         public const int MaxCleanupDepth = 8;
 
