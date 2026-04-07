@@ -417,6 +417,8 @@ namespace FFVM.Compiler
             if (module.ModuleVariables.Count == 0) return;
 
             int nextModuleReg = VMConstants.ModuleVarRegBase;
+            // Temporary _constValues used for cascading const folding during module variable processing
+            _constValues = new Dictionary<string, Number>();
 
             for (int i = 0; i < module.ModuleVariables.Count; i++)
             {
@@ -437,15 +439,11 @@ namespace FFVM.Compiler
                         _errors.Add($"Module 'const' requires an initializer (line {decl.Line})");
                         continue;
                     }
-                    // Set up a temporary _constValues for folding (enables const-depends-on-const)
-                    if (_constValues == null) _constValues = new Dictionary<string, Number>();
-                    // Copy already-folded module consts into _constValues for cascading references
-                    foreach (var kv in _moduleConstValues)
-                        _constValues[kv.Key] = kv.Value;
 
                     if (TryFoldConstant(decl.Initializer, out Number constVal))
                     {
                         _moduleConstValues[decl.Name] = constVal;
+                        _constValues[decl.Name] = constVal; // make available for subsequent folding
                         continue; // no register needed
                     }
 
@@ -466,14 +464,6 @@ namespace FFVM.Compiler
                 // Try to fold initializer to a constant value for emit
                 if (decl.Initializer != null)
                 {
-                    // Need _constValues populated with module consts for folding
-                    if (_constValues == null) _constValues = new Dictionary<string, Number>();
-                    foreach (var kv in _moduleConstValues)
-                    {
-                        if (!_constValues.ContainsKey(kv.Key))
-                            _constValues[kv.Key] = kv.Value;
-                    }
-
                     if (TryFoldConstant(decl.Initializer, out Number initVal))
                     {
                         _moduleVarInitValues[reg] = initVal;
@@ -1092,12 +1082,12 @@ namespace FFVM.Compiler
             // Lang-1: prevent local variable from shadowing module variable
             if (_moduleVarRegisters != null && _moduleVarRegisters.ContainsKey(name))
             {
-                _errors.Add($"Local variable '{name}' cannot shadow module variable '{name}'");
+                _errors.Add($"Cannot redeclare '{name}' as local variable (already exists as module variable)");
                 return VarRegBase;
             }
             if (_moduleConstValues != null && _moduleConstValues.ContainsKey(name))
             {
-                _errors.Add($"Local variable '{name}' cannot shadow module constant '{name}'");
+                _errors.Add($"Cannot redeclare '{name}' as local variable (already exists as module constant)");
                 return VarRegBase;
             }
 
@@ -1565,12 +1555,12 @@ namespace FFVM.Compiler
                 // Lang-1: prevent local const from shadowing module variable/const
                 if (_moduleVarRegisters != null && _moduleVarRegisters.ContainsKey(stmt.Name))
                 {
-                    _errors.Add($"Local constant '{stmt.Name}' cannot shadow module variable '{stmt.Name}' (line {stmt.Line})");
+                    _errors.Add($"Cannot redeclare '{stmt.Name}' as local constant (already exists as module variable) (line {stmt.Line})");
                     return;
                 }
                 if (_moduleConstValues != null && _moduleConstValues.ContainsKey(stmt.Name))
                 {
-                    _errors.Add($"Local constant '{stmt.Name}' cannot shadow module constant '{stmt.Name}' (line {stmt.Line})");
+                    _errors.Add($"Cannot redeclare '{stmt.Name}' as local constant (already exists as module constant) (line {stmt.Line})");
                     return;
                 }
 
