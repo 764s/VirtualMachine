@@ -1,8 +1,8 @@
 # KOF98 技能 FFS 脚本化讨论
 
-> **状态**：✅ 前期讨论完成（SK1~SK12 全部收敛，仅 SK3 待验证性能后定夺）
+> **状态**：🔄 讨论中（SK1~SK12 收敛；SK7 细化多入口方案；SK13 属性脚本共享机制新增）
 > **来源**：需求讨论 — 将 host-side 技能迁移为 FFS 脚本驱动
-> **日期**：2026-04-06
+> **日期**：2026-04-07（第 6 轮更新）
 
 ---
 
@@ -473,7 +473,7 @@ class SkillDef {
 - VM 条件检查 = spawn + 执行约 3-5 条指令 + return → 约 1-2μs/次
 - 最坏情况: 5 × 2μs = 10μs/帧，完全可接受
 
-### 7.5 技能条件位置（已收敛）
+### 7.5 技能条件位置（已收敛 → 第 6 轮细化）
 
 > **补充**（第 5 轮反馈）：倾向提供**专有条件检测入口**，由宿主侧的调用结构决定。宿主架构中角色技能执行可能存在多个阶段（phase），宿主按顺序调用各 phase：
 > ```
@@ -483,23 +483,99 @@ class SkillDef {
 > ```
 > 这与当前"脚本开头做条件检查"的方案 C 兼容，但宿主侧需要明确的调用流程来驱动条件检测入口。
 
-条件写在技能脚本开头（方案 C），具体条件判断在 VM 内。
+> **第 6 轮细化**：经审查发现原 §七.5 方案 C（条件在 main 开头、靠 return/yield 信号区分）与第 5 轮补充的"专有条件检测入口"存在矛盾。实际实现中 `ProbeSkillCondition` 虽已就绪但未被调用，所有 4 个已有脚本仍依赖宿主侧 `CanActivate` lambda。
+>
+> **根本原因**：方案 C 把条件和执行混在同一个 `func main()` 中，导致：
+> 1. 条件检查和技能执行的生命周期耦合（probe 需 spawn 完整实例）
+> 2. 脚本结构不直观（读者难以区分"条件部分"和"执行部分"）
+> 3. 无法独立复用条件逻辑（如 AI 判断可用性时不需要启动执行）
+>
+> **修正为方案 D：独立条件函数（多入口）**。条件检查在技能脚本内，但作为独立的 `func checkEnter()` 被宿主以不同的入口调用。
+
+#### 方案 D：独立条件函数（多入口）✅
+
+技能脚本包含两个约定函数：
+
+| 函数 | 职责 | 宿主调用时机 | 返回语义 |
+|------|------|-------------|---------|
+| `func checkEnter()` | 条件检测 | 裁决层 Layer 3（候选池筛选） | `return 0` = 不满足；`return 1` = 满足 |
+| `func step()` | 技能执行 | 技能激活后每帧驱动 | `yield` = 继续；`return` = 技能结束 |
 
 ```ffs
-// skill_light_punch.ffs
-func main() {
-    // --- 条件检查 (第一帧) ---
-    var input: int = GetInput()
-    var grounded: int = IsGrounded()
-    if (input & INPUT_LP) == 0 || grounded == 0 {
-        return    // 条件不满足, 立即退出
-    }
+// skill_light_punch.ffs — 方案 D 示例
 
-    // --- 条件通过, 执行技能 ---
-    var frames: int = 20
-    BeginAction(101, frames)
+/// 技能进入条件（独立入口，由裁决层调用）
+func checkEnter(): int {
+    var lpPressed: int = IsInputPressed(4)
+    var grounded: int = IsGrounded()
+    if lpPressed == 0 || grounded == 0 {
+        return 0    // 条件不满足
+    }
+    return 1        // 条件满足
+}
+
+/// 技能执行主体（激活后每帧驱动）
+func step() {
+    BeginAction(10, 20)
     defer { EndAction() }
-    // ...
+
+    var f: int = 0
+    var hitDone: int = 0
+    while f < 20 {
+        if f >= 5 && f < 10 && hitDone == 0 {
+            var target: int = CheckAttackHit(1001)
+            if target > 0 {
+                ApplyDamage(target, 1.0, 102)
+                hitDone = 1
+            }
+        }
+        f = f + 1
+        yield
+    }
+}
+```
+
+**与方案 C 的关键区别**：
+
+| 维度 | 方案 C（main 开头） | 方案 D（独立函数） |
+|------|---------------------|-------------------|
+| 条件入口 | main 的第一段代码 | 独立 `checkEnter()` 函数 |
+| 执行入口 | main yield 之后的代码 | 独立 `step()` 函数 |
+| probe 开销 | spawn 完整实例 → tick → 检查是否 completed | spawn 轻量实例 → 调用 checkEnter → 读返回值 → destroy |
+| 可读性 | 条件和执行混合 | 职责分离 |
+| AI 复用 | 需要 spawn+tick 完整实例 | 可单独调用 checkEnter 查询可用性 |
+| 生命周期 | probe 通过的实例继续复用为执行实例 | probe 和执行是独立实例 |
+
+**FFVM 多入口支持确认**（已验证）：
+
+FFVM 编译器和运行时**原生支持**多入口调用，无需任何 VM 层修改：
+
+1. `BytecodeCompiler.Compile(source, entryFunc, ...)` 编译**所有** `func` 声明，不仅限 entryFunc（见 BytecodeCompiler.cs:200-212）
+2. `VMProgram.Functions[]` 存储所有函数的 `FunctionEntry{Name, EntryIP, ...}`
+3. `VMProgram.TryGetFunction(name, out entry)` 可按名称查找任意函数的入口 IP
+4. `VMWorld.SpawnInstance(moduleSlot, entryIP)` 接受任意入口 IP，不限于 0
+
+宿主侧调用示例：
+
+```csharp
+// 条件检测：spawn at checkEnter, execute, read return value, destroy
+var program = World.Modules.Get(def.VMModuleSlot);
+if (program.TryGetFunction("checkEnter", out var entry))
+{
+    int vmId = World.SpawnInstance(def.VMModuleSlot, entry.EntryIP);
+    World.TickInstance(vmId);
+    // 读取返回值 (r0)
+    ref var inst = ref World.Pool.Instances[vmId];
+    bool passed = inst.Registers[0].IsNonZero;
+    World.DestroyInstance(vmId);
+    if (!passed) continue; // 条件不满足, 尝试下一个
+}
+
+// 技能执行：spawn at step
+if (program.TryGetFunction("step", out var stepEntry))
+{
+    int vmId = World.SpawnInstance(def.VMModuleSlot, stepEntry.EntryIP);
+    // ... attach to SkillInstance, drive every frame
 }
 ```
 
@@ -508,11 +584,17 @@ func main() {
 - 优先级判断（InterruptPriority >= 当前技能的 ActivationPriority）
 - 硬直/倒地/死亡状态互斥
 
-**特殊规则**（脚本侧，技能自定义）：
+**特殊规则**（脚本侧 `checkEnter()` 内，技能自定义）：
 - 具体输入要求（需要某个按键组合）
 - 距离/位置条件（如投技需要近距离）
 - 资源条件（如超必杀需要能量）
 - 连招窗口（如取消窗口内才可衔接）
+
+**向后兼容**：
+
+- 若脚本不含 `checkEnter()`，宿主回退到宿主侧 `CanActivate` 回调（legacy 路径）
+- 若脚本不含 `step()` 而有 `main()`，宿主可使用 `main` 作为执行入口（过渡期）
+- 最终目标：所有 VM 技能统一使用 `checkEnter()` + `step()` 双入口
 
 ---
 
@@ -587,11 +669,12 @@ if f >= 4 && f < 8 {
 | 变更 | 说明 | 影响范围 |
 |------|------|---------|
 | `SkillDef.VMModuleSlot` 设置 | 技能定义指向已编译的 .ffs 模块 | CharacterData 技能注册 |
-| `CanActivate` → 脚本内条件 | 技能条件迁移到脚本第一帧检查（§七.5） | SkillManager 需检测"第 0 帧完成"并回退 |
+| `CanActivate` → 脚本 `checkEnter()` | 技能条件迁移到脚本独立函数（§七.5 方案 D）。宿主通过 `TryGetFunction("checkEnter")` 获取入口 IP，spawn 轻量实例执行，读取返回值判断通过/失败 | GameVMBridge + SkillManager Layer 3 |
 | `CanContinue` → 脚本控制 | 循环技能退出由脚本决定（通过结束/return）或宿主 Kill | SkillManager 裁决层 |
-| `OnFrame` → 删除 | 每帧逻辑由 FFS 脚本 `yield` 循环驱动 | 不再需要 |
+| `OnFrame` → `step()` 函数 | 每帧逻辑由 FFS 脚本 `step()` 函数的 `yield` 循环驱动。宿主通过 `TryGetFunction("step")` 获取入口 IP，spawn 实例驱动 | GameVMBridge |
 | `CollisionFrames` → 脚本内设置 | 碰撞框数据迁移到脚本 Syscall（§八） | 需新增 Syscall |
-| `GameVMBridge.ActivateSkillVM` | 技能激活时自动 spawn VM 实例 | 已实现 |
+| `GameVMBridge.ActivateSkillVM` | 技能激活时 spawn `step()` 入口的 VM 实例（而非 IP=0） | 需修改 |
+| `GameVMBridge.ProbeSkillCondition` | 重构为调用 `checkEnter()` 入口，读返回值（而非 yield/return 信号） | 需修改 |
 | 裁决层改造 | 实现分层候选池机制：姿态分组+优先级+脚本条件（§七.4） | SkillManager 重构 |
 | `SkillDef` 扩展 | 新增 `AllowedStances`, `ActivationPriority`, `InterruptPriority` | 技能定义 |
 | `ApplyDamage` → 拆分 | 拆为 `ApplyDamage` (数值) + `ApplyHitReaction` (标记)（§4.2） | Syscall 重新设计 |
@@ -607,12 +690,13 @@ if f >= 4 && f < 8 {
 | SK4 | 蹲/倒地等姿态 Syscall | ✅ 可以新增 |
 | SK5 | 脚本文件命名规则 | ✅ `skill_<英文名>.ffs`，例: `skill_idle.ffs` |
 | SK6 | 硬直实现机制 | ✅ 方案 A — 时间轴暂停（§六.3），`yield`/`wait(N)` 已支持 |
-| SK7 | 技能条件入口 | ✅ 提供专有条件检测入口，由宿主侧调用流程决定阶段（§七.5 补充） |
+| SK7 | 技能条件入口 | ✅ → 🔄 细化为方案 D（独立 `checkEnter()` 函数），FFVM 多入口已确认支持（§七.5 第 6 轮） |
 | SK8 | 碰撞框 Syscall 新增范围 | ✅ 暂由脚本推送到宿主（SetHitbox/SetHurtbox/ClearHitbox/SetPushBox） |
 | SK9 | 受击标记(HitReactionTag) | ✅ 分组 mask 混合方向正确（§4.2 补充方向） |
 | SK10 | 连招共用环境 | ✅ V1: 方案 B（黑板变量），理想: 方案 C（连招脚本），纳入 KOF 串行计划（§十三.1） |
 | SK11 | 多阶段技能（多时间轴） | ✅ Phase 是脚本内实现行为，提供便利但不作硬性规则（§十三.2） |
 | SK12 | ECS 纯数据化与数据归属 | ✅ 原则已定：脚本内闭环留 VM，外部需求走 Syscall 推送（§十四） |
+| SK13 | 属性脚本共享机制 | 💬 讨论中 — 推荐方案 A（预处理器 `include`），待收敛（§十五） |
 
 ---
 
@@ -621,6 +705,7 @@ if f >= 4 && f < 8 {
 | ID | 问题 | 候选方案 | 当前倾向 |
 |----|------|---------|---------|
 | SK3 | 碰撞框数据交互方式 | A: 脚本推送到宿主（性能好，宿主存冗余） / B: 宿主向脚本查询（隔离好，性能待证实） | 两方案各有优劣，需验证 VM↔宿主交互性能后定夺 |
+| SK13 | 属性脚本共享机制 | A: 预处理器 include / B: 编译期 mixin / C: 宿主侧合并 / D: 结构体嵌入 | 方案 A（include），详见 §十五 |
 
 > **SK3 补充说明**：
 > - **方案 A（推送）**：好处是性能，避免宿主实时和脚本互查询。坏处是宿主需存一份"看起来没什么营养的数据"
@@ -744,3 +829,209 @@ func main() {
 > **SK11 补充说明**（第 5 轮反馈）：Phase 倾向是脚本内的实现行为。可为此提供便利（如 `BeginAction` 支持多次调用切换动作），但不建议作为硬性规则（不强制所有多阶段技能必须用 Phase 机制）。
 
 > 📌 后续所有新增 Syscall 设计都应先自检数据归属：**脚本内闭环 → 留 VM 内；外部系统必须读取 → Syscall 推送到宿主纯数据 component**。
+
+---
+
+## 十五、讨论：属性脚本共享机制 💬 (SK13)
+
+> **来源**（第 6 轮反馈）：技能属性（优先级、允许姿态等）当前全在 C# `SkillDef` 上配置。多个技能共用相同的属性集（如所有"地面普攻"共享相同的 `AllowedStances`、`InterruptPriority`），导致重复配置。希望脚本层有机制支持属性共享和覆盖。
+
+### 15.1 问题描述
+
+当前状态：
+```csharp
+// Program.cs — 每个技能都要手动设置相同的属性
+lpSkill.AllowedStances = new[] { Stance.Grounded };
+lpSkill.ActivationPriority = 200;
+lpSkill.InterruptPriority = 500;
+
+hpSkill.AllowedStances = new[] { Stance.Grounded };  // 重复
+hpSkill.ActivationPriority = 180;
+hpSkill.InterruptPriority = 500;  // 重复
+```
+
+期望状态：
+```ffs
+// configs/ground_attack.ffs — 属性脚本（独立文件）
+const ALLOWED_STANCES: int = 1       // Grounded
+const ACTIVATION_PRIORITY: int = 200
+const INTERRUPT_PRIORITY: int = 500
+
+// skill_light_punch.ffs — 技能脚本
+include "configs/ground_attack"      // 继承所有属性
+
+const ACTIVATION_PRIORITY: int = 200 // 可选覆盖
+
+func checkEnter(): int { ... }
+func step() { ... }
+```
+
+**核心需求**：
+1. **属性共享**：多个技能脚本引用同一属性脚本，避免重复
+2. **可覆盖**：技能脚本可显式覆盖属性脚本的值
+3. **代码提示**：LSP 能看到被引入的属性定义，提供完整补全
+4. **真实值**：属性在脚本内是真实存在的 const/var，可用于 `checkEnter()` 中
+
+### 15.2 历史脚本系统实现参考
+
+不同脚本系统对"属性共享 / 文件合并"的实现方式：
+
+| 系统 | 机制 | 语义 | 优点 | 缺点 |
+|------|------|------|------|------|
+| **C/C++ `#include`** | 预处理器文本替换 | 被引入文件的全部内容在引用点展开 | 极简实现、零运行时开销 | 命名冲突、无选择性引入、头文件嵌套复杂度 |
+| **GLSL/HLSL `#include`** | 同 C，但用于 shader | 共享 uniform/struct 定义 | GPU 脚本标准做法、工具链成熟 | 同 C |
+| **Lua `require` / `dofile`** | 运行时加载模块，返回 table | 命名空间隔离，可选择性引入 | 灵活、模块化 | 运行时开销、需要 GC |
+| **GDScript `extends`** | 类继承 | 子脚本继承父脚本的属性和方法 | OOP 直觉、编辑器完整支持 | 需要类/对象系统 |
+| **UnrealScript `extends`** | 类继承 + DefaultProperties | 子类覆盖父类默认属性 | 属性编辑器集成好 | 重量级 OOP |
+| **GameMaker GML `parent`** | 对象继承 | 子对象继承父对象事件和属性 | 编辑器一键设置 | 仅限对象级，不适用纯数据 |
+| **Sass/SCSS `@mixin`** | 编译期 mixin 展开 | 将一组声明注入引用点，支持参数 | 灵活、可参数化 | CSS 专用语义 |
+| **Rust `use` + trait** | 模块系统 + trait 方法 | 精确引入 + 默认实现可覆盖 | 类型安全、最小引入 | 需要完整模块系统 |
+| **Go embed / init** | 结构体嵌入 | 内嵌结构体的字段"提升"到外层 | 组合优于继承 | 需要结构体系统 |
+
+### 15.3 FFS 适用性分析
+
+FFS 的设计约束：
+- **零 GC、零动态分配** → 排除运行时 require/import
+- **无类/无继承** → 排除 OOP extends
+- **无模块系统** → 排除 Rust-style use
+- **编译期完成** → 适合预处理器 / 编译期合并方案
+- **LSP 支持需求** → 合并后的符号需对 LSP 可见
+
+**适合 FFS 的方向**：编译期文件合并（类似 C `#include` 或 Sass `@mixin`）。
+
+### 15.4 候选方案
+
+#### 方案 A：预处理器 `include`（C/GLSL 风格）
+
+```ffs
+// configs/ground_attack.ffs
+const ACTIVATION_PRIORITY: int = 200
+const INTERRUPT_PRIORITY: int = 500
+
+// skill_light_punch.ffs
+include "configs/ground_attack"
+
+// 以下覆盖 (需要编译器支持 const 重定义)
+const ACTIVATION_PRIORITY: int = 150
+
+func checkEnter(): int { ... }
+func step() { ... }
+```
+
+**实现方式**：编译前由宿主或预处理器将 `include` 文件的内容拼接到引用点。
+
+| 维度 | 评估 |
+|------|------|
+| 实现复杂度 | ⭐ 低（文本拼接 + const 重定义支持） |
+| LSP 代码提示 | ✅ 展开后所有符号可见 |
+| 覆盖机制 | 需编译器允许 const 重定义（后定义覆盖先定义） |
+| 命名冲突风险 | ⚠️ 中等（全局命名空间） |
+| 多级引入 | 支持（递归展开） |
+| AST 基础 | ✅ `ImportDecl` + `ModuleNode.Imports` 已存在于 AST |
+
+#### 方案 B：编译期合并 `mixin`（Sass 风格）
+
+```ffs
+// configs/ground_attack.ffs — 声明为 mixin 模块
+const ACTIVATION_PRIORITY: int = 200
+const INTERRUPT_PRIORITY: int = 500
+
+// skill_light_punch.ffs
+mixin "configs/ground_attack"      // 将 const/struct 声明注入当前文件
+
+const ACTIVATION_PRIORITY: int = 150  // 覆盖
+
+func checkEnter(): int { ... }
+func step() { ... }
+```
+
+**与 A 的区别**：`mixin` 只引入声明（const、struct），不引入函数。防止意外引入不需要的函数定义。
+
+| 维度 | 评估 |
+|------|------|
+| 实现复杂度 | ⭐⭐ 中等（需区分声明类型） |
+| LSP 代码提示 | ✅ 引入的声明对 LSP 可见 |
+| 覆盖机制 | 同 A |
+| 命名冲突风险 | ⭐ 低（只引入 const/struct，不引入 func） |
+| 函数隔离 | ✅ 不会意外引入属性脚本中的函数 |
+
+#### 方案 C：宿主侧合并（零语言改动）
+
+```csharp
+// GameVMBridge.cs — 宿主在编译前合并源码
+string configSource = File.ReadAllText("configs/ground_attack.ffs");
+string skillSource = File.ReadAllText("skill_light_punch.ffs");
+string merged = configSource + "\n" + skillSource;
+compiler.Compile(merged, "step", syscallMap, syscallTable);
+```
+
+技能脚本自身不感知合并，合并由宿主驱动。
+
+| 维度 | 评估 |
+|------|------|
+| 实现复杂度 | ⭐ 最低（零语言/编译器改动） |
+| LSP 代码提示 | ❌ 脚本文件本身没有 include/mixin 声明，LSP 无法知道有额外定义 |
+| 覆盖机制 | 需编译器允许 const 重定义 |
+| 脚本自包含 | ❌ 脚本不知道自己依赖哪个配置文件 |
+| 调试体验 | ⚠️ 行号映射可能偏移 |
+
+#### 方案 D：编译期结构体嵌入（Go embed 风格）
+
+```ffs
+// configs/ground_attack.ffs
+struct GroundAttackConfig {
+    activationPriority: int   // default 200
+    interruptPriority: int    // default 500
+}
+
+// skill_light_punch.ffs
+include "configs/ground_attack"
+
+// 使用配置
+func checkEnter(): int {
+    // 从宿主读取配置（通过 Syscall）
+    ...
+}
+```
+
+> 此方案需要 FFS 支持结构体默认值（当前不支持），实现成本较高。暂列为参考。
+
+### 15.5 推荐方案
+
+**推荐：方案 A（预处理器 `include`）** — 作为首选实现目标
+
+**理由**：
+1. **最小改动**：FFS AST 已有 `ImportDecl` 和 `ModuleNode.Imports`，parser 只需增加 `include` 关键字解析
+2. **LSP 友好**：展开后所有符号在语义分析阶段可见，代码补全自然工作
+3. **游戏脚本惯例**：GLSL/HLSL 的 `#include` 是着色器领域的标准做法，游戏开发者熟悉
+4. **覆盖语义清晰**：编译器支持 "后定义覆盖先定义" 的 const 重定义规则即可
+5. **渐进实现**：第一步可由宿主做文本合并（方案 C 作为过渡），第二步再实现编译器原生 `include`
+
+**实现路线**：
+
+| 阶段 | 内容 | 改动范围 |
+|------|------|---------|
+| V0（过渡） | 宿主侧文本合并（方案 C） | GameVMBridge 只改编译流程 |
+| V1 | Parser 支持 `include "path"` 语法 | Lexer + Parser + 文件解析器 |
+| V2 | 编译器 const 重定义支持（后定义覆盖） | BytecodeCompiler |
+| V3 | LSP 跟随 include 解析被引入文件 | LSP Server |
+
+**const 重定义规则草案**：
+
+```ffs
+// 规则：同名 const 后定义覆盖先定义，且类型必须一致
+include "base_config"           // 定义 const X: int = 10
+const X: int = 20               // 覆盖为 20 ✅
+const X: float = 20.0           // ❌ 类型不匹配
+var X: int = 20                  // ❌ 不能用 var 覆盖 const
+```
+
+### 15.6 待决
+
+| 问题 | 选项 | 倾向 |
+|------|------|------|
+| 关键字选择 | `include` / `import` / `mixin` | `include`（语义最直观） |
+| 引入范围 | 全部（const+struct+func）还是仅数据（const+struct） | 仅数据（func 不引入，避免命名冲突） |
+| 多级引入 | 是否支持 include 的 include | 支持（递归展开，检测循环） |
+| 路径解析 | 相对路径 / 绝对路径 / 项目根路径 | 相对于当前文件（与 GLSL 一致） |
+| 覆盖是否需要显式标记 | `const override X: int = 20` 还是隐式覆盖 | 隐式覆盖（简洁优先，编译器 warning 可选） |
