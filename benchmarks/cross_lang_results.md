@@ -1,6 +1,6 @@
 # FFVM Cross-Language Performance Comparison
 
-> Auto-generated: 2026-04-07 20:32:10
+> Auto-generated: 2026-04-07 20:46:59
 > .NET 8.0.25 | Microsoft Windows NT 10.0.19045.0 | 8 cores
 > Node.js 24.14.0 | Lua 5.1.4 | Python 3.7.7
 > 200 runs after warmup. All times in μs.
@@ -40,11 +40,11 @@ B02 is pure integer (classic Fibonacci). Each language uses its own supported ty
 
 | Benchmark | C# raw | C# | FFVM | Lua | Node.js | Python |
 |-----------|-------:|---:|-----:|----:|--------:|-------:|
-| B01_ArithLoop | 27.6 | 54.4 | 635.8 | 345.0 | 24.1 | 2085.9 |
-| B02_Fibonacci | 0.6 | 0.6 | 2.9 | 0.0 | 1.0 | 2.6 |
-| B03_NestedLoop | 22.2 | 53.4 | 582.1 | 580.0 | 14.8 | 1952.0 |
-| B04_Branching | 33.4 | 20.7 | 916.0 | 465.0 | 20.7 | 4457.0 |
-| B05_Accumulator | 63.7 | 59.1 | 1183.0 | 1920.0 | 59.3 | 8195.1 |
+| B01_ArithLoop | 37.2 | 78.6 | 801.3 | 670.0 | 28.0 | 4468.4 |
+| B02_Fibonacci | 0.7 | 0.7 | 1.3 | 0.0 | 1.2 | 3.1 |
+| B03_NestedLoop | 29.7 | 15.6 | 711.3 | 425.0 | 16.1 | 3765.9 |
+| B04_Branching | 35.7 | 26.3 | 1554.3 | 915.0 | 23.3 | 5638.5 |
+| B05_Accumulator | 74.1 | 67.8 | 2307.5 | 1915.0 | 71.4 | 13410.8 |
 
 ### Relative to C# (1.00x)
 
@@ -54,11 +54,11 @@ B02 is pure integer (classic Fibonacci). Each language uses its own supported ty
 
 | Benchmark | C# raw | C# | FFVM | Lua | Node.js | Python |
 |-----------|-------:|---:|-----:|----:|--------:|-------:|
-| B01_ArithLoop | 0.51x | 1.00x | 11.69x | 6.34x | 0.44x | 38.34x |
-| B02_Fibonacci | 1.00x | 1.00x | 4.83x | 0.00x | 1.67x | 4.33x |
-| B03_NestedLoop | 0.42x | 1.00x | 10.90x | 10.86x | 0.28x | 36.55x |
-| B04_Branching | 1.61x | 1.00x | 44.25x | 22.46x | 1.00x | 215.31x |
-| B05_Accumulator | 1.08x | 1.00x | 20.02x | 32.49x | 1.00x | 138.66x |
+| B01_ArithLoop | 0.47x | 1.00x | 10.19x | 8.52x | 0.36x | 56.85x |
+| B02_Fibonacci | 1.00x | 1.00x | 1.86x | 0.00x | 1.71x | 4.43x |
+| B03_NestedLoop | 1.90x | 1.00x | 45.60x | 27.24x | 1.03x | 241.40x |
+| B04_Branching | 1.36x | 1.00x | 59.10x | 34.79x | 0.89x | 214.39x |
+| B05_Accumulator | 1.09x | 1.00x | 34.03x | 28.24x | 1.05x | 197.80x |
 
 ---
 
