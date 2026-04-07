@@ -44,7 +44,17 @@ namespace FFVM
         /// </summary>
         public int SpawnInstance(int moduleSlot, int entryIP)
         {
-            return Pool.Allocate(moduleSlot, entryIP);
+            int id = Pool.Allocate(moduleSlot, entryIP);
+            if (id < 0) return id;
+
+            // Lang-1.1b: Pre-allocate extended registers if the module's program requires them
+            VMProgram program = Modules.Get(moduleSlot);
+            if (program != null && program.RequiredExtendedRegisters > 0)
+            {
+                Pool.ExtendedRegs[id] = new Number[program.RequiredExtendedRegisters];
+            }
+
+            return id;
         }
 
         /// <summary>
@@ -223,6 +233,10 @@ namespace FFVM
             // Safe as a single local: cleanup blocks can't WAIT (R8/G6), so each
             // RET_FUNC→cleanup→RETURN cycle completes before the next RET_FUNC.
             Number savedR0 = default;
+
+            // Lang-1.1b: Cache extended register array reference (null when not used).
+            // Heap-allocated per-instance, accessed only via LOAD_XREG/STORE_XREG.
+            Number[] xregs = Pool.ExtendedRegs[inst.InstanceId];
 
             // O1: Pin registers once for the entire execution burst.
             // Previously each Get/Set call did its own fixed pin/unpin — the single
@@ -772,6 +786,18 @@ namespace FFVM
 
                         case OpCode.STORE_MVAR:
                             regs[VMConstants.ModuleVarRegBase + op.A] = regs[Reg(op.B, rb)];
+                            inst.IP++;
+                            break;
+
+                        // --- Lang-1.1b: extended register access (heap-allocated) ---
+
+                        case OpCode.LOAD_XREG:
+                            regs[Reg(op.A, rb)] = xregs[op.B | (op.C << 8)];
+                            inst.IP++;
+                            break;
+
+                        case OpCode.STORE_XREG:
+                            xregs[op.A | (op.C << 8)] = regs[Reg(op.B, rb)];
                             inst.IP++;
                             break;
 

@@ -90,8 +90,12 @@ namespace FFVM
         LOAD_MVAR    = 47,  // A=destReg, B=mvarSlot → Reg[A] = ModuleVars[ModuleVarRegBase + B]
         STORE_MVAR   = 48,  // A=mvarSlot, B=srcReg → ModuleVars[ModuleVarRegBase + A] = Reg[B]
 
+        // --- Lang-1.1b: extended register access (heap-allocated, dedicated opcodes) ---
+        LOAD_XREG    = 49,  // A=destReg, B=xidx_lo, C=xidx_hi → Reg[A] = ExtRegs[B | (C<<8)]
+        STORE_XREG   = 50,  // A=xidx_lo, B=srcReg, C=xidx_hi → ExtRegs[A | (C<<8)] = Reg[B]
+
         // --- O15: sentinel (never emitted by compiler) ---
-        SENTINEL     = 49,  // appended by VMProgram ctor; replaces per-instruction boundary check
+        SENTINEL     = 51,  // appended by VMProgram ctor; replaces per-instruction boundary check
     }
 
     /// <summary>

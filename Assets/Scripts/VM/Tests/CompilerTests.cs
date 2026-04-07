@@ -5300,6 +5300,264 @@ func main() {
             Assert(values.Count == 2 && values[1] == 2, $"MV08: frame3 state=2, got {(values.Count > 1 ? values[1].ToString() : "none")}");
         }
 
+        // ===== Test XR01: Extended registers — module variable overflow (>8 vars) =====
+        {
+            // 10 module vars: 8 fit in fixed slots (r56-r63), 2 overflow to extended registers
+            string source = @"
+var v1: int = 1
+var v2: int = 2
+var v3: int = 3
+var v4: int = 4
+var v5: int = 5
+var v6: int = 6
+var v7: int = 7
+var v8: int = 8
+var v9: int = 9
+var v10: int = 10
+
+func sumAll(): int {
+    var s: int = v1 + v2
+    s = s + v3
+    s = s + v4
+    s = s + v5
+    s = s + v6
+    s = s + v7
+    s = s + v8
+    s = s + v9
+    s = s + v10
+    return s
+}
+
+func main() {
+    Report(sumAll())
+}";
+            var syscalls = new Dictionary<string, int> { { "Report", 0 } };
+            var result = compiler.Compile(source, "main", syscalls);
+            if (!result.Success && result.Errors != null)
+                foreach (var e in result.Errors) Debug.Log($"XR01 error: {e}");
+            Assert(result.Success, "XR01 compile success");
+            Assert(result.Program.RequiredExtendedRegisters == 2, $"XR01: 2 extended regs needed, got {result.Program.RequiredExtendedRegisters}");
+
+            var values = new List<int>();
+            var world = new VMWorld();
+            world.Modules.Load(0, result.Program);
+            world.Syscalls.Register(0, "Report", (ref VMInstanceState s) =>
+            {
+                values.Add(s.Registers.Get(0).ToInt());
+            });
+
+            world.SpawnInstance(0, 0);
+            world.Tick();
+            Assert(values.Count == 1, $"XR01: 1 report, got {values.Count}");
+            Assert(values[0] == 55, $"XR01: sum(1..10)=55, got {values[0]}");
+        }
+
+        // ===== Test XR02: Extended registers — read/write overflow module vars =====
+        {
+            string source = @"
+var v1: int = 1
+var v2: int = 2
+var v3: int = 3
+var v4: int = 4
+var v5: int = 5
+var v6: int = 6
+var v7: int = 7
+var v8: int = 8
+var v9: int = 100
+var v10: int = 200
+
+func incr9() {
+    v9 = v9 + 1
+}
+
+func main() {
+    incr9()
+    incr9()
+    incr9()
+    v10 = v10 + v9
+    Report(v9)
+    Report(v10)
+}";
+            var syscalls = new Dictionary<string, int> { { "Report", 0 } };
+            var result = compiler.Compile(source, "main", syscalls);
+            Assert(result.Success, "XR02 compile success");
+
+            var values = new List<int>();
+            var world = new VMWorld();
+            world.Modules.Load(0, result.Program);
+            world.Syscalls.Register(0, "Report", (ref VMInstanceState s) =>
+            {
+                values.Add(s.Registers.Get(0).ToInt());
+            });
+
+            world.SpawnInstance(0, 0);
+            world.Tick();
+            Assert(values.Count == 2, $"XR02: 2 reports, got {values.Count}");
+            Assert(values[0] == 103, $"XR02: v9=100+3=103, got {values[0]}");
+            Assert(values[1] == 303, $"XR02: v10=200+103=303, got {values[1]}");
+        }
+
+        // ===== Test XR03: Extended registers — zero overhead when not used =====
+        {
+            string source = @"
+var a: int = 42
+func main() {
+    Report(a)
+}";
+            var syscalls = new Dictionary<string, int> { { "Report", 0 } };
+            var result = compiler.Compile(source, "main", syscalls);
+            Assert(result.Success, "XR03 compile success");
+            Assert(result.Program.RequiredExtendedRegisters == 0, $"XR03: 0 extended regs for 1 module var, got {result.Program.RequiredExtendedRegisters}");
+
+            var world = new VMWorld();
+            world.Modules.Load(0, result.Program);
+            var id = world.SpawnInstance(0, 0);
+            Assert(world.Pool.ExtendedRegs[id] == null, "XR03: no extended regs allocated");
+        }
+
+        // ===== Test XR04: Extended registers — persistence across frames (wait) =====
+        {
+            // v9 overflows to extended register, must persist across wait frames
+            string source = @"
+var v1: int = 0
+var v2: int = 0
+var v3: int = 0
+var v4: int = 0
+var v5: int = 0
+var v6: int = 0
+var v7: int = 0
+var v8: int = 0
+var counter: int = 0
+
+func main() {
+    counter = 10
+    Report(counter)
+    wait 1
+    counter = counter + 5
+    Report(counter)
+}";
+            var syscalls = new Dictionary<string, int> { { "Report", 0 } };
+            var result = compiler.Compile(source, "main", syscalls);
+            Assert(result.Success, "XR04 compile success");
+            Assert(result.Program.RequiredExtendedRegisters == 1, $"XR04: 1 extended reg, got {result.Program.RequiredExtendedRegisters}");
+
+            var values = new List<int>();
+            var world = new VMWorld();
+            world.Modules.Load(0, result.Program);
+            world.Syscalls.Register(0, "Report", (ref VMInstanceState s) =>
+            {
+                values.Add(s.Registers.Get(0).ToInt());
+            });
+
+            world.SpawnInstance(0, 0);
+            world.Tick();  // frame 1: counter=10, Report(10), wait 1
+            Assert(values.Count == 1 && values[0] == 10, $"XR04: frame1 counter=10, got {(values.Count > 0 ? values[0].ToString() : "none")}");
+            world.Tick();  // frame 2: wait expires
+            world.Tick();  // frame 3: counter=15, Report(15)
+            Assert(values.Count == 2 && values[1] == 15, $"XR04: frame3 counter=15, got {(values.Count > 1 ? values[1].ToString() : "none")}");
+        }
+
+        // ===== Test XR05: Extended registers — snapshot/rollback =====
+        {
+            string source = @"
+var v1: int = 0
+var v2: int = 0
+var v3: int = 0
+var v4: int = 0
+var v5: int = 0
+var v6: int = 0
+var v7: int = 0
+var v8: int = 0
+var xval: int = 0
+
+func main() {
+    xval = 42
+    Report(xval)
+    wait 100
+}";
+            var syscalls = new Dictionary<string, int> { { "Report", 0 } };
+            var result = compiler.Compile(source, "main", syscalls);
+            Assert(result.Success, "XR05 compile success");
+
+            var values = new List<int>();
+            var world = new VMWorld();
+            world.Modules.Load(0, result.Program);
+            world.Syscalls.Register(0, "Report", (ref VMInstanceState s) =>
+            {
+                values.Add(s.Registers.Get(0).ToInt());
+            });
+
+            world.SpawnInstance(0, 0);
+            world.SaveState();  // Save before tick
+            world.Tick();       // xval=42, Report(42), wait 100
+            Assert(values.Count == 1 && values[0] == 42, $"XR05: pre-rollback xval=42, got {(values.Count > 0 ? values[0].ToString() : "none")}");
+
+            // Rollback to saved state
+            bool ok = world.LoadState(world.FrameNumber - 1);
+            Assert(ok, "XR05: rollback success");
+
+            // After rollback, xval should be 0 again (pre-tick state)
+            values.Clear();
+            world.Tick();  // re-execute: xval=42, Report(42), wait 100
+            Assert(values.Count == 1 && values[0] == 42, $"XR05: post-rollback xval=42, got {(values.Count > 0 ? values[0].ToString() : "none")}");
+        }
+
+        // ===== Test XR06: Extended registers — mixed fixed and extended module vars =====
+        {
+            // First 8 module vars use fixed registers, 9th+ use extended registers
+            // Test that both types work correctly together
+            string source = @"
+var a: int = 10
+var b: int = 20
+var c: int = 30
+var d: int = 40
+var e: int = 50
+var f: int = 60
+var g: int = 70
+var h: int = 80
+var x: int = 100
+
+func compute(): int {
+    var s: int = a + b
+    s = s + c
+    s = s + d
+    s = s + e
+    s = s + f
+    s = s + g
+    s = s + h
+    s = s + x
+    return s
+}
+
+func updateAll() {
+    a = a + 1
+    x = x + 1
+}
+
+func main() {
+    Report(compute())
+    updateAll()
+    Report(compute())
+}";
+            var syscalls = new Dictionary<string, int> { { "Report", 0 } };
+            var result = compiler.Compile(source, "main", syscalls);
+            Assert(result.Success, "XR06 compile success");
+
+            var values = new List<int>();
+            var world = new VMWorld();
+            world.Modules.Load(0, result.Program);
+            world.Syscalls.Register(0, "Report", (ref VMInstanceState s) =>
+            {
+                values.Add(s.Registers.Get(0).ToInt());
+            });
+
+            world.SpawnInstance(0, 0);
+            world.Tick();
+            Assert(values.Count == 2, $"XR06: 2 reports, got {values.Count}");
+            Assert(values[0] == 460, $"XR06: sum=10+20+30+40+50+60+70+80+100=460, got {values[0]}");
+            Assert(values[1] == 462, $"XR06: after update sum=462, got {values[1]}");
+        }
+
         // ===== Summary =====
         Debug.Log($"========================================");
         Debug.Log($"Compiler Tests: {passed} passed, {failed} failed");

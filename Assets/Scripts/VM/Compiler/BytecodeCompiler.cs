@@ -18,6 +18,7 @@ namespace FFVM.Compiler
     ///   ScratchZoneSize..TempRegBase-1        — local variables (LocalVarSlots slots, windowed)
     ///   TempRegBase..ModuleVarRegBase-1       — expression temporaries (TempSlots slots, windowed+remapped)
     ///   ModuleVarRegBase..MaxRegisters-1      — module variables (ModuleVarSlots slots, absolute via LOAD_MVAR/STORE_MVAR)
+    ///   MaxRegisters+                          — extended registers (heap-allocated, via LOAD_XREG/STORE_XREG, Lang-1.1b)
     /// </summary>
     public class BytecodeCompiler
     {
@@ -100,10 +101,11 @@ namespace FFVM.Compiler
         private bool _inCleanupBlock;
 
         // Lang-1: Module variable support
-        private Dictionary<string, int> _moduleVarRegisters;     // module var name → absolute register
+        private Dictionary<string, int> _moduleVarRegisters;     // module var name → absolute register (>= MaxRegisters = extended)
         private Dictionary<string, Number> _moduleConstValues;   // module const name → folded value
         private HashSet<string> _moduleConstVarNames;            // module const names that required a register (non-foldable)
         private Dictionary<int, Number> _moduleVarInitValues;    // module var register → init value (for EmitModuleVarInit)
+        private int _nextExtendedReg;                            // Lang-1.1b: next extended register index (0-based)
 
         // F4: Register lifecycle analysis
         private struct LiveRange
@@ -304,7 +306,8 @@ namespace FFVM.Compiler
                     _sourceLines.ToArray(),
                     _symbolEntries.ToArray(),
                     _stringConstants.Count > 0 ? _stringConstants.ToArray() : null,
-                    _jumpTables.Count > 0 ? _jumpTables.ToArray() : null
+                    _jumpTables.Count > 0 ? _jumpTables.ToArray() : null,
+                    _nextExtendedReg
                 ),
                 Errors = _errors
             };
@@ -414,6 +417,7 @@ namespace FFVM.Compiler
             _moduleConstValues = new Dictionary<string, Number>();
             _moduleConstVarNames = new HashSet<string>();
             _moduleVarInitValues = new Dictionary<int, Number>();
+            _nextExtendedReg = 0;
 
             if (module.ModuleVariables.Count == 0) return;
 
@@ -452,14 +456,18 @@ namespace FFVM.Compiler
                     continue;
                 }
 
-                // Module var — allocate absolute register
-                if (nextModuleReg >= VMConstants.MaxRegisters)
+                // Module var — allocate register (fixed or extended)
+                int reg;
+                if (nextModuleReg < VMConstants.MaxRegisters)
                 {
-                    _errors.Add($"Too many module variables (max {VMConstants.ModuleVarSlots}) (line {decl.Line})");
-                    continue;
+                    // Fixed module var slot available
+                    reg = nextModuleReg++;
                 }
-
-                int reg = nextModuleReg++;
+                else
+                {
+                    // Lang-1.1b: Overflow to extended registers
+                    reg = VMConstants.MaxRegisters + _nextExtendedReg++;
+                }
                 _moduleVarRegisters[decl.Name] = reg;
 
                 // Try to fold initializer to a constant value for emit
@@ -486,8 +494,8 @@ namespace FFVM.Compiler
 
         /// <summary>
         /// Lang-1: Emit module variable initialization code as entry function preamble.
-        /// Emits LOAD_CONST to temp + STORE_MVAR for each module var with an initializer.
-        /// Vars without initializer default to zero (registers are zero-initialized on spawn).
+        /// Emits LOAD_CONST to temp + STORE_MVAR/STORE_XREG for each module var with an initializer.
+        /// Vars without initializer default to zero (registers/extended pool are zero-initialized on spawn).
         /// </summary>
         private void EmitModuleVarInit()
         {
@@ -498,13 +506,46 @@ namespace FFVM.Compiler
                 int reg = kv.Key;
                 Number val = kv.Value;
                 int ci = AddConst(val);
-                int mvarSlot = reg - ModuleVarRegBase;
-                // Load constant into a temp, then STORE_MVAR to module var slot
+                // Load constant into a temp, then store to module var (fixed or extended)
                 int temp = AllocTemp();
                 Emit(OpCode.LOAD_CONST, temp, ci);
-                Emit(OpCode.STORE_MVAR, mvarSlot, temp);
+                EmitStoreModuleVar(reg, temp);
+                ResetTemps();  // Lang-1.1b: reset per-var to support >8 module vars
             }
-            ResetTemps();
+        }
+
+        /// <summary>
+        /// Lang-1.1b: Emit a load from a module variable register to a destination register.
+        /// Routes to LOAD_MVAR (fixed) or LOAD_XREG (extended) based on register number.
+        /// </summary>
+        private void EmitLoadModuleVar(int destReg, int moduleVarReg)
+        {
+            if (moduleVarReg >= VMConstants.MaxRegisters)
+            {
+                int xidx = moduleVarReg - VMConstants.MaxRegisters;
+                Emit(OpCode.LOAD_XREG, destReg, xidx & 0xFF, xidx >> 8);
+            }
+            else
+            {
+                Emit(OpCode.LOAD_MVAR, destReg, moduleVarReg - ModuleVarRegBase);
+            }
+        }
+
+        /// <summary>
+        /// Lang-1.1b: Emit a store to a module variable register from a source register.
+        /// Routes to STORE_MVAR (fixed) or STORE_XREG (extended) based on register number.
+        /// </summary>
+        private void EmitStoreModuleVar(int moduleVarReg, int srcReg)
+        {
+            if (moduleVarReg >= VMConstants.MaxRegisters)
+            {
+                int xidx = moduleVarReg - VMConstants.MaxRegisters;
+                Emit(OpCode.STORE_XREG, xidx & 0xFF, srcReg, xidx >> 8);
+            }
+            else
+            {
+                Emit(OpCode.STORE_MVAR, moduleVarReg - ModuleVarRegBase, srcReg);
+            }
         }
 
         /// <summary>
@@ -689,9 +730,11 @@ namespace FFVM.Compiler
                 case OpCode.LOAD_CONST: return 1;    // A=destReg, B=constIndex
                 case OpCode.WAIT_FOR:   return 1;    // A=srcReg
                 case OpCode.LOAD_MVAR:  return 1;    // A=destReg, B=mvarSlot
+                case OpCode.LOAD_XREG: return 1;    // A=destReg, B=xidx_lo, C=xidx_hi
 
                 // B = register (A is not a register)
                 case OpCode.STORE_MVAR: return 2;    // A=mvarSlot, B=srcReg
+                case OpCode.STORE_XREG: return 2;    // A=xidx_lo, B=srcReg, C=xidx_hi
 
                 // A and B = registers
                 case OpCode.MOVE: return 3;           // A=dest, B=src
@@ -1204,7 +1247,7 @@ namespace FFVM.Compiler
         /// </summary>
         private bool IsModuleVarReg(int reg)
         {
-            return reg >= ModuleVarRegBase && reg < VMConstants.MaxRegisters;
+            return reg >= ModuleVarRegBase;
         }
 
         /// <summary>
@@ -1367,22 +1410,22 @@ namespace FFVM.Compiler
                 return;
             }
 
-            // At least one side is a module var — use per-field LOAD_MVAR/STORE_MVAR
+            // At least one side is a module var — use per-field EmitLoadModuleVar/EmitStoreModuleVar
             for (int i = 0; i < count; i++)
             {
                 if (srcIsMVar && destIsMVar)
                 {
                     int temp = AllocTemp();
-                    Emit(OpCode.LOAD_MVAR, temp, (srcBase - ModuleVarRegBase) + i);
-                    Emit(OpCode.STORE_MVAR, (destBase - ModuleVarRegBase) + i, temp);
+                    EmitLoadModuleVar(temp, srcBase + i);
+                    EmitStoreModuleVar(destBase + i, temp);
                 }
                 else if (srcIsMVar)
                 {
-                    Emit(OpCode.LOAD_MVAR, destBase + i, (srcBase - ModuleVarRegBase) + i);
+                    EmitLoadModuleVar(destBase + i, srcBase + i);
                 }
                 else
                 {
-                    Emit(OpCode.STORE_MVAR, (destBase - ModuleVarRegBase) + i, srcBase + i);
+                    EmitStoreModuleVar(destBase + i, srcBase + i);
                 }
             }
         }
@@ -1457,7 +1500,7 @@ namespace FFVM.Compiler
                     if (IsModuleVarReg(targetReg))
                     {
                         int valueReg = CompileExpr(valueExpr);
-                        Emit(OpCode.STORE_MVAR, targetReg - ModuleVarRegBase, valueReg);
+                        EmitStoreModuleVar(targetReg, valueReg);
                     }
                     else
                     {
@@ -2358,11 +2401,11 @@ namespace FFVM.Compiler
                     return EmitLoadConst(AddConst(constVal), destReg);
                 }
                 int reg = ResolveVar(ident.Name);
-                // Lang-1: module var → emit LOAD_MVAR to materialize value
+                // Lang-1: module var → emit LOAD_MVAR/LOAD_XREG to materialize value
                 if (IsModuleVarReg(reg))
                 {
                     int dest = destReg >= 0 ? destReg : AllocTemp();
-                    Emit(OpCode.LOAD_MVAR, dest, reg - ModuleVarRegBase);
+                    EmitLoadModuleVar(dest, reg);
                     return dest;
                 }
                 return reg;
@@ -2371,11 +2414,11 @@ namespace FFVM.Compiler
             if (expr is FieldAccessExpr fieldAccess)
             {
                 int reg = ResolveFieldAccess(fieldAccess);
-                // Lang-1: module struct field → emit LOAD_MVAR to materialize value
+                // Lang-1: module struct field → emit LOAD_MVAR/LOAD_XREG to materialize value
                 if (IsModuleVarReg(reg))
                 {
                     int dest = destReg >= 0 ? destReg : AllocTemp();
-                    Emit(OpCode.LOAD_MVAR, dest, reg - ModuleVarRegBase);
+                    EmitLoadModuleVar(dest, reg);
                     return dest;
                 }
                 return reg;
@@ -2488,11 +2531,11 @@ namespace FFVM.Compiler
 
                     // Scalar field assignment (original path)
                     int fieldReg = ResolveFieldAccess(fieldTarget);
-                    // Lang-1: module struct field → STORE_MVAR
+                    // Lang-1: module struct field → STORE_MVAR/STORE_XREG
                     if (IsModuleVarReg(fieldReg))
                     {
                         int valueReg = CompileExpr(assign.Value);
-                        Emit(OpCode.STORE_MVAR, fieldReg - ModuleVarRegBase, valueReg);
+                        EmitStoreModuleVar(fieldReg, valueReg);
                         return valueReg;
                     }
                     // O4: pass dest-reg hint for field assignment
@@ -2512,11 +2555,11 @@ namespace FFVM.Compiler
                         return destReg >= 0 ? destReg : AllocTemp();
                     }
                     int scalarTargetReg = ResolveVar(scalarTarget.Name);
-                    // Lang-1: module var → STORE_MVAR
+                    // Lang-1: module var → STORE_MVAR/STORE_XREG
                     if (IsModuleVarReg(scalarTargetReg))
                     {
                         int scalarValueReg = CompileExpr(assign.Value);
-                        Emit(OpCode.STORE_MVAR, scalarTargetReg - ModuleVarRegBase, scalarValueReg);
+                        EmitStoreModuleVar(scalarTargetReg, scalarValueReg);
                         return scalarValueReg;
                     }
                     // O4: pass dest-reg hint so expression writes directly into target register

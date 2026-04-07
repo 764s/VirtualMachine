@@ -36,11 +36,15 @@ namespace FFVM
         // O9: Active list snapshot
         public int[] ActiveListData;
 
+        // Lang-1.1b: Extended register snapshots (per-instance, null = not used)
+        public Number[][] ExtendedRegSnapshots;
+
         public void Init()
         {
             InstanceSnapshots = new VMInstanceState[VMConstants.MaxInstances];
             FreeStackData = new int[VMConstants.MaxFreeStack];
             ActiveListData = new int[VMConstants.MaxInstances];
+            ExtendedRegSnapshots = new Number[VMConstants.MaxInstances][];
         }
     }
 
@@ -80,6 +84,19 @@ namespace FFVM
             {
                 int id = pool.ActiveList[i];
                 snap.InstanceSnapshots[id] = pool.Instances[id];
+
+                // Lang-1.1b: Deep-copy extended registers if allocated
+                var xregs = pool.ExtendedRegs[id];
+                if (xregs != null)
+                {
+                    if (snap.ExtendedRegSnapshots[id] == null || snap.ExtendedRegSnapshots[id].Length != xregs.Length)
+                        snap.ExtendedRegSnapshots[id] = new Number[xregs.Length];
+                    Array.Copy(xregs, snap.ExtendedRegSnapshots[id], xregs.Length);
+                }
+                else
+                {
+                    snap.ExtendedRegSnapshots[id] = null;
+                }
             }
 
             // memcpy free stack (int[128] = 512 bytes — always full copy)
@@ -118,6 +135,19 @@ namespace FFVM
                     {
                         int id = snap.ActiveListData[j];
                         pool.Instances[id] = snap.InstanceSnapshots[id];
+
+                        // Lang-1.1b: Restore extended registers
+                        var xsnap = snap.ExtendedRegSnapshots[id];
+                        if (xsnap != null)
+                        {
+                            if (pool.ExtendedRegs[id] == null || pool.ExtendedRegs[id].Length != xsnap.Length)
+                                pool.ExtendedRegs[id] = new Number[xsnap.Length];
+                            Array.Copy(xsnap, pool.ExtendedRegs[id], xsnap.Length);
+                        }
+                        else
+                        {
+                            pool.ExtendedRegs[id] = null;
+                        }
                     }
 
                     Array.Copy(snap.FreeStackData, pool.FreeStack, VMConstants.MaxFreeStack);
