@@ -13,6 +13,8 @@ namespace FFVM
         //
         public const int MaxInstances = 128;
         public const int MaxRegisters = 64;
+        public const int ModuleVarSlots = (MaxRegisters / 64) * 8;   // 8 slots per 64 registers
+        public const int ModuleVarRegBase = MaxRegisters - ModuleVarSlots; // r56 when MaxRegisters=64
         public const int MaxCallDepth = 16;
         public const int MaxCleanupDepth = 8;
 

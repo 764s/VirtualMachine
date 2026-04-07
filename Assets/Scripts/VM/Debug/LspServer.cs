@@ -580,6 +580,18 @@ namespace FFVM.Debug
                 }
             }
 
+            // Lang-1: Check module-level variable/const declarations
+            foreach (var mv in ast.ModuleVariables)
+            {
+                string keyword = mv.IsConst ? "const" : "var";
+                if (MatchesName(mv.Line, mv.Column, keyword.Length + 1, mv.Name, line, col))
+                {
+                    string prefix = mv.IsConst ? "const" : "var";
+                    string typeStr = mv.TypeName ?? "int";
+                    return $"(module {prefix}) {mv.Name}: {typeStr}";
+                }
+            }
+
             // Walk function bodies for identifiers, calls, var decls
             foreach (var func in ast.Functions)
             {
@@ -1103,6 +1115,15 @@ namespace FFVM.Debug
                         items.Add(MakeCompletionItem(st.Name, 22 /* Struct */, null));
                     }
 
+                    // Lang-1: Module-level variables and constants
+                    foreach (var mv in ast.ModuleVariables)
+                    {
+                        string prefix = mv.IsConst ? "const" : "var";
+                        string typeStr = mv.TypeName ?? "int";
+                        items.Add(MakeCompletionItem(mv.Name, 6 /* Variable */,
+                            $"(module {prefix}) {mv.Name}: {typeStr}"));
+                    }
+
                     // Scope-aware variables: find which function contains the cursor
                     FuncDecl containingFunc = FindContainingFunction(ast, lspLine + 1);
                     if (containingFunc != null)
@@ -1424,7 +1445,22 @@ namespace FFVM.Debug
                 }
             }
             // Check local variables
-            return FindVarStructTypeInBlock(ast, func.Body, varName);
+            string localResult = FindVarStructTypeInBlock(ast, func.Body, varName);
+            if (localResult != null) return localResult;
+            // Lang-1: Check module-level variables
+            foreach (var mv in ast.ModuleVariables)
+            {
+                if (mv.Name == varName && mv.TypeName != null)
+                {
+                    foreach (var st in ast.Structs)
+                    {
+                        if (st.Name == mv.TypeName)
+                            return mv.TypeName;
+                    }
+                    return null;
+                }
+            }
+            return null;
         }
 
         private static string FindVarStructTypeInBlock(ModuleNode ast, BlockStmt block, string varName)

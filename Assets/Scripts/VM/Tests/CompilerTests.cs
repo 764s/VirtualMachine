@@ -5076,6 +5076,230 @@ func main() {
                 $"SO1-05: after rollback → (7,8,9), got ({string.Join(",", log)})");
         }
 
+        // ===== Test MV01: Module variable — basic scalar var/const =====
+        {
+            string source = @"
+var counter: int = 0
+const MAX: int = 100
+
+func incr() {
+    counter = counter + 1
+}
+
+func main() {
+    incr()
+    incr()
+    incr()
+    Report(counter)
+    Report(MAX)
+}";
+            var syscalls = new Dictionary<string, int> { { "Report", 0 } };
+            var result = compiler.Compile(source, "main", syscalls);
+            Assert(result.Success, "MV01 compile success");
+
+            var values = new List<int>();
+            var world = new VMWorld();
+            world.Modules.Load(0, result.Program);
+            world.Syscalls.Register(0, "Report", (ref VMInstanceState s) =>
+            {
+                values.Add(s.Registers.Get(0).ToInt());
+            });
+
+            world.SpawnInstance(0, 0);
+            world.Tick();
+            Assert(values.Count == 2, $"MV01: 2 reports, got {values.Count}");
+            Assert(values[0] == 3, $"MV01: counter=3 after 3 incr(), got {values[0]}");
+            Assert(values[1] == 100, $"MV01: MAX=100, got {values[1]}");
+        }
+
+        // ===== Test MV02: Module variable — shared across functions =====
+        {
+            string source = @"
+var x: int = 10
+
+func add(n: int) {
+    x = x + n
+}
+
+func main() {
+    add(5)
+    add(3)
+    Report(x)
+}";
+            var syscalls = new Dictionary<string, int> { { "Report", 0 } };
+            var result = compiler.Compile(source, "main", syscalls);
+            Assert(result.Success, "MV02 compile success");
+
+            var values = new List<int>();
+            var world = new VMWorld();
+            world.Modules.Load(0, result.Program);
+            world.Syscalls.Register(0, "Report", (ref VMInstanceState s) =>
+            {
+                values.Add(s.Registers.Get(0).ToInt());
+            });
+
+            world.SpawnInstance(0, 0);
+            world.Tick();
+            Assert(values.Count == 1, $"MV02: 1 report, got {values.Count}");
+            Assert(values[0] == 18, $"MV02: x=10+5+3=18, got {values[0]}");
+        }
+
+        // ===== Test MV03: Module const — prevent assignment =====
+        {
+            string source = @"
+const PI: int = 314
+
+func main() {
+    PI = 0
+    Report(PI)
+}";
+            var syscalls = new Dictionary<string, int> { { "Report", 0 } };
+            var result = compiler.Compile(source, "main", syscalls);
+            Assert(!result.Success, "MV03: assignment to module const should fail");
+        }
+
+        // ===== Test MV04: Module variable — prevent local shadowing =====
+        {
+            string source = @"
+var x: int = 10
+
+func main() {
+    var x: int = 20
+    Report(x)
+}";
+            var syscalls = new Dictionary<string, int> { { "Report", 0 } };
+            var result = compiler.Compile(source, "main", syscalls);
+            Assert(!result.Success, "MV04: local var shadowing module var should fail");
+        }
+
+        // ===== Test MV05: Module variable — default initialization to zero =====
+        {
+            string source = @"
+var a: int
+var b: int
+
+func main() {
+    Report(a)
+    Report(b)
+}";
+            var syscalls = new Dictionary<string, int> { { "Report", 0 } };
+            var result = compiler.Compile(source, "main", syscalls);
+            Assert(result.Success, "MV05 compile success");
+
+            var values = new List<int>();
+            var world = new VMWorld();
+            world.Modules.Load(0, result.Program);
+            world.Syscalls.Register(0, "Report", (ref VMInstanceState s) =>
+            {
+                values.Add(s.Registers.Get(0).ToInt());
+            });
+
+            world.SpawnInstance(0, 0);
+            world.Tick();
+            Assert(values.Count == 2, $"MV05: 2 reports, got {values.Count}");
+            Assert(values[0] == 0, $"MV05: a=0 default, got {values[0]}");
+            Assert(values[1] == 0, $"MV05: b=0 default, got {values[1]}");
+        }
+
+        // ===== Test MV06: Multiple module variables =====
+        {
+            string source = @"
+var a: int = 1
+var b: int = 2
+var c: int = 3
+
+func sum(): int {
+    return a + b + c
+}
+
+func main() {
+    Report(sum())
+    a = 10
+    Report(sum())
+}";
+            var syscalls = new Dictionary<string, int> { { "Report", 0 } };
+            var result = compiler.Compile(source, "main", syscalls);
+            Assert(result.Success, "MV06 compile success");
+
+            var values = new List<int>();
+            var world = new VMWorld();
+            world.Modules.Load(0, result.Program);
+            world.Syscalls.Register(0, "Report", (ref VMInstanceState s) =>
+            {
+                values.Add(s.Registers.Get(0).ToInt());
+            });
+
+            world.SpawnInstance(0, 0);
+            world.Tick();
+            Assert(values.Count == 2, $"MV06: 2 reports, got {values.Count}");
+            Assert(values[0] == 6, $"MV06: sum=1+2+3=6, got {values[0]}");
+            Assert(values[1] == 15, $"MV06: sum=10+2+3=15, got {values[1]}");
+        }
+
+        // ===== Test MV07: Module const with expression initializer =====
+        {
+            string source = @"
+const A: int = 10
+const B: int = A + 5
+const C: int = A * B
+
+func main() {
+    Report(A)
+    Report(B)
+    Report(C)
+}";
+            var syscalls = new Dictionary<string, int> { { "Report", 0 } };
+            var result = compiler.Compile(source, "main", syscalls);
+            Assert(result.Success, "MV07 compile success");
+
+            var values = new List<int>();
+            var world = new VMWorld();
+            world.Modules.Load(0, result.Program);
+            world.Syscalls.Register(0, "Report", (ref VMInstanceState s) =>
+            {
+                values.Add(s.Registers.Get(0).ToInt());
+            });
+
+            world.SpawnInstance(0, 0);
+            world.Tick();
+            Assert(values.Count == 3, $"MV07: 3 reports, got {values.Count}");
+            Assert(values[0] == 10, $"MV07: A=10, got {values[0]}");
+            Assert(values[1] == 15, $"MV07: B=15, got {values[1]}");
+            Assert(values[2] == 150, $"MV07: C=150, got {values[2]}");
+        }
+
+        // ===== Test MV08: Module variable with wait — persistence across frames =====
+        {
+            string source = @"
+var state: int = 0
+
+func main() {
+    state = 1
+    Report(state)
+    wait 1
+    state = state + 1
+    Report(state)
+}";
+            var syscalls = new Dictionary<string, int> { { "Report", 0 } };
+            var result = compiler.Compile(source, "main", syscalls);
+            Assert(result.Success, "MV08 compile success");
+
+            var values = new List<int>();
+            var world = new VMWorld();
+            world.Modules.Load(0, result.Program);
+            world.Syscalls.Register(0, "Report", (ref VMInstanceState s) =>
+            {
+                values.Add(s.Registers.Get(0).ToInt());
+            });
+
+            world.SpawnInstance(0, 0);
+            world.Tick();  // frame 1: state=1, Report(1), wait 1
+            Assert(values.Count == 1 && values[0] == 1, $"MV08: frame1 state=1, got {(values.Count > 0 ? values[0].ToString() : "none")}");
+            world.Tick();  // frame 2: wait expires
+            world.Tick();  // frame 3: state=2, Report(2)
+            Assert(values.Count == 2 && values[1] == 2, $"MV08: frame3 state=2, got {(values.Count > 1 ? values[1].ToString() : "none")}");
+        }
+
         // ===== Summary =====
         Debug.Log($"========================================");
         Debug.Log($"Compiler Tests: {passed} passed, {failed} failed");
