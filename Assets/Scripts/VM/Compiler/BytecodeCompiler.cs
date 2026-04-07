@@ -14,14 +14,16 @@ namespace FFVM.Compiler
     /// Compiles a parsed AST (single function) into a VMProgram (bytecode + constants).
     ///
     /// Register layout:
-    ///   r0..r15   — scratch zone: syscall arguments / return values
-    ///   r16..r47  — local variables (32 slots)
-    ///   r48..r63  — expression temporaries (16 slots)
+    ///   r0..r15   — scratch zone: syscall arguments / return values (absolute)
+    ///   r16..r47  — local variables (32 slots, windowed)
+    ///   r48..r55  — expression temporaries (8 slots, windowed+remapped)
+    ///   r56..r63  — module variables (8 slots, absolute via LOAD_MVAR/STORE_MVAR)
     /// </summary>
     public class BytecodeCompiler
     {
         private const int VarRegBase = 16;
         private const int TempRegBase = 48;
+        private const int ModuleVarRegBase = VMConstants.ModuleVarRegBase;  // r56 when MaxRegisters=64
 
         private List<Instruction> _instructions;
         private List<int> _wideA;  // O8: full int A values parallel to _instructions (byte A may truncate for IP > 255)
@@ -97,6 +99,12 @@ namespace FFVM.Compiler
         // Cleanup block compilation state (G6: prohibit wait/wait_for inside cleanup blocks)
         private bool _inCleanupBlock;
 
+        // Lang-1: Module variable support
+        private Dictionary<string, int> _moduleVarRegisters;     // module var name → absolute register
+        private Dictionary<string, Number> _moduleConstValues;   // module const name → folded value
+        private HashSet<string> _moduleConstVarNames;            // module const names that required a register (non-foldable)
+        private Dictionary<int, Number> _moduleVarInitValues;    // module var register → init value (for EmitModuleVarInit)
+
         // F4: Register lifecycle analysis
         private struct LiveRange
         {
@@ -163,6 +171,11 @@ namespace FFVM.Compiler
 
             // SN1: Build flattened struct info (recursive expansion + cycle detection)
             BuildFlatStructInfo();
+            if (_errors.Count > 0)
+                return new CompileResult { Errors = _errors };
+
+            // Lang-1: Process module-level var/const declarations
+            ProcessModuleVariables(module);
             if (_errors.Count > 0)
                 return new CompileResult { Errors = _errors };
 
@@ -325,8 +338,26 @@ namespace FFVM.Compiler
             // function's last line.
             _currentLine = func.Line;
 
+            // Lang-1: Pre-populate scope with module variables and constants
+            if (_moduleVarRegisters != null)
+            {
+                foreach (var kv in _moduleVarRegisters)
+                    _variables[kv.Key] = kv.Value;
+            }
+            if (_moduleConstValues != null)
+            {
+                foreach (var kv in _moduleConstValues)
+                    _constValues[kv.Key] = kv.Value;
+            }
+            // Module consts with registers (non-foldable) are already in _moduleVarRegisters
+            // and marked in _moduleConstVarNames for assignment prevention
+
             // F4: analyze variable lifetimes before compilation
             _liveRanges = AnalyzeVariableLifetimes(func);
+
+            // Lang-1: Entry function preamble — emit module variable initialization
+            if (isEntry)
+                EmitModuleVarInit();
 
             // Bind parameters: copy from scratch zone r0..rN into local registers r16+
             // S4/SN1: struct parameters use flattened field count for nested struct support
@@ -369,6 +400,111 @@ namespace FFVM.Compiler
 
             // A.6: Record precise window size using max register actually allocated
             _callerWindowSize = (_maxVarRegUsed >= VarRegBase) ? (_maxVarRegUsed - VarRegBase + 1) : 0;
+        }
+
+        /// <summary>
+        /// Lang-1: Process module-level var/const declarations.
+        /// Allocates absolute registers r56..r63 for module variables.
+        /// Foldable consts go to _moduleConstValues (no register).
+        /// Non-foldable consts get a register and are tracked in _moduleConstVarNames.
+        /// </summary>
+        private void ProcessModuleVariables(ModuleNode module)
+        {
+            _moduleVarRegisters = new Dictionary<string, int>();
+            _moduleConstValues = new Dictionary<string, Number>();
+            _moduleConstVarNames = new HashSet<string>();
+            _moduleVarInitValues = new Dictionary<int, Number>();
+
+            if (module.ModuleVariables.Count == 0) return;
+
+            int nextModuleReg = VMConstants.ModuleVarRegBase;
+            // Temporary _constValues used for cascading const folding during module variable processing
+            _constValues = new Dictionary<string, Number>();
+
+            for (int i = 0; i < module.ModuleVariables.Count; i++)
+            {
+                var decl = module.ModuleVariables[i];
+
+                // Check for duplicate module variable names
+                if (_moduleVarRegisters.ContainsKey(decl.Name) || _moduleConstValues.ContainsKey(decl.Name))
+                {
+                    _errors.Add($"Duplicate module variable '{decl.Name}' (line {decl.Line})");
+                    continue;
+                }
+
+                if (decl.IsConst)
+                {
+                    // Try to fold to compile-time constant
+                    if (decl.Initializer == null)
+                    {
+                        _errors.Add($"Module 'const' requires an initializer (line {decl.Line})");
+                        continue;
+                    }
+
+                    if (TryFoldConstant(decl.Initializer, out Number constVal))
+                    {
+                        _moduleConstValues[decl.Name] = constVal;
+                        _constValues[decl.Name] = constVal; // make available for subsequent folding
+                        continue; // no register needed
+                    }
+
+                    _errors.Add($"Module 'const' initializer must be a compile-time constant (line {decl.Line})");
+                    continue;
+                }
+
+                // Module var — allocate absolute register
+                if (nextModuleReg >= VMConstants.MaxRegisters)
+                {
+                    _errors.Add($"Too many module variables (max {VMConstants.ModuleVarSlots}) (line {decl.Line})");
+                    continue;
+                }
+
+                int reg = nextModuleReg++;
+                _moduleVarRegisters[decl.Name] = reg;
+
+                // Try to fold initializer to a constant value for emit
+                if (decl.Initializer != null)
+                {
+                    if (TryFoldConstant(decl.Initializer, out Number initVal))
+                    {
+                        _moduleVarInitValues[reg] = initVal;
+                    }
+                    else
+                    {
+                        _errors.Add($"Module variable '{decl.Name}' initializer must be a compile-time constant (line {decl.Line})");
+                    }
+                }
+                // else: no initializer → default zero (no entry in _moduleVarInitValues)
+
+                // DBG2: record symbol entry for module variable
+                _symbolEntries.Add(new SymbolEntry(decl.Name, reg, 0, null, "<module>"));
+            }
+
+            // Clean up temporary _constValues used during folding
+            _constValues = null;
+        }
+
+        /// <summary>
+        /// Lang-1: Emit module variable initialization code as entry function preamble.
+        /// Emits LOAD_CONST to temp + STORE_MVAR for each module var with an initializer.
+        /// Vars without initializer default to zero (registers are zero-initialized on spawn).
+        /// </summary>
+        private void EmitModuleVarInit()
+        {
+            if (_moduleVarInitValues == null || _moduleVarInitValues.Count == 0) return;
+
+            foreach (var kv in _moduleVarInitValues)
+            {
+                int reg = kv.Key;
+                Number val = kv.Value;
+                int ci = AddConst(val);
+                int mvarSlot = reg - ModuleVarRegBase;
+                // Load constant into a temp, then STORE_MVAR to module var slot
+                int temp = AllocTemp();
+                Emit(OpCode.LOAD_CONST, temp, ci);
+                Emit(OpCode.STORE_MVAR, mvarSlot, temp);
+            }
+            ResetTemps();
         }
 
         /// <summary>
@@ -530,9 +666,9 @@ namespace FFVM.Compiler
                 bool changed = false;
 
                 byte mask = GetRegisterMask(instr.Code);
-                if ((mask & 1) != 0 && a >= TempRegBase) { a += shift; changed = true; }
-                if ((mask & 2) != 0 && b >= TempRegBase) { b += shift; changed = true; }
-                if ((mask & 4) != 0 && c >= TempRegBase) { c += shift; changed = true; }
+                if ((mask & 1) != 0 && a >= TempRegBase && a < VMConstants.ModuleVarRegBase) { a += shift; changed = true; }
+                if ((mask & 2) != 0 && b >= TempRegBase && b < VMConstants.ModuleVarRegBase) { b += shift; changed = true; }
+                if ((mask & 4) != 0 && c >= TempRegBase && c < VMConstants.ModuleVarRegBase) { c += shift; changed = true; }
 
                 if (changed)
                     _instructions[ip] = new Instruction(instr.Code, a, b, c);
@@ -552,6 +688,10 @@ namespace FFVM.Compiler
                 // A = register
                 case OpCode.LOAD_CONST: return 1;    // A=destReg, B=constIndex
                 case OpCode.WAIT_FOR:   return 1;    // A=srcReg
+                case OpCode.LOAD_MVAR:  return 1;    // A=destReg, B=mvarSlot
+
+                // B = register (A is not a register)
+                case OpCode.STORE_MVAR: return 2;    // A=mvarSlot, B=srcReg
 
                 // A and B = registers
                 case OpCode.MOVE: return 3;           // A=dest, B=src
@@ -949,6 +1089,18 @@ namespace FFVM.Compiler
 
         private int DeclareVar(string name)
         {
+            // Lang-1: prevent local variable from shadowing module variable
+            if (_moduleVarRegisters != null && _moduleVarRegisters.ContainsKey(name))
+            {
+                _errors.Add($"Cannot redeclare '{name}' as local variable (already exists as module variable)");
+                return VarRegBase;
+            }
+            if (_moduleConstValues != null && _moduleConstValues.ContainsKey(name))
+            {
+                _errors.Add($"Cannot redeclare '{name}' as local variable (already exists as module constant)");
+                return VarRegBase;
+            }
+
             // F4: try to reuse a freed register from the free list
             if (_freeVarRegs != null && _freeVarRegs.Count > 0)
             {
@@ -1031,6 +1183,8 @@ namespace FFVM.Compiler
             // Don't release variables that cross awaits — they must persist
             if (range.CrossesAwait) return;
             if (!_variables.TryGetValue(name, out int reg)) return;
+            // Lang-1: don't release module variable registers — they're shared across functions
+            if (IsModuleVarReg(reg)) return;
 
             int count = range.FieldCount > 0 ? range.FieldCount : 1;
             for (int i = 0; i < count; i++)
@@ -1043,6 +1197,14 @@ namespace FFVM.Compiler
                 return reg;
             _errors.Add($"Undefined variable '{name}'");
             return VarRegBase;
+        }
+
+        /// <summary>
+        /// Check if a register index belongs to the module variable region (r56-r63).
+        /// </summary>
+        private bool IsModuleVarReg(int reg)
+        {
+            return reg >= ModuleVarRegBase && reg < VMConstants.MaxRegisters;
         }
 
         /// <summary>
@@ -1104,7 +1266,7 @@ namespace FFVM.Compiler
 
         private int AllocTemp()
         {
-            if (_tempTop >= VMConstants.MaxRegisters)
+            if (_tempTop >= VMConstants.ModuleVarRegBase)
             {
                 _errors.Add("Expression too complex (out of temp registers)");
                 return TempRegBase;
@@ -1191,14 +1353,37 @@ namespace FFVM.Compiler
         private void EmitStructCopy(int destBase, int srcBase, int count)
         {
             if (destBase == srcBase) return;
-            if (count >= 3)
+            bool destIsMVar = IsModuleVarReg(destBase);
+            bool srcIsMVar = IsModuleVarReg(srcBase);
+
+            if (!destIsMVar && !srcIsMVar)
             {
-                Emit(OpCode.COPY_BLOCK, destBase, srcBase, count);
+                // Original path — both are local/temp registers
+                if (count >= 3)
+                    Emit(OpCode.COPY_BLOCK, destBase, srcBase, count);
+                else
+                    for (int i = 0; i < count; i++)
+                        Emit(OpCode.MOVE, destBase + i, srcBase + i);
+                return;
             }
-            else
+
+            // At least one side is a module var — use per-field LOAD_MVAR/STORE_MVAR
+            for (int i = 0; i < count; i++)
             {
-                for (int i = 0; i < count; i++)
-                    Emit(OpCode.MOVE, destBase + i, srcBase + i);
+                if (srcIsMVar && destIsMVar)
+                {
+                    int temp = AllocTemp();
+                    Emit(OpCode.LOAD_MVAR, temp, (srcBase - ModuleVarRegBase) + i);
+                    Emit(OpCode.STORE_MVAR, (destBase - ModuleVarRegBase) + i, temp);
+                }
+                else if (srcIsMVar)
+                {
+                    Emit(OpCode.LOAD_MVAR, destBase + i, (srcBase - ModuleVarRegBase) + i);
+                }
+                else
+                {
+                    Emit(OpCode.STORE_MVAR, (destBase - ModuleVarRegBase) + i, srcBase + i);
+                }
             }
         }
 
@@ -1268,9 +1453,18 @@ namespace FFVM.Compiler
                 else
                 {
                     // Scalar field — compile expression into target register
-                    int valueReg = CompileExpr(valueExpr, destReg: baseReg + offset);
-                    if (valueReg != baseReg + offset)
-                        Emit(OpCode.MOVE, baseReg + offset, valueReg);
+                    int targetReg = baseReg + offset;
+                    if (IsModuleVarReg(targetReg))
+                    {
+                        int valueReg = CompileExpr(valueExpr);
+                        Emit(OpCode.STORE_MVAR, targetReg - ModuleVarRegBase, valueReg);
+                    }
+                    else
+                    {
+                        int valueReg = CompileExpr(valueExpr, destReg: targetReg);
+                        if (valueReg != targetReg)
+                            Emit(OpCode.MOVE, targetReg, valueReg);
+                    }
                     offset++;
                 }
             }
@@ -1410,6 +1604,18 @@ namespace FFVM.Compiler
             // B-ε3: const — fold to compile-time constant, no register allocation
             if (stmt.IsConst)
             {
+                // Lang-1: prevent local const from shadowing module variable/const
+                if (_moduleVarRegisters != null && _moduleVarRegisters.ContainsKey(stmt.Name))
+                {
+                    _errors.Add($"Cannot redeclare '{stmt.Name}' as local constant (already exists as module variable) (line {stmt.Line})");
+                    return;
+                }
+                if (_moduleConstValues != null && _moduleConstValues.ContainsKey(stmt.Name))
+                {
+                    _errors.Add($"Cannot redeclare '{stmt.Name}' as local constant (already exists as module constant) (line {stmt.Line})");
+                    return;
+                }
+
                 if (stmt.Initializer == null)
                 {
                     _errors.Add($"'const' requires an initializer (line {stmt.Line})");
@@ -2151,12 +2357,28 @@ namespace FFVM.Compiler
                 {
                     return EmitLoadConst(AddConst(constVal), destReg);
                 }
-                return ResolveVar(ident.Name);
+                int reg = ResolveVar(ident.Name);
+                // Lang-1: module var → emit LOAD_MVAR to materialize value
+                if (IsModuleVarReg(reg))
+                {
+                    int dest = destReg >= 0 ? destReg : AllocTemp();
+                    Emit(OpCode.LOAD_MVAR, dest, reg - ModuleVarRegBase);
+                    return dest;
+                }
+                return reg;
             }
 
             if (expr is FieldAccessExpr fieldAccess)
             {
-                return ResolveFieldAccess(fieldAccess);
+                int reg = ResolveFieldAccess(fieldAccess);
+                // Lang-1: module struct field → emit LOAD_MVAR to materialize value
+                if (IsModuleVarReg(reg))
+                {
+                    int dest = destReg >= 0 ? destReg : AllocTemp();
+                    Emit(OpCode.LOAD_MVAR, dest, reg - ModuleVarRegBase);
+                    return dest;
+                }
+                return reg;
             }
 
             if (expr is BinaryExpr bin)
@@ -2266,10 +2488,17 @@ namespace FFVM.Compiler
 
                     // Scalar field assignment (original path)
                     int fieldReg = ResolveFieldAccess(fieldTarget);
+                    // Lang-1: module struct field → STORE_MVAR
+                    if (IsModuleVarReg(fieldReg))
+                    {
+                        int valueReg = CompileExpr(assign.Value);
+                        Emit(OpCode.STORE_MVAR, fieldReg - ModuleVarRegBase, valueReg);
+                        return valueReg;
+                    }
                     // O4: pass dest-reg hint for field assignment
-                    int valueReg = CompileExpr(assign.Value, destReg: fieldReg);
-                    if (valueReg != fieldReg)
-                        Emit(OpCode.MOVE, fieldReg, valueReg);
+                    int fieldValueReg = CompileExpr(assign.Value, destReg: fieldReg);
+                    if (fieldValueReg != fieldReg)
+                        Emit(OpCode.MOVE, fieldReg, fieldValueReg);
                     return fieldReg;
                 }
 
@@ -2283,10 +2512,17 @@ namespace FFVM.Compiler
                         return destReg >= 0 ? destReg : AllocTemp();
                     }
                     int scalarTargetReg = ResolveVar(scalarTarget.Name);
+                    // Lang-1: module var → STORE_MVAR
+                    if (IsModuleVarReg(scalarTargetReg))
+                    {
+                        int scalarValueReg = CompileExpr(assign.Value);
+                        Emit(OpCode.STORE_MVAR, scalarTargetReg - ModuleVarRegBase, scalarValueReg);
+                        return scalarValueReg;
+                    }
                     // O4: pass dest-reg hint so expression writes directly into target register
-                    int scalarValueReg = CompileExpr(assign.Value, destReg: scalarTargetReg);
-                    if (scalarValueReg != scalarTargetReg)
-                        Emit(OpCode.MOVE, scalarTargetReg, scalarValueReg);
+                    int localValueReg = CompileExpr(assign.Value, destReg: scalarTargetReg);
+                    if (localValueReg != scalarTargetReg)
+                        Emit(OpCode.MOVE, scalarTargetReg, localValueReg);
                     return scalarTargetReg;
                 }
                 {
@@ -2604,7 +2840,7 @@ namespace FFVM.Compiler
                 funcWindows[functionEntries[i].Name] = functionEntries[i].LocalRegCount;
 
             var windowVisited = new Dictionary<string, int>(); // funcName → max cumulative window (-1 = in progress)
-            int availableSlots = VMConstants.MaxRegisters - VarRegBase; // 64 - 16 = 48
+            int availableSlots = VMConstants.ModuleVarRegBase - VarRegBase; // 56 - 16 = 40
 
             int ComputeMaxWindow(string funcName)
             {
@@ -3129,8 +3365,9 @@ namespace FFVM.Compiler
                 // P2: dest-redirect — OP rT,… ; MOVE rV,rT → OP rV,…
                 // Safety: only redirect when original dest (ins.A) is a temp register (≥ TempRegBase).
                 // Variable registers may be read later; redirecting away from them would break semantics.
+                // Lang-1: Module var registers (≥ ModuleVarRegBase) are persistent absolute and must NOT be redirected.
                 if (IsResultProducer(ins.Code) && next.Code == OpCode.MOVE
-                    && next.B == ins.A && ins.A >= TempRegBase)
+                    && next.B == ins.A && ins.A >= TempRegBase && ins.A < VMConstants.ModuleVarRegBase)
                 {
                     _instructions[i] = new Instruction(ins.Code, next.A, ins.B, ins.C);
                     _wideA[i] = next.A;  // O8: register value, always byte-safe

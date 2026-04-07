@@ -472,7 +472,7 @@ Docs/
 | — | **B-δ4 SN2 结构体字面量构造语法** | **StructLiteralExpr AST + Parser `TypeName { field: expr }` + Compiler sugar 展开 + 嵌套字面量 + CS31-CS38 测试** | **990** | [B-δ4](Plan/Step_B_Delta4_SN2_StructLiteral.md) |
 | — | **B-δ5 C5 Cleanup 超时保护** | **MaxCleanupSteps 每块步数预算 + 超时跳过当前块继续剩余 cleanup + C5-01~C5-04 测试** | **1007** | [B-δ5](Plan/Step_B_Delta5_C5_CleanupTimeout.md) |
 
-**B 阶段全部完成。1007 项 Assert × 2 模式全通过。B-ε 性能优化串行计划全部完成（4/4）。B-ζ 分支场景优化串行计划全部完成（3/3）。B-η O8 指令压缩完成（O8-1~O8-3/O8-5 ✅，O8-4 ⏸）。D 阶段分发基础设施全部完成（DIST-1~DIST-10 ✅）。当前位置 → Lang（语言需求实现，SK14）。**
+**B 阶段全部完成。1007 项 Assert × 2 模式全通过。B-ε 性能优化串行计划全部完成（4/4）。B-ζ 分支场景优化串行计划全部完成（3/3）。B-η O8 指令压缩完成（O8-1~O8-3/O8-5 ✅，O8-4 ⏸）。D 阶段分发基础设施全部完成（DIST-1~DIST-10 ✅）。Lang-1 ✅ 完成。当前位置 → Lang-1.1a。**
 
 ---
 
@@ -517,7 +517,7 @@ B 阶段 20 个步骤（B-R1 → B-δ5）全部完成，已归入上方 A 区表
 | B-ζ2 | CMP-immediate 指令 | ✅ | +6 OpCode `JUMP_IF_EQ_K` ~ `JUMP_IF_GTE_K`：`A=targetIP, B=reg, C=constIndex`，一条指令完成"与常量比较并跳转"，替代 `LOAD_CONST tmp` + `JUMP_IF_*`。Peephole 识别 + 编译器直接 emit | ~15-20% B04 加速；所有含常量比较的分支受益 | 中（+6 OpCode + VMWorld case + Peephole/Compiler 识别） |
 | B-ζ3 | SWITCH 跳转表指令 | ✅ | 编译器识别连续 if-else if 链中所有条件为同一变量对连续整数常量（从 0 起）比较时，生成 `SWITCH defaultIP, testReg, jumpTableIdx` 跳转表指令；O(N) 串行测试 → O(1) 分派。+1 OpCode + VMProgram.JumpTables + 编译器 TryCompileSwitch + Peephole 跳转表重映射 | B04↓40-47%（含高方差环境） | 中高（AST 模式识别 + 跳转表编码 + 新 OpCode + 仅对连续 0-based 整数常量有效） |
 
-**B-ζ 分支场景优化串行计划完成（3/3 ✅）。B-η O8 指令压缩完成（O8-1~O8-3/O8-5 ✅，O8-4 临时妥协 ⏸）。D 阶段分发基础设施全部完成（DIST-1~DIST-10 ✅）。当前位置 → Lang（语言需求实现，SK14）。**
+**B-ζ 分支场景优化串行计划完成（3/3 ✅）。B-η O8 指令压缩完成（O8-1~O8-3/O8-5 ✅，O8-4 临时妥协 ⏸）。D 阶段分发基础设施全部完成（DIST-1~DIST-10 ✅）。Lang-1 ✅ 完成。当前位置 → Lang-1.1a。**
 
 ---
 
@@ -566,7 +566,7 @@ B 阶段 20 个步骤（B-R1 → B-δ5）全部完成，已归入上方 A 区表
 >
 > 详细需求背景、痛点分析、3 个建议方向的细则与待回复问题，见 [D_SkillScripting.md SK14](../KOF98/Docs/Discussion/D_SkillScripting.md)「向 VM/语言方提交的需求背景与建议方向」一节。
 
-**当前位置 → Lang（语言需求实现）。C 阶段宿主阻塞期间，优先推进语言需求。**
+**当前位置 → Lang-1.1a（MaxRegisters 常量配置化）。Lang-1 ✅ 完成（MV01-MV08 全通过）。**
 
 ---
 
@@ -604,7 +604,7 @@ B 阶段 20 个步骤（B-R1 → B-δ5）全部完成，已归入上方 A 区表
 | DIST-9 | Sandbox 改造：消费分发库 attach API | ✅ | 删除 `Sandbox/EmbeddedDapServer.cs`（774 行），`SandboxRunner` 改用 `FFVM.Debug.EmbeddableDapServer`；沙盒定制行为（WaitForConnection + StopOnEntry）保留。1007 项 Assert 全通过 + Sandbox 构建 0 错误 | DIST-8 | 验证分发库 API 可用性的"吃自己狗粮"步骤 |
 | DIST-10 | .NET 多版本兼容策略 | ✅ | FFVM.csproj 双目标 `netstandard2.1;net8.0`（NuGet 包含两个 TFM 程序集），netstandard2.1 目标自动定义 `FFVM_LEGACY_CSHARP` 切换条件编译。VMWorld.cs `AggressiveOptimization` 用条件编译隔离。CLI 追加 `RollForward=LatestMajor`。KOF98 + StandaloneRunner 构建通过，1007 Assert 全通过 | DIST-1 | [D11 讨论](Discussion/Step_DIST_Distribution.md) §七；[KOF98 覆盖验证](Discussion/Step_DIST_Distribution.md) §7.6 |
 
-**DIST-1~DIST-3 ✅ 已完成。DIST-8~DIST-9 ✅ 已完成。DIST-10 ✅ 已完成。D 阶段分发基础设施全部完成。当前位置 → Lang（语言需求实现，SK14）。**
+**DIST-1~DIST-3 ✅ 已完成。DIST-8~DIST-9 ✅ 已完成。DIST-10 ✅ 已完成。D 阶段分发基础设施全部完成。Lang-1 ✅ 完成。当前位置 → Lang-1.1a。**
 
 ---
 
