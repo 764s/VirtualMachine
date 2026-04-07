@@ -1130,7 +1130,7 @@ namespace FFVM.Compiler
             if (_moduleVarRegs != null && _moduleVarRegs.ContainsKey(name))
             {
                 _errors.Add($"Local variable '{name}' shadows module variable");
-                return _moduleVarRegs[name];
+                return VarRegBase;  // error recovery: return safe local register base
             }
             if (_moduleConstValues != null && _moduleConstValues.ContainsKey(name))
             {
