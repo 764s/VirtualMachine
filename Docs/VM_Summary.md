@@ -342,12 +342,12 @@ Docs/
 | 解释器 | `TreeWalker`（Phase 2 原型，含 defer + Kill） | ✅ 完成 |
 | 词法分析 | `Lexer`（手写，16 关键字 + 运算符 + 字面量 + 注释，含 `struct` 关键字 + `.` 分隔符） | ✅ 完成 |
 | 语法分析 | `Parser`（手写递归下降，source → `ModuleNode` AST，含 using/wait_for/struct 声明/字段访问/错误恢复） | ✅ 完成 |
-| 编译器 | `BytecodeCompiler`（AST → `VMProgram`，寄存器分配：r0-15 scratch / r16-47 locals / r48-63 temps，支持 using 配对 Syscall，支持多函数编译 + CALL emit，支持 struct 编译期拍平 → 连续寄存器槽位映射，F4 寄存器生命周期分析 + 复用，O4 dest-reg hint，O5 常量折叠，O7 Syscall 结果直达，FO5 返回值直达，FO7 调用栈深度静态分析，R7 >50 函数回填 Dictionary 切换，R8 Cleanup 块禁止函数调用） | ✅ 完成 |
+| 编译器 | `BytecodeCompiler`（AST → `VMProgram`，寄存器分配：r0-15 scratch / r16-47 locals / r48-55 temps / r56-63 module vars，支持 using 配对 Syscall，支持多函数编译 + CALL emit，支持 struct 编译期拍平 → 连续寄存器槽位映射，F4 寄存器生命周期分析 + 复用，O4 dest-reg hint，O5 常量折叠，O7 Syscall 结果直达，FO5 返回值直达，FO7 调用栈深度静态分析，R7 >50 函数回填 Dictionary 切换，R8 Cleanup 块禁止函数调用，Lang-1 模块变量支持） | ✅ 完成 |
 | 调试信息 | `VMProgram.SourceMap`（DBG1：IP→行号平行数组）+ `VMProgram.SymbolTable`（DBG2：变量名→寄存器+struct字段信息） | ✅ 完成 |
 | 运行时调试 | `ScriptDebugger`（DBG3 断点桥接 + DBG5 变量查看适配器 + DBG6 调用栈查看，Gate 0 命令行调试能力，HaltOnBreakpoint + SkipNextCheck DAP 暂停支持，DBG4 单步映射：临时断点 + FindNextLineIP/FindStepIntoIP/FindStepOutIP） | ✅ 完成 |
 | DAP 适配器 | `DapServer`（DBG7-A：12 消息 DAP 最小协议 + DBG7-B：next/stepIn/stepOut handler，stdin/stdout JSON-RPC + ContentLengthStream 分帧 + JsonHelper 手写 JSON），`StandaloneRunner --dap` 模式，Gate 1 + Gate 2 自动化验证通过 | ✅ Phase 3B 完成 |
 | VS Code 扩展 | `vscode-ffvm-debug/`（package.json + TextMate grammar + language-configuration.json + launch.json 模板） | ✅ 完成 |
-| 测试 | 1007 项 Assert 全部通过（112 TreeWalker + 506 Compiler + 44 Performance + 18 FFScript + 51 Debug + 97 DAP + 179 LSP），另有 6 项自动化性能基准 | ✅ B-δ5 通过 |
+| 测试 | 1032 项 Assert 全部通过（112 TreeWalker + 531 Compiler + 44 Performance + 18 FFScript + 51 Debug + 97 DAP + 179 LSP），另有 6 项自动化性能基准 | ✅ Lang-1 通过 |
 | 性能基准 | `BenchmarkRunner`（6 组 VM vs C# 对比基准）+ `run-benchmarks.cmd` 自动化管线 → `benchmark_results.md` | ✅ 完成 |
 | 语言服务 | `LspServer`（LSP2 诊断 + LSP1 核心 + LSP3 实时诊断 + LSP4 符号分析 + LSP5 代码补全 + LSP6 Syscall 声明 + LSP7 参数提示） | ✅ 完成 |
 
@@ -548,7 +548,7 @@ B 阶段 20 个步骤（B-R1 → B-δ5）全部完成，已归入上方 A 区表
 
 | 序号 | 步骤 | 状态 | 内容 | 对应痛点 | 改动范围 | 复杂度 |
 |------|------|------|------|---------|---------|--------|
-| Lang-1 | 模块变量 (L1) | ⏳ | Parser 顶层 `var`/`const` + 编译器保留寄存器段（`ModuleVarSlots = (MaxRegisters / 64) * 8`，当前 = 8，即 r56~r63）。保留段跟随 MaxRegisters 变化，使用常量配置 | P1: 函数间无法共享变量 | 编译器 | ⭐⭐ |
+| Lang-1 | 模块变量 (L1) | ✅ | Parser 顶层 `var`/`const` + 编译器保留寄存器段（`ModuleVarSlots = (MaxRegisters / 64) * 8`，当前 = 8，即 r56~r63）。保留段跟随 MaxRegisters 变化，使用常量配置 | P1: 函数间无法共享变量 | 编译器 | ⭐⭐ |
 | Lang-1.1a | MaxRegisters 常量配置化 | ⏳ | `MaxRegisters` 从硬编码 64 改为可配置常量 + `NumberRegisters` 结构体同步扩展 + 内存预算注释更新。已确认：除客观内存占用外无性能区别 | — | VM 运行时 | ⭐ |
 | Lang-1.1b | 扩展寄存器 | ⏳ | 独立于 `NumberRegisters` 的按需扩展寄存器池（`Number[]` 堆数组）+ 专用 opcode 访问。不使用时零开销（不在 `fixed` 指针路径上）。固定需求 | 寄存器容量兜底 | 编译器 + VM 运行时 | ⭐⭐ |
 | Lang-2 | include (L2) | ⏳ | 预处理器递归展开 + const/struct/func/var 重定义规则 | P2: 脚本间无法复用声明 | 编译器（新 Preprocessor） | ⭐⭐ |

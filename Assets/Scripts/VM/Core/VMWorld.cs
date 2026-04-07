@@ -188,11 +188,11 @@ namespace FFVM
 
         /// <summary>
         /// Resolve a logical register index to a physical register index.
-        /// r0-r15 (scratch zone) are absolute; r16+ are offset by RegisterBase.
+        /// r0-r15 (scratch zone) and r56+ (module vars) are absolute; r16-r55 are offset by RegisterBase.
         /// </summary>
         private static int Reg(int r, int regBase)
         {
-            return r < 16 ? r : r + regBase;
+            return (r < 16 || r >= VMConstants.ModuleVarRegBase) ? r : r + regBase;
         }
 
 #if !FFVM_LEGACY_CSHARP

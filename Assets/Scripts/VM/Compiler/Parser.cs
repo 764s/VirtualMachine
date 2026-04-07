@@ -39,9 +39,17 @@ namespace FFVM.Compiler
                 {
                     module.Structs.Add(ParseStructDecl());
                 }
+                else if (Check(TokenType.Var))
+                {
+                    module.ModuleVariables.Add(ParseVarDecl(false));
+                }
+                else if (Check(TokenType.Const))
+                {
+                    module.ModuleVariables.Add(ParseVarDecl(true));
+                }
                 else
                 {
-                    Error($"Expected 'func' or 'struct', got '{Current().Text}'");
+                    Error($"Expected 'func', 'struct', 'var' or 'const', got '{Current().Text}'");
                     Advance();
                 }
             }
