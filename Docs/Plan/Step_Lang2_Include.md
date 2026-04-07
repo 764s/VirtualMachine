@@ -4,7 +4,7 @@
 >
 > **前置**：Lang-1 ✅（模块变量）、Lang-1.1a ✅（MaxRegisters 常量配置化）、Lang-1.1b ✅（扩展寄存器）
 >
-> **状态**：⏳ 实施中
+> **状态**：✅ 完成
 >
 > **目标**：编译期 `include "path"` 预处理器，递归展开被引入文件的 const/struct/func/var 声明，支持跨文件覆盖。
 

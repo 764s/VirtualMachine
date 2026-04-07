@@ -551,7 +551,7 @@ B 阶段 20 个步骤（B-R1 → B-δ5）全部完成，已归入上方 A 区表
 | Lang-1 | 模块变量 (L1) | ✅ | Parser 顶层 `var`/`const` + 编译器保留寄存器段（`ModuleVarSlots = (MaxRegisters / 64) * 8`，当前 = 8，即 r56~r63）。保留段跟随 MaxRegisters 变化，使用常量配置 | P1: 函数间无法共享变量 | 编译器 | ⭐⭐ |
 | Lang-1.1a | MaxRegisters 常量配置化 | ✅ | VMConstants 新增 `ScratchZoneSize` / `TempSlots` / `LocalVarSlots` / `TempRegBase` 派生常量。`NumberRegisters` 改为 `fixed long Raw[MaxRegisters]`（自动跟随 MaxRegisters）。BytecodeCompiler / VMWorld / ScriptDebugger 所有硬编码边界改用 VMConstants 常量。修改 MaxRegisters（64 的倍数）后无需改动其他文件 | — | VM 运行时 | ⭐ |
 | Lang-1.1b | 扩展寄存器 | ✅ | 独立于 `NumberRegisters` 的按需扩展寄存器池（`Number[]` 堆数组）+ 专用 LOAD_XREG/STORE_XREG opcode 访问。不使用时零开销（不分配堆内存）。模块变量超过 ModuleVarSlots 时自动溢出到扩展寄存器。编译器辅助方法 `EmitLoadModuleVar` / `EmitStoreModuleVar` 统一路由固定/扩展寄存器。快照系统深拷贝扩展数组 | 寄存器容量兜底 | 编译器 + VM 运行时 | ⭐⭐ |
-| Lang-2 | include (L2) | ⏳ | 预处理器递归展开 + const/struct/func/var 重定义规则 | P2: 脚本间无法复用声明 | 编译器（新 Preprocessor） | ⭐⭐ |
+| Lang-2 | include (L2) | ✅ | 预处理器递归展开 + const/struct/func/var 重定义规则 | P2: 脚本间无法复用声明 | 编译器（新 Preprocessor） | ⭐⭐ |
 | Lang-3 | 黑板 Syscall 正式化 | ⏳ | Get/SetBlackboard(key, value) 标准 Syscall | P3: 跨脚本运行时数据共享 | 宿主 Syscall | ⭐ |
 | *Lang-4* | *跨模块共享变量 (L3)* | *⏳* | *共享内存区域或专用寄存器段* | *P3 升级* | *⚠️ 编译器 + VM 运行时* | *⭐⭐⭐* |
 | *Lang-5* | *跨模块函数调用 (L4)* | *⏳* | *ModuleTable + CALL 指令扩展* | *P4: 跨模块函数调用* | *⚠️ 编译器 + VM 运行时* | *⭐⭐⭐* |
@@ -567,8 +567,10 @@ B 阶段 20 个步骤（B-R1 → B-δ5）全部完成，已归入上方 A 区表
 > 🔧 **专用指令优化原则**（Lang-1 经验）：任何需要特殊寄存器寻址的语言特性，必须使用专用 OpCode（如 LOAD_MVAR/STORE_MVAR、LOAD_XREG/STORE_XREG）而非在 Reg() 热路径中增加分支。Reg() 是每条指令执行 1~3 次的最内层函数，额外分支会被放大为系统性回归。Lang-1 初始实现在 Reg() 增加 `|| r >= ModuleVarRegBase` 分支后发现性能回归，改为专用指令后 Reg() 恢复为 `r < ScratchZoneSize ? r : r + regBase` 最简形式。Lang-1.1b 扩展寄存器同样遵循此原则——用 LOAD_XREG/STORE_XREG 专用指令访问堆数组，Reg() 无任何改动。后续 Lang-4（跨模块共享变量）等涉及新寄存器段/寻址模式的步骤，亦须遵循此原则。
 >
 > 详细需求背景、痛点分析、3 个建议方向的细则与待回复问题，见 [D_SkillScripting.md SK14](../KOF98/Docs/Discussion/D_SkillScripting.md)「向 VM/语言方提交的需求背景与建议方向」一节。
+>
+> **Lang-2 实现总结**：新增 `Preprocessor` 类（`Preprocessor.cs`）+ `IFileResolver` / `DictionaryFileResolver` 接口。Lexer 新增 `Include` TokenType，Parser 解析 `include "path"` → `ImportDecl`（AST 基础设施已预置）。Preprocessor 递归深度优先展开 include，支持菱形依赖（diamond include）。重定义规则：跨文件覆盖允许（后者覆盖前者），同文件重定义禁止，var/const 交叉覆盖禁止。BytecodeCompiler 新增 `Compile(source, entry, syscalls, syscallTable, fileResolver, filePath)` 重载，原有 `Compile(source, entry, syscalls)` 向后兼容不变。INC01-INC16 共 16 个测试用例覆盖：基础 include、多 include、多级 include、循环检测、跨文件覆盖、同文件重定义错误、const/var 交叉覆盖错误、struct/func 覆盖、全集成、文件未找到、向后兼容。Reg() 热路径无改动，纯编译期特性。
 
-**当前位置 → Lang-2（include）。Lang-1 ✅ 完成。Lang-1.1a ✅ 完成（MR01-MR08 全通过）。Lang-1.1b ✅ 完成（XR01-XR06 全通过，1055 测试全通过，B01-B06 无回归）。**
+**当前位置 → Lang-3（黑板 Syscall）。Lang-1 ✅ 完成。Lang-1.1a ✅ 完成（MR01-MR08 全通过）。Lang-1.1b ✅ 完成（XR01-XR06 全通过）。Lang-2 ✅ 完成（INC01-INC16 全通过，1087 测试全通过）。**
 
 ---
 
