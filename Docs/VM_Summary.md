@@ -548,13 +548,19 @@ B 阶段 20 个步骤（B-R1 → B-δ5）全部完成，已归入上方 A 区表
 
 | 序号 | 步骤 | 状态 | 内容 | 对应痛点 | 改动范围 | 复杂度 |
 |------|------|------|------|---------|---------|--------|
-| Lang-1 | 模块变量 (L1) | ⏳ | Parser 顶层 `var` + 编译器保留寄存器段（如 r56~r63） | P1: 函数间无法共享变量 | 编译器 | ⭐⭐ |
+| Lang-1 | 模块变量 (L1) | ⏳ | Parser 顶层 `var`/`const` + 编译器保留寄存器段（`ModuleVarSlots = (MaxRegisters / 64) * 8`，当前 = 8，即 r56~r63）。保留段跟随 MaxRegisters 变化，使用常量配置 | P1: 函数间无法共享变量 | 编译器 | ⭐⭐ |
+| Lang-1.1a | MaxRegisters 常量配置化 | ⏳ | `MaxRegisters` 从硬编码 64 改为可配置常量 + `NumberRegisters` 结构体同步扩展 + 内存预算注释更新。已确认：除客观内存占用外无性能区别 | — | VM 运行时 | ⭐ |
+| Lang-1.1b | 扩展寄存器 | ⏳ | 独立于 `NumberRegisters` 的按需扩展寄存器池（`Number[]` 堆数组）+ 专用 opcode 访问。不使用时零开销（不在 `fixed` 指针路径上）。固定需求 | 寄存器容量兜底 | 编译器 + VM 运行时 | ⭐⭐ |
 | Lang-2 | include (L2) | ⏳ | 预处理器递归展开 + const/struct/func/var 重定义规则 | P2: 脚本间无法复用声明 | 编译器（新 Preprocessor） | ⭐⭐ |
 | Lang-3 | 黑板 Syscall 正式化 | ⏳ | Get/SetBlackboard(key, value) 标准 Syscall | P3: 跨脚本运行时数据共享 | 宿主 Syscall | ⭐ |
 | *Lang-4* | *跨模块共享变量 (L3)* | *⏳* | *共享内存区域或专用寄存器段* | *P3 升级* | *⚠️ 编译器 + VM 运行时* | *⭐⭐⭐* |
 | *Lang-5* | *跨模块函数调用 (L4)* | *⏳* | *ModuleTable + CALL 指令扩展* | *P4: 跨模块函数调用* | *⚠️ 编译器 + VM 运行时* | *⭐⭐⭐* |
 
-> 斜体 = 远期展望，当前阶段不排期，按需触发。Lang-1 和 Lang-2 无依赖关系，可并行实施。
+> 斜体 = 远期展望，当前阶段不排期，按需触发。Lang-1 和 Lang-2 无依赖关系，可并行实施。Lang-1.1a/b 在 Lang-1 之后，与 Lang-2 无依赖。
+>
+> **Lang-1 保留段决策**：保留 r56~r63 模块变量段，跟随 MaxRegisters 变化。公式 `ModuleVarSlots = (MaxRegisters / 64) * 8`（即每 64 寄存器保留 8 个 slot）。`ModuleVarRegBase = MaxRegisters - ModuleVarSlots`。全部使用 VMConstants 常量配置，无性能影响（仅编译器寄存器分配变化，VM 运行时 Reg() 增加一个绝对段判断）。即使 Lang-1.1a/b 扩展寄存器后，固定寄存器文件内的保留段仍保留——扩展寄存器用于 locals/temps 溢出，模块变量始终在固定段内以保证绝对寻址。
+>
+> **Lang-1.1 分析结论**：MaxRegisters 64→128→const 对热循环零性能影响（`fixed (Number* regs = &inst.Registers.R00)` 后为裸指针偏移，JIT 生成 `ptr + index * 8`，不关心结构体总大小）。唯一客观影响为每实例内存增长（64 slots = 512B → 128 slots = 1024B）及快照 memcpy 体积，但 O10 仅拷贝活跃实例（典型 3-10 个），可忽略。因此 Lang-1.1a 直接常量配置化。Lang-1.1b 扩展寄存器为固定需求，不使用时对性能无影响。
 >
 > ⚠️ **性能敏感**：每个 Lang 步骤完成后必须运行 B01-B06 benchmark，确认无性能回归。涉及 VM 运行时改动的步骤（Lang-4/5）需额外关注 ExecuteInstance 热循环影响。
 >
