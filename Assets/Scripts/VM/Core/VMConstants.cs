@@ -16,6 +16,13 @@ namespace FFVM
         public const int MaxCallDepth = 16;
         public const int MaxCleanupDepth = 8;
 
+        // Lang-1: Module variable reserved registers
+        // Formula: every 64 registers reserves 8 slots for module variables.
+        // ModuleVarRegBase = MaxRegisters - ModuleVarSlots.
+        // Module vars occupy r56..r63 (absolute, not windowed by Reg()).
+        public const int ModuleVarSlots = (MaxRegisters / 64) * 8;
+        public const int ModuleVarRegBase = MaxRegisters - ModuleVarSlots;
+
         // Module limits
         public const int MaxModules = 64;
         public const int MaxModuleSize = 64 * 1024; // 64KB per module
