@@ -131,8 +131,34 @@ namespace FFVM.Compiler
         /// <param name="syscallTable">Optional SyscallTable for paired syscall lookup (required for 'using')</param>
         public CompileResult Compile(string source, string entryFunc, Dictionary<string, int> syscalls, SyscallTable syscallTable = null)
         {
-            var parser = new Parser();
-            var module = parser.Parse(source, out var parseErrors);
+            return Compile(source, entryFunc, syscalls, syscallTable, null, null);
+        }
+
+        /// <summary>
+        /// Compile source text with include support.
+        /// When a fileResolver is provided, include directives are resolved via the Preprocessor.
+        /// </summary>
+        /// <param name="source">Script source code</param>
+        /// <param name="entryFunc">Entry function name (typically "main")</param>
+        /// <param name="syscalls">Syscall name → slot mapping</param>
+        /// <param name="syscallTable">Optional SyscallTable for paired syscall lookup (required for 'using')</param>
+        /// <param name="fileResolver">Optional file resolver for include directives</param>
+        /// <param name="filePath">Logical path of the main file (for include cycle detection and diagnostics)</param>
+        public CompileResult Compile(string source, string entryFunc, Dictionary<string, int> syscalls, SyscallTable syscallTable, IFileResolver fileResolver, string filePath)
+        {
+            ModuleNode module;
+            List<string> parseErrors;
+
+            if (fileResolver != null)
+            {
+                var preprocessor = new Preprocessor(fileResolver);
+                module = preprocessor.Resolve(source, filePath ?? "main", out parseErrors);
+            }
+            else
+            {
+                var parser = new Parser();
+                module = parser.Parse(source, out parseErrors);
+            }
 
             if (parseErrors != null && parseErrors.Count > 0)
                 return new CompileResult { Errors = parseErrors };

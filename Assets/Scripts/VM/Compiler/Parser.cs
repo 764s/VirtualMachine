@@ -31,7 +31,11 @@ namespace FFVM.Compiler
 
             while (!IsAtEnd())
             {
-                if (Check(TokenType.Func))
+                if (Check(TokenType.Include))
+                {
+                    module.Imports.Add(ParseIncludeDecl());
+                }
+                else if (Check(TokenType.Func))
                 {
                     module.Functions.Add(ParseFuncDecl());
                 }
@@ -49,7 +53,7 @@ namespace FFVM.Compiler
                 }
                 else
                 {
-                    Error($"Expected 'func', 'struct', 'var' or 'const', got '{Current().Text}'");
+                    Error($"Expected 'func', 'struct', 'var', 'const' or 'include', got '{Current().Text}'");
                     Advance();
                 }
             }
@@ -109,6 +113,14 @@ namespace FFVM.Compiler
         }
 
         // ===== Top-level =====
+
+        private ImportDecl ParseIncludeDecl()
+        {
+            Expect(TokenType.Include, "");
+            var pathToken = Expect(TokenType.StringLiteral, "after 'include'");
+            string path = pathToken.Text ?? "";
+            return new ImportDecl(path);
+        }
 
         private FuncDecl ParseFuncDecl()
         {
