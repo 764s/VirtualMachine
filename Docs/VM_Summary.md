@@ -564,7 +564,7 @@ B 阶段 20 个步骤（B-R1 → B-δ5）全部完成，已归入上方 A 区表
 >
 > ⚠️ **性能敏感**：每个 Lang 步骤完成后必须运行 B01-B06 benchmark，确认无性能回归。涉及 VM 运行时改动的步骤（Lang-4/5）需额外关注 ExecuteInstance 热循环影响。
 >
-> 🔧 **专用指令优化原则**（Lang-1 经验）：任何需要特殊寄存器寻址的语言特性，必须使用专用 OpCode（如 LOAD_MVAR/STORE_MVAR）而非在 Reg() 热路径中增加分支。Reg() 是每条指令执行 1~3 次的最内层函数，额外分支会被放大为系统性回归。Lang-1 初始实现在 Reg() 增加 `|| r >= ModuleVarRegBase` 分支后发现性能回归，改为专用指令后 Reg() 恢复为 `r < 16 ? r : r + regBase` 最简形式。后续 Lang-1.1b（扩展寄存器）、Lang-4（跨模块共享变量）等涉及新寄存器段/寻址模式的步骤，均须遵循此原则——用专用 OpCode 替代 Reg() 分支。
+> 🔧 **专用指令优化原则**（Lang-1 经验）：任何需要特殊寄存器寻址的语言特性，必须使用专用 OpCode（如 LOAD_MVAR/STORE_MVAR）而非在 Reg() 热路径中增加分支。Reg() 是每条指令执行 1~3 次的最内层函数，额外分支会被放大为系统性回归。Lang-1 初始实现在 Reg() 增加 `|| r >= ModuleVarRegBase` 分支后发现性能回归，改为专用指令后 Reg() 恢复为 `r < ScratchZoneSize ? r : r + regBase` 最简形式。后续 Lang-1.1b（扩展寄存器）、Lang-4（跨模块共享变量）等涉及新寄存器段/寻址模式的步骤，均须遵循此原则——用专用 OpCode 替代 Reg() 分支。
 >
 > 详细需求背景、痛点分析、3 个建议方向的细则与待回复问题，见 [D_SkillScripting.md SK14](../KOF98/Docs/Discussion/D_SkillScripting.md)「向 VM/语言方提交的需求背景与建议方向」一节。
 
