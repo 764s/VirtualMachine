@@ -356,7 +356,7 @@ Docs/
 
 | 优先级 | 内容 | 阻塞关系 |
 |--------|------|----------|
-| **P0** | **语言需求实现（SK14）**— ~~模块变量 (L1)~~ ✅ + include (L2) + 黑板 Syscall 正式化；远期：跨模块共享变量 (L3) + 跨模块函数调用 (L4)。详见 §7 Lang 区。 | **最优先 — 当前位置 → Lang-2**。阻塞 KOF98 有状态技能脚本 |
+| **P0** | **语言需求实现（SK14）**— ~~模块变量 (L1)~~ ✅ + 结构体常量 (L1b) + include (L2) + 黑板 Syscall 正式化；远期：跨模块共享变量 (L3) + 跨模块函数调用 (L4)。详见 §7 Lang 区。 | **最优先 — 当前位置 → Lang-1b**。阻塞 KOF98 有状态技能脚本 |
 | P3 | V5 帧内 Profiler 验证（真实 Syscall 接入后） | 阻塞编辑器 UI |
 | P3 | 编辑器流程图投影 | 不阻塞 VM 核心 |
 | — | Handle64 批处理协议 | 展望项，最晚于真实多目标业务接入前 |
@@ -474,7 +474,7 @@ Docs/
 | — | **B-δ5 C5 Cleanup 超时保护** | **MaxCleanupSteps 每块步数预算 + 超时跳过当前块继续剩余 cleanup + C5-01~C5-04 测试** | **1007** | [B-δ5](Plan/Step_B_Delta5_C5_CleanupTimeout.md) |
 | — | **Lang-1 模块变量 (L1)** | **Parser 顶层 `var`/`const` + ModuleNode.ModuleVariables + r56~r63 绝对寄存器 + VM Reg() + FO6/FO7/P2 修正 + EmitModuleVarInit + LSP 全面支持 + L01~L14 + L1-LSP-01~06** | **1037** | [Lang-1](Plan/Step_Lang1_ModuleVariable.md) |
 
-**B 阶段全部完成。1037 项 Assert × 2 模式全通过。B-ε 性能优化串行计划全部完成（4/4）。B-ζ 分支场景优化串行计划全部完成（3/3）。B-η O8 指令压缩完成（O8-1~O8-3/O8-5 ✅，O8-4 ⏸）。D 阶段分发基础设施全部完成（DIST-1~DIST-10 ✅）。Lang-1 ✅ 完成。当前位置 → Lang-2（include 预处理器）。**
+**B 阶段全部完成。1037 项 Assert × 2 模式全通过。B-ε 性能优化串行计划全部完成（4/4）。B-ζ 分支场景优化串行计划全部完成（3/3）。B-η O8 指令压缩完成（O8-1~O8-3/O8-5 ✅，O8-4 ⏸）。D 阶段分发基础设施全部完成（DIST-1~DIST-10 ✅）。Lang-1 ✅ 完成。当前位置 → Lang-1b（结构体常量）。**
 
 ---
 
@@ -485,7 +485,8 @@ B 阶段 20 个步骤（B-R1 → B-δ5）全部完成，已归入上方 A 区表
 
 > **剩余展望项**（暂无排期，业务驱动激活）：B1 Unity Editor DAP、~~FF1 跨模块调用~~（→ Lang-5）、FF2 函数回调、FF4 多返回值、
 > O11-O14 运行时优化、FO2 尾调用、FO3 小函数内联、
-> ~~BB1 黑板 Key 编译期 ID~~（→ Lang-3）、PR1 带参 Paired Syscall、DM1 双轨编排模式。
+> ~~BB1 黑板 Key 编译期 ID~~（→ Lang-3）、PR1 带参 Paired Syscall、DM1 双轨编排模式、
+> E1/E2/E3 寄存器扩展（模块变量区，分层备案）。
 > 完整索引见 [Outlook_And_Risks.md](Plan/Outlook_And_Risks.md)。
 
 ---
@@ -519,7 +520,7 @@ B 阶段 20 个步骤（B-R1 → B-δ5）全部完成，已归入上方 A 区表
 | B-ζ2 | CMP-immediate 指令 | ✅ | +6 OpCode `JUMP_IF_EQ_K` ~ `JUMP_IF_GTE_K`：`A=targetIP, B=reg, C=constIndex`，一条指令完成"与常量比较并跳转"，替代 `LOAD_CONST tmp` + `JUMP_IF_*`。Peephole 识别 + 编译器直接 emit | ~15-20% B04 加速；所有含常量比较的分支受益 | 中（+6 OpCode + VMWorld case + Peephole/Compiler 识别） |
 | B-ζ3 | SWITCH 跳转表指令 | ✅ | 编译器识别连续 if-else if 链中所有条件为同一变量对连续整数常量（从 0 起）比较时，生成 `SWITCH defaultIP, testReg, jumpTableIdx` 跳转表指令；O(N) 串行测试 → O(1) 分派。+1 OpCode + VMProgram.JumpTables + 编译器 TryCompileSwitch + Peephole 跳转表重映射 | B04↓40-47%（含高方差环境） | 中高（AST 模式识别 + 跳转表编码 + 新 OpCode + 仅对连续 0-based 整数常量有效） |
 
-**B-ζ 分支场景优化串行计划完成（3/3 ✅）。B-η O8 指令压缩完成（O8-1~O8-3/O8-5 ✅，O8-4 临时妥协 ⏸）。D 阶段分发基础设施全部完成（DIST-1~DIST-10 ✅）。Lang-1 ✅ 完成。当前位置 → Lang-2（include 预处理器）。**
+**B-ζ 分支场景优化串行计划完成（3/3 ✅）。B-η O8 指令压缩完成（O8-1~O8-3/O8-5 ✅，O8-4 临时妥协 ⏸）。D 阶段分发基础设施全部完成（DIST-1~DIST-10 ✅）。Lang-1 ✅ 完成。当前位置 → Lang-1b（结构体常量）。**
 
 ---
 
@@ -551,18 +552,19 @@ B 阶段 20 个步骤（B-R1 → B-δ5）全部完成，已归入上方 A 区表
 | 序号 | 步骤 | 状态 | 内容 | 对应痛点 | 改动范围 | 复杂度 |
 |------|------|------|------|---------|---------|--------|
 | Lang-1 | 模块变量 (L1) | ✅ | Parser 顶层 `var`/`const` + 编译器 r56~r63 绝对寄存器段 + VM Reg() 修正 + LSP 支持 | P1: 函数间无法共享变量 | 编译器 + VM | ⭐⭐ |
+| Lang-1b | 结构体常量 (L1 扩展) | ⏳ | 模块级 `const` 支持结构体形式声明 — 各字段编译期折叠为独立常量，零寄存器开销。使用户可安全声明静态配置项（如 `const CFG: AttackConfig = AttackConfig { damage: 3, frames: 20 }`） | P1 扩展: 静态配置项的结构化声明 | 编译器（ProcessModuleVariables + TryFoldStructConst + 字段访问路径） | ⭐ |
 | Lang-2 | include (L2) | ⏳ | 预处理器递归展开 + const/struct/func/var 重定义规则 | P2: 脚本间无法复用声明 | 编译器（新 Preprocessor） | ⭐⭐ |
 | Lang-3 | 黑板 Syscall 正式化 | ⏳ | Get/SetBlackboard(key, value) 标准 Syscall | P3: 跨脚本运行时数据共享 | 宿主 Syscall | ⭐ |
 | *Lang-4* | *跨模块共享变量 (L3)* | *⏳* | *共享内存区域或专用寄存器段* | *P3 升级* | *⚠️ 编译器 + VM 运行时* | *⭐⭐⭐* |
 | *Lang-5* | *跨模块函数调用 (L4)* | *⏳* | *ModuleTable + CALL 指令扩展* | *P4: 跨模块函数调用* | *⚠️ 编译器 + VM 运行时* | *⭐⭐⭐* |
 
-> 斜体 = 远期展望，当前阶段不排期，按需触发。Lang-1 和 Lang-2 无依赖关系，可并行实施。
+> 斜体 = 远期展望，当前阶段不排期，按需触发。Lang-1b 与 Lang-2 无依赖关系，可并行实施。
 >
 > ⚠️ **性能敏感**：每个 Lang 步骤完成后必须运行 B01-B06 benchmark，确认无性能回归。涉及 VM 运行时改动的步骤（Lang-4/5）需额外关注 ExecuteInstance 热循环影响。
 >
 > 详细需求背景、痛点分析、3 个建议方向的细则与待回复问题，见 [D_SkillScripting.md SK14](../KOF98/Docs/Discussion/D_SkillScripting.md)「向 VM/语言方提交的需求背景与建议方向」一节。
 
-**Lang-1 ✅ 完成。当前位置 → Lang-2（include 预处理器）。C 阶段宿主阻塞期间，优先推进语言需求。**
+**Lang-1 ✅ 完成。当前位置 → Lang-1b（结构体常量）。C 阶段宿主阻塞期间，优先推进语言需求。**
 
 ---
 
@@ -600,7 +602,7 @@ B 阶段 20 个步骤（B-R1 → B-δ5）全部完成，已归入上方 A 区表
 | DIST-9 | Sandbox 改造：消费分发库 attach API | ✅ | 删除 `Sandbox/EmbeddedDapServer.cs`（774 行），`SandboxRunner` 改用 `FFVM.Debug.EmbeddableDapServer`；沙盒定制行为（WaitForConnection + StopOnEntry）保留。1007 项 Assert 全通过 + Sandbox 构建 0 错误 | DIST-8 | 验证分发库 API 可用性的"吃自己狗粮"步骤 |
 | DIST-10 | .NET 多版本兼容策略 | ✅ | FFVM.csproj 双目标 `netstandard2.1;net8.0`（NuGet 包含两个 TFM 程序集），netstandard2.1 目标自动定义 `FFVM_LEGACY_CSHARP` 切换条件编译。VMWorld.cs `AggressiveOptimization` 用条件编译隔离。CLI 追加 `RollForward=LatestMajor`。KOF98 + StandaloneRunner 构建通过，1007 Assert 全通过 | DIST-1 | [D11 讨论](Discussion/Step_DIST_Distribution.md) §七；[KOF98 覆盖验证](Discussion/Step_DIST_Distribution.md) §7.6 |
 
-**DIST-1~DIST-3 ✅ 已完成。DIST-8~DIST-9 ✅ 已完成。DIST-10 ✅ 已完成。D 阶段分发基础设施全部完成。Lang-1 ✅ 完成。当前位置 → Lang-2（include 预处理器）。**
+**DIST-1~DIST-3 ✅ 已完成。DIST-8~DIST-9 ✅ 已完成。DIST-10 ✅ 已完成。D 阶段分发基础设施全部完成。Lang-1 ✅ 完成。当前位置 → Lang-1b（结构体常量）。**
 
 ---
 
@@ -890,6 +892,7 @@ bash benchmarks/update-history.sh bench-raw.txt
 | 结构体 | — | S4 参数 ✅、SN1 嵌套 ✅、SN2 字面量 ✅ |
 | 脚本调试 | — | DBG1-DBG7 全部 ✅ |
 | 语言服务 | — | LSP1-LSP7 全部 ✅ |
+| 寄存器扩展 | E1 压缩 temp（临时）、E2 扩大 MaxRegisters（正式）、E3 溢出辅助存储（兜底） | — |
 
 ### 优化展望
 
