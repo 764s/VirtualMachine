@@ -18,6 +18,10 @@ namespace FFVM
         public int[] ActiveList;
         public int ActiveListCount;
 
+        // Lang-1.1b: Per-instance extended register pools (heap-allocated).
+        // Null entry = instance does not use extended registers.
+        public Number[][] ExtendedRegs;
+
         // Legacy alias: always equals ActiveListCount (kept for snapshot compat)
         public int ActiveCount { get => ActiveListCount; set => ActiveListCount = value; }
 
@@ -26,6 +30,7 @@ namespace FFVM
             Instances = new VMInstanceState[VMConstants.MaxInstances];
             FreeStack = new int[VMConstants.MaxFreeStack];
             ActiveList = new int[VMConstants.MaxInstances];
+            ExtendedRegs = new Number[VMConstants.MaxInstances][];
             FreeTop = VMConstants.MaxInstances;
             ActiveListCount = 0;
 
@@ -55,6 +60,9 @@ namespace FFVM
             inst.IsAlive = true;
             inst.StateFlags = VMStateFlags.Active;
             inst.WaitTargetInstanceId = -1;
+
+            // Lang-1.1b: Clear extended registers (pre-allocation handled by SpawnInstance)
+            ExtendedRegs[slot] = null;
 
             // O9: Append to active list (also updates ActiveCount via alias)
             inst.ActiveListIndex = ActiveListCount;

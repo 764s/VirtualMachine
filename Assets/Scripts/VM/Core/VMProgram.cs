@@ -64,12 +64,15 @@ namespace FFVM
         /// <summary>B-ζ3: Jump tables for SWITCH instruction dispatch.</summary>
         public readonly int[][] JumpTables;
 
+        /// <summary>Lang-1.1b: Number of extended (heap-allocated) registers required. 0 = none.</summary>
+        public readonly int RequiredExtendedRegisters;
+
         /// <summary>O15: Logical instruction count, excluding the trailing SENTINEL.</summary>
         public int InstructionCount => Instructions.Length - 1;
 
         public VMProgram(Instruction[] instructions, Number[] constants, int requiredRegisters,
             FunctionEntry[] functions = null, int[] sourceMap = null, SymbolEntry[] symbolTable = null,
-            string[] stringConstants = null, int[][] jumpTables = null)
+            string[] stringConstants = null, int[][] jumpTables = null, int requiredExtendedRegisters = 0)
         {
             // O15: append SENTINEL — allows removing per-instruction boundary check in ExecuteInstance.
             var withSentinel = new Instruction[instructions.Length + 1];
@@ -97,6 +100,7 @@ namespace FFVM
             SymbolTable = symbolTable;
             StringConstants = stringConstants ?? System.Array.Empty<string>();
             JumpTables = jumpTables ?? System.Array.Empty<int[]>();
+            RequiredExtendedRegisters = requiredExtendedRegisters;
         }
 
         /// <summary>

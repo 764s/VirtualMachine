@@ -142,7 +142,7 @@ namespace FFVM.Debug
             if (varRef == 1 && _debugger != null && _program != null && _instanceId >= 0)
             {
                 _structExpansions = _structExpansions ?? new List<(string[], Number[])>();
-                var vars = _debugger.GetVariables(_program, ref _world.Pool.Instances[_instanceId]);
+                var vars = _debugger.GetVariables(_program, ref _world.Pool.Instances[_instanceId], _world.Pool.ExtendedRegs[_instanceId]);
 
                 foreach (var v in vars)
                 {
@@ -200,7 +200,7 @@ namespace FFVM.Debug
             if (_debugger == null || _program == null || _instanceId < 0)
                 throw new Exception("Not paused");
 
-            var vars = _debugger.GetVariables(_program, ref _world.Pool.Instances[_instanceId]);
+            var vars = _debugger.GetVariables(_program, ref _world.Pool.Instances[_instanceId], _world.Pool.ExtendedRegs[_instanceId]);
 
             // Field access: "varName.fieldName"
             int dotIdx = expression.IndexOf('.');

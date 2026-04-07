@@ -260,7 +260,7 @@ namespace FFVM
         /// Get all variables visible at the current execution point.
         /// Filters by the current function scope using SymbolTable.ScopeFunctionName.
         /// </summary>
-        public List<VariableInfo> GetVariables(VMProgram program, ref VMInstanceState inst)
+        public List<VariableInfo> GetVariables(VMProgram program, ref VMInstanceState inst, Number[] extendedRegs = null)
         {
             var result = new List<VariableInfo>();
             if (program.SymbolTable == null)
@@ -281,6 +281,29 @@ namespace FFVM
                     Name = sym.Name,
                     IsStruct = sym.FieldCount > 0
                 };
+
+                // Lang-1.1b: Extended registers are stored in heap array
+                if (sym.Register >= VMConstants.MaxRegisters)
+                {
+                    int xidx = sym.Register - VMConstants.MaxRegisters;
+                    if (extendedRegs != null && xidx < extendedRegs.Length)
+                    {
+                        if (sym.FieldCount > 0 && sym.FieldNames != null)
+                        {
+                            info.Value = extendedRegs[xidx];
+                            info.FieldNames = sym.FieldNames;
+                            info.FieldValues = new Number[sym.FieldCount];
+                            for (int f = 0; f < sym.FieldCount; f++)
+                                info.FieldValues[f] = extendedRegs[xidx + f];
+                        }
+                        else
+                        {
+                            info.Value = extendedRegs[xidx];
+                        }
+                    }
+                    result.Add(info);
+                    continue;
+                }
 
                 // Scratch zone registers are absolute; windowed registers offset by RegisterBase
                 int physReg = sym.Register < VMConstants.ScratchZoneSize ? sym.Register : sym.Register + inst.RegisterBase;
