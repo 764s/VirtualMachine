@@ -5556,6 +5556,488 @@ func main() {
             Assert(values[1] == 462, $"XR06: after update sum=462, got {values[1]}");
         }
 
+        // ===================================================================
+        //  Lang-2: Include Tests (INC01–INC16)
+        // ===================================================================
+
+        // ===== Test INC01: Basic include — const declaration =====
+        {
+            var files = new Dictionary<string, string>
+            {
+                { "shared/config", @"
+const SPEED: int = 42
+" }
+            };
+            string source = @"
+include ""shared/config""
+
+func main() {
+    Report(SPEED)
+}";
+            var syscalls = new Dictionary<string, int> { { "Report", 0 } };
+            var resolver = new DictionaryFileResolver(files);
+            var result = compiler.Compile(source, "main", syscalls, null, resolver, "main.ffs");
+            Assert(result.Success, "INC01 compile success");
+
+            var values = new List<int>();
+            var world = new VMWorld();
+            world.Modules.Load(0, result.Program);
+            world.Syscalls.Register(0, "Report", (ref VMInstanceState s) =>
+            {
+                values.Add(s.Registers.Get(0).ToInt());
+            });
+            world.SpawnInstance(0, 0);
+            world.Tick();
+            Assert(values.Count == 1 && values[0] == 42, $"INC01: SPEED=42, got {(values.Count > 0 ? values[0].ToString() : "none")}");
+        }
+
+        // ===== Test INC02: Include func declaration =====
+        {
+            var files = new Dictionary<string, string>
+            {
+                { "shared/helpers", @"
+func add(a: int, b: int): int {
+    return a + b
+}
+" }
+            };
+            string source = @"
+include ""shared/helpers""
+
+func main() {
+    Report(add(10, 20))
+}";
+            var syscalls = new Dictionary<string, int> { { "Report", 0 } };
+            var resolver = new DictionaryFileResolver(files);
+            var result = compiler.Compile(source, "main", syscalls, null, resolver, "main.ffs");
+            Assert(result.Success, "INC02 compile success");
+
+            var values = new List<int>();
+            var world = new VMWorld();
+            world.Modules.Load(0, result.Program);
+            world.Syscalls.Register(0, "Report", (ref VMInstanceState s) =>
+            {
+                values.Add(s.Registers.Get(0).ToInt());
+            });
+            world.SpawnInstance(0, 0);
+            world.Tick();
+            Assert(values.Count == 1 && values[0] == 30, $"INC02: add(10,20)=30, got {(values.Count > 0 ? values[0].ToString() : "none")}");
+        }
+
+        // ===== Test INC03: Multiple includes =====
+        {
+            var files = new Dictionary<string, string>
+            {
+                { "config/a", @"const A: int = 100" },
+                { "config/b", @"const B: int = 200" }
+            };
+            string source = @"
+include ""config/a""
+include ""config/b""
+
+func main() {
+    Report(A + B)
+}";
+            var syscalls = new Dictionary<string, int> { { "Report", 0 } };
+            var resolver = new DictionaryFileResolver(files);
+            var result = compiler.Compile(source, "main", syscalls, null, resolver, "main.ffs");
+            Assert(result.Success, "INC03 compile success");
+
+            var values = new List<int>();
+            var world = new VMWorld();
+            world.Modules.Load(0, result.Program);
+            world.Syscalls.Register(0, "Report", (ref VMInstanceState s) =>
+            {
+                values.Add(s.Registers.Get(0).ToInt());
+            });
+            world.SpawnInstance(0, 0);
+            world.Tick();
+            Assert(values.Count == 1 && values[0] == 300, $"INC03: A+B=300, got {(values.Count > 0 ? values[0].ToString() : "none")}");
+        }
+
+        // ===== Test INC04: Multi-level include (A→B→C) =====
+        {
+            var files = new Dictionary<string, string>
+            {
+                { "deep/c", @"const BASE: int = 5" },
+                { "mid/b", @"
+include ""deep/c""
+func triple(x: int): int { return x * 3 }
+" }
+            };
+            string source = @"
+include ""mid/b""
+
+func main() {
+    Report(triple(BASE))
+}";
+            var syscalls = new Dictionary<string, int> { { "Report", 0 } };
+            var resolver = new DictionaryFileResolver(files);
+            var result = compiler.Compile(source, "main", syscalls, null, resolver, "main.ffs");
+            Assert(result.Success, "INC04 compile success");
+
+            var values = new List<int>();
+            var world = new VMWorld();
+            world.Modules.Load(0, result.Program);
+            world.Syscalls.Register(0, "Report", (ref VMInstanceState s) =>
+            {
+                values.Add(s.Registers.Get(0).ToInt());
+            });
+            world.SpawnInstance(0, 0);
+            world.Tick();
+            Assert(values.Count == 1 && values[0] == 15, $"INC04: triple(5)=15, got {(values.Count > 0 ? values[0].ToString() : "none")}");
+        }
+
+        // ===== Test INC05: Circular include detection =====
+        {
+            var files = new Dictionary<string, string>
+            {
+                { "loop/a", @"include ""loop/b""
+const X: int = 1" },
+                { "loop/b", @"include ""loop/a""
+const Y: int = 2" }
+            };
+            string source = @"
+include ""loop/a""
+func main() { Report(X) }";
+            var syscalls = new Dictionary<string, int> { { "Report", 0 } };
+            var resolver = new DictionaryFileResolver(files);
+            var result = compiler.Compile(source, "main", syscalls, null, resolver, "main.ffs");
+            Assert(!result.Success, "INC05: circular include detected");
+            bool hasCircular = false;
+            if (result.Errors != null)
+                for (int i = 0; i < result.Errors.Count; i++)
+                    if (result.Errors[i].Contains("Circular")) hasCircular = true;
+            Assert(hasCircular, "INC05: error mentions 'Circular'");
+        }
+
+        // ===== Test INC06: Cross-file const override (later wins) =====
+        {
+            var files = new Dictionary<string, string>
+            {
+                { "base_config", @"const PRIORITY: int = 100" }
+            };
+            string source = @"
+include ""base_config""
+const PRIORITY: int = 200
+
+func main() {
+    Report(PRIORITY)
+}";
+            var syscalls = new Dictionary<string, int> { { "Report", 0 } };
+            var resolver = new DictionaryFileResolver(files);
+            var result = compiler.Compile(source, "main", syscalls, null, resolver, "main.ffs");
+            Assert(result.Success, "INC06 compile success");
+
+            var values = new List<int>();
+            var world = new VMWorld();
+            world.Modules.Load(0, result.Program);
+            world.Syscalls.Register(0, "Report", (ref VMInstanceState s) =>
+            {
+                values.Add(s.Registers.Get(0).ToInt());
+            });
+            world.SpawnInstance(0, 0);
+            world.Tick();
+            Assert(values.Count == 1 && values[0] == 200, $"INC06: override PRIORITY=200, got {(values.Count > 0 ? values[0].ToString() : "none")}");
+        }
+
+        // ===== Test INC07: Same-file const redefinition is error =====
+        {
+            string source = @"
+const X: int = 10
+const X: int = 20
+func main() { Report(X) }";
+            var syscalls = new Dictionary<string, int> { { "Report", 0 } };
+            var resolver = new DictionaryFileResolver(new Dictionary<string, string>());
+            var result = compiler.Compile(source, "main", syscalls, null, resolver, "main.ffs");
+            Assert(!result.Success, "INC07: same-file const redefine is error");
+        }
+
+        // ===== Test INC08: var cannot override const =====
+        {
+            var files = new Dictionary<string, string>
+            {
+                { "base", @"const X: int = 10" }
+            };
+            string source = @"
+include ""base""
+var X: int = 20
+func main() { Report(X) }";
+            var syscalls = new Dictionary<string, int> { { "Report", 0 } };
+            var resolver = new DictionaryFileResolver(files);
+            var result = compiler.Compile(source, "main", syscalls, null, resolver, "main.ffs");
+            Assert(!result.Success, "INC08: var cannot override const");
+        }
+
+        // ===== Test INC09: Cross-file func override =====
+        {
+            var files = new Dictionary<string, string>
+            {
+                { "templates", @"
+func checkEnter(): int {
+    return 0
+}
+" }
+            };
+            string source = @"
+include ""templates""
+
+func checkEnter(): int {
+    return 1
+}
+
+func main() {
+    Report(checkEnter())
+}";
+            var syscalls = new Dictionary<string, int> { { "Report", 0 } };
+            var resolver = new DictionaryFileResolver(files);
+            var result = compiler.Compile(source, "main", syscalls, null, resolver, "main.ffs");
+            Assert(result.Success, "INC09 compile success");
+
+            var values = new List<int>();
+            var world = new VMWorld();
+            world.Modules.Load(0, result.Program);
+            world.Syscalls.Register(0, "Report", (ref VMInstanceState s) =>
+            {
+                values.Add(s.Registers.Get(0).ToInt());
+            });
+            world.SpawnInstance(0, 0);
+            world.Tick();
+            Assert(values.Count == 1 && values[0] == 1, $"INC09: overridden checkEnter()=1, got {(values.Count > 0 ? values[0].ToString() : "none")}");
+        }
+
+        // ===== Test INC10: Include struct declaration =====
+        {
+            var files = new Dictionary<string, string>
+            {
+                { "types/vec", @"
+struct Vec2 {
+    x: int
+    y: int
+}
+" }
+            };
+            string source = @"
+include ""types/vec""
+
+func main() {
+    var v: Vec2
+    v.x = 3
+    v.y = 4
+    Report(v.x + v.y)
+}";
+            var syscalls = new Dictionary<string, int> { { "Report", 0 } };
+            var resolver = new DictionaryFileResolver(files);
+            var result = compiler.Compile(source, "main", syscalls, null, resolver, "main.ffs");
+            Assert(result.Success, "INC10 compile success");
+
+            var values = new List<int>();
+            var world = new VMWorld();
+            world.Modules.Load(0, result.Program);
+            world.Syscalls.Register(0, "Report", (ref VMInstanceState s) =>
+            {
+                values.Add(s.Registers.Get(0).ToInt());
+            });
+            world.SpawnInstance(0, 0);
+            world.Tick();
+            Assert(values.Count == 1 && values[0] == 7, $"INC10: v.x+v.y=7, got {(values.Count > 0 ? values[0].ToString() : "none")}");
+        }
+
+        // ===== Test INC11: Include module var declaration =====
+        {
+            var files = new Dictionary<string, string>
+            {
+                { "shared/state", @"var counter: int = 0" }
+            };
+            string source = @"
+include ""shared/state""
+
+func inc() {
+    counter = counter + 1
+}
+
+func main() {
+    inc()
+    inc()
+    inc()
+    Report(counter)
+}";
+            var syscalls = new Dictionary<string, int> { { "Report", 0 } };
+            var resolver = new DictionaryFileResolver(files);
+            var result = compiler.Compile(source, "main", syscalls, null, resolver, "main.ffs");
+            Assert(result.Success, "INC11 compile success");
+
+            var values = new List<int>();
+            var world = new VMWorld();
+            world.Modules.Load(0, result.Program);
+            world.Syscalls.Register(0, "Report", (ref VMInstanceState s) =>
+            {
+                values.Add(s.Registers.Get(0).ToInt());
+            });
+            world.SpawnInstance(0, 0);
+            world.Tick();
+            Assert(values.Count == 1 && values[0] == 3, $"INC11: counter=3, got {(values.Count > 0 ? values[0].ToString() : "none")}");
+        }
+
+        // ===== Test INC12: Full integration — chain includes + all declaration types =====
+        {
+            var files = new Dictionary<string, string>
+            {
+                { "base/types", @"
+struct Point {
+    x: int
+    y: int
+}
+const ORIGIN_X: int = 0
+const ORIGIN_Y: int = 0
+" },
+                { "base/math", @"
+include ""base/types""
+func dist(p: Point): int {
+    return p.x + p.y
+}
+" },
+                { "shared/config", @"
+include ""base/types""
+const SPEED: int = 10
+var phase: int = 0
+" }
+            };
+            string source = @"
+include ""base/math""
+include ""shared/config""
+const SPEED: int = 25
+
+func main() {
+    var p: Point
+    p.x = 3
+    p.y = 4
+    phase = dist(p)
+    Report(phase)
+    Report(SPEED)
+    Report(ORIGIN_X)
+}";
+            var syscalls = new Dictionary<string, int> { { "Report", 0 } };
+            var resolver = new DictionaryFileResolver(files);
+            var result = compiler.Compile(source, "main", syscalls, null, resolver, "main.ffs");
+            Assert(result.Success, "INC12 compile success");
+
+            var values = new List<int>();
+            var world = new VMWorld();
+            world.Modules.Load(0, result.Program);
+            world.Syscalls.Register(0, "Report", (ref VMInstanceState s) =>
+            {
+                values.Add(s.Registers.Get(0).ToInt());
+            });
+            world.SpawnInstance(0, 0);
+            world.Tick();
+            Assert(values.Count == 3, $"INC12: 3 reports, got {values.Count}");
+            if (values.Count == 3)
+            {
+                Assert(values[0] == 7, $"INC12: dist(3,4)=7, got {values[0]}");
+                Assert(values[1] == 25, $"INC12: SPEED=25 (overridden), got {values[1]}");
+                Assert(values[2] == 0, $"INC12: ORIGIN_X=0, got {values[2]}");
+            }
+        }
+
+        // ===== Test INC13: Include file not found error =====
+        {
+            string source = @"
+include ""nonexistent""
+func main() { Report(0) }";
+            var syscalls = new Dictionary<string, int> { { "Report", 0 } };
+            var resolver = new DictionaryFileResolver(new Dictionary<string, string>());
+            var result = compiler.Compile(source, "main", syscalls, null, resolver, "main.ffs");
+            Assert(!result.Success, "INC13: file not found is error");
+            bool hasNotFound = false;
+            if (result.Errors != null)
+                for (int i = 0; i < result.Errors.Count; i++)
+                    if (result.Errors[i].Contains("not found")) hasNotFound = true;
+            Assert(hasNotFound, "INC13: error mentions 'not found'");
+        }
+
+        // ===== Test INC14: const cannot override var =====
+        {
+            var files = new Dictionary<string, string>
+            {
+                { "base", @"var X: int = 10" }
+            };
+            string source = @"
+include ""base""
+const X: int = 20
+func main() { Report(X) }";
+            var syscalls = new Dictionary<string, int> { { "Report", 0 } };
+            var resolver = new DictionaryFileResolver(files);
+            var result = compiler.Compile(source, "main", syscalls, null, resolver, "main.ffs");
+            Assert(!result.Success, "INC14: const cannot override var");
+        }
+
+        // ===== Test INC15: Cross-file struct override =====
+        {
+            var files = new Dictionary<string, string>
+            {
+                { "old_types", @"
+struct Pair {
+    a: int
+    b: int
+}
+" }
+            };
+            string source = @"
+include ""old_types""
+
+struct Pair {
+    a: int
+    b: int
+    c: int
+}
+
+func main() {
+    var p: Pair
+    p.a = 1
+    p.b = 2
+    p.c = 3
+    Report(p.a + p.b + p.c)
+}";
+            var syscalls = new Dictionary<string, int> { { "Report", 0 } };
+            var resolver = new DictionaryFileResolver(files);
+            var result = compiler.Compile(source, "main", syscalls, null, resolver, "main.ffs");
+            Assert(result.Success, "INC15 compile success");
+
+            var values = new List<int>();
+            var world = new VMWorld();
+            world.Modules.Load(0, result.Program);
+            world.Syscalls.Register(0, "Report", (ref VMInstanceState s) =>
+            {
+                values.Add(s.Registers.Get(0).ToInt());
+            });
+            world.SpawnInstance(0, 0);
+            world.Tick();
+            Assert(values.Count == 1 && values[0] == 6, $"INC15: Pair(1+2+3)=6, got {(values.Count > 0 ? values[0].ToString() : "none")}");
+        }
+
+        // ===== Test INC16: No file resolver — backward compat (no include) =====
+        {
+            string source = @"
+func main() {
+    Report(42)
+}";
+            var syscalls = new Dictionary<string, int> { { "Report", 0 } };
+            var result = compiler.Compile(source, "main", syscalls);
+            Assert(result.Success, "INC16: backward compat compile success");
+
+            var values = new List<int>();
+            var world = new VMWorld();
+            world.Modules.Load(0, result.Program);
+            world.Syscalls.Register(0, "Report", (ref VMInstanceState s) =>
+            {
+                values.Add(s.Registers.Get(0).ToInt());
+            });
+            world.SpawnInstance(0, 0);
+            world.Tick();
+            Assert(values.Count == 1 && values[0] == 42, $"INC16: backward compat Report(42), got {(values.Count > 0 ? values[0].ToString() : "none")}");
+        }
+
         // ===== Summary =====
         Debug.Log($"========================================");
         Debug.Log($"Compiler Tests: {passed} passed, {failed} failed");

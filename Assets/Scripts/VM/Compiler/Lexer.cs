@@ -16,7 +16,7 @@ namespace FFVM.Compiler
         // Keywords
         Func, Var, Const, If, Else, While, For, Return,
         Wait, WaitFor, Yield, Defer, Using,
-        True, False, Struct,
+        True, False, Struct, Include,
 
         // Operators
         Plus, Minus, Star, Slash, Percent,
@@ -79,6 +79,7 @@ namespace FFVM.Compiler
             { "true",     TokenType.True },
             { "false",    TokenType.False },
             { "struct",   TokenType.Struct },
+            { "include",  TokenType.Include },
         };
 
         public Lexer(string source)
