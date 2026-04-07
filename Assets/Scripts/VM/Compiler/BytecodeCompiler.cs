@@ -14,10 +14,10 @@ namespace FFVM.Compiler
     /// Compiles a parsed AST (single function) into a VMProgram (bytecode + constants).
     ///
     /// Register layout:
-    ///   r0..r15   — scratch zone: syscall arguments / return values
-    ///   r16..r47  — local variables (32 slots)
-    ///   r48..r55  — expression temporaries (8 slots)
-    ///   r56..r63  — module variables (8 slots, absolute, not windowed)
+    ///   r0..r15   — scratch zone: syscall arguments / return values (absolute)
+    ///   r16..r47  — local variables (32 slots, windowed)
+    ///   r48..r55  — expression temporaries (8 slots, windowed+remapped)
+    ///   r56..r63  — module variables (8 slots, absolute via LOAD_MVAR/STORE_MVAR)
     /// </summary>
     public class BytecodeCompiler
     {
@@ -486,7 +486,7 @@ namespace FFVM.Compiler
 
         /// <summary>
         /// Lang-1: Emit module variable initialization code as entry function preamble.
-        /// Emits LOAD_CONST for each module var with an initializer.
+        /// Emits LOAD_CONST to temp + STORE_MVAR for each module var with an initializer.
         /// Vars without initializer default to zero (registers are zero-initialized on spawn).
         /// </summary>
         private void EmitModuleVarInit()
@@ -2496,9 +2496,9 @@ namespace FFVM.Compiler
                         return valueReg;
                     }
                     // O4: pass dest-reg hint for field assignment
-                    int fvalueReg = CompileExpr(assign.Value, destReg: fieldReg);
-                    if (fvalueReg != fieldReg)
-                        Emit(OpCode.MOVE, fieldReg, fvalueReg);
+                    int fieldValueReg = CompileExpr(assign.Value, destReg: fieldReg);
+                    if (fieldValueReg != fieldReg)
+                        Emit(OpCode.MOVE, fieldReg, fieldValueReg);
                     return fieldReg;
                 }
 
@@ -2520,9 +2520,9 @@ namespace FFVM.Compiler
                         return scalarValueReg;
                     }
                     // O4: pass dest-reg hint so expression writes directly into target register
-                    int scalarValueReg2 = CompileExpr(assign.Value, destReg: scalarTargetReg);
-                    if (scalarValueReg2 != scalarTargetReg)
-                        Emit(OpCode.MOVE, scalarTargetReg, scalarValueReg2);
+                    int localValueReg = CompileExpr(assign.Value, destReg: scalarTargetReg);
+                    if (localValueReg != scalarTargetReg)
+                        Emit(OpCode.MOVE, scalarTargetReg, localValueReg);
                     return scalarTargetReg;
                 }
                 {
