@@ -459,6 +459,13 @@ namespace FFVM.Debug
                 entries.Add((st.Line, MakeSymbolInfo(st.Name, 23 /* Struct */, st.Line, st.Column, st.Name.Length)));
             }
 
+            // Lang-1: Module variables
+            foreach (var mv in ast.ModuleVariables)
+            {
+                int symbolKind = mv.IsConst ? 14 /* Constant */ : 13 /* Variable */;
+                entries.Add((mv.Line, MakeSymbolInfo(mv.Name, symbolKind, mv.Line, mv.Column, mv.Name.Length)));
+            }
+
             // Sort by source line to preserve declaration order
             entries.Sort((a, b) => a.line.CompareTo(b.line));
 
@@ -577,6 +584,16 @@ namespace FFVM.Debug
                 if (MatchesName(st.Line, st.Column, "struct".Length + 1, st.Name, line, col))
                 {
                     return FormatStructHover(st);
+                }
+            }
+
+            // Lang-1: Check module variable declarations
+            foreach (var mv in ast.ModuleVariables)
+            {
+                string keyword = mv.IsConst ? "const" : "var";
+                if (MatchesName(mv.Line, mv.Column, keyword.Length + 1, mv.Name, line, col))
+                {
+                    return $"(module {keyword}) {mv.Name}: {mv.TypeName}";
                 }
             }
 
@@ -712,6 +729,15 @@ namespace FFVM.Debug
                         if (p.DocComment != null)
                             paramHover += $"\n\n{p.DocComment}";
                         return paramHover;
+                    }
+                }
+                // Lang-1: Check module variables
+                foreach (var mv in ast.ModuleVariables)
+                {
+                    if (mv.Name == id.Name)
+                    {
+                        string keyword = mv.IsConst ? "const" : "var";
+                        return $"(module {keyword}) {mv.Name}: {mv.TypeName}";
                     }
                 }
                 return $"{id.Name}";
@@ -1115,6 +1141,15 @@ namespace FFVM.Debug
                         }
                         // Local variables declared before cursor line
                         CollectVariablesInScope(containingFunc.Body, lspLine + 1, items);
+                    }
+
+                    // Lang-1: Module variables (always in scope within any function)
+                    foreach (var mv in ast.ModuleVariables)
+                    {
+                        string keyword = mv.IsConst ? "const" : "var";
+                        int itemKind = mv.IsConst ? 21 /* Constant */ : 6 /* Variable */;
+                        items.Add(MakeCompletionItem(mv.Name, itemKind,
+                            $"(module {keyword}) {mv.Name}: {mv.TypeName}"));
                     }
                 }
 
@@ -1565,6 +1600,15 @@ namespace FFVM.Debug
                     return new SymbolAtPosition { name = st.Name, kind = SymbolKindTag.Struct };
             }
 
+            // Lang-1: Check module variable declarations
+            foreach (var mv in ast.ModuleVariables)
+            {
+                string keyword = mv.IsConst ? "const" : "var";
+                int nameStart = mv.Column + keyword.Length + 1;
+                if (mv.Line == line && ColMatches(nameStart, mv.Name.Length, col))
+                    return new SymbolAtPosition { name = mv.Name, kind = SymbolKindTag.Variable };
+            }
+
             // Walk function bodies
             foreach (var func in ast.Functions)
             {
@@ -1729,6 +1773,17 @@ namespace FFVM.Debug
             }
             else if (kind == SymbolKindTag.Variable || kind == SymbolKindTag.Parameter)
             {
+                // Lang-1: Check module variables first (they have no scope function)
+                foreach (var mv in ast.ModuleVariables)
+                {
+                    if (mv.Name == name)
+                    {
+                        string keyword = mv.IsConst ? "const" : "var";
+                        int nameCol = mv.Column + keyword.Length + 1;
+                        return (mv.Line, nameCol, mv.Name.Length);
+                    }
+                }
+
                 // Find the declaration in the scope function
                 foreach (var func in ast.Functions)
                 {
@@ -1825,6 +1880,16 @@ namespace FFVM.Debug
             }
             else // Variable or Parameter
             {
+                // Lang-1: Module variable declaration site
+                foreach (var mv in ast.ModuleVariables)
+                {
+                    if (mv.Name == name)
+                    {
+                        string keyword = mv.IsConst ? "const" : "var";
+                        int nameCol = mv.Column + keyword.Length + 1;
+                        locations.Add(MakeLocation(uri, mv.Line, nameCol, name.Length));
+                    }
+                }
                 // All identifier references with matching name across all functions
                 foreach (var func in ast.Functions)
                 {

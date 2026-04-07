@@ -1510,6 +1510,195 @@ public static class LspTests
             }
         }
 
+        // ============================================================
+        // Lang-1: Module variable LSP tests
+        // ============================================================
+
+        // L1-LSP-01: Document symbols include module variables
+        {
+            var session = new LspBatchSession();
+            session.AddInitialize();
+            session.AddInitialized();
+            session.AddDidOpen("file:///modvar.ffs", "var counter: int = 0\nconst MAX: int = 10\n\nstruct Vec2 {\n  x: int\n  y: int\n}\n\nfunc main() {\n  counter = MAX\n}");
+            session.AddDocumentSymbol("file:///modvar.ffs");
+            session.AddShutdown();
+            session.AddExit();
+            session.Run();
+
+            session.ExpectResponse(0); // initialize
+            var symResp = session.ExpectResponse(1); // documentSymbol
+            Assert(symResp != null, "L1-LSP-01: symbols response received");
+
+            bool foundCounter = false, foundMax = false;
+            if (symResp != null)
+            {
+                var result = symResp.GetArray("result");
+                if (result != null)
+                {
+                    for (int i = 0; i < result.Count; i++)
+                    {
+                        var sym = result[i] as JsonObject;
+                        string name = sym?.GetString("name");
+                        int kind = sym != null ? sym.GetInt("kind") : -1;
+                        if (name == "counter" && kind == 13) foundCounter = true;  // Variable
+                        if (name == "MAX" && kind == 14) foundMax = true;          // Constant
+                    }
+                }
+            }
+            Assert(foundCounter, "L1-LSP-01: counter shown as Variable symbol");
+            Assert(foundMax, "L1-LSP-01: MAX shown as Constant symbol");
+        }
+
+        // L1-LSP-02: Hover on module variable declaration
+        {
+            var session = new LspBatchSession();
+            session.AddInitialize();
+            session.AddInitialized();
+            session.AddDidOpen("file:///mvhover.ffs", "var counter: int = 0\n\nfunc main() {\n  counter = 5\n}");
+            // Hover on "counter" in declaration (line 0, col 4 = LSP zero-based)
+            session.AddHover("file:///mvhover.ffs", 0, 5);
+            session.AddShutdown();
+            session.AddExit();
+            session.Run();
+
+            session.ExpectResponse(0); // initialize
+            var hoverResp = session.ExpectResponse(1); // hover
+            Assert(hoverResp != null, "L1-LSP-02: hover response received");
+            if (hoverResp != null)
+            {
+                var result = hoverResp.GetObject("result");
+                if (result != null)
+                {
+                    var contents = result.GetObject("contents");
+                    string value = contents?.GetString("value");
+                    Assert(value != null && value.Contains("module var") && value.Contains("counter"),
+                        $"L1-LSP-02: hover shows module var info, got '{value}'");
+                }
+            }
+        }
+
+        // L1-LSP-03: Hover on module variable usage inside function
+        {
+            var session = new LspBatchSession();
+            session.AddInitialize();
+            session.AddInitialized();
+            session.AddDidOpen("file:///mvuse.ffs", "var counter: int = 0\n\nfunc main() {\n  counter = counter + 1\n}");
+            // Hover on the second "counter" in "counter = counter + 1" (line 3, col ~14)
+            session.AddHover("file:///mvuse.ffs", 3, 14);
+            session.AddShutdown();
+            session.AddExit();
+            session.Run();
+
+            session.ExpectResponse(0); // initialize
+            var hoverResp = session.ExpectResponse(1); // hover
+            Assert(hoverResp != null, "L1-LSP-03: hover response received");
+            if (hoverResp != null)
+            {
+                var result = hoverResp.GetObject("result");
+                if (result != null)
+                {
+                    var contents = result.GetObject("contents");
+                    string value = contents?.GetString("value");
+                    Assert(value != null && value.Contains("module var"),
+                        $"L1-LSP-03: hover shows module var info for usage, got '{value}'");
+                }
+            }
+        }
+
+        // L1-LSP-04: Completion includes module variables
+        {
+            var session = new LspBatchSession();
+            session.AddInitialize();
+            session.AddInitialized();
+            session.AddDidOpen("file:///mvcomp.ffs", "var counter: int = 0\nconst MAX: int = 10\n\nfunc main() {\n  c\n}");
+            session.AddCompletion("file:///mvcomp.ffs", 4, 3);
+            session.AddShutdown();
+            session.AddExit();
+            session.Run();
+
+            session.ExpectResponse(0); // initialize
+            var compResp = session.ExpectResponse(1); // completion
+            Assert(compResp != null, "L1-LSP-04: completion response received");
+
+            bool foundCounter = false, foundMax = false;
+            if (compResp != null)
+            {
+                var result = compResp.GetArray("result");
+                if (result != null)
+                {
+                    for (int i = 0; i < result.Count; i++)
+                    {
+                        var item = result[i] as JsonObject;
+                        string label = item?.GetString("label");
+                        if (label == "counter") foundCounter = true;
+                        if (label == "MAX") foundMax = true;
+                    }
+                }
+            }
+            Assert(foundCounter, "L1-LSP-04: counter in completion list");
+            Assert(foundMax, "L1-LSP-04: MAX in completion list");
+        }
+
+        // L1-LSP-05: Diagnostics for module variable shadow error
+        {
+            var session = new LspBatchSession();
+            session.AddInitialize();
+            session.AddInitialized();
+            session.AddDidOpen("file:///mvshadow.ffs", "var counter: int = 0\n\nfunc entry() {\n  var counter: int = 5\n}");
+            session.AddShutdown();
+            session.AddExit();
+            session.Run();
+
+            var diag = session.FindNotification("textDocument/publishDiagnostics");
+            Assert(diag != null, "L1-LSP-05: diagnostics notification received");
+            if (diag != null)
+            {
+                var diagParams = diag.GetObject("params");
+                var diags = diagParams?.GetArray("diagnostics");
+                Assert(diags != null && diags.Count > 0,
+                    $"L1-LSP-05: has diagnostics, got {diags?.Count ?? 0}");
+                if (diags != null && diags.Count > 0)
+                {
+                    var d0 = diags[0] as JsonObject;
+                    string msg = d0?.GetString("message");
+                    Assert(msg != null && msg.Contains("shadows"),
+                        $"L1-LSP-05: diagnostic mentions shadowing, got '{msg}'");
+                }
+            }
+        }
+
+        // L1-LSP-06: Go-to-definition for module variable usage → declaration
+        {
+            var session = new LspBatchSession();
+            session.AddInitialize();
+            session.AddInitialized();
+            session.AddDidOpen("file:///mvdef.ffs", "var counter: int = 0\n\nfunc main() {\n  counter = 5\n}");
+            // Definition on "counter" usage (line 3, col 2)
+            session.AddDefinition("file:///mvdef.ffs", 3, 3);
+            session.AddShutdown();
+            session.AddExit();
+            session.Run();
+
+            session.ExpectResponse(0); // initialize
+            var defResp = session.ExpectResponse(1); // definition
+            Assert(defResp != null, "L1-LSP-06: definition response received");
+            if (defResp != null)
+            {
+                var result = defResp.GetObject("result");
+                if (result != null)
+                {
+                    var range = result.GetObject("range");
+                    if (range != null)
+                    {
+                        var start = range.GetObject("start");
+                        int defLine = start != null ? start.GetInt("line") : -1;
+                        Assert(defLine == 0,
+                            $"L1-LSP-06: definition points to line 0 (module var decl), got line {defLine}");
+                    }
+                }
+            }
+        }
+
         Debug.Log($"\n===== LspTests: {passed} passed, {failed} failed =====");
     }
 
