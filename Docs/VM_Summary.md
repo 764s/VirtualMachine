@@ -558,11 +558,13 @@ B 阶段 20 个步骤（B-R1 → B-δ5）全部完成，已归入上方 A 区表
 
 > 斜体 = 远期展望，当前阶段不排期，按需触发。Lang-1 和 Lang-2 无依赖关系，可并行实施。Lang-1.1a/b 在 Lang-1 之后，与 Lang-2 无依赖。
 >
-> **Lang-1 保留段决策**：保留 r56~r63 模块变量段，跟随 MaxRegisters 变化。公式 `ModuleVarSlots = (MaxRegisters / 64) * 8`（即每 64 寄存器保留 8 个 slot）。`ModuleVarRegBase = MaxRegisters - ModuleVarSlots`。全部使用 VMConstants 常量配置，无性能影响（仅编译器寄存器分配变化，VM 运行时 Reg() 增加一个绝对段判断）。即使 Lang-1.1a/b 扩展寄存器后，固定寄存器文件内的保留段仍保留——扩展寄存器用于 locals/temps 溢出，模块变量始终在固定段内以保证绝对寻址。
+> **Lang-1 保留段决策**：保留 r56~r63 模块变量段，跟随 MaxRegisters 变化。公式 `ModuleVarSlots = (MaxRegisters / 64) * 8`（即每 64 寄存器保留 8 个 slot）。`ModuleVarRegBase = MaxRegisters - ModuleVarSlots`。全部使用 VMConstants 常量配置。模块变量通过专用 LOAD_MVAR/STORE_MVAR 指令绝对寻址，Reg() 保持最简形式 `r < 16 ? r : r + regBase`，热循环无额外分支。即使 Lang-1.1a/b 扩展寄存器后，固定寄存器文件内的保留段仍保留——扩展寄存器用于 locals/temps 溢出，模块变量始终在固定段内以保证绝对寻址。
 >
 > **Lang-1.1 分析结论**：MaxRegisters 64→128→const 对热循环零性能影响（`fixed (Number* regs = &inst.Registers.R00)` 后为裸指针偏移，JIT 生成 `ptr + index * 8`，不关心结构体总大小）。唯一客观影响为每实例内存增长（64 slots = 512B → 128 slots = 1024B）及快照 memcpy 体积，但 O10 仅拷贝活跃实例（典型 3-10 个），可忽略。因此 Lang-1.1a 直接常量配置化。Lang-1.1b 扩展寄存器为固定需求，不使用时对性能无影响。
 >
 > ⚠️ **性能敏感**：每个 Lang 步骤完成后必须运行 B01-B06 benchmark，确认无性能回归。涉及 VM 运行时改动的步骤（Lang-4/5）需额外关注 ExecuteInstance 热循环影响。
+>
+> 🔧 **专用指令优化原则**（Lang-1 经验）：任何需要特殊寄存器寻址的语言特性，必须使用专用 OpCode（如 LOAD_MVAR/STORE_MVAR）而非在 Reg() 热路径中增加分支。Reg() 是每条指令执行 1~3 次的最内层函数，额外分支会被放大为系统性回归。Lang-1 初始实现在 Reg() 增加 `|| r >= ModuleVarRegBase` 分支后发现性能回归，改为专用指令后 Reg() 恢复为 `r < 16 ? r : r + regBase` 最简形式。后续 Lang-1.1b（扩展寄存器）、Lang-4（跨模块共享变量）等涉及新寄存器段/寻址模式的步骤，均须遵循此原则——用专用 OpCode 替代 Reg() 分支。
 >
 > 详细需求背景、痛点分析、3 个建议方向的细则与待回复问题，见 [D_SkillScripting.md SK14](../KOF98/Docs/Discussion/D_SkillScripting.md)「向 VM/语言方提交的需求背景与建议方向」一节。
 
