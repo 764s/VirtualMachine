@@ -6038,6 +6038,435 @@ func main() {
             Assert(values.Count == 1 && values[0] == 42, $"INC16: backward compat Report(42), got {(values.Count > 0 ? values[0].ToString() : "none")}");
         }
 
+        // ===================================================================
+        //  Lang-3: Blackboard Syscall Tests (BB01–BB10)
+        // ===================================================================
+
+        // ===== Test BB01: Basic Set/Get round-trip =====
+        {
+            string source = @"
+const KEY_HP: int = 1
+
+func main() {
+    SetBlackboard(KEY_HP, 100)
+    Report(GetBlackboard(KEY_HP))
+}";
+            var syscalls = new Dictionary<string, int> { { "SetBlackboard", 0 }, { "GetBlackboard", 1 }, { "Report", 2 } };
+            var result = compiler.Compile(source, "main", syscalls);
+            Assert(result.Success, "BB01 compile success");
+
+            var board = new Dictionary<int, int>();
+            var values = new List<int>();
+            var world = new VMWorld();
+            world.Modules.Load(0, result.Program);
+            world.Syscalls.Register(0, "SetBlackboard", (ref VMInstanceState s) =>
+            {
+                var args = new SyscallArgs(ref s);
+                board[args.GetInt(0)] = args.GetInt(1);
+            });
+            world.Syscalls.Register(1, "GetBlackboard", (ref VMInstanceState s) =>
+            {
+                var args = new SyscallArgs(ref s);
+                int key = args.GetInt(0);
+                args.SetReturnInt(board.TryGetValue(key, out var v) ? v : 0);
+            });
+            world.Syscalls.Register(2, "Report", (ref VMInstanceState s) =>
+            {
+                values.Add(s.Registers.Get(0).ToInt());
+            });
+            world.SpawnInstance(0, 0);
+            world.Tick();
+            Assert(values.Count == 1 && values[0] == 100, $"BB01: Set(1,100) then Get(1)=100, got {(values.Count > 0 ? values[0].ToString() : "none")}");
+        }
+
+        // ===== Test BB02: Multiple keys — independence =====
+        {
+            string source = @"
+const KEY_A: int = 1
+const KEY_B: int = 2
+const KEY_C: int = 3
+
+func main() {
+    SetBlackboard(KEY_A, 10)
+    SetBlackboard(KEY_B, 20)
+    SetBlackboard(KEY_C, 30)
+    Report(GetBlackboard(KEY_A))
+    Report(GetBlackboard(KEY_B))
+    Report(GetBlackboard(KEY_C))
+}";
+            var syscalls = new Dictionary<string, int> { { "SetBlackboard", 0 }, { "GetBlackboard", 1 }, { "Report", 2 } };
+            var result = compiler.Compile(source, "main", syscalls);
+            Assert(result.Success, "BB02 compile success");
+
+            var board = new Dictionary<int, int>();
+            var values = new List<int>();
+            var world = new VMWorld();
+            world.Modules.Load(0, result.Program);
+            world.Syscalls.Register(0, "SetBlackboard", (ref VMInstanceState s) =>
+            {
+                var args = new SyscallArgs(ref s);
+                board[args.GetInt(0)] = args.GetInt(1);
+            });
+            world.Syscalls.Register(1, "GetBlackboard", (ref VMInstanceState s) =>
+            {
+                var args = new SyscallArgs(ref s);
+                int key = args.GetInt(0);
+                args.SetReturnInt(board.TryGetValue(key, out var v) ? v : 0);
+            });
+            world.Syscalls.Register(2, "Report", (ref VMInstanceState s) =>
+            {
+                values.Add(s.Registers.Get(0).ToInt());
+            });
+            world.SpawnInstance(0, 0);
+            world.Tick();
+            Assert(values.Count == 3, $"BB02: 3 reports, got {values.Count}");
+            Assert(values[0] == 10 && values[1] == 20 && values[2] == 30,
+                $"BB02: keys independent, got [{string.Join(",", values)}]");
+        }
+
+        // ===== Test BB03: Default value — unset key returns 0 =====
+        {
+            string source = @"
+const KEY_UNSET: int = 99
+
+func main() {
+    Report(GetBlackboard(KEY_UNSET))
+}";
+            var syscalls = new Dictionary<string, int> { { "GetBlackboard", 1 }, { "Report", 2 } };
+            var result = compiler.Compile(source, "main", syscalls);
+            Assert(result.Success, "BB03 compile success");
+
+            var board = new Dictionary<int, int>();
+            var values = new List<int>();
+            var world = new VMWorld();
+            world.Modules.Load(0, result.Program);
+            world.Syscalls.Register(1, "GetBlackboard", (ref VMInstanceState s) =>
+            {
+                var args = new SyscallArgs(ref s);
+                int key = args.GetInt(0);
+                args.SetReturnInt(board.TryGetValue(key, out var v) ? v : 0);
+            });
+            world.Syscalls.Register(2, "Report", (ref VMInstanceState s) =>
+            {
+                values.Add(s.Registers.Get(0).ToInt());
+            });
+            world.SpawnInstance(0, 0);
+            world.Tick();
+            Assert(values.Count == 1 && values[0] == 0, $"BB03: unset key returns 0, got {(values.Count > 0 ? values[0].ToString() : "none")}");
+        }
+
+        // ===== Test BB04: Overwrite — last write wins =====
+        {
+            string source = @"
+const KEY: int = 1
+
+func main() {
+    SetBlackboard(KEY, 10)
+    SetBlackboard(KEY, 20)
+    SetBlackboard(KEY, 30)
+    Report(GetBlackboard(KEY))
+}";
+            var syscalls = new Dictionary<string, int> { { "SetBlackboard", 0 }, { "GetBlackboard", 1 }, { "Report", 2 } };
+            var result = compiler.Compile(source, "main", syscalls);
+            Assert(result.Success, "BB04 compile success");
+
+            var board = new Dictionary<int, int>();
+            var values = new List<int>();
+            var world = new VMWorld();
+            world.Modules.Load(0, result.Program);
+            world.Syscalls.Register(0, "SetBlackboard", (ref VMInstanceState s) =>
+            {
+                var args = new SyscallArgs(ref s);
+                board[args.GetInt(0)] = args.GetInt(1);
+            });
+            world.Syscalls.Register(1, "GetBlackboard", (ref VMInstanceState s) =>
+            {
+                var args = new SyscallArgs(ref s);
+                int key = args.GetInt(0);
+                args.SetReturnInt(board.TryGetValue(key, out var v) ? v : 0);
+            });
+            world.Syscalls.Register(2, "Report", (ref VMInstanceState s) =>
+            {
+                values.Add(s.Registers.Get(0).ToInt());
+            });
+            world.SpawnInstance(0, 0);
+            world.Tick();
+            Assert(values.Count == 1 && values[0] == 30, $"BB04: last write wins, got {(values.Count > 0 ? values[0].ToString() : "none")}");
+        }
+
+        // ===== Test BB05: Cross-function persistence =====
+        {
+            string source = @"
+const KEY: int = 1
+
+func writer() {
+    SetBlackboard(KEY, 42)
+}
+
+func reader(): int {
+    return GetBlackboard(KEY)
+}
+
+func main() {
+    writer()
+    Report(reader())
+}";
+            var syscalls = new Dictionary<string, int> { { "SetBlackboard", 0 }, { "GetBlackboard", 1 }, { "Report", 2 } };
+            var result = compiler.Compile(source, "main", syscalls);
+            Assert(result.Success, "BB05 compile success");
+
+            var board = new Dictionary<int, int>();
+            var values = new List<int>();
+            var world = new VMWorld();
+            world.Modules.Load(0, result.Program);
+            world.Syscalls.Register(0, "SetBlackboard", (ref VMInstanceState s) =>
+            {
+                var args = new SyscallArgs(ref s);
+                board[args.GetInt(0)] = args.GetInt(1);
+            });
+            world.Syscalls.Register(1, "GetBlackboard", (ref VMInstanceState s) =>
+            {
+                var args = new SyscallArgs(ref s);
+                int key = args.GetInt(0);
+                args.SetReturnInt(board.TryGetValue(key, out var v) ? v : 0);
+            });
+            world.Syscalls.Register(2, "Report", (ref VMInstanceState s) =>
+            {
+                values.Add(s.Registers.Get(0).ToInt());
+            });
+            world.SpawnInstance(0, 0);
+            world.Tick();
+            Assert(values.Count == 1 && values[0] == 42, $"BB05: cross-function persistence, got {(values.Count > 0 ? values[0].ToString() : "none")}");
+        }
+
+        // ===== Test BB06: Integration with module variables =====
+        {
+            string source = @"
+const KEY: int = 1
+var cachedValue: int = 0
+
+func main() {
+    SetBlackboard(KEY, 77)
+    cachedValue = GetBlackboard(KEY)
+    Report(cachedValue)
+}";
+            var syscalls = new Dictionary<string, int> { { "SetBlackboard", 0 }, { "GetBlackboard", 1 }, { "Report", 2 } };
+            var result = compiler.Compile(source, "main", syscalls);
+            Assert(result.Success, "BB06 compile success");
+
+            var board = new Dictionary<int, int>();
+            var values = new List<int>();
+            var world = new VMWorld();
+            world.Modules.Load(0, result.Program);
+            world.Syscalls.Register(0, "SetBlackboard", (ref VMInstanceState s) =>
+            {
+                var args = new SyscallArgs(ref s);
+                board[args.GetInt(0)] = args.GetInt(1);
+            });
+            world.Syscalls.Register(1, "GetBlackboard", (ref VMInstanceState s) =>
+            {
+                var args = new SyscallArgs(ref s);
+                int key = args.GetInt(0);
+                args.SetReturnInt(board.TryGetValue(key, out var v) ? v : 0);
+            });
+            world.Syscalls.Register(2, "Report", (ref VMInstanceState s) =>
+            {
+                values.Add(s.Registers.Get(0).ToInt());
+            });
+            world.SpawnInstance(0, 0);
+            world.Tick();
+            Assert(values.Count == 1 && values[0] == 77, $"BB06: module var caches blackboard value, got {(values.Count > 0 ? values[0].ToString() : "none")}");
+        }
+
+        // ===== Test BB07: Integration with include =====
+        {
+            var files = new Dictionary<string, string>
+            {
+                { "shared/bb_keys", @"
+const KEY_COMBO: int = 10
+const KEY_HITS: int = 11
+
+func bbSet(k: int, v: int) {
+    SetBlackboard(k, v)
+}
+
+func bbGet(k: int): int {
+    return GetBlackboard(k)
+}
+" }
+            };
+            string source = @"
+include ""shared/bb_keys""
+
+func main() {
+    bbSet(KEY_COMBO, 3)
+    bbSet(KEY_HITS, 5)
+    Report(bbGet(KEY_COMBO))
+    Report(bbGet(KEY_HITS))
+}";
+            var syscalls = new Dictionary<string, int> { { "SetBlackboard", 0 }, { "GetBlackboard", 1 }, { "Report", 2 } };
+            var resolver = new DictionaryFileResolver(files);
+            var result = compiler.Compile(source, "main", syscalls, null, resolver, "main.ffs");
+            Assert(result.Success, "BB07 compile success");
+
+            var board = new Dictionary<int, int>();
+            var values = new List<int>();
+            var world = new VMWorld();
+            world.Modules.Load(0, result.Program);
+            world.Syscalls.Register(0, "SetBlackboard", (ref VMInstanceState s) =>
+            {
+                var args = new SyscallArgs(ref s);
+                board[args.GetInt(0)] = args.GetInt(1);
+            });
+            world.Syscalls.Register(1, "GetBlackboard", (ref VMInstanceState s) =>
+            {
+                var args = new SyscallArgs(ref s);
+                int key = args.GetInt(0);
+                args.SetReturnInt(board.TryGetValue(key, out var v) ? v : 0);
+            });
+            world.Syscalls.Register(2, "Report", (ref VMInstanceState s) =>
+            {
+                values.Add(s.Registers.Get(0).ToInt());
+            });
+            world.SpawnInstance(0, 0);
+            world.Tick();
+            Assert(values.Count == 2, $"BB07: 2 reports, got {values.Count}");
+            Assert(values[0] == 3 && values[1] == 5,
+                $"BB07: include key consts + helper funcs, got [{string.Join(",", values)}]");
+        }
+
+        // ===== Test BB08: Integration with defer — cleanup resets blackboard =====
+        {
+            string source = @"
+const KEY: int = 1
+
+func main() {
+    SetBlackboard(KEY, 0)
+    defer {
+        SetBlackboard(KEY, 0)
+    }
+    SetBlackboard(KEY, 99)
+    Report(GetBlackboard(KEY))
+    wait 10
+}";
+            var syscalls = new Dictionary<string, int> { { "SetBlackboard", 0 }, { "GetBlackboard", 1 }, { "Report", 2 } };
+            var result = compiler.Compile(source, "main", syscalls);
+            Assert(result.Success, "BB08 compile success");
+
+            var board = new Dictionary<int, int>();
+            var values = new List<int>();
+            var world = new VMWorld();
+            world.Modules.Load(0, result.Program);
+            world.Syscalls.Register(0, "SetBlackboard", (ref VMInstanceState s) =>
+            {
+                var args = new SyscallArgs(ref s);
+                board[args.GetInt(0)] = args.GetInt(1);
+            });
+            world.Syscalls.Register(1, "GetBlackboard", (ref VMInstanceState s) =>
+            {
+                var args = new SyscallArgs(ref s);
+                int key = args.GetInt(0);
+                args.SetReturnInt(board.TryGetValue(key, out var v) ? v : 0);
+            });
+            world.Syscalls.Register(2, "Report", (ref VMInstanceState s) =>
+            {
+                values.Add(s.Registers.Get(0).ToInt());
+            });
+            var id = world.SpawnInstance(0, 0);
+            world.Tick(); // tick 1: Set(0), defer registered, Set(99), Report(99), wait 10
+            Assert(values.Count == 1 && values[0] == 99, $"BB08: before cleanup, got {(values.Count > 0 ? values[0].ToString() : "none")}");
+            Assert(board[1] == 99, $"BB08: board[1]=99 after Set, got {board[1]}");
+
+            // Kill instance → defer fires → SetBlackboard(KEY, 0)
+            world.Pool.Instances[id].StateFlags |= VMStateFlags.Killed;
+            world.Tick();
+            Assert(board[1] == 0, $"BB08: defer cleanup resets board[1]=0, got {board[1]}");
+        }
+
+        // ===== Test BB09: String key name via syscall =====
+        {
+            string source = @"
+func main() {
+    SetBBNamed(""combo_count"", 7)
+    Report(GetBBNamed(""combo_count""))
+}";
+            var syscalls = new Dictionary<string, int> { { "SetBBNamed", 0 }, { "GetBBNamed", 1 }, { "Report", 2 } };
+            var result = compiler.Compile(source, "main", syscalls);
+            Assert(result.Success, "BB09 compile success");
+
+            var board = new Dictionary<string, int>();
+            var values = new List<int>();
+            var world = new VMWorld();
+            world.Modules.Load(0, result.Program);
+            var strTable = result.Program.StringConstants;
+            world.Syscalls.Register(0, "SetBBNamed", (ref VMInstanceState s) =>
+            {
+                var args = new SyscallArgs(ref s);
+                string key = args.GetString(0, strTable);
+                int val = args.GetInt(1);
+                board[key] = val;
+            });
+            world.Syscalls.Register(1, "GetBBNamed", (ref VMInstanceState s) =>
+            {
+                var args = new SyscallArgs(ref s);
+                string key = args.GetString(0, strTable);
+                args.SetReturnInt(board.TryGetValue(key, out var v) ? v : 0);
+            });
+            world.Syscalls.Register(2, "Report", (ref VMInstanceState s) =>
+            {
+                values.Add(s.Registers.Get(0).ToInt());
+            });
+            world.SpawnInstance(0, 0);
+            world.Tick();
+            Assert(values.Count == 1 && values[0] == 7, $"BB09: string key via syscall, got {(values.Count > 0 ? values[0].ToString() : "none")}");
+        }
+
+        // ===== Test BB10: Loop bulk read/write =====
+        {
+            string source = @"
+func main() {
+    var i: int = 0
+    while i < 5 {
+        SetBlackboard(i, i * 10)
+        i = i + 1
+    }
+    var sum: int = 0
+    i = 0
+    while i < 5 {
+        sum = sum + GetBlackboard(i)
+        i = i + 1
+    }
+    Report(sum)
+}";
+            var syscalls = new Dictionary<string, int> { { "SetBlackboard", 0 }, { "GetBlackboard", 1 }, { "Report", 2 } };
+            var result = compiler.Compile(source, "main", syscalls);
+            Assert(result.Success, "BB10 compile success");
+
+            var board = new Dictionary<int, int>();
+            var values = new List<int>();
+            var world = new VMWorld();
+            world.Modules.Load(0, result.Program);
+            world.Syscalls.Register(0, "SetBlackboard", (ref VMInstanceState s) =>
+            {
+                var args = new SyscallArgs(ref s);
+                board[args.GetInt(0)] = args.GetInt(1);
+            });
+            world.Syscalls.Register(1, "GetBlackboard", (ref VMInstanceState s) =>
+            {
+                var args = new SyscallArgs(ref s);
+                int key = args.GetInt(0);
+                args.SetReturnInt(board.TryGetValue(key, out var v) ? v : 0);
+            });
+            world.Syscalls.Register(2, "Report", (ref VMInstanceState s) =>
+            {
+                values.Add(s.Registers.Get(0).ToInt());
+            });
+            world.SpawnInstance(0, 0);
+            world.Tick();
+            // sum = 0*10 + 1*10 + 2*10 + 3*10 + 4*10 = 0+10+20+30+40 = 100
+            Assert(values.Count == 1 && values[0] == 100, $"BB10: loop bulk R/W sum=100, got {(values.Count > 0 ? values[0].ToString() : "none")}");
+        }
+
         // ===== Summary =====
         Debug.Log($"========================================");
         Debug.Log($"Compiler Tests: {passed} passed, {failed} failed");
