@@ -67,7 +67,7 @@ Sandbox\run-sandbox.cmd           # 启动沙盒，输入 R 运行脚本
 
 # macOS / Linux
 bash Sandbox/sandbox-init.sh
-./run-sandbox.sh
+bash Sandbox/run-sandbox.sh
 ```
 
 编辑 `Sandbox/scripts/main.ffs`，按 `R` 即可重新编译运行。
@@ -100,7 +100,7 @@ FFScript 语法类似简化版 Go，完整语法参考见 [Docs/Reference/FFS_Sy
 | 类型 | 说明 |
 |------|------|
 | `int` | 32 位整数 |
-| `float` | 浮点数（运行时为 Fix64 定点数） |
+| `float` | 浮点数（开发期为 double，发布期切换为 Fix64 定点数以确保帧同步确定性） |
 | `bool` | `true` / `false` |
 | `string` | 编译期常量字符串 |
 | `struct` | 值类型结构体（赋值即复制，编译期拍平为连续寄存器） |
@@ -174,8 +174,10 @@ include "common/math.ffs"
 | B03 NestedLoop | 1.42x | 37.0x | 22.5x | 1.31x | 235.3x |
 | B05 Accumulator | 1.08x | 26.8x | 11.9x | 1.01x | 158.5x |
 
+> **两张表基线不同**：第一张表基线是 C#（使用 `Number` struct），第二张表同样以 C# `Number` 为 1.00x 基线但使用了优化后的跨语言基准测试环境，因此同一基准的倍率有所差异。
+>
 > FFVM 与 Lua（PUC-Rio）是最接近的架构对等物——都是寄存器式解释器 + 统一 double 数值类型。
-> 当前差距主要来自指令编码大小（4B vs Lua 4B，已从 16B 压缩）和 C# 托管开销。
+> 当前差距主要来自 C# 托管开销（边界检查、方法调用）和安全机制（寄存器窗口、Cleanup 链、调试钩子）。指令编码已从 16B 压缩至 4B，与 Lua 持平。
 > 详细基准数据见 [benchmarks/](benchmarks/)。
 
 ### 关键性能指标
