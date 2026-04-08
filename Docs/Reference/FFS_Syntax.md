@@ -44,7 +44,7 @@ FFScript 是为 FFVM 设计的自定义领域特定语言（DSL），语法风�
 | 控制流 | `if`、`else`、`while`、`for`、`return` |
 | 执行控制 | `wait`、`wait_for`、`yield` |
 | 清理 | `defer`、`using` |
-| 预处理 | `include` |
+| 模块导入 | `include` |
 | 布尔字面量 | `true`、`false` |
 
 ### 2.3 运算符与分隔符
