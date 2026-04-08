@@ -1,8 +1,8 @@
 # KOF98 技能 FFS 脚本化讨论
 
-> **状态**：🔄 讨论中（SK1~SK12 已收敛，SK3 待性能验证；SK14 语言需求已整合，第 11 轮重构为需求背景+多方向建议，待语言方回复）
+> **状态**：🔄 讨论中（SK1~SK12 已收敛，SK3 待性能验证；SK14 语言需求已整合；第 12 轮讨论 OOP/ECS 数据兼容、硬直期脚本进入、跨脚本使用模式）
 > **来源**：需求讨论 — 将 host-side 技能迁移为 FFS 脚本驱动
-> **日期**：2026-04-07（第 11 轮更新）
+> **日期**：2026-04-08（第 12 轮更新）
 
 ---
 
@@ -1221,10 +1221,573 @@ VM 改动: 无
 5. **实施顺序**：L1 先 / L2 先 / 并行？
 6. **是否有语言层面的统一设计**：能否将 L1~L4 中若干项合并为一个统一机制？
 
+---
+
+## 第 12 轮：OOP/ECS 数据兼容、硬直期脚本进入、跨脚本使用模式
+
+> **日期**：2026-04-08
+> **来源**：用户提出 3 个新议题 — (1) OOP 数据原则与未来 ECS 兼容性；(2) 硬直期间是否让脚本继续进入；(3) 跨脚本 VM 使用模式推荐。
+
+---
+
+### Q1: OOP 数据封闭原则与未来 ECS Component 需求是否冲突？
+
+> 用户原话：目前的数据使用原则是在脚本中定义并消费就封闭在脚本内。当将来在 ECS 场景中, 会有让数据进入 ECS 中的 C 的需求。这两个需求看起来会对同一份数据有不同的要求。当前要考虑吗？暂时感觉不用, 因为当前以 OOP 风格熟悉, 会自动兼容 ECS, 我的感觉对吗？
+
+#### 回答：你的感觉基本正确，不需要现在额外考虑
+
+**核心判断**：OOP 风格脚本与 ECS 数据需求之间**不存在根本冲突**，因为两者之间已有一道天然边界 —— **Syscall 推送**。
+
+具体分析：
+
+**1. 当前的数据封闭原则天然与 ECS 兼容**
+
+SK12 已确立的数据归属原则：
+
+| 归属 | 原则 | ECS 对应 |
+|------|------|---------|
+| **VM 内** | 脚本内定义+消费 → 留在寄存器 | `VMInstanceState` 本身就是一个 blittable struct，已经可以作为 ECS Component 挂载 |
+| **宿主侧** | 外部系统需读取 → Syscall 推送 | Syscall 的目标（SetStance, ApplyDamage, SetHitbox…）天然对应 ECS 的写 Component |
+
+这两条路径清晰、正交，数据不会出现"同一份数据有不同要求"的矛盾：
+- **Phase index、帧计数器、连招段数** → 脚本内消费 → 留在 VM 寄存器 → 不需要进入 ECS Component
+- **动画 ID、碰撞框参数、伤害数值** → 宿主必须读取 → 通过 Syscall 推送 → 写入宿主 ECS Component
+
+**2. "自动兼容"的前提条件**
+
+你说"OOP 风格会自动兼容 ECS"，这在以下前提下成立：
+
+| 前提 | 说明 | 当前状态 |
+|------|------|---------|
+| Syscall 是唯一的数据出口 | 脚本不直接写宿主内存 | ✅ 已满足（Syscall 边界纪律） |
+| VM RAM 是纯值类型 | `VMInstanceState` blittable，可 memcpy | ✅ 已满足（~740B struct） |
+| 不存在"延迟推送"需求 | 不需要在 Tick 结束后批量同步脚本内部状态到 ECS | ✅ 当前满足 — Syscall 是即时推送 |
+
+只要继续遵守 SK12 原则（**脚本想输出到世界 → 走 Syscall**），OOP 脚本写法就不会阻碍 ECS 集成。
+
+**3. 唯一可能需要重新审视的场景**
+
+有一种假设性场景值得提前意识到（但不需要现在行动）：
+
+> 某些数据在 OOP 阶段是"脚本内闭环"，但 ECS 阶段需要被外部系统读取。
+
+例如：技能脚本的蓄力进度（charge_progress），OOP 阶段只有脚本自己用（闭环 → 留 VM 内），但 ECS 阶段 UI 系统需要读取来显示蓄力条。
+
+**应对方式**：当这种需求出现时，只需新增一个 Syscall（如 `SetChargeProgress(value)`）将数据推送到宿主 Component。脚本内仍然用模块变量维护蓄力进度（闭环），只是额外多一步推送。这是渐进式改动，不需要改变数据模型。
+
+**4. 结论**
+
+| 问题 | 回答 |
+|------|------|
+| 当前要考虑 ECS 吗？ | **不用**。SK12 原则 + Syscall 边界已经提供了正确的分离 |
+| OOP 风格会自动兼容 ECS 吗？ | **基本正确** — 只要继续遵守"输出走 Syscall"纪律 |
+| 有没有陷阱？ | 唯一风险是"闭环数据变成需要外部读取的数据"，但处理方式是增量的（加 Syscall），不需要重构 |
+| 需要预留什么？ | 无需预留。VM RAM 已经是 ECS-ready 的 blittable struct |
+
+---
+
+### Q2: 硬直期间是否让脚本进入（时间轴暂停时的 VM Tick 策略）
+
+> 用户原话：希望角色时间轴暂停时脚本能进入, 这样能有更多自由度。如果真想不执行也是简单跳过, 不会太拖累性能。但是硬直进入虚拟机之后, yield/wait 可能要正确区分时间轴(包含了硬直)暂停期间是否要算在等待帧内的问题。
+
+#### 分析：这是对 SK6 方案 A 的修正提案
+
+SK6 当前结论是 **方案 A（宿主时间轴暂停）**：硬直期间宿主不调用 `VMWorld.Tick()`，脚本自然冻结。用户现在提出**方案 A′** — 硬直期间仍然 Tick 脚本，但引入机制让脚本知道当前处于暂停期。
+
+#### 方案对比
+
+| 维度 | SK6 方案 A（现行） | 方案 A′（用户提案） |
+|------|-----------------|-----------------|
+| 硬直期间 VM Tick | ❌ 不调用 | ✅ 照常调用 |
+| 脚本自由度 | 零 — 完全冻结 | 高 — 脚本可自行决定暂停期行为 |
+| yield/wait 语义 | 无歧义 — 不 Tick 就不消费 | ⚠️ 需要区分"逻辑帧"和"物理帧" |
+| 性能 | 暂停期零开销 | 暂停期有 Tick 开销（但通常很小） |
+| 脚本复杂度 | 简单 — 不用关心暂停 | 稍高 — 需要感知暂停状态 |
+| 典型用途 | 纯冻结效果 | 硬直期间播放受击特效、震动、闪烁等 |
+
+#### yield/wait 的帧计数问题
+
+这是方案 A′ 的**核心难点**。当前 VM 中：
+- `yield` = `WAIT 1`（等待 1 个 Tick）
+- `wait(N)` = `WAIT N`（等待 N 个 Tick）
+- `WaitCounter` 每次 `Tick()` 递减 1
+
+如果硬直期间继续 Tick，`wait(10)` 的 10 帧是**包含硬直帧还是只算逻辑帧**？两种语义都有合理的使用场景：
+
+| 场景 | 期望的 wait 语义 | 说明 |
+|------|----------------|------|
+| 攻击动画等待 10 帧 | wait(10) 应只算**逻辑帧** — 硬直帧不算 | 否则攻击动画会因为硬直被"吃掉"若干帧 |
+| 受击闪烁效果持续 5 帧 | wait(5) 应算**物理帧** — 含硬直帧 | 受击特效需要在硬直期间正常播放 |
+| 蓄力技能等待 30 帧 | wait(30) 应只算**逻辑帧** | 蓄力不应因对手受击硬直而加速 |
+
+#### 推荐方案：双 Tick 模式（逻辑帧 + 物理帧分离）
+
+如果要采用方案 A′，建议引入"Tick 类型"区分：
+
+**方案 A′-1: 宿主传入 Tick 类型**
+
+```
+宿主 Tick 调用:
+  正常帧  → VMWorld.Tick()         // isLogicTick = true
+  硬直帧  → VMWorld.TickPaused()   // isLogicTick = false
+```
+
+VM 内部行为区分：
+
+| 操作 | 逻辑帧 (`Tick`) | 暂停帧 (`TickPaused`) |
+|------|----------------|---------------------|
+| `yield` / `wait(N)` | WaitCounter 正常递减 | WaitCounter **不递减** |
+| 脚本执行 | 正常执行 | 正常执行 |
+| Syscall | 全部可用 | 全部可用 |
+
+这样 `wait(10)` 在任何情况下都意味着"等待 10 个逻辑帧"。脚本在暂停帧被调用时，如果执行到 `yield` 或 `wait(N)`，下一个暂停帧**仍然会执行脚本**（因为 WaitCounter 没递减，但也没阻止执行——需要进一步设计）。
+
+这里有一个微妙问题：当前的 `yield` 编译为 `WAIT 1`，如果暂停帧不递减 WaitCounter，那脚本执行到 `yield` 后下一个暂停帧怎么办？
+
+**细化设计**：
+
+```
+暂停帧 TickPaused() 的语义:
+1. WaitCounter > 0 且是暂停帧 → 不递减，不执行（冻结中的脚本保持冻结）
+2. WaitCounter == 0 → 正常执行脚本
+3. 脚本执行到 yield/wait → 设置 WaitCounter，return
+4. 下一个暂停帧 → 回到 1，WaitCounter 不递减
+
+效果: 
+- 正在 wait 中的脚本在暂停帧完全冻结（与方案 A 行为一致）
+- 刚被 Spawn 或刚从 wait 恢复的脚本可以在暂停帧执行一次，直到 yield
+```
+
+**方案 A′-2: 脚本内感知暂停（Syscall 查询）**
+
+更简单的替代方案 — 保持方案 A（暂停期不 Tick），但提供 Syscall 让脚本在恢复后查询"刚才暂停了多久"：
+
+```ffs
+func step() {
+    BeginAction(101, 10)
+    var f: int = 0
+    while f < 10 {
+        var paused: int = GetPausedFrames()  // 返回上次 yield 到现在经过的暂停帧数
+        if paused > 0 {
+            // 可以补偿暂停期间应发生的事情
+            SpawnEffect(EFFECT_HIT_FLASH)
+        }
+        f = f + 1
+        yield
+    }
+}
+```
+
+**方案 A′-3: 暂停期间执行独立回调函数**
+
+保持 `step()` 在暂停期冻结，但允许宿主在暂停帧调用脚本的**另一个入口函数**：
+
+```ffs
+func step() {
+    // 正常逻辑 — 暂停期间冻结
+    BeginAction(101, 10)
+    var f: int = 0
+    while f < 10 { f = f + 1; yield }
+}
+
+func onPaused() {
+    // 暂停期间每帧调用 — 可选实现
+    // 无 yield/wait — 单帧执行完毕
+    var flash: int = GetModuleVar(0)  // 或模块变量
+    if flash > 0 { SpawnEffect(EFFECT_HIT_FLASH) }
+}
+```
+
+宿主在暂停帧调用 `TickInstance` 指向 `onPaused` 入口。由于 `onPaused` 不允许 yield/wait，不存在帧计数歧义。
+
+#### 方案对比总结
+
+| 维度 | A′-1 双 Tick 模式 | A′-2 查询补偿 | A′-3 独立回调 |
+|------|-----------------|-------------|-------------|
+| VM 改动 | ⭐⭐ 中 — 新增 TickPaused + WaitCounter 分支 | ⭐ 小 — 新增 1 个 Syscall | ⭐ 小 — 宿主层调度 |
+| yield/wait 歧义 | ⚠️ 有 — 需要仔细设计暂停帧的冻结恢复 | ✅ 无 — wait 语义不变 | ✅ 无 — onPaused 内禁止 yield |
+| 脚本自由度 | ⭐⭐⭐ 最高 — 暂停帧可执行任意逻辑 | ⭐⭐ 中 — 只能在恢复后补偿 | ⭐⭐ 中 — 独立回调，但不能修改 step 的 wait 状态 |
+| 实现复杂度 | 高 — 双时钟语义贯穿 VM | 低 — 仅 Syscall | 低 — 宿主层调度 |
+| 与现有 SK6 兼容 | ⚠️ 修改 Tick 核心逻辑 | ✅ 完全向后兼容 | ✅ 完全向后兼容 |
+
+#### 语言方建议
+
+1. **如果只是为了"硬直期间播放特效/闪烁"**，**A′-2 或 A′-3 已经足够**。A′-3（独立 `onPaused` 回调）与现有 `checkEnter/step` 双入口模式风格一致，推荐优先考虑。
+
+2. **A′-1（双 Tick 模式）** 虽然自由度最高，但引入了"逻辑帧 vs 物理帧"的全局复杂度。`wait(N)` 的语义会变得依赖上下文，增加脚本编写者的心智负担。除非有 A′-2/A′-3 无法满足的硬需求，建议不引入。
+
+3. **性能方面**：用户说"简单跳过不会太拖累性能"是对的。暂停帧进入 VM Tick，如果脚本正在 `wait` 中且 WaitCounter 不递减，只多了一次 `WaitCounter > 0` 检查和一次 `continue`，开销可忽略。但如果要执行脚本逻辑（如 A′-1），则有实际的 ExecuteInstance 开销，虽然对少量实例（格斗游戏典型 2-4）影响极小。
+
+#### 待用户确认
+
+1. **暂停期间脚本需要做什么？** — 仅特效/音效/闪烁，还是需要修改 step 的执行流程？
+2. **是否接受 A′-3（onPaused 独立回调）**？如果是，后续设计将保持 yield/wait 语义不变。
+3. **如果选 A′-1，是否接受 yield/wait 始终按逻辑帧计数**？（暂停帧中 WaitCounter 不递减）
+
+---
+
+### Q3: 跨脚本 VM 使用模式推荐
+
+> 用户原话：想要继续讨论虚拟机跨脚本使用的方式, 先帮我推荐几种不同方向的使用方法。
+
+#### 背景回顾
+
+当前语言进度：L1（模块变量）✅、L2（include）✅、L3（黑板 Syscall）✅ 已完成。L4（跨模块共享变量）和 L5（跨模块函数调用）待定。
+
+跨脚本使用的根本需求是：**多个独立编译的 FFS 脚本实例在运行时共享数据或协调行为**。
+
+以下从 5 个不同方向推荐，按机制复杂度从低到高排列：
+
+---
+
+#### 方向 1: 黑板中介（Blackboard Mediator）
+
+**思路**：所有跨脚本通信通过宿主黑板 Syscall 中转。脚本之间互不知道对方的存在，只通过约定的 Key 读写共享状态。
+
+```
+┌──────────────┐    SetBB(key,val)    ┌──────────────┐
+│ skill_LP.ffs │ ──────────────────→ │   宿主黑板    │
+└──────────────┘                      │ (key-value)  │
+                                      └──────┬───────┘
+┌──────────────┐    GetBB(key)               │
+│ skill_HP.ffs │ ←───────────────────────────┘
+└──────────────┘
+```
+
+**使用模式**：
+```ffs
+// skill_light_punch.ffs
+func step() {
+    // ... 攻击帧逻辑 ...
+    var hit: int = CheckAttackHit(1001)
+    if hit > 0 {
+        SetBlackboard(BB_LP_HIT, 1)        // 通知"轻拳命中了"
+        SetBlackboard(BB_LP_HIT_FRAME, GetFrame())
+    }
+    // ...
+}
+
+// skill_heavy_punch.ffs
+func checkEnter(): int {
+    var lpHit: int = GetBlackboard(BB_LP_HIT)
+    var lpFrame: int = GetBlackboard(BB_LP_HIT_FRAME)
+    if lpHit > 0 && GetFrame() - lpFrame < 15 {
+        return 1  // 轻拳命中后 15 帧内可衔接重拳
+    }
+    return 0
+}
+```
+
+| 优点 | 缺点 |
+|------|------|
+| ✅ **已可用** — Lang-3 黑板 Syscall 已实现 | ❌ Key 命名需约定，缺少编译期安全 |
+| ✅ 零 VM 运行时改动 | ❌ 逻辑分散在多个脚本中 |
+| ✅ 简单、可预测、可调试 | ❌ 每次读写有 Syscall 开销 |
+| ✅ 天然支持跨角色（不同角色读同一 Key） | ❌ 缺乏结构化（纯 key-value 平铺） |
+
+**适用场景**：连招衔接通知、全局状态标志（round_start、time_remaining）、简单的跨脚本条件判断。
+
+**当前推荐度**：⭐⭐⭐⭐⭐ — 已实现，覆盖 KOF98 当前全部跨脚本需求。
+
+---
+
+#### 方向 2: Include 共享模板（Compile-time Sharing）
+
+**思路**：多个脚本 include 同一份 `.ffs` 文件，共享 const、struct、辅助函数的**定义**。运行时各脚本实例拥有独立副本。
+
+```
+┌──────────────────┐
+│ shared/combo.ffs │ ← const + func 定义
+└────────┬─────────┘
+         │ include (编译期展开)
+    ┌────┴────┐
+    ↓         ↓
+┌─────────┐ ┌─────────┐
+│ LP.ffs  │ │ HP.ffs  │  ← 各自拥有独立副本
+└─────────┘ └─────────┘
+```
+
+**使用模式**：
+```ffs
+// shared/combo_chain.ffs
+const CHAIN_LP_TO_HP: int = 1
+const CHAIN_LP_TO_LK: int = 2
+const CHAIN_WINDOW: int = 15
+
+func canChain(fromSkill: int, toSkill: int, elapsed: int): int {
+    if elapsed > CHAIN_WINDOW { return 0 }
+    if fromSkill == SKILL_LP && toSkill == SKILL_HP { return 1 }
+    if fromSkill == SKILL_LP && toSkill == SKILL_LK { return 1 }
+    return 0
+}
+
+// skill_heavy_punch.ffs
+include "shared/combo_chain"
+func checkEnter(): int {
+    var from: int = GetBlackboard(BB_LAST_SKILL)
+    var elapsed: int = GetFrame() - GetBlackboard(BB_LAST_HIT_FRAME)
+    return canChain(from, SKILL_HP, elapsed)
+}
+```
+
+| 优点 | 缺点 |
+|------|------|
+| ✅ **已可用** — Lang-2 include 已实现 | ❌ 运行时各实例数据独立，不能共享状态 |
+| ✅ 编译期安全 — const/func 编译检查 | ❌ 修改共享文件需重新编译所有依赖脚本 |
+| ✅ 代码复用减少维护成本 | ❌ 共享 var 是各实例的副本（非同一份数据） |
+| ✅ 零运行时开销 | |
+
+**适用场景**：连招关系表、技能属性常量、通用辅助函数、伤害计算公式。
+
+**与方向 1 配合**：方向 2 解决"代码复用"，方向 1 解决"数据共享"。两者正交互补，推荐联合使用。
+
+**当前推荐度**：⭐⭐⭐⭐⭐ — 已实现，与方向 1 配合使用为最佳实践。
+
+---
+
+#### 方向 3: 宿主编排（Host Orchestration）
+
+**思路**：跨脚本协调逻辑不在 FFS 脚本内，而在宿主 C# 代码中。宿主作为"导演"读取各脚本输出（通过 Syscall 推送的 Component 数据），执行协调逻辑，然后通过 Spawn/Kill/Syscall 控制各脚本。
+
+```
+┌──────────────────────────────────────────────┐
+│ 宿主 C# (SkillOrchestrator / CombatSystem)   │
+│                                              │
+│  1. 读取各 Component (Stance, HitResult, …)  │
+│  2. 执行裁决/连招/状态机逻辑                   │
+│  3. Spawn/Kill 脚本实例                       │
+│  4. 通过黑板 Key 传入配置                      │
+└───────┬──────────────┬──────────────┬────────┘
+        ↓              ↓              ↓
+   ┌─────────┐    ┌─────────┐    ┌─────────┐
+   │ LP.ffs  │    │ HP.ffs  │    │ Hit.ffs │
+   └─────────┘    └─────────┘    └─────────┘
+   (只关心自己     (只关心自己     (只关心自己
+    的帧执行)       的帧执行)       的帧执行)
+```
+
+**使用模式**：
+```csharp
+// 宿主 C# — CombatSystem.OnTick()
+if (character.LastHitResult.Hit && character.CurrentSkill == SkillId.LightPunch) {
+    // 轻拳命中 → 设置黑板允许重拳衔接
+    vm.SetBlackboard(character.EntityId, BB_COMBO_ALLOW_HP, 1);
+    vm.SetBlackboard(character.EntityId, BB_COMBO_WINDOW_END, frameNumber + 15);
+}
+
+// 裁决层 — 已有 SK2 分层候选池
+var candidates = GetCandidateSkills(character.Stance);
+foreach (var skill in candidates) {
+    // checkEnter 只需检查黑板中宿主已设好的标志
+    if (ProbeCheckEnter(character, skill)) {
+        ActivateSkill(character, skill);
+        break;
+    }
+}
+```
+
+| 优点 | 缺点 |
+|------|------|
+| ✅ 脚本保持简单 — 每个脚本只管自己的帧逻辑 | ❌ 协调逻辑在 C# 中，不享受脚本热更新 |
+| ✅ 宿主有全局视角 — 天然适合裁决、连招判定 | ❌ 脚本自由度低 — 不能自主决定跨脚本行为 |
+| ✅ 零 VM 改动 | ❌ 与"尽量多的逻辑放脚本"的长远目标矛盾 |
+| ✅ 调试直观 — 全在 C# 断点可见 | |
+
+**适用场景**：裁决层（SK2）、全局战斗事件（Round Start/End）、需要全局视角的复杂判定。
+
+**定位**：这不是"跨脚本通信"的替代方案，而是一种**分工策略** — 把"谁和谁通信"的决定权留在宿主。与方向 1/2 不冲突，而是正交的补充。
+
+**当前推荐度**：⭐⭐⭐⭐ — 裁决层已按此模式设计（SK2），不需要额外实现。
+
+---
+
+#### 方向 4: 共享变量区（Shared Variable Zone）— 对应 Lang-4 跨模块共享变量
+
+**思路**：VM 运行时提供一块**跨实例共享的变量区**，多个脚本实例可以直接读写同一份数据，无需经过 Syscall。
+
+```
+┌─────────┐   LOAD_SHARED r, idx   ┌───────────────────┐
+│ LP.ffs  │ ←─────────────────────→ │  共享变量区        │
+└─────────┘   STORE_SHARED idx, r   │  (每角色一块 or   │
+                                    │   全局一块)        │
+┌─────────┐   LOAD_SHARED r, idx   │                   │
+│ HP.ffs  │ ←─────────────────────→ │  slot[0]: LP_hit  │
+└─────────┘                         │  slot[1]: combo_n │
+                                    │  slot[2]: ...     │
+                                    └───────────────────┘
+```
+
+**使用模式（假想语法）**：
+```ffs
+// 编译器层面
+shared var lp_hit: int = 0        // 声明共享变量
+shared var combo_count: int = 0
+
+// skill_light_punch.ffs
+func step() {
+    // ...
+    if CheckAttackHit(1001) > 0 {
+        lp_hit = 1          // 直接写共享区 — 无 Syscall 开销
+        combo_count = combo_count + 1
+    }
+    // ...
+}
+
+// skill_heavy_punch.ffs
+func checkEnter(): int {
+    if lp_hit > 0 { return 1 }  // 直接读共享区
+    return 0
+}
+```
+
+| 优点 | 缺点 |
+|------|------|
+| ✅ 极低开销 — 直接寄存器/内存读写，无 Syscall | ⚠️ 需要 VM 运行时改动（新增共享区域 + 专用 OpCode） |
+| ✅ 脚本内闭环 — 数据不经过宿主 | ⚠️ 共享粒度设计复杂 — 角色级 vs 全局？ |
+| ✅ 编译期安全 — 编译器分配 slot | ⚠️ 确定性/回滚需额外处理共享区快照 |
+| ✅ 与黑板功能重叠 — 可统一为一个机制 | ⚠️ 多实例并发写入的冲突问题 |
+
+**关键设计问题**：
+1. **共享粒度**：每个角色一块（角色级共享）vs 全局一块（跨角色共享）vs 可配置？
+2. **与黑板关系**：共享变量区是否取代黑板 Syscall？还是并存？
+3. **回滚支持**：共享区需要纳入 SnapshotRingBuffer 吗？
+4. **编译期绑定**：多个脚本如何声明同一个共享变量？`include shared_vars.ffs` + `shared var` 语法？
+
+**适用场景**：高频跨脚本数据传递（每帧多次读写）、连招状态共享、角色级全局计数器。
+
+**当前推荐度**：⭐⭐⭐ — 目前黑板 Syscall 已覆盖需求。当黑板 Syscall 的频率成为性能瓶颈时再引入。
+
+---
+
+#### 方向 5: 服务脚本 + 跨模块调用（Service Script + Cross-Module Call）— 对应 Lang-5 跨模块函数调用
+
+**思路**：某些脚本不绑定到技能帧逻辑，而是作为"服务"常驻运行，其他脚本通过跨模块函数调用来查询/请求服务。
+
+```
+┌──────────────────────────────┐
+│ combo_manager.ffs (服务脚本)  │ ← 常驻实例，管理连招状态
+│                              │
+│  func queryCanChain(from, to)│ ← 被其他脚本调用
+│  func notifyHit(skillId)     │
+│  func getComboCount(): int   │
+└──────────┬───────────────────┘
+           │ CALL_MODULE
+     ┌─────┴──────┐
+     ↓            ↓
+┌─────────┐  ┌─────────┐
+│ LP.ffs  │  │ HP.ffs  │  ← 技能脚本调用服务脚本的函数
+└─────────┘  └─────────┘
+```
+
+**使用模式（假想语法）**：
+```ffs
+// combo_manager.ffs — 服务脚本
+var combo_count: int = 0
+var last_hit_skill: int = 0
+var last_hit_frame: int = 0
+
+func notifyHit(skillId: int) {
+    last_hit_skill = skillId
+    last_hit_frame = GetFrame()
+    combo_count = combo_count + 1
+}
+
+func queryCanChain(toSkill: int): int {
+    if GetFrame() - last_hit_frame > 15 { return 0 }
+    // 连招表查询...
+    return 1
+}
+
+func step() {
+    // 常驻循环 — 可选，或纯被动（只通过跨模块调用触发）
+    while 1 { yield }
+}
+
+// skill_light_punch.ffs
+import "combo_manager" as combo  // 假想 import 语法
+
+func step() {
+    // ...
+    if CheckAttackHit(1001) > 0 {
+        combo.notifyHit(SKILL_LP)  // 跨模块调用
+    }
+    // ...
+}
+
+// skill_heavy_punch.ffs
+import "combo_manager" as combo
+
+func checkEnter(): int {
+    return combo.queryCanChain(SKILL_HP)  // 跨模块调用
+}
+```
+
+| 优点 | 缺点 |
+|------|------|
+| ✅ 逻辑最集中 — 连招管理器是唯一权威源 | ⚠️ VM 改动最大 — ModuleTable + 跨模块 CALL 协议 |
+| ✅ 脚本完全自治 — 宿主无需参与协调 | ⚠️ 复杂度最高 — 跨模块调用栈、寄存器切换 |
+| ✅ 真正的"连招描述脚本"理想形（SK10 理想形 1） | ⚠️ 调度复杂 — 服务脚本的生命周期管理 |
+| ✅ 可扩展到 AI 脚本、全局事件脚本等 | ⚠️ 确定性 — 跨模块调用顺序需要确定性保证 |
+
+**关键设计问题**：
+1. **调用协议**：同步调用（调用方挂起等待返回）vs 消息队列（异步）？
+2. **寄存器切换**：跨模块调用时是否切换到目标实例的寄存器窗口？
+3. **生命周期**：服务脚本由谁 Spawn？谁 Kill？绑定角色还是全局？
+4. **步数预算**：跨模块调用消耗调用方的 MaxStepsPerTick 还是目标方的？
+5. **确定性**：帧同步场景下跨模块调用顺序如何保证确定性？
+
+**适用场景**：集中式连招管理器、AI 决策脚本查询角色状态、全局事件广播。
+
+**当前推荐度**：⭐⭐ — 目前无刚性需求，但这是 FFS 脚本生态的终极形态。当项目规模扩大到需要"脚本自治"时是必要的。
+
+---
+
+#### 五种方向总览
+
+| # | 方向 | 数据共享机制 | VM 改动 | 当前可用 | 推荐度 |
+|---|------|-----------|--------|---------|--------|
+| 1 | 黑板中介 | 宿主 key-value Syscall | 无 | ✅ Lang-3 | ⭐⭐⭐⭐⭐ |
+| 2 | Include 共享模板 | 编译期代码复用（数据独立） | 无 | ✅ Lang-2 | ⭐⭐⭐⭐⭐ |
+| 3 | 宿主编排 | 宿主 C# 协调 + Syscall | 无 | ✅ SK2 裁决 | ⭐⭐⭐⭐ |
+| 4 | 共享变量区 | VM 跨实例共享内存 | ⭐⭐ | ❌ Lang-4 | ⭐⭐⭐ |
+| 5 | 服务脚本 + 跨模块调用 | VM 跨模块函数调用 | ⭐⭐⭐ | ❌ Lang-5 | ⭐⭐ |
+
+**推荐的渐进路径**：
+
+```
+阶段 1（现在）: 方向 1 + 方向 2 + 方向 3
+  → 黑板 + include + 宿主编排联合使用
+  → 覆盖 KOF98 全部已知需求
+
+阶段 2（需求驱动）: + 方向 4
+  → 当黑板 Syscall 频率成为性能瓶颈
+  → 或者脚本间高频数据传递需求出现
+
+阶段 3（远期）: + 方向 5
+  → 当需要"脚本自治生态"（多脚本自主协调，宿主极少介入）
+  → 或者项目扩展到 NvN、AI 脚本等复杂场景
+```
+
+#### 待用户确认
+
+1. **阶段 1 是否满足当前需求？** — 方向 1+2+3 是否覆盖你目前想到的所有跨脚本场景？
+2. **有没有具体的跨脚本场景**是上述 5 种方向都不能好好覆盖的？
+3. **对方向 4 和方向 5，是否有倾向性？** — 先推进哪个，还是都按需触发？
+4. **方向 3（宿主编排）的定位** — 你倾向于尽量多的逻辑放脚本内（减少宿主 C# 协调），还是接受宿主作为"导演"角色？
+
+---
+
 <details>
 <summary>📋 讨论历史</summary>
 
-#### 第 11 轮（当前）
+#### 第 12 轮（当前）
+
+用户提出 3 个新议题：
+- (1) OOP 数据封闭原则与 ECS Component 需求是否冲突 → 结论：不冲突，Syscall 边界天然分离，不需要现在额外考虑
+- (2) 硬直期间脚本是否应继续进入 → 3 个子方案（A′-1 双 Tick / A′-2 查询补偿 / A′-3 独立回调），推荐 A′-3
+- (3) 跨脚本 VM 使用模式 → 5 个方向（黑板中介 / include 模板 / 宿主编排 / 共享变量区 / 服务脚本），推荐渐进路径 1+2+3 → 4 → 5
+
+#### 第 11 轮
 
 用户反馈：语言演进路线应以需求背景为主视角 — 哪些需求实现不了/难以达到理想状态，给出多个建议方向（长期理想/最速最小改动/折衷），最终由语言方从语言视角取舍或完全整合。
 
