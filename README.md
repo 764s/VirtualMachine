@@ -1,27 +1,11 @@
-# FFVM — 帧同步友好的轻量脚本虚拟机
-// 说明是探索向目的
-FFVM 是一个**寄存器式字节码虚拟机**，配套 DSL **FFScript**（`.ffs`）。
+# FFVM — 帧同步友好的轻量脚本虚拟机（探索中）
 
-// 啰嗦
-FFScript 的定位**平行于行为树编辑器**——侧重胶水与编排，大部分实际功能仍由宿主实现（而非 Lua 这类通用脚本语言）。
-VM 设计为 ROM / RAM 分离，支持虚拟机层面的快照导入导出，适用于少量单位的帧同步场景。
+> ⚠️ 这是一个**探索向项目**，尚未在实际产品中验证。
 
-// 啰嗦
-```ffs
-func main() {
-    BeginAction(114, 56)
-    defer { EndAction() }
+FFVM 是一个寄存器式字节码虚拟机，配套胶水 DSL **FFScript**（`.ffs`）。
+定位平行于行为树编辑器——编排宿主 Syscall，而非替代宿主逻辑。
 
-    var f: int = 0
-    while f < 56 {
-        if f == 9 {
-            ApplyDamage(target, 1.0, 0)
-        }
-        wait 1          // 暂停 1 帧，下一帧继续
-        f = f + 1
-    }
-}
-```
+**特点**：零 GC · ROM / RAM 分离 · VM 层快照导入导出 · 定点数（Fix64） · 原生 `wait` / `yield` 帧控制 · 性能目标追平 Lua
 
 ---
 
@@ -29,23 +13,10 @@ func main() {
 
 为少量单位的帧同步游戏提供一个有限但够用的脚本方案。
 
-**定位**
-
 - **胶水 DSL，不是通用脚本**——平行于行为树编辑器，负责编排宿主提供的 Syscall，大部分逻辑仍在宿主层
 - **ROM / RAM 分离**——字节码只读共享，实例状态为定长值类型，VM 层面即可快照导入导出
 - **紧急出口**——在限定范围内可以用脚本实现少量细节，也可为提前框定范围的宿主功能提供热更覆盖
 - **两种配置方式**——当前以脚本作为配置入口，将来同时支持传统 UI 编辑方式
-
-// 作为特点描述, 方到合适的地方
-// 零gc, ram和rom分离, 虚拟机层快照, 定点数计算, 支持yield wait 
-**硬约束**
-
-| 约束 | 说明 |
-|------|------|
-| **零 GC** | 运行时零垃圾回收 |
-| **ROM / RAM 分离** | 字节码只读共享，实例状态独立，`Array.Copy` 即可快照 / 回滚 |
-| **`wait` 一等语义** | 脚本挂起 / 恢复由 VM 管理，不依赖宿主协程 |
-| **Fix64 确定性数值** | 开发期 float，发布期 Fix64 |
 
 ---
 
@@ -165,41 +136,6 @@ include "common/math.ffs"
 
 ---
 
-// 暂时不要些, 在合适的地方说明尽量尽量追平lua
-## 性能
-
-### VM vs C# 对比（同数据类型 `Number` struct）
-
-| 基准 | VM (μs) | C# (μs) | 倍率 | 循环规模 |
-|------|---------|---------|------|---------|
-| B01 ArithLoop | 1189 | 116 | 10.2x | 10,000 |
-| B02 Fibonacci | 5.3 | 1.1 | 4.7x | 46 |
-| B03 NestedLoop | 992 | 19 | 53.6x | 100×100 |
-| B05 Accumulator | 2807 | 85 | 33.1x | 50,000 |
-| B06 FuncCall | 681 | 19 | 35.5x | 5,000 |
-
-### 跨语言对比（vs C# `Number` 基线 = 1.00x）
-
-| 基准 | C# raw | FFVM | Lua 5.1 | Node.js | Python 3.7 |
-|------|--------|------|---------|---------|------------|
-| B01 ArithLoop | 0.51x | 13.4x | 9.1x | 0.44x | 31.7x |
-| B03 NestedLoop | 1.42x | 37.0x | 22.5x | 1.31x | 235.3x |
-| B05 Accumulator | 1.08x | 26.8x | 11.9x | 1.01x | 158.5x |
-
-> **两张表基线不同**：第一张表基线是 C#（使用 `Number` struct），第二张表同样以 C# `Number` 为 1.00x 基线但使用了优化后的跨语言基准测试环境，因此同一基准的倍率有所差异。
->
-> FFVM 与 Lua（PUC-Rio）是最接近的架构对等物——都是寄存器式解释器 + 统一 double 数值类型。
-> 当前差距主要来自 C# 托管开销（边界检查、方法调用）和安全机制（寄存器窗口、Cleanup 链、调试钩子）。指令编码已从 16B 压缩至 4B，与 Lua 持平。
-> 详细基准数据见 [benchmarks/](benchmarks/)。
-
-### 关键性能指标
-
-- **零 GC**：100 Tick 0 bytes 分配（V1 验证通过）
-- **快照回滚**：Syscall 序列 bit-exact 一致（V2 验证通过）
-- **128 实例吞吐**：0.391ms（V4 验证通过，帧预算充裕）
-
----
-
 ## 目标路线图
 
 ```
@@ -241,17 +177,3 @@ dotnet run --project StandaloneRunner
 # 方法 3：脚本
 run-vm-tests.cmd              # Windows
 ```
-
----
-
-// 暂时不需要
-## 文档
-
-| 文档 | 说明 |
-|------|------|
-| [Docs/VM_Summary.md](Docs/VM_Summary.md) | 项目总览（唯一入口文档） |
-| [Docs/Reference/FFS_Syntax.md](Docs/Reference/FFS_Syntax.md) | FFScript 完整语法参考 |
-| [Docs/Reference/FFS_QuickRef.md](Docs/Reference/FFS_QuickRef.md) | FFScript 快速上手（C# 开发者版） |
-| [Docs/DIST_Usage.md](Docs/DIST_Usage.md) | 分发使用说明 |
-| [Docs/Reference/VM_Architecture_Rules.md](Docs/Reference/VM_Architecture_Rules.md) | 架构硬约束（20 条纪律） |
-| [Docs/Reference/Skills/](Docs/Reference/Skills/) | 技能脚本示例（飞燕旋风腿等） |
