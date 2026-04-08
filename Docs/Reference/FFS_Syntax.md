@@ -36,7 +36,7 @@ FFScript 是为 FFVM 设计的自定义领域特定语言（DSL），语法风�
 
 不支持块注释（`/* ... */`）。
 
-### 2.2 关键字（16 个）
+### 2.2 关键字（17 个）
 
 | 类别 | 关键字 |
 |------|--------|
@@ -44,6 +44,7 @@ FFScript 是为 FFVM 设计的自定义领域特定语言（DSL），语法风�
 | 控制流 | `if`、`else`、`while`、`for`、`return` |
 | 执行控制 | `wait`、`wait_for`、`yield` |
 | 清理 | `defer`、`using` |
+| 模块导入 | `include` |
 | 布尔字面量 | `true`、`false` |
 
 ### 2.3 运算符与分隔符
@@ -131,6 +132,74 @@ struct Rect {
 ---
 
 ## 四、声明
+
+### 4.0 模块级声明
+
+FFScript 模块的顶层可包含以下声明：
+
+- `func` — 函数声明
+- `struct` — 结构体声明
+- `var` — 模块变量（跨函数共享的可变状态）
+- `const` — 模块常量
+- `include` — 包含其他 `.ffs` 文件
+
+模块变量和常量在模块顶层声明，作用域为整个模块，所有函数均可访问：
+
+```ffs
+const MAX_HP: int = 100
+var currentHP: int = MAX_HP
+
+func damage(amount: int) {
+    currentHP = currentHP - amount
+    if currentHP < 0 {
+        currentHP = 0
+    }
+}
+
+func main() {
+    damage(30)
+    print(currentHP)    // 70
+}
+```
+
+- 模块变量使用专用寄存器段（绝对寻址），不受函数调用窗口影响
+- 模块常量在编译期求值时不分配寄存器；不可折叠的常量也分配寄存器但禁止赋值
+- 局部变量不可与模块变量同名（编译错误）
+- 超出内置槽位数的模块变量自动溢出到扩展寄存器（堆分配）
+
+### 4.0.1 Include 指令
+
+`include` 用于将其他 `.ffs` 文件的内容合并到当前模块：
+
+```ffs
+include "common/math.ffs"
+include "shared/types.ffs"
+
+func main() {
+    // 可以使用被包含文件中定义的函数、结构体和模块变量
+    var v: Vec2 = Vec2 { x: 1, y: 2 }
+    print(lengthSq(v))
+}
+```
+
+**Include 规则**：
+
+- 递归深度优先展开（支持多级 include）
+- 支持菱形依赖（同一文件被多条路径 include 只处理一次）
+- 循环引用检测（编译错误）
+- 跨文件覆盖：后 include 的声明覆盖先 include 的同名声明
+- 同文件重定义：编译错误
+- `var` / `const` 交叉覆盖（跨文件用 `var` 覆盖 `const` 或反之）：编译错误
+
+**编译器 API**：使用 include 时需提供 `IFileResolver` 和文件路径：
+
+```csharp
+var resolver = new DictionaryFileResolver(new Dictionary<string, string> {
+    { "common/math.ffs", mathSource },
+    { "shared/types.ffs", typesSource },
+});
+var result = compiler.Compile(source, "main", syscalls, syscallTable, resolver, "main.ffs");
+```
 
 ### 4.1 函数声明
 
@@ -470,7 +539,10 @@ ApplyDamage(t, 5, 101)
 
 ```ebnf
 (* ===== 顶层 ===== *)
-Module          = { FuncDecl | StructDecl } ;
+Module          = { IncludeDecl | FuncDecl | StructDecl | ModuleVarDecl | ModuleConstDecl } ;
+
+(* ===== Include ===== *)
+IncludeDecl     = 'include' StringLiteral ;
 
 (* ===== 声明 ===== *)
 FuncDecl        = 'func' Identifier '(' [ ParamList ] ')' [ ':' TypeName ] Block ;
@@ -479,6 +551,9 @@ Param           = Identifier ':' TypeName [ '=' Expression ] ;
 
 StructDecl      = 'struct' Identifier '{' { StructField } '}' ;
 StructField     = Identifier ':' TypeName [ ';' ] ;
+
+ModuleVarDecl   = 'var' Identifier ':' TypeName [ '=' Expression ] ;
+ModuleConstDecl = 'const' Identifier ':' TypeName '=' Expression ;
 
 TypeName        = Identifier ;
 
