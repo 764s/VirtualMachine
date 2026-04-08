@@ -81,21 +81,28 @@ using FFVM.Compiler;
 
 // 编译脚本
 var compiler = new BytecodeCompiler();
+var syscallMap = new Dictionary<string, int> { { "print", 0 } };
 var syscallTable = new SyscallTable();
-// 注册自定义 syscall（可选）
 syscallTable.Register(0, "print", (ref VMInstanceState s) => {
     var args = new SyscallArgs(ref s);
     Console.WriteLine(args.GetNumber(0));
 });
-var program = compiler.Compile(source, "main", syscallTable.GetNameMap(), syscallTable);
+var result = compiler.Compile(source, "main", syscallMap, syscallTable);
 
 // 运行
-var world = new VMWorld(syscallTable);
-var moduleTable = new VMModuleTable();
-moduleTable.Load(0, program);
-int instanceId = world.SpawnInstance(0, moduleTable);
-while (world.HasLiveInstances)
+var world = new VMWorld();
+world.Modules.Load(0, result.Program);
+world.Syscalls.Register(0, "print", (ref VMInstanceState s) => {
+    var args = new SyscallArgs(ref s);
+    Console.WriteLine(args.GetNumber(0));
+});
+int instanceId = world.SpawnInstance(0, 0);
+while (true)
+{
     world.Tick();
+    ref var inst = ref world.Pool.Instances[instanceId];
+    if ((inst.StateFlags & VMStateFlags.Completed) != 0) break;
+}
 ```
 
 ### 场景 C：Sandbox 交互开发
@@ -151,7 +158,7 @@ VirtualMachine/
 │   └── FFVM.Cli/          ← CLI 工具（ffvm-cli：run / compile / lsp / dap）
 ├── Sandbox/               ← 脚本沙盒（交互式测试环境）
 ├── KOF98/                 ← 格斗游戏实践（FFVM 应用示例）
-├── StandaloneRunner/      ← 测试运行器（1007 个断言）
+├── StandaloneRunner/      ← 测试运行器（1111 个断言）
 ├── Assets/Scripts/VM/     ← VM 核心源码（被 FFVM.csproj 引用）
 ├── vscode-ffvm-debug/     ← VS Code 调试扩展
 ├── ffvm.cmd               ← 主命令菜单（sandbox / test / bench）

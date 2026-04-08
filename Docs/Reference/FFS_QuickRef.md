@@ -60,12 +60,35 @@ defer {
 ## 3. 变量与常量
 
 ```ffs
+// 局部变量（函数内部）
 var hp: int = 100          // 可变
 var name: string = "player"
 var pos: Vec2 = Vec2 { x: 0, y: 0 }
 
 const MAX_HP: int = 100    // 编译期常量
 ```
+
+### 模块变量（函数外部，顶层声明）
+
+模块变量在所有函数之间共享，类似全局变量：
+
+```ffs
+const MAX_HP: int = 100
+var currentHP: int = MAX_HP
+
+func damage(amount: int) {
+    currentHP = currentHP - amount
+}
+
+func main() {
+    damage(30)
+    print(currentHP)    // 70
+}
+```
+
+- 模块级 `var` / `const` 写在函数和结构体的外面
+- 所有函数都可以读写模块变量
+- 局部变量不能和模块变量同名
 
 ---
 
@@ -88,6 +111,25 @@ func hit(target: int, coeff: float = 1.0) {
 ```
 
 所有函数都是顶层的，不能嵌套定义。
+
+---
+
+## 4.5 Include（文件包含）
+
+```ffs
+include "common/math.ffs"
+include "shared/types.ffs"
+
+func main() {
+    // 可以使用被包含文件中定义的函数、结构体和模块变量
+    print(add(1, 2))
+}
+```
+
+- `include` 写在文件顶部，递归展开
+- 支持菱形依赖（同文件多次 include 只处理一次）
+- 循环引用会报编译错误
+- 跨文件同名声明：后者覆盖前者；同文件重定义报错
 
 ---
 
@@ -360,8 +402,11 @@ func main() {
 
 | 你想做的事 | FFScript | C# |
 |-----------|----------|-----|
-| 声明变量 | `var x: int = 0` | `int x = 0;` |
-| 声明常量 | `const N: int = 10` | `const int N = 10;` |
+| 声明局部变量 | `var x: int = 0` | `int x = 0;` |
+| 声明局部常量 | `const N: int = 10` | `const int N = 10;` |
+| 模块变量 | `var hp: int = 100`（顶层） | `static int hp = 100;` |
+| 模块常量 | `const MAX: int = 100`（顶层） | `static const int MAX = 100;` |
+| 文件包含 | `include "path.ffs"` | `using` / `#include` |
 | 函数 | `func f(a: int): int {}` | `int f(int a) {}` |
 | 结构体 | `struct S { x: int }` | `struct S { public int x; }` |
 | 实例化结构体 | `S { x: 1 }` | `new S { x = 1 }` |
