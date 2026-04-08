@@ -1,8 +1,8 @@
 # KOF98 技能 FFS 脚本化讨论
 
-> **状态**：🔄 讨论中（SK1~SK12 已收敛，SK3 待性能验证；SK14 语言需求已整合；第 12 轮讨论 OOP/ECS 数据兼容、硬直期脚本进入、跨脚本使用模式）
+> **状态**：🔄 讨论中（SK1~SK12 已收敛，SK3 待性能验证；SK14 语言需求已整合；第 12.5 轮回复用户对 Q1~Q3 的反馈）
 > **来源**：需求讨论 — 将 host-side 技能迁移为 FFS 脚本驱动
-> **日期**：2026-04-08（第 12 轮更新）
+> **日期**：2026-04-08（第 12.5 轮更新）
 
 ---
 
@@ -1230,8 +1230,11 @@ VM 改动: 无
 
 ---
 
-// 确认无害, 丢弃
-### Q1: OOP 数据封闭原则与未来 ECS Component 需求是否冲突？
+### Q1: OOP 数据封闭原则与未来 ECS Component 需求是否冲突？ ✅ 已关闭
+
+> **用户第 12.5 轮反馈**：确认无害，丢弃。
+>
+> **处理**：Q1 确认关闭，无后续行动。
 
 > 用户原话：目前的数据使用原则是在脚本中定义并消费就封闭在脚本内。当将来在 ECS 场景中, 会有让数据进入 ECS 中的 C 的需求。这两个需求看起来会对同一份数据有不同的要求。当前要考虑吗？暂时感觉不用, 因为当前以 OOP 风格熟悉, 会自动兼容 ECS, 我的感觉对吗？
 
@@ -1287,14 +1290,144 @@ SK12 已确立的数据归属原则：
 
 ---
 
-// 想法是: 跟随宿主时间轴比较自然.
-// 但等等, 这里好像有一个大坑
-// 类似条件的 A&B 和 A 下一帧& B
-// step 也需要有类似的区分
-// 一个想法是, step 总是打算一次执行完, 但遇到 yield/wait 会暂停, [这里正好可以处理宿主时间轴暂停]除非宿主时间轴前进制定的帧数, 否则暂停不会继续
-// [问题 ]但这带来一个新问题, yeild/wait 作为语言层的机制需要于 `宿主时间轴` 这个业务层的概念关联起来
-// 首先以上想法模拟是否合适, 如果是的话就这个问题就转换为对 `[问题]` 的讨论
-// 如果不是或有严重误解, 告诉我错误在哪
+> **用户第 12.5 轮反馈（Q2）**：
+> - 想法是跟随宿主时间轴比较自然。
+> - 但发现一个大坑：类似条件的 `A&B` 和 `A 下一帧& B` 的区分，step 也需要有类似区分。
+> - 一个想法是：step 总是打算一次执行完，但遇到 yield/wait 会暂停。**这里正好可以处理宿主时间轴暂停** — 除非宿主时间轴前进指定的帧数，否则暂停不会继续。
+> - **[问题]** 但这带来一个新问题：yield/wait 作为语言层的机制需要与"宿主时间轴"这个业务层的概念关联起来。
+> - 请确认以上模型是否合适。如果是，则问题转换为对 [问题] 的讨论。如果有严重误解，告诉错误在哪。
+
+#### 语言方回复（第 12.5 轮）
+
+**你的模型完全正确，没有误解。** 逐点确认：
+
+##### 1. "step 总是打算一次执行完，遇到 yield/wait 会暂停" — ✅ 正确
+
+这正是 FFVM 的执行模型。当宿主调用 `Tick()` 或 `TickInstance(id)` 时：
+
+```
+ExecuteInstance(ref inst) 开始执行
+  → 执行指令 → 执行指令 → … → 遇到 WAIT 指令
+  → inst.WaitCounter = N; inst.IP++; return;  ← 交出执行权
+  → 控制权回到宿主
+```
+
+脚本**每次被 Tick 时都打算执行到底**（直到 return 结束或遇到 yield/wait 暂停）。这与 Unity 协程 `yield return` 的心智模型一致。
+
+##### 2. "除非宿主时间轴前进，否则暂停不会继续" — ✅ 正确
+
+当前实现就是如此。`WaitCounter` 只在 `Tick()` 被调用时递减：
+
+```csharp
+// VMWorld.Tick() 内
+if (inst.WaitCounter > 0 && !killed)
+{
+    inst.WaitCounter--;  // 只有宿主调用 Tick() 时才递减
+    continue;
+}
+```
+
+如果宿主不调用 `Tick()`（硬直期间时间轴暂停），`WaitCounter` 就不递减 → yield/wait 的等待帧只算**宿主真正推进的帧**。这天然实现了"硬直期间脚本冻结"的效果。
+
+##### 3. [问题] yield/wait 语言层机制与"宿主时间轴"业务层概念的耦合
+
+这是你提出的核心问题，也是一个好问题。我来分析：
+
+**当前的耦合方式**：
+
+```
+语言层            业务层                    物理层
+─────────        ─────────────            ─────────
+yield (= wait 1) →  "等 1 帧"         →  WaitCounter = 1
+wait(N)           →  "等 N 帧"         →  WaitCounter = N
+                     ↑
+                     何时递减？
+                     → 宿主调用 Tick() 时递减
+                     → 宿主不调 Tick() = 帧不流逝
+```
+
+**关键洞察**：yield/wait **已经** 与宿主时间轴耦合了，只是这个耦合是**隐式的** — 通过"谁调用 Tick()"来体现。
+
+| 耦合方式 | 说明 | 是否需要语言改动 |
+|---------|------|----------------|
+| **隐式耦合（当前）** | yield/wait 的 "1 帧" = "宿主调用 Tick() 1 次"。宿主控制何时调用 Tick()，从而控制帧的含义 | ❌ 不需要 |
+| **显式耦合（如果要）** | 语言层区分 `yield`（等 1 逻辑帧）vs `yield_real`（等 1 物理帧），VM 内部维护双时钟 | ⚠️ 需要语言+VM 改动 |
+
+**结论**：隐式耦合已经满足你描述的需求。**不需要**在语言层引入"宿主时间轴"的概念。
+
+具体来说：
+
+```
+场景 1: 正常帧
+  宿主: Tick() → Tick() → Tick() → ...
+  脚本: yield → 等 1 → 恢复 → yield → 等 1 → 恢复 → ...
+  效果: 每帧执行一段脚本逻辑 ✅
+
+场景 2: 硬直 5 帧
+  宿主: Tick() → [不调 Tick ×5] → Tick() → ...
+  脚本: yield → [冻结 ×5] → 等 1 → 恢复 → ...
+  效果: 硬直期间脚本自然冻结，恢复后无感继续 ✅
+
+场景 3: 全屏顿帧
+  宿主: [不调任何角色的 Tick ×3] → Tick() → ...
+  脚本: [冻结 ×3] → 恢复 → ...
+  效果: 全局暂停 ✅
+```
+
+**"耦合"不是问题，而是正确的设计**。yield/wait 表达的是"等待逻辑帧"，而"什么算一个逻辑帧"是宿主的职责。这种分层是干净的：
+
+```
+┌─────────────────────┐
+│ 脚本层               │  yield = "我这一帧的活干完了，等下一帧"
+│ (只关心逻辑帧)        │  wait(N) = "我要等 N 个逻辑帧"
+├─────────────────────┤
+│ 宿主调度层            │  决定"何时算一个逻辑帧" → 调用 Tick()
+│ (控制时间轴)          │  硬直 = 不调 Tick()
+│                     │  正常 = 每物理帧调 Tick()
+├─────────────────────┤
+│ VM 引擎层             │  Tick() 被调用 → WaitCounter-- → 为 0 时恢复执行
+│ (只关心 Tick 调用)    │  Tick() 不被调用 → 什么都不发生
+└─────────────────────┘
+```
+
+##### 4. 关于"A&B 和 A 下一帧& B"的区分
+
+你提到的这个大坑，我理解是指：
+
+> **同帧内多个条件/步骤** vs **跨帧的条件/步骤**
+
+在 step 中也存在类似问题：
+
+```ffs
+func step() {
+    // 场景 A: 这两行在同一帧内执行（同一次 Tick）
+    SetHitbox(1, 10, 20, 30, 40)
+    BeginAction(101, 10)
+    
+    // 场景 B: yield 后下一帧才执行
+    yield
+    SetHitbox(2, 50, 60, 70, 80)  // 这是下一帧
+}
+```
+
+这在当前模型中已经自然解决了：
+- **不 yield** → 同一次 `ExecuteInstance()` 调用内连续执行 → 同帧
+- **yield** → 交出执行权 → 下一次 `Tick()` 恢复 → 下一帧
+
+脚本编写者通过 yield 的位置来精确控制"什么在同一帧，什么在下一帧"。**无需额外机制**。
+
+##### 5. 综合结论
+
+| 你的判断 | 语言方确认 |
+|---------|----------|
+| step 总是打算一次执行完，yield/wait 暂停 | ✅ 正确 — 这就是 FFVM 的执行模型 |
+| 宿主不推进时间轴 → yield/wait 不恢复 | ✅ 正确 — WaitCounter 只在 Tick() 中递减 |
+| yield/wait 与宿主时间轴有耦合 | ✅ 存在耦合 — 但这是**正确的隐式耦合**，不需要语言改动 |
+| 这个模型足以处理硬直 | ✅ 足够 — 宿主不调 Tick() 即冻结 |
+
+**[问题] 的回答**：yield/wait 不需要在语言层面与"宿主时间轴"显式关联。当前的隐式耦合（"1 帧" = "宿主调用 Tick() 1 次"）已经是正确的设计。宿主通过控制是否调用 `Tick()` 来表达时间轴暂停/恢复，脚本无需感知。
+
+**Q2 可以关闭吗？** 如果你接受以上模型（宿主控制 Tick 节奏 = 控制时间轴），则 SK6 方案 A 维持不变，无需新增 VM 机制。第 12 轮提出的 A′-1/A′-2/A′-3 方案仅在你需要"硬直期间脚本仍需执行某些逻辑"时才需要引入。
 ### Q2: 硬直期间是否让脚本进入（时间轴暂停时的 VM Tick 策略）
 
 > 用户原话：希望角色时间轴暂停时脚本能进入, 这样能有更多自由度。如果真想不执行也是简单跳过, 不会太拖累性能。但是硬直进入虚拟机之后, yield/wait 可能要正确区分时间轴(包含了硬直)暂停期间是否要算在等待帧内的问题。
@@ -1435,10 +1568,293 @@ func onPaused() {
 
 ---
 
+> **用户第 12.5 轮反馈（Q3）**：
+> - 这 5 种方向没有覆盖我最初的直觉方式：**从宿主层获取虚拟机实例，调用虚拟机实例的方法**。
+> - 另外需要确认：一个脚本（代表虚拟机）的实例变量或常量，确实如 C# 脚本语言那样是多个函数的上层 scope 同一个数据（实例）。因为看到过"实例重定向"之类的东西，不太能把这个东西和这里关联起来。
+> - 另外实例重定向看起来是一个重要的实用功能，请介绍运行机制和实用示范。
 
-// 这里的方式没有貌似覆盖我最初的直觉方式:
-// 从宿主层获取虚拟机实例, 调用虚拟机实例的方式. 
-// 另外需要额外确认 一个脚本(代表虚拟机) 的实例变量或常量, 确实如c#脚本语言那用是 多个函数的上层scope 同一个数据(实例, 这么说可能不太好, 但就是这个意思). 因为从其他地方看到过什么`实例重定向`之类的东西, 不是很能把这个东西和重定向关联起来. 另外实例重定向看起来是一个重要的实用功能, 向我介绍运行机制, 实用示范.
+#### 语言方回复（第 12.5 轮）
+
+##### 回答 A: "宿主获取 VM 实例，调用方法" — 这正是 FFVM 的核心使用模式
+
+你说的"直觉方式"其实已经是 FFVM 的基本 API，只是第 12 轮的 5 个方向聚焦于"跨脚本"协调而忽略了最基础的使用模式。让我补充说明：
+
+**FFVM 的基本使用模式**：
+
+```csharp
+// 宿主 C# 代码
+
+// 1. 编译脚本 → 获得 VMProgram (ROM)
+VMProgram program = BytecodeCompiler.Compile(sourceCode, "step", syscalls, syscallTable);
+
+// 2. 加载到 VMWorld 的模块槽
+int moduleSlot = 0;
+world.Modules.Set(moduleSlot, program);
+
+// 3. 创建实例 — 获得实例 ID
+int instanceId = world.SpawnInstance(moduleSlot, program.EntryIP);
+
+// 4. 每帧 Tick — 驱动这个实例执行
+world.TickInstance(instanceId);    // 单独 tick 这一个实例
+// 或
+world.Tick();                      // tick 所有活跃实例
+
+// 5. 读取实例状态
+ref VMInstanceState inst = ref world.Pool.Instances[instanceId];
+bool isFinished = (inst.StateFlags & VMStateFlags.Completed) != 0;
+int returnValue = inst.Registers.Get(0).ToInt();  // r0 = 返回值
+
+// 6. 调用实例的另一个函数（通过 Redirect）
+if (program.TryGetFunction("step", out var stepFunc)) {
+    inst.IP = stepFunc.EntryIP;
+    inst.StateFlags &= ~VMStateFlags.Completed;
+    // 现在 TickInstance(instanceId) 会从 step() 开始执行
+}
+
+// 7. 销毁
+world.DestroyInstance(instanceId);
+```
+
+这就是你说的 **"从宿主层获取虚拟机实例，调用虚拟机实例的方法"**。
+
+与 C# 脚本的类比：
+
+| C# 脚本概念 | FFVM 对应 |
+|------------|----------|
+| `var obj = new MyScript()` | `int id = world.SpawnInstance(moduleSlot, entryIP)` |
+| `obj.checkEnter()` | `world.TickInstance(id)` (当 IP 指向 checkEnter) |
+| `obj.step()` | redirect IP 到 step → `world.TickInstance(id)` |
+| `obj.myField` | `world.Pool.Instances[id].Registers.Get(r56)` (模块变量) |
+| `Destroy(obj)` | `world.DestroyInstance(id)` |
+
+**为什么第 12 轮没列这个方向**：因为这不是"跨脚本"模式 — 这是**单脚本**的基本使用方式。第 12 轮的 5 个方向专注于"多个脚本之间如何通信"。但你的直觉方式（宿主获取实例 → 调用方法 → 读取结果）正是所有方向的基础。
+
+**补充为方向 0**：
+
+| # | 方向 | 描述 | 当前可用 |
+|---|------|------|---------|
+| **0** | **宿主直调（Host Direct Call）** | 宿主 C# 持有 instanceId，直接 SpawnInstance → TickInstance → 读寄存器 → DestroyInstance | ✅ 已可用 |
+
+这是最基本的模式，其他 5 个方向都建立在它之上。
+
+---
+
+##### 回答 B: 模块变量确实是多个函数共享的"实例级数据" — ✅ 确认
+
+你的理解是正确的。让我用具体例子确认：
+
+```ffs
+// skill_light_punch.ffs
+
+var charge: int = 0        // 模块变量 — 分配在 r56
+var hitCount: int = 0      // 模块变量 — 分配在 r57
+const MAX_CHARGE: int = 30 // 编译期常量 — 不占寄存器
+
+func checkEnter(): int {
+    // 可以读写 charge 和 hitCount
+    if charge > 10 {
+        return 1
+    }
+    return 0
+}
+
+func step() {
+    // 同一个 charge、同一个 hitCount — 与 checkEnter 共享
+    charge = charge + 1
+    if charge > MAX_CHARGE {
+        hitCount = hitCount + 1
+        charge = 0
+    }
+    yield
+}
+```
+
+**物理层面的解释**：
+
+```
+VMInstanceState (一个实例的全部状态)
+├── IP = 当前执行位置
+├── Registers[0..63]          ← 64 个寄存器槽
+│   ├── r0~r15   — scratch zone (绝对寻址, 函数返回值等)
+│   ├── r16~r47  — local zone (窗口化, 每个函数独立)
+│   ├── r48~r55  — temp zone (编译器临时变量)
+│   └── r56~r63  — module var zone (模块变量 ← 这就是"实例级数据")
+│       ├── r56 = charge     ← checkEnter 和 step 都读写同一个 r56
+│       └── r57 = hitCount   ← checkEnter 和 step 都读写同一个 r57
+├── CallStack[...]
+└── CleanupStack[...]
+```
+
+关键点：
+
+| 维度 | 说明 |
+|------|------|
+| **模块变量在哪** | `r56~r63`（ModuleVarRegBase=56，共 8 个槽；超过 8 个会溢出到扩展寄存器 ExtendedRegs） |
+| **多个函数共享吗** | ✅ 是 — 模块变量使用 LOAD_MVAR/STORE_MVAR 指令**绝对寻址**，不受函数调用的寄存器窗口(RegisterBase)影响 |
+| **与 C# 实例字段类比** | `var charge: int` ≈ C# 的 `private int charge;`。同一个实例的所有函数都读写同一个 `charge` |
+| **局部变量呢** | 局部变量在 `r16~r47`（local zone），每个函数独立分配。不同函数的 `var a` 可能编译到同一个 r16，但语义上互不影响（函数调用时寄存器窗口会偏移 RegisterBase） |
+| **初始化时机** | SpawnInstance 时编译器生成的入口函数 preamble 会执行模块变量初始化代码（`EmitModuleVarInit`） |
+
+**一句话确认**：模块变量（`var`/`const` 在脚本顶层声明）= 实例级共享数据，所有函数读写同一份。这与 C# 的实例字段行为一致。
+
+---
+
+##### 回答 C: 实例重定向（Instance Redirect）运行机制与实用示范
+
+**"实例重定向"是什么**：在不销毁/重建实例的情况下，将一个已完成（或运行中）的实例的执行位置（IP）跳转到另一个函数入口，同时保留实例的寄存器状态。
+
+**为什么需要它**：同一个技能的 `checkEnter()` 和 `step()` 是同一实例的两个阶段。检查条件时从 `checkEnter` 开始执行；条件通过后不需要销毁重建，只需把 IP 指向 `step` 继续执行即可。
+
+**运行机制（逐步）**：
+
+```
+阶段 1: 条件检查
+─────────────────
+宿主: id = SpawnInstance(moduleSlot, checkEnter.EntryIP)
+       → 实例创建, IP = checkEnter 入口
+       
+宿主: TickInstance(id)
+       → ExecuteInstance 从 checkEnter 开始执行
+       → checkEnter() 内: 读模块变量、做条件判断…
+       → return 1  (条件通过)
+       → inst.StateFlags |= Completed
+       
+宿主: 读 inst.Registers[0] → 返回值 = 1 → 条件通过!
+
+               ┌─────────────────────────────────┐
+        此时:  │ IP = checkEnter 末尾 (Completed)  │
+               │ r56 (charge) = 某个值             │  ← 寄存器状态保留
+               │ r57 (hitCount) = 某个值           │
+               └─────────────────────────────────┘
+
+
+阶段 2: 重定向到 step
+─────────────────────
+宿主: // 实例重定向 — 核心 3 行
+      inst.IP = stepFunc.EntryIP;              // 跳到 step 入口
+      inst.StateFlags &= ~VMStateFlags.Completed;  // 清除完成标记
+      inst.CallStackDepth = 0;                 // 重置调用栈
+
+               ┌─────────────────────────────────┐
+        此时:  │ IP = step 入口 (Active)          │
+               │ r56 (charge) = 保留的值           │  ← 没有被清零!
+               │ r57 (hitCount) = 保留的值         │
+               └─────────────────────────────────┘
+
+宿主: TickInstance(id)  或  Tick() 自动推进
+       → step() 开始执行
+       → step() 可以读到 checkEnter 阶段写入的模块变量值
+       → yield → 下一帧继续 → … → return → 技能结束 → Completed
+
+阶段 3: 销毁
+─────────────
+宿主: DestroyInstance(id)
+```
+
+**实用示范：完整的技能生命周期**
+
+```csharp
+// ========== 宿主 C# 代码 ==========
+// 第 1 步: 编译脚本
+var program = BytecodeCompiler.Compile(skillSource, "checkEnter", syscalls, table);
+world.Modules.Set(slot, program);
+
+// 第 2 步: 裁决层 — 检查条件
+program.TryGetFunction("checkEnter", out var checkEntry);
+int id = world.SpawnInstance(slot, checkEntry.EntryIP);
+world.TickInstance(id);  // 执行 checkEnter
+
+ref var inst = ref world.Pool.Instances[id];
+if ((inst.StateFlags & VMStateFlags.Completed) != 0 && inst.Registers.Get(0).IsNonZero)
+{
+    // 条件通过 → 重定向到 step
+    program.TryGetFunction("step", out var stepEntry);
+    inst.IP = stepEntry.EntryIP;
+    inst.StateFlags &= ~VMStateFlags.Completed;
+    inst.CallStackDepth = 0;
+    
+    // 实例保持活跃，后续每帧由 Tick() 驱动 step()
+    activeSkills[charId] = id;
+}
+else
+{
+    // 条件不通过 → 销毁
+    world.DestroyInstance(id);
+}
+
+// 第 3 步: 每帧主循环
+world.Tick();  // 所有活跃实例自动执行（含 step 中的 yield 恢复）
+
+// 第 4 步: 检测技能结束
+ref var skill = ref world.Pool.Instances[activeSkills[charId]];
+if ((skill.StateFlags & VMStateFlags.Completed) != 0)
+{
+    world.DestroyInstance(activeSkills[charId]);
+    activeSkills.Remove(charId);
+}
+```
+
+```ffs
+// ========== FFS 脚本 ==========
+// skill_light_punch.ffs
+
+var combo_window: int = 0      // 模块变量 r56 — checkEnter 和 step 共享
+
+func checkEnter(): int {
+    // 通过黑板查询前置条件
+    var canCombo: int = GetBlackboard(BB_LP_ALLOWED)
+    if canCombo > 0 {
+        combo_window = 15       // 写模块变量 → step 阶段可以读到
+        return 1
+    }
+    return 0
+}
+
+func step() {
+    // combo_window 已经是 checkEnter 设置的 15！
+    BeginAction(ACTION_LIGHT_PUNCH, 10)
+    defer { EndAction() }
+    
+    var f: int = 0
+    while f < 10 {
+        // 攻击帧逻辑
+        if f >= 3 && f < 7 {
+            var hit: int = CheckAttackHit(HITBOX_LP)
+            if hit > 0 {
+                ApplyDamage(hit, 50)
+                SetBlackboard(BB_LP_HIT, 1)
+            }
+        }
+        
+        // 连招窗口递减
+        if combo_window > 0 {
+            combo_window = combo_window - 1
+        }
+        
+        f = f + 1
+        yield
+    }
+}
+```
+
+**为什么不销毁+重建**：
+
+| 方式 | 操作 | 寄存器状态 | 开销 |
+|------|------|-----------|------|
+| **重定向（推荐）** | 修改 3 个字段 (IP, StateFlags, CallStackDepth) | ✅ 保留 — checkEnter 写的值 step 直接读 | 几乎为零 |
+| **销毁+重建** | DestroyInstance + SpawnInstance | ❌ 丢失 — 新实例寄存器全部清零 | 需要重新初始化模块变量 |
+
+**一句话总结**：实例重定向 = "让同一个实例换一个函数继续执行，但记忆（寄存器/模块变量）保留"。这是同一实例多阶段生命周期（checkEnter → step）的核心机制。
+
+---
+
+#### 第 12.5 轮待用户确认
+
+1. **Q1 已关闭** ✅
+2. **Q2**：你的模型（yield/wait 自然跟随宿主时间轴、宿主不 Tick 则冻结）已确认正确。是否还需要硬直期间脚本执行的能力（A′-1/A′-2/A′-3）？还是当前模型已足够？
+3. **Q3 方向 0（宿主直调）**：已补充。是否覆盖了你的直觉方式？
+4. **Q3 模块变量确认**：已确认模块变量 = 实例级共享数据（类似 C# 实例字段）。清楚了吗？
+5. **Q3 实例重定向**：已介绍运行机制和完整示范。清楚了吗？有其他想了解的点吗？
 ### Q3: 跨脚本 VM 使用模式推荐
 
 > 用户原话：想要继续讨论虚拟机跨脚本使用的方式, 先帮我推荐几种不同方向的使用方法。
@@ -1793,7 +2209,14 @@ func checkEnter(): int {
 <details>
 <summary>📋 讨论历史</summary>
 
-#### 第 12 轮（当前）
+#### 第 12.5 轮（当前）
+
+用户对第 12 轮 Q1~Q3 做出回应：
+- Q1: 确认无害，丢弃 → **已关闭**
+- Q2: 用户模型（step 打算一次执行完 → yield/wait 暂停 → 宿主不推进时间轴则冻结）已确认正确。yield/wait 与宿主时间轴的耦合是**隐式的**且**正确的** — 不需要语言层改动
+- Q3: 补充方向 0（宿主直调 = 基本 API 使用模式）。确认模块变量 = 实例级共享数据。详细介绍实例重定向（Instance Redirect）运行机制与完整示范
+
+#### 第 12 轮
 
 用户提出 3 个新议题：
 - (1) OOP 数据封闭原则与 ECS Component 需求是否冲突 → 结论：不冲突，Syscall 边界天然分离，不需要现在额外考虑
