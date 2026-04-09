@@ -1,6 +1,6 @@
 # KOF98 技能 FFS 脚本化讨论
 
-> **状态**：🔄 讨论中（SK1~SK12 已收敛，SK3 待性能验证；SK14 语言需求已整合；Q2 ✅ 收敛；Q3 渐进路径待确认；Q4 服务脚本 ✅ 收敛 — 14 项决策锁定，待输出 XCALL Spec）
+> **状态**：🔄 讨论中（SK1~SK14 已收敛；Q2 ✅；Q3 渐进路径已被 Q4 覆盖 → ✅；Q4 服务脚本 ✅ 收敛 — 14 项决策锁定。下一步 → XCALL Spec 输出 + C 阶段实现。语言需求已提交 VM_Summary Lang 表）
 > **来源**：需求讨论 — 将 host-side 技能迁移为 FFS 脚本驱动
 > **日期**：2026-04-09（第 26 轮更新）
 
@@ -16,17 +16,17 @@
 | SK4 | 姿态 Syscall | ✅ | 可新增 SetStance 等 |
 | SK5 | 命名规则 | ✅ | `skill_<英文名>.ffs` |
 | SK6 | 硬直机制 | ✅ | 方案 A — 宿主时间轴暂停，yield/wait(N) 已支持 |
-| SK7 | 技能条件入口 | ✅ | 方案 D′ — 同实例 checkEnter()/step()。VM 无硬障碍，模块变量需求转入 SK14 |
+| SK7 | 技能条件入口 | ✅ | 方案 D′ — 同实例 checkEnter()/step()。VM 无硬障碍，模块变量已由 Lang-1 实现 |
 | SK8 | 碰撞框 Syscall | ✅ | SetHitbox/SetHurtbox/ClearHitbox/SetPushBox |
 | SK9 | 受击标记 | ✅ | 分组 mask 混合方向正确 |
 | SK10 | 连招共用环境 | ✅ | V1: 黑板 Syscall；理想形 3（混合式）由 L1+L2+黑板覆盖，需求转入 SK14 |
 | SK11 | 多阶段技能 | ✅ | Phase 是脚本内行为，提供便利但不强制 |
 | SK12 | ECS 数据归属 | ✅ | 脚本内闭环 → VM；外部需读取 → Syscall 推送到宿主 |
-| SK13 | 属性脚本共享 | ✅ | 方案 A — 预处理器 `include`，全量展开。需求转入 SK14 L2 |
-| SK14 | FFS 语言需求整合 | 💬 | L1 模块变量 + L2 include = Phase 1；L3/L4 跨模块 = 远期 |
+| SK13 | 属性脚本共享 | ✅ | 方案 A — 预处理器 `include`，全量展开。已由 Lang-2 实现 |
+| SK14 | FFS 语言需求整合 | ✅ | L1 模块变量 ✅ + L2 include ✅ + L3 黑板 ✅ = Phase 1 完成；L4/L5 跨模块 = Q4 服务脚本方案，已提交 VM_Summary |
 | Q2 | 硬直+yield 语句级控制 | ✅ | 方案 A — while+GetFrame()+yield，帧区间循环行业标准模式（7/10 语言同构） |
-| Q3 | 跨脚本 VM 使用模式 | 💬 | 6 方向渐进路径（1+2+3 → 4 → 5），待用户确认 |
-| Q4 | FFS 封装 — 服务脚本 | ✅ | 方式 C ✅；Y1-Plus ✅；统一语法 ✅；@export ✅；@inline ✅；嵌套 Warn/Unlimited ✅；14 项决策锁定 |
+| Q3 | 跨脚本 VM 使用模式 | ✅ | 6 方向渐进路径（1+2+3 ✅ → 4 → 5），阶段1已完成；方向5 = Q4 服务脚本方案 |
+| Q4 | FFS 封装 — 服务脚本 | ✅ | 方式 C ✅；Y1-Plus ✅；统一语法 ✅；@export ✅；@inline ✅；嵌套 Warn/Unlimited ✅；14 项决策锁定。→ [VM_Summary Lang-6~Lang-8](../../Docs/VM_Summary.md) |
 
 ---
 
@@ -219,7 +219,7 @@ class SkillDef {
 
 ---
 
-## SK7: 技能条件入口 🔄
+## SK7: 技能条件入口 ✅
 
 **结论**：方案 D′ — 独立 `checkEnter()` + `step()` 函数，**同一 VM 实例**。
 
@@ -599,7 +599,7 @@ func step() {
 
 ---
 
-## SK13: 属性脚本共享机制 💬
+## SK13: 属性脚本共享机制 ✅
 
 **结论**：方案 A — 预处理器 `include`，全量展开（const + struct + func）。跳过 V0 过渡，直接实现编译器原生 include。
 
@@ -983,7 +983,7 @@ func step() {
 
 ---
 
-## SK14: FFS 语言需求整合（第 10 轮新增） 💬
+## SK14: FFS 语言需求整合（第 10 轮新增） ✅
 
 > **背景**：SK7（全局变量）、SK10（连招共用环境）、SK13（include）三个议题各自衍生出语言层需求，分散在不同 SK 小节中。需要整合成统一视图，明确依赖关系和实现优先级，提交 VM_Summary 作为 FFS 语言演进计划。
 
@@ -2580,9 +2580,9 @@ if (inst.WaitCounter > 0 && !killed)
 
 ---
 
-### Q3: 跨脚本 VM 使用模式 💬
+### Q3: 跨脚本 VM 使用模式 ✅
 
-**最新结论（第 12.5 轮）**：6 种方向（含方向 0 基础模式），推荐渐进路径。
+**结论**：6 种方向渐进路径。阶段 1（方向 1+2+3）✅ 已完成。方向 5（服务脚本）已由 Q4 收敛设计。
 
 | # | 方向 | 数据共享机制 | VM 改动 | 当前可用 | 推荐度 |
 |---|------|-----------|--------|---------|--------|
@@ -2590,31 +2590,24 @@ if (inst.WaitCounter > 0 && !killed)
 | 1 | **黑板中介** | 宿主 key-value Syscall | 无 | ✅ Lang-3 | ⭐⭐⭐⭐⭐ |
 | 2 | **Include 共享模板** | 编译期代码复用（数据独立） | 无 | ✅ Lang-2 | ⭐⭐⭐⭐⭐ |
 | 3 | **宿主编排** | 宿主 C# 协调 + Syscall | 无 | ✅ SK2 裁决 | ⭐⭐⭐⭐ |
-| 4 | **共享变量区** | VM 跨实例共享内存 | ⭐⭐ | ❌ Lang-4 | ⭐⭐⭐ |
-| 5 | **服务脚本 + 跨模块调用** | VM 跨模块函数调用 | ⭐⭐⭐ | ❌ Lang-5 | ⭐⭐ |
+| 4 | **共享变量区** | VM 跨实例共享内存 | ⭐⭐ | ❌ Lang-4 待定 | ⭐⭐⭐ |
+| 5 | **服务脚本 + 跨模块调用** | VM 跨模块函数调用 | ⭐⭐⭐ | → **Q4 XCALL 设计** | ⭐⭐ |
 
-**推荐渐进路径**：
+**渐进路径**：
 
-| 阶段 | 内容 | 条件 |
+| 阶段 | 内容 | 状态 |
 |------|------|------|
-| **阶段 1（现在）** | 方向 1 + 2 + 3 — 黑板 + include + 宿主编排 | 已覆盖 KOF98 全部已知需求 |
-| **阶段 2（需求驱动）** | + 方向 4 — 共享变量区 | 黑板 Syscall 频率成为性能瓶颈时 |
-| **阶段 3（远期）** | + 方向 5 — 服务脚本 | 需要脚本自治生态（NvN、AI 脚本）时 |
+| **阶段 1** | 方向 1 + 2 + 3 — 黑板 + include + 宿主编排 | ✅ 已完成（Lang-1/2/3） |
+| **阶段 2（需求驱动）** | + 方向 4 — 共享变量区 | ⏳ 黑板 Syscall 频率成为瓶颈时触发 |
+| **阶段 3** | + 方向 5 — 服务脚本 | → Q4 收敛，实现路径 C-0~C-3 已排入 [VM_Summary](../../Docs/VM_Summary.md) |
 
-**关键确认（第 12.5 轮）**：
+**关键确认**：
 
 | 确认项 | 结论 |
 |--------|------|
 | 模块变量 = 实例级共享数据 | ✅ 类似 C# 实例字段。`var charge` 分配在 r56，checkEnter 和 step 读写同一个 r56 |
 | 实例重定向 | ✅ 修改 3 个字段（IP, StateFlags, CallStackDepth）即可让同一实例换函数执行，寄存器保留 |
 | 方向 0（宿主直调） | ✅ SpawnInstance → TickInstance → 读寄存器 → DestroyInstance，是所有方向的基础 |
-
-#### 待用户确认
-
-1. **阶段 1 是否满足当前需求？** — 方向 1+2+3 是否覆盖所有跨脚本场景？
-2. **有没有具体的跨脚本场景**是 5 种方向都不能覆盖的？
-3. **方向 4 和 5，是否有倾向性？** — 先推进哪个，还是都按需触发？
-4. **方向 3（宿主编排）的定位** — 倾向于尽量多逻辑放脚本内，还是接受宿主"导演"角色？
 
 <details>
 <summary>📋 Q3 讨论历史（第 12~12.5 轮）</summary>
@@ -3267,9 +3260,60 @@ func step() {
 </details>
 ---
 
-### Q4: FFS 无对象语言的宿主参数封装 💬
+### Q4: FFS 无对象语言的宿主参数封装 ✅
 
-> **第 18 轮新增**。随着 `GetFrame()`、`Owner` 等宿主交互点增多，需要合理的组织方式。FFS 不支持对象，如何有效处理 Owner、Scene、Context 等封装需求？
+> **第 18~26 轮。✅ 收敛（第 26 轮）。** 14 项设计决策全部锁定。语言需求已提交 [VM_Summary Lang-6~Lang-8](../../Docs/VM_Summary.md)。
+
+#### 核心结论
+
+| 决策 | 结论 | 轮次 |
+|------|------|------|
+| 服务脚本定位 | FFS 运行时实体，不是 include | R20 ✅ |
+| 持有方式 | 方式 C — 语言级引用（instanceId） | R20 ✅ |
+| 生命周期管理 | 宿主 C# 创建并注册 | R21 ✅ |
+| 服务函数 yield | 禁止 — 纯编译期保证 Y1-Plus（无运行时负担） | R22 ✅ |
+| 调用语法 | `svc.member` 统一语法，编译器自动路由 L4/L5 | R23-24 ✅ |
+| L4/L5 关系 | 同基线设计：XCALL + XLOAD_MVAR + XSTORE_MVAR 在 C-1 同时实现 | R23 ✅ |
+| 导出声明 | **`@export` 唯一形式** | R24-25 ✅ |
+| 自动优化 | A1/A2 自动 getter/setter→直接访问退化（C-1.5） | R23 ✅ |
+| 用户引导内联 | `@inline`（hint，C-2）+ `@force_inline`（强制，C-3）+ LSP 诊断 | R24 ✅ |
+| 实现路径 | C-0 → C-1(XCALL+XL4) → C-1.5(A1/A2+配置) → C-2(语法糖+@inline+LSP) → C-3(A5+@force_inline) | R23-26 ✅ |
+| 嵌套调用 | **运行时配置 MaxXCallDepth（默认4）+ Warn/Unlimited 两种策略** | R21→R26 ✅ |
+| 性能影响 | 可忽略（< 0.02% 帧预算；深度检查 +1 ns/XCALL；常量 vs 变量无差异） | R20-26 ✅ |
+| XCALL 优化 | O1+O2（C-1），A1/A2（C-1.5），O7+@inline（C-2），O4/A5+@force_inline（C-3+） | R22-24 ✅ |
+| 优化退化策略 | 编译期自动退化，运行时零决策开销 | R22 ✅ |
+
+**下一步** → 输出 **XCALL Spec 设计文档**，正式进入 C 阶段实现。
+
+#### OpCode 基线设计（C-1 同时实现）
+
+| OpCode | 操作 | 编码 | 开销 |
+|--------|------|------|------|
+| **XCALL** | 跨实例函数调用 | A=dest, B=instanceId_reg, C=funcIndex | ~15 ns |
+| **XLOAD_MVAR** | 跨实例变量读取 | A=dest, B=instanceId_reg, C=mvarIndex | ~3-5 ns |
+| **XSTORE_MVAR** | 跨实例变量写入 | A=src, B=instanceId_reg, C=mvarIndex | ~3-5 ns |
+
+#### 嵌套深度配置（C-1.5）
+
+```csharp
+public class VMConfig {
+    public int MaxXCallDepth = 4;      // 0 = 不限制
+    public bool XCallDepthWarning = true; // true = Warn, false = Unlimited
+}
+```
+
+#### 实现路径
+
+| 阶段 | 内容 | 说明 |
+|------|------|------|
+| C-0 | 零改动原型验证 | 宿主 C# 桥接模拟跨实例调用 |
+| C-1 | XCALL + XLOAD_MVAR + XSTORE_MVAR | 三个 OpCode + @export + Y1-Plus 编译期 yield 禁止 |
+| C-1.5 | A1/A2 自动退化 + MaxXCallDepth 配置 | getter/setter 自动优化为直接变量访问 |
+| C-2 | `svc.member` 统一语法 + @inline + LSP 诊断 | 语法糖 + 编译期内联 hint + 调用链深度诊断 |
+| C-3 | @force_inline + A5 深度内联 | 强制内联 + 函数体展开 |
+
+<details>
+<summary>📋 Q4 完整讨论历史（第 18~26 轮）</summary>
 
 #### 背景
 
@@ -5477,6 +5521,8 @@ case OpCode.XCALL:
 2. **Q4 收敛** — 14 项决策全部锁定，下一步输出 XCALL Spec？
 
 ---
+
+</details>
 
 <details>
 <summary>📋 讨论轮次总览</summary>
