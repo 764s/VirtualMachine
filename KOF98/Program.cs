@@ -77,12 +77,21 @@ namespace KOF98
                 // Register all loaded module script paths for multi-module tracking
                 RegisterDebugScriptPaths(dapServer, vmSlots, scriptsDir);
 
-                // Attach debugger to VMWorld — use the first loaded program for initial breakpoint verification
-                var firstProgram = vmBridge.World.Modules.Get(vmSlots.Idle >= 0 ? vmSlots.Idle : 0);
-                string firstScriptPath = vmSlots.Idle >= 0
-                    ? System.IO.Path.GetFullPath(System.IO.Path.Combine(scriptsDir, "skill_idle.ffs"))
-                    : null;
-                dapServer.AttachToWorld(vmBridge.World, firstProgram, -1, firstScriptPath);
+                // Attach debugger to VMWorld — use the idle program for initial breakpoint verification
+                // Idle is always the first script to execute (fallback skill activated on character creation)
+                if (vmSlots.Idle >= 0)
+                {
+                    var idleProgram = vmBridge.World.Modules.Get(vmSlots.Idle);
+                    string idleScriptPath = System.IO.Path.GetFullPath(
+                        System.IO.Path.Combine(scriptsDir, "skill_idle.ffs"));
+                    dapServer.AttachToWorld(vmBridge.World, idleProgram, -1, idleScriptPath);
+                }
+                else
+                {
+                    // No idle script loaded — attach to world without a specific program
+                    // Breakpoints will be buffered and applied when a module is loaded
+                    dapServer.AttachToWorld(vmBridge.World, null, -1, null);
+                }
 
                 // Wait for VS Code to connect and complete configuration
                 dapServer.WaitForConnection();
