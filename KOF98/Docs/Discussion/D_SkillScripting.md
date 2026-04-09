@@ -1,8 +1,8 @@
 # KOF98 技能 FFS 脚本化讨论
 
-> **状态**：🔄 讨论中（SK1~SK12 已收敛，SK3 待性能验证；SK14 语言需求已整合；Q2 第 16 轮 — while+yield 循环 vs 专用语法对比中；Q3 渐进路径待确认）
+> **状态**：🔄 讨论中（SK1~SK12 已收敛，SK3 待性能验证；SK14 语言需求已整合；Q2 第 17 轮 — while+GetFrame()+yield 确认为行业共识，基本收敛；Q3 渐进路径待确认）
 > **来源**：需求讨论 — 将 host-side 技能迁移为 FFS 脚本驱动
-> **日期**：2026-04-09（第 16 轮更新）
+> **日期**：2026-04-09（第 17 轮更新）
 
 ---
 
@@ -24,7 +24,7 @@
 | SK12 | ECS 数据归属 | ✅ | 脚本内闭环 → VM；外部需读取 → Syscall 推送到宿主 |
 | SK13 | 属性脚本共享 | ✅ | 方案 A — 预处理器 `include`，全量展开。需求转入 SK14 L2 |
 | SK14 | FFS 语言需求整合 | 💬 | L1 模块变量 + L2 include = Phase 1；L3/L4 跨模块 = 远期 |
-| Q2 | 硬直+yield 语句级控制 | 💬 | yield 保持 tick 直觉；帧区间重复 = while+yield 循环（路径 A 推荐），专用语法（B1 frames）备选 |
+| Q2 | 硬直+yield 语句级控制 | 💬→✅? | while+GetFrame()+yield 为帧区间循环标准模式（7/10 语言同构），基本收敛 |
 | Q3 | 跨脚本 VM 使用模式 | 💬 | 6 方向渐进路径（1+2+3 → 4 → 5），待用户确认 |
 
 ---
@@ -1359,25 +1359,21 @@ func step() {
 ✅ 可读，直觉清晰：while 循环 = 重复，yield = 每 tick 一次，GetFrame() 条件 = 退出。
 
 **场景 2：帧区间内持续伤害 + 播放特效**
-// 小问题, 这个方案下脚本只关心tick yield, f 由宿主提供(GetFrame())
+
+> ⚠️ 第 17 轮修正：用户指出场景 2/3 用脚本维护 `f` 的写法与场景 1 矛盾 — 既然方案核心是"脚本只关心 tick/yield，帧号由宿主提供 GetFrame()"，所有场景都应统一使用 `GetFrame()`。
+
 ```ffs
 func step() {
-    var f: int = 0
-    
-    // 阶段1：起手（帧 0~4）
-    while f < 5 {
-        f = f + 1
-        SetFrame(f)
+    // 阶段1：起手（帧 0~4）— 空操作，宿主每 tick 自动推帧
+    while GetFrame() < 5 {
         yield
     }
     
     // 阶段2：攻击激活（帧 5~15），每 tick 检测伤害
-    while f < 16 {
-        f = f + 1
-        SetFrame(f)
+    while GetFrame() < 16 {
         SetHitbox(0, 10, 20, 30, 40)       // 每帧推送碰撞框
         
-        if f == 5 {
+        if GetFrame() == 5 {
             PlaySound(SFX_SLASH)            // 第 5 帧播放音效（只一次）
         }
         
@@ -1386,40 +1382,30 @@ func step() {
     
     // 阶段3：收招（帧 16~24）
     ClearHitbox()
-    while f < 25 {
-        f = f + 1
-        SetFrame(f)
+    while GetFrame() < 25 {
         yield
     }
 }
 ```
 
-✅ 完全用 while + yield，帧驱动逻辑自然。唯一的"麻烦"是 `while f < N { ... yield }` 模式会反复出现。
+✅ 完全用 while + yield + GetFrame()。脚本不维护帧计数器，宿主每 tick 自动推进帧号。样板只有 `while GetFrame() < N { ... yield }`。
 
 **场景 3：多种效果叠加的复杂技能**
 
 ```ffs
-var f: int = 0
-
 func step() {
-    f = 0
-    
     // 帧 0~9：蓄力期，每 tick 产生粒子
-    while f < 10 {
-        f = f + 1
-        SetFrame(f)
+    while GetFrame() < 10 {
         CreateParticle()
         yield
     }
     
     // 帧 10~19：释放期，每 tick 造成伤害 + 每 3 帧闪光
-    while f < 20 {
-        f = f + 1
-        SetFrame(f)
+    while GetFrame() < 20 {
         SetHitbox(0, 10, 20, 30, 40)
         ApplyDamageToNearby()
         
-        if (f - 10) % 3 == 0 {
+        if (GetFrame() - 10) % 3 == 0 {
             FlashScreen()
         }
         
@@ -1428,29 +1414,27 @@ func step() {
     
     // 帧 20~29：残留火焰，只产生粒子
     ClearHitbox()
-    while f < 30 {
-        f = f + 1
-        SetFrame(f)
+    while GetFrame() < 30 {
         CreateFireParticle()
         yield
     }
 }
 ```
 
-✅ 仍然清晰。但注意到模式：**每个阶段都是 `while f < N { f=f+1; SetFrame(f); ...; yield }`**。
+✅ 清晰简洁。模式统一：**每个阶段都是 `while GetFrame() < N { ...; yield }`**。样板只有 2 行（while + yield），主体逻辑占绝对比重。
 
-##### 路径 A 的评估
+##### 路径 A 的评估（第 17 轮修正后）
 
 | 维度 | 评价 |
 |------|------|
 | **与 yield 混淆** | ✅ 零 — yield 始终是"等下一 tick"，循环只是普通 while |
 | **直觉** | ✅ C#/Lua 协程用户立刻理解 |
-| **职责分离** | ✅ 语言层不感知"帧区间"，宿主通过 Syscall（GetFrame/SetFrame）提供帧信息 |
+| **职责分离** | ✅ 语言层不感知"帧"，宿主通过 Syscall（GetFrame）提供帧信息并推进帧号 |
 | **VM/语言改动** | ⭐ 零 |
-| **麻烦程度** | ⚠️ 中 — `while f < N { f=f+1; SetFrame(f); ...; yield }` 样板代码重复 |
+| **样板代码** | ✅ 低 — `while GetFrame() < N { ...; yield }` 仅 2 行开销（while + yield） |
 | **灵活性** | ✅ 极高 — 任意条件、任意嵌套、混合逻辑全部自然表达 |
 
-**核心问题**：样板代码。每个帧区间都要写 `while f < N { f=f+1; SetFrame(f); ...; yield }`。
+**关键改进**：统一使用 `GetFrame()` 后，样板从 4 行（while/f++/SetFrame/yield）降到 2 行（while/yield）。脚本不再维护帧计数器 — 这是宿主的职责。
 
 ---
 
@@ -1458,259 +1442,325 @@ func step() {
 
 如果引入一个专用语法来消除样板，能简单到什么程度？
 
-**语法设计 B1：`frames(start, end)` 块**
+> **注意**：第 17 轮修正后，路径 A 的样板已从 4 行/阶段降到 2 行/阶段（`while GetFrame() < N { ...; yield }`）。路径 B 的价值相应降低 — 它现在只是把 `while GetFrame() < N` + `yield` 合并为一个块。
+
+**语法设计 B1：`frames(end)` 块**
 
 ```ffs
 func step() {
-    var f: int = 0
-    
-    // frames 块 = "从 start 帧到 end 帧，每 tick 执行块内代码，自动推进帧号"
-    frames(0, 4) {
-        // f 自动递增，SetFrame 自动调用
-        // 此块在帧 0~4 的每个 tick 执行一次
+    // frames 块 = "每 tick 执行一次，直到帧号达到 end"
+    // 隐含 yield — 块内代码每 tick 执行一次
+    frames(5) {
+        // 起手 — 空
     }
     
-    frames(5, 15) {
+    frames(16) {
         SetHitbox(0, 10, 20, 30, 40)
-        if f == 5 {
+        if GetFrame() == 5 {
             PlaySound(SFX_SLASH)
         }
     }
     
-    frames(16, 24) {
-        ClearHitbox()   // 注意：这会每帧调用，需要幂等或只在首帧调用
+    ClearHitbox()
+    frames(25) {
+        // 收招 — 空
     }
 }
 ```
 
-编译器将 `frames(a, b) { body }` 展开为：
+编译器将 `frames(n) { body }` 展开为：
 
 ```ffs
-while f < b + 1 {
-    f = f + 1
-    SetFrame(f)
+while GetFrame() < n {
     body
     yield
 }
 ```
 
-**场景 2 对比**：
+**场景 2 对比（第 17 轮修正后）**：
 
 ```ffs
-// 路径 A（while 循环）                    // 路径 B（frames 语法）
+// 路径 A（while 循环）                    // 路径 B1（frames 语法）
 func step() {                              func step() {
-    var f: int = 0                             var f: int = 0
-                                               
-    while f < 5 {                              frames(0, 4) {
-        f = f + 1                                  // 起手 — 空
-        SetFrame(f)                            }
-        yield                                  
-    }                                          frames(5, 15) {
+    while GetFrame() < 5 {                     frames(5) {}
+        yield                              
+    }                                          frames(16) {
                                                    SetHitbox(0, 10, 20, 30, 40)
-    while f < 16 {                                 if f == 5 {
-        f = f + 1                                      PlaySound(SFX_SLASH)
-        SetFrame(f)                                }
-        SetHitbox(0, 10, 20, 30, 40)           }
-        if f == 5 {                            
-            PlaySound(SFX_SLASH)               frames(16, 24) {
-        }                                          ClearHitbox()
-        yield                                  }
-    }                                      }
-    
+    while GetFrame() < 16 {                        if GetFrame() == 5 {
+        SetHitbox(0, 10, 20, 30, 40)                   PlaySound(SFX_SLASH)
+        if GetFrame() == 5 {                       }
+            PlaySound(SFX_SLASH)                }
+        }                                  
+        yield                                  ClearHitbox()
+    }                                          frames(25) {}
+                                           }
     ClearHitbox()
-    while f < 25 {
-        f = f + 1
-        SetFrame(f)
+    while GetFrame() < 25 {
         yield
     }
 }
 ```
 
-**场景 3 对比（复杂技能）**：
+差距比修正前小了很多 — 路径 A 只多了 `while` 和 `yield` 两个关键字/阶段。
 
-```ffs
-// 路径 B
-func step() {
-    var f: int = 0
-    
-    frames(0, 9) {
-        CreateParticle()
-    }
-    
-    frames(10, 19) {
-        SetHitbox(0, 10, 20, 30, 40)
-        ApplyDamageToNearby()
-        if (f - 10) % 3 == 0 {
-            FlashScreen()
-        }
-    }
-    
-    ClearHitbox()
-    frames(20, 29) {
-        CreateFireParticle()
-    }
-}
-```
+##### 路径 B 的评估（第 17 轮修正后）
 
-比路径 A 少约 40% 的行数，消除了所有样板。
+| 维度 | B1 `frames(n)` |
+|------|------|
+| **与 yield 混淆** | ✅ 零 — frames 块内无显式 yield |
+| **直觉** | ✅ 直观："到帧 16 前做这些事" |
+| **职责分离** | ⚠️ 语言层耦合 GetFrame() Syscall 名称 |
+| **VM 改动** | ⭐ — 纯编译期展开，无新 VM 指令 |
+| **语言改动** | ⭐⭐ — 新关键字 + Parser + 编译器展开 |
+| **样板消除** | ⚠️ 中 — 仅省去 `while` + `yield`，修正后优势缩小 |
 
-**语法设计 B2：`repeat_until_frame(end)` 表达式**
+##### ⚠️ 路径 B 的核心问题：投入产出比
 
-```ffs
-func step() {
-    var f: int = 0
-    
-    // 更轻量 — 只指定结束帧，不自动递增 f
-    repeat_until_frame(5) {
-        f = f + 1
-        SetFrame(f)
-    }
-    
-    repeat_until_frame(16) {
-        f = f + 1
-        SetFrame(f)
-        SetHitbox(0, 10, 20, 30, 40)
-    }
-    
-    ClearHitbox()
-    repeat_until_frame(25) {
-        f = f + 1
-        SetFrame(f)
-    }
-}
-```
+第 17 轮修正后，路径 A 的样板已经很低（2 行/阶段）。路径 B1 引入新关键字，只省去这 2 行 — **投入产出比不高**。
 
-这个不如 B1 简洁（没有自动推帧），但耦合更低 — 语言层只提供"循环直到帧条件"，不感知 SetFrame。
-
-##### 路径 B 的评估
-
-| 维度 | B1 `frames(a,b)` | B2 `repeat_until_frame(n)` |
-|------|------|------|
-| **与 yield 混淆** | ✅ 零 — frames 块内无显式 yield | ✅ 零 — 同理 |
-| **直觉** | ✅ 非常直观："帧 5~15 做这些事" | ⚠️ 较好但不如 B1 自然 |
-| **职责分离** | ❌ **语言层耦合帧概念**（f 递增、SetFrame） | ⚠️ 语言层耦合 GetFrame() |
-| **VM 改动** | ⭐⭐ — 新语法节点 + 编译展开 | ⭐⭐ — 同 |
-| **语言改动** | ⭐⭐⭐ — 新关键字 + Parser + 编译器 | ⭐⭐ — 稍少 |
-| **样板消除** | ✅ 极好 — 消除 while/f++/SetFrame/yield | ⚠️ 部分消除 |
-
-##### ⚠️ 路径 B 的核心问题：语言-业务耦合
-
-`frames(a, b)` 意味着语言层需要理解：
-- "帧"是什么（int 帧号？角色帧？世界帧？）
-- 谁来递增帧号（语言自动？脚本手动？）
-- SetFrame 是什么（Syscall？自动调用？）
-- 帧号存在哪个变量里（隐式 f？显式指定？）
-
-这些都是**宿主业务概念** — 不同游戏的帧模型不同。如果烧进语言层，FFS 就不再是通用脚本语言了。
-
-**但这里有一个折中**：如果 `frames` 只是**语法糖**（编译期展开为 while + yield），不引入新的 VM 指令，那么耦合只在**语法层**，不在运行时层。
+更重要的问题：`frames(n)` 需要语言层知道 `GetFrame()` 这个 Syscall 的语义，这打破了"语言不感知业务"的原则。
 
 ---
 
-##### 路径 C：折中方案 — 宏/函数模板消除样板
+##### 路径 D：跨语言借鉴 — 其他语言如何处理"条件循环+暂停"（第 17 轮新增）
 
-不引入新语法，但提供**可复用模式**来消除样板：
+> 用户要求从大众和小众语言中寻找借鉴。以下调研聚焦于"在条件满足前反复暂停/恢复执行"这个核心模式。
 
-**C1：辅助函数 + 回调模式**
+**D1. C# — `yield return` + while 循环（大众）**
 
-```ffs
-// 公共 include 文件中定义
-// （注：当前 FFS 不支持函数参数为函数指针，此方案暂不可行）
-```
-
-❌ FFS 没有高阶函数/函数指针，此路不通。
-
-**C2：预处理器宏（如果支持的话）**
-
-```ffs
-// 假设支持宏定义
-#define FRAMES(start, end, body) \
-    while f < end + 1 { f = f + 1; SetFrame(f); body; yield }
-```
-
-❌ 当前 Lang-2 预处理器只支持 `#include`，不支持宏定义。
-
-**C3：约定式 — 用注释标注模式**
-
-```ffs
-func step() {
-    var f: int = 0
-    
-    // [frames 0~4]
-    while f < 5 { f = f + 1; SetFrame(f); yield }
-    
-    // [frames 5~15]
-    while f < 16 {
-        f = f + 1
-        SetFrame(f)
-        SetHitbox(0, 10, 20, 30, 40)
-        if f == 5 { PlaySound(SFX_SLASH) }
-        yield
+```csharp
+// Unity 协程 — 与 FFS 当前路径 A 几乎相同
+IEnumerator AttackRoutine() {
+    // 蓄力期
+    while (GetFrame() < 10) {
+        SpawnParticle();
+        yield return null;  // 等下一帧
     }
-    
-    // [frames 16~24]
-    ClearHitbox()
-    while f < 25 { f = f + 1; SetFrame(f); yield }
+    // 攻击期
+    while (GetFrame() < 20) {
+        EnableHitbox();
+        yield return null;
+    }
+    DisableHitbox();
 }
 ```
 
-这就是路径 A + 注释约定，不需要任何改动。
+✅ FFS 路径 A 与 Unity 协程模式完全一致。yield + while 是 C# 游戏开发的标准范式。
+
+**D2. Lua — 协程 + coroutine.yield()（大众）**
+
+```lua
+-- LÖVE2D / Defold 风格
+function attack_routine()
+    -- 蓄力期
+    while get_frame() < 10 do
+        spawn_particle()
+        coroutine.yield()  -- 等下一帧
+    end
+    -- 攻击期  
+    while get_frame() < 20 do
+        enable_hitbox()
+        coroutine.yield()
+    end
+    disable_hitbox()
+end
+```
+
+✅ 与路径 A 同构。Lua 游戏脚本领域的标准模式。
+
+**D3. GDScript (Godot) — `await` + `signal`（大众）**
+
+```gdscript
+# Godot 4 — 用 await 等待信号
+func attack():
+    # 蓄力期
+    while get_frame() < 10:
+        spawn_particle()
+        await get_tree().process_frame  # 等下一帧
+    # 攻击期
+    while get_frame() < 20:
+        enable_hitbox()
+        await get_tree().process_frame
+```
+
+✅ 同样是 while + 暂停原语。Godot 用 `await signal` 代替 `yield`，但模式相同。
+
+**D4. Kotlin — `suspend fun` + `delay()` / `yield()`（大众）**
+
+```kotlin
+// Kotlin 协程
+suspend fun attackRoutine() {
+    while (getFrame() < 10) {
+        spawnParticle()
+        yield()  // 让出执行权
+    }
+    while (getFrame() < 20) {
+        enableHitbox()
+        yield()
+    }
+    disableHitbox()
+}
+```
+
+✅ 同构模式。Kotlin 的 `yield()` 与 FFS 的 `yield` 语义相同。
+
+**D5. Ink (inkle) — 选择/跳转（小众 · 叙事脚本）**
+
+```ink
+=== attack ===
+~ frame = 0
+- (charge_loop)
+~ spawn_particle()
+~ frame++
+{ frame < 10: -> charge_loop }
+// 攻击阶段...
+```
+
+⚠️ Ink 不是协程模型 — 它用跳转+条件实现循环。暂停靠"等待玩家输入"而非 yield。**不适用于帧循环场景**。
+
+**D6. Wren — Fiber（小众 · 嵌入式脚本）**
+
+```wren
+// Wren 的 Fiber 类似协程
+var attackRoutine = Fiber.new {
+    while (getFrame() < 10) {
+        spawnParticle()
+        Fiber.yield()   // 等下一帧
+    }
+    while (getFrame() < 20) {
+        enableHitbox()
+        Fiber.yield()
+    }
+    disableHitbox()
+}
+```
+
+✅ 与路径 A 完全同构。Wren（Fiber）是嵌入式脚本语言中协程的标杆实现。
+
+**D7. Squirrel — Generator（小众 · 游戏脚本）**
+
+```squirrel
+// Squirrel 用 yield 的 generator 函数
+function attackRoutine() {
+    while (getFrame() < 10) {
+        spawnParticle()
+        ::suspend()   // 等下一帧
+    }
+    while (getFrame() < 20) {
+        enableHitbox()
+        ::suspend()
+    }
+    disableHitbox()
+}
+```
+
+✅ Squirrel 是 Source 引擎（Valve）使用的脚本语言。同样的 while+suspend 模式。
+
+**D8. Haxe/FlxState — `update()` 状态机（大众 · 游戏框架）**
+
+```haxe
+// HaxeFlixel — 不用协程，用状态机
+override function update(elapsed:Float) {
+    switch (phase) {
+        case Charge: 
+            if (frame < 10) { spawnParticle(); frame++; }
+            else phase = Attack;
+        case Attack:
+            if (frame < 20) { enableHitbox(); frame++; }
+            else { disableHitbox(); phase = Recovery; }
+    }
+}
+```
+
+⚠️ 这是**非协程方案** — 用显式状态机 + update 回调。可读性远低于协程。**佐证了协程方案（路径 A）的价值**。
+
+**D9. Zig — `suspend`/`resume`（小众 · 系统语言）**
+
+Zig 曾有协程（async/suspend/resume），但在 0.11 后被移除。其设计理念是"协程应在用户空间实现"。**不提供语言级暂停原语**。这说明有些语言选择把调度完全交给运行时/宿主。
+
+**D10. Fennel/Janet — 用 Lua/C 协程（小众 · Lisp 方言）**
+
+```fennel
+;; Fennel — 编译到 Lua，继承 Lua 协程
+(fn attack-routine []
+  (while (< (get-frame) 10)
+    (spawn-particle)
+    (coroutine.yield))
+  (while (< (get-frame) 20)
+    (enable-hitbox)
+    (coroutine.yield))
+  (disable-hitbox))
+```
+
+✅ Lisp 语法不同，但底层模式完全相同。
+
+##### 跨语言调研总结
+
+| 语言 | 类型 | 模式 | 与 FFS 路径 A 同构？ |
+|------|------|------|------|
+| **C# (Unity)** | 大众 | `while + yield return null` | ✅ 完全同构 |
+| **Lua** | 大众 | `while + coroutine.yield()` | ✅ 完全同构 |
+| **GDScript** | 大众 | `while + await signal` | ✅ 同构（await 替代 yield） |
+| **Kotlin** | 大众 | `while + yield()` | ✅ 完全同构 |
+| **Wren** | 小众 | `while + Fiber.yield()` | ✅ 完全同构 |
+| **Squirrel** | 小众 | `while + ::suspend()` | ✅ 完全同构 |
+| **Fennel/Janet** | 小众 | `while + coroutine.yield` | ✅ 完全同构 |
+| **Haxe (FlxState)** | 大众 | 状态机 + update() | ❌ 非协程，可读性差 |
+| **Ink** | 小众 | 跳转 + 条件 | ❌ 不适用于帧循环 |
+| **Zig** | 小众 | 已移除协程 | ❌ 不提供语言级暂停 |
+
+**结论**：
+
+> **7/10 的语言（包括所有游戏相关语言）使用完全相同的 `while + yield/suspend/await` 模式**。这不是巧合 — 这是协程驱动的帧循环的事实标准（de facto standard）。
+
+路径 A 不是"粗暴做法"— **它是行业共识**。
+
+##### 有没有语言提供更好的语法糖？
+
+在调研范围内，没有发现主流语言为"帧区间循环"提供专用语法。最接近的是：
+
+1. **Godot 的 `await get_tree().create_timer(seconds)`** — 但这是等待时间，不是帧条件
+2. **Unity 的 `yield return new WaitUntil(() => condition)`** — 条件等待，但不执行循环体
+3. **RPG Maker 的 Wait(frames)** — 纯等待，不执行逻辑
+
+这些都不是"帧区间内循环执行逻辑"的语法糖 — 它们要么是纯等待（不执行），要么是单次条件等待。
+
+**唯一接近的模式是 Unity 的 `WaitUntil`**，但它只能等待条件，不能在等待期间执行逻辑。而 FFS 的需求是"在等待期间每 tick 执行逻辑"，这天然就是 while 循环。
+
+> 💡 **没有语言为 while+yield 提供专用语法糖，因为 while+yield 本身就足够简洁和直观。**
 
 ---
 
-##### 综合对比
+##### 综合对比（第 17 轮修正后）
 
-| | 路径 A（while 循环） | 路径 B1（frames 语法） | 路径 B2（repeat_until） | 路径 C（约定） |
-|---|---|---|---|---|
-| **样板代码** | ⚠️ 多 | ✅ 极少 | ⚠️ 较少 | ⚠️ 多 |
-| **yield 混淆** | ✅ 零 | ✅ 零 | ✅ 零 | ✅ 零 |
-| **学习成本** | ✅ 零 | ⚠️ 新语法 | ⚠️ 新语法 | ✅ 零 |
-| **语言-业务耦合** | ✅ 零 | ❌ 高 | ⚠️ 中 | ✅ 零 |
-| **VM/语言改动** | ✅ 零 | ❌ 大 | ⚠️ 中 | ✅ 零 |
-| **灵活性** | ✅ 极高 | ⚠️ 受限于块模型 | ⚠️ 受限 | ✅ 极高 |
+| | 路径 A（while+GetFrame+yield） | 路径 B1（frames 语法糖） |
+|---|---|---|
+| **样板代码** | ✅ 低 — 2 行/阶段 | ✅ 极少 — 0~1 行/阶段 |
+| **yield 混淆** | ✅ 零 | ✅ 零 |
+| **学习成本** | ✅ 零 | ⚠️ 新关键字 |
+| **语言-业务耦合** | ✅ 零 | ⚠️ 耦合 GetFrame() |
+| **VM/语言改动** | ✅ 零 | ⭐⭐ 中 |
+| **灵活性** | ✅ 极高 | ⚠️ 受限于块模型 |
+| **行业共识** | ✅ 7/10 语言使用同样模式 | ❌ 无先例 |
 
-##### 推荐
+##### 推荐（第 17 轮更新）
 
-**先用路径 A（while 循环）上路**。理由：
+**路径 A（while + GetFrame() + yield）确认为最终方案**。理由加强：
 
 1. **零改动** — 当前 FFS 已经完全支持，今天就能写
 2. **零混淆** — yield 保持 tick 直觉，循环就是循环
 3. **零耦合** — 语言层不感知帧概念，全部通过 Syscall
-4. **样板代码可接受** — `while f < N { f=f+1; SetFrame(f); ...; yield }` 虽然重复，但每个阶段的主体逻辑不同，样板部分只有 3 行（while/f++/SetFrame），与主体逻辑相比不算严重
+4. **样板极低** — 修正后仅 `while GetFrame() < N { ...; yield }`，2 行开销
+5. **🆕 行业共识** — C#/Lua/GDScript/Kotlin/Wren/Squirrel/Fennel 7 种语言使用完全相同的模式
+6. **🆕 无先例** — 调研 10 种语言，无一为 while+yield 提供专用语法糖
 
-如果未来发现样板确实是痛点（比如 50+ 个技能脚本写下来真的很烦），再考虑 **路径 B1 的语法糖版本**（编译期展开、不引入 VM 指令）。那时候有真实脚本作为设计输入，语法设计会更准确。
+> Q2 可以视为**基本收敛** — while+yield 是答案，不需要新语法。
 
-#### 待用户确认（第 16 轮）
+#### 待用户确认（第 17 轮）
 
-1. **路径 A（while 循环）是否足够？** — 从模拟来看，样板代码约 3 行/阶段，你觉得可接受吗？
-2. **路径 B1 的简洁度值得语法投入吗？** — 如果觉得"必须消除样板"，我们可以设计一个编译期展开的 `frames` 语法糖
-3. **GetFrame() 的归属？** — 你示例中的 `owner.GetFrame()` 暗示帧号来自宿主（而非脚本自己维护的 f）。如果宿主已经维护帧号，那脚本内不需要 `f` 变量，进一步简化为：
-
-```ffs
-// 如果宿主维护帧号，脚本只需要查询
-func step() {
-    // 阶段1：蓄力（帧 0~9）
-    while GetFrame() < 10 {
-        CreateParticle()
-        yield
-    }
-    
-    // 阶段2：攻击（帧 10~19）
-    while GetFrame() < 20 {
-        SetHitbox(0, 10, 20, 30, 40)
-        ApplyDamageToNearby()
-        yield
-    }
-    
-    // 阶段3：收招（帧 20~29）
-    ClearHitbox()
-    while GetFrame() < 30 {
-        yield
-    }
-}
-```
-
-这样样板只剩 `while GetFrame() < N { ... yield }` — 两行开销，基本无痛了。**帧号由宿主推进（每 tick 自动 +1）还是由脚本推进，这个决定会显著影响简洁度。**
+1. **Q2 是否可以收敛为 ✅？** — 路径 A（while + GetFrame() + yield）作为帧区间循环的标准模式
+2. **帧号推进由宿主负责** — 这个假设是否正确？即宿主每 tick 自动递增帧号，脚本通过 `GetFrame()` 查询
+3. **是否还有其他语言/模式想探索？** — 目前调研覆盖 10 种语言
 
 ```
     yield 流（step）          硬直回调流（onHitstun）
@@ -1739,7 +1789,11 @@ func step() {
 4. **"帧区间"的具体含义？** — 你说"指定一个角色帧区间" — 是指宿主告知脚本"当前硬直影响的是角色帧 3~3"（即冻结在帧 3），还是"重放帧 1~5"这种回溯区间？
 
 <details>
-<summary>📋 Q2 讨论历史（第 12~16 轮）</summary>
+<summary>📋 Q2 讨论历史（第 12~17 轮）</summary>
+
+#### 第 17 轮 — 修正 GetFrame() 一致性 + 跨语言调研
+
+用户指出场景 2/3 的 `f` 变量与 GetFrame() 方向矛盾。语言方修正全部场景统一使用 GetFrame()，样板降为 2 行/阶段。新增 10 种语言调研，7/10 使用 while+yield 同构模式。Q2 基本收敛。
 
 #### 第 16 轮 — 用户想明白需求：while 循环 vs 专用语法
 
@@ -3217,7 +3271,19 @@ func step() {
 <details>
 <summary>📋 讨论轮次总览</summary>
 
-#### 第 16 轮（当前）
+#### 第 17 轮（当前）
+
+用户指出小失误：场景 2/3 用脚本维护 `f` 的写法与场景 1 矛盾 — 既然方案核心是"脚本只关心 tick/yield，帧号由宿主提供 GetFrame()"，所有场景应统一。大方向正确。要求从其他语言（大众+小众）借鉴。
+
+语言方回应：
+1. 修正场景 2/3 全部改用 `GetFrame()`，样板从 4 行降为 2 行/阶段
+2. 跨语言调研 10 种语言：C#/Lua/GDScript/Kotlin（大众），Wren/Squirrel/Fennel/Ink/Zig/Haxe（小众）
+3. 结论：7/10 语言使用完全相同的 while+yield/suspend/await 模式 — 这是行业事实标准
+4. 无语言为 while+yield 提供专用语法糖 — 因为 while+yield 本身就足够简洁
+
+Q2 基本收敛。
+
+#### 第 16 轮
 
 用户想明白了需求：不是"从上一个 yield 点重放"，而是"指定一段代码让它循环"。给出 while+yield+GetFrame() 条件 break 的示例。要求模拟实现 + 对比专用语法的简洁度。
 
