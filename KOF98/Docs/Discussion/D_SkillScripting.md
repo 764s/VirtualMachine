@@ -35,6 +35,15 @@
 - 如果一个议题包含多个独立论点，应拆分为子编号（如 SK14-1, SK14-2），每个子编号独立遵循上述结构
 - ⚠️ **避免"整合/汇总/全景"型单节**：将多个独立论点聚合为一个 ## 会导致结论区无法一句话概括、详细设计区过于庞杂。应先识别各论点再分别建节
 
+**状态标记**：
+标题中的 `[状态]` 使用以下图标，一眼识别议题是否需要继续讨论：
+
+| 图标 | 含义 | 色调 | 说明 |
+|------|------|------|------|
+| ✅ | 已完成 | 🟢 绿 | 结论已锁定，无需再讨论 |
+| 💬 | 讨论中 | 🟡 黄 | 有待决事项或待验证内容 |
+| 🔒 | 已关闭 | ⚪ 灰 | 议题已关闭（不再相关、合并到其他议题等） |
+
 **结构规则**：
 - 所有议论点（SK、Q）使用 `##` 级标题，**不允许**使用容器 `##` 来嵌套 `###` 议论点（如 ~~"## 第 N 轮议题" → "### Q1"~~）
 - 文档排列顺序：**决议总览 → 背景 → 全部议论点（SK + Q）→ 评估区（Syscall/宿主）→ 附录**
@@ -62,6 +71,7 @@
 | SK14-1 | 语言需求全景与优先级 | ✅ | 4 痛点（P1~P4）；L1+L2 最紧迫，L3 黑板变通可行，L4 远期。L1/L2 正交互补，L2≠L3（编译期≠运行时） |
 | SK14-2 | 连招脚本覆盖度 | ✅ | 理想形 3（混合式: L1+L2+黑板 Syscall）最务实，Phase 1 即可覆盖 |
 | SK14-3 | 实施方向选择 | ✅ | 方向 C（折衷分期）被采纳；Phase 1 (L1+L2+L3) + Phase 2 (L4 XCALL) 全部已实现 |
+| Q1 | OOP/ECS 数据兼容 | 🔒 | 不冲突 — SK12 原则 + blittable VMInstanceState 天然兼容 ECS |
 | Q2 | 硬直+yield 语句级控制 | ✅ | 方案 A — while+GetFrame()+yield，帧区间循环行业标准模式（7/10 语言同构） |
 | Q3 | 跨脚本 VM 使用模式 | ✅ | 6 方向渐进路径：阶段1（方向1+2+3）✅ 完成；阶段3（方向5 服务脚本 = Q4）✅ C-1~C-2 已实现 |
 | Q4 | FFS 封装 — 服务脚本 | ✅ | 方式 C ✅；Y1-Plus ✅；统一语法 ✅；@export ✅；@inline ✅；嵌套 Warn/Unlimited ✅；14 项决策锁定。C-1~C-2 已实现（Lang-6/7/8 ✅ 1259 tests）。剩余 C-3 @force_inline 远期 |
@@ -79,7 +89,12 @@ VM 桥接层已就绪（`GameVMBridge` + `GameSyscalls` ~40 syscall），但 `KO
 
 ## SK1: 首批脚本范围 ✅
 
-**结论**：8 个脚本，覆盖主循环各阶段。命名规则 `skill_<英文名>.ffs`。
+**结论**：8 个脚本，覆盖 idle→walk→attack→hit→recover 全生命周期。命名规则 `skill_<英文名>.ffs`。
+
+<details>
+<summary>📋 详细设计</summary>
+
+**首批脚本清单**：
 
 | # | 技能 | 分类 | 脚本模式 | 文件名 |
 |---|------|------|---------|--------|
@@ -97,13 +112,12 @@ VM 桥接层已就绪（`GameVMBridge` + `GameSyscalls` ~40 syscall），但 `KO
 | 模式 | 特征 | 代表技能 | 核心 Syscall |
 |------|------|---------|-------------|
 | **循环型** | `while true { yield }`, 输入驱动退出 | Idle, Walk | GetInput, SetVelocity |
-| **有限帧型** | `while f < N { yield }`, 帧计数驱动 | LightPunch, HitHigh | BeginAction, EndAction |
+| **有限帧型** | `while GetFrame() < N { yield }`, 宿主帧号驱动 | LightPunch, HitHigh | BeginAction, EndAction |
 | **物理型** | 初始速度 + 等待落地 | Jump | SetVelocity, IsGrounded |
 | **被动型** | 宿主切换层激活, 脚本只播放动作 | HitHigh, Knockdown | BeginAction, SpawnEffectSelf |
 | **攻击型** | 帧窗口内命中检测 + 分支处理 | LightPunch, CrouchPunch | CheckAttackHit, ApplyDamage |
 
-<details>
-<summary>📋 选择原则</summary>
+**选择原则**：
 
 根据 D_GameArchitecture.md §2.3 VM 应用分级（稳赚/模糊/稳亏）：
 
@@ -360,7 +374,7 @@ if (program.TryGetFunction("step", out var stepEntry))
 
 有状态检查通过模块变量（Lang-1）实现。早期讨论的"路径 3 全局变量"即为模块变量的前身。
 
-**脚本示例**（⚠️ 仅为示范，帧号获取方式可能过期 — 应从宿主获取而非脚本维护）：
+**脚本示例**：
 
 ```ffs
 // skill_light_punch.ffs — 方案 D′ 示例
@@ -376,17 +390,15 @@ func checkEnter(): int {
 func step() {
     BeginAction(10, 20)
     defer { EndAction() }
-    var f: int = 0
     var hitDone: int = 0
-    while f < 20 {
-        if f >= 5 && f < 10 && hitDone == 0 {
+    while GetFrame() < 20 {
+        if GetFrame() >= 5 && GetFrame() < 10 && hitDone == 0 {
             var target: int = CheckAttackHit(1001)
             if target > 0 {
                 ApplyDamage(target, 1.0, 102)
                 hitDone = 1
             }
         }
-        f = f + 1
         yield
     }
 }
@@ -539,31 +551,25 @@ if f >= 4 && f < 8 {
 <details>
 <summary>📋 详细设计</summary>
 
-⚠️ 以下脚本示例中帧号获取方式已过期 — 帧号应从宿主获取（`GetFrame()` Syscall 或服务脚本），而非脚本内自行维护计数器。
-
 ```ffs
 func step() {
     // Phase 1: 起手
     BeginAction(101, 10)
     defer { EndAction() }
 
-    var f: int = 0
     var hit: int = 0
-    while f < 10 {
-        if f >= 3 && f < 7 && hit == 0 {
+    while GetFrame() < 10 {
+        if GetFrame() >= 3 && GetFrame() < 7 && hit == 0 {
             var t: int = CheckAttackHit(1001)
             if t > 0 { hit = 1 }
         }
-        f = f + 1
         yield
     }
     if hit == 0 { return }  // 未命中, 技能结束
 
     // Phase 2: 追加段
     BeginAction(102, 15)
-    var f2: int = 0
-    while f2 < 15 {
-        f2 = f2 + 1
+    while GetFrame() < 15 {
         yield
     }
 }
@@ -860,7 +866,7 @@ SK10 连招描述脚本需要哪些语言特性？
 
 ---
 
-## Q1: OOP/ECS 数据兼容 ✅ 已关闭
+## Q1: OOP/ECS 数据兼容 🔒
 
 **结论**：不冲突 — SK12 原则 + blittable VMInstanceState 天然兼容 ECS，无需额外考虑。
 
@@ -5562,7 +5568,7 @@ SetEnergyCoeff(multiplier)
 
 - **必须提取为变量**：多次引用的值（帧数 `totalFrames`、攻击窗口边界）
 - **可内联**：仅出现一次的常量参数（effectId, groupId 等），注释说明含义
-- **注意**：`while f < N` 中的 `N` 若在 `BeginAction` 中已声明则应统一变量
+- **帧号获取**：统一使用 `GetFrame()` Syscall 从宿主获取帧号，**不在脚本内自行维护帧计数器**（参见 Q2 结论）
 - **结构约定**：所有 VM 技能脚本包含 `func checkEnter(): int`（条件）+ `func step()`（执行）
 
 ### S01 — 站立待机 (Idle)
@@ -5602,9 +5608,8 @@ func step() {
     defer { EndAction() }
 
     var hit: int = 0
-    var f: int = 0
-    while f < frames {
-        if f >= 4 && f < 8 && hit == 0 {
+    while GetFrame() < frames {
+        if GetFrame() >= 4 && GetFrame() < 8 && hit == 0 {
             var t: int = CheckAttackHit(1001)
             if t > 0 {
                 ApplyDamage(t, 3, 102)
@@ -5614,7 +5619,6 @@ func step() {
                 hit = 1
             }
         }
-        f = f + 1
         yield
     }
 }
@@ -5636,9 +5640,7 @@ func step() {
 
     SpawnEffectSelf(4001, 60)
 
-    var f: int = 0
-    while f < frames {
-        f = f + 1
+    while GetFrame() < frames {
         yield
     }
 }
