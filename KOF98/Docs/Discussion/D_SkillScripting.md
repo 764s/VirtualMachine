@@ -5416,6 +5416,7 @@ Q2 基本收敛。
 - 语言演进路线 Lang-1~Lang-5 提出，待同步到 VM_Summary
 
 </details>
+
 ## Syscall 需求评估
 
 **结论**：前 4 个脚本（S01~S04）可直接用现有 Syscall 实现。S05~S08 及碰撞框脚本化需新增少量 Syscall。
