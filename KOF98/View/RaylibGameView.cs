@@ -133,6 +133,7 @@ namespace KOF98
         {
             Raylib.SetTraceLogLevel(TraceLogLevel.Warning);
             Raylib.InitWindow(ScreenWidth, ScreenHeight, "KOF98 Practice — FFVM Exploration");
+            Raylib.SetExitKey(0); // Disable ESC as window-close key; ESC is used to close UI panel
             Raylib.SetTargetFPS(60);
             LoadCjkFont();
         }
