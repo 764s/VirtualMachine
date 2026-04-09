@@ -1,8 +1,53 @@
 # KOF98 技能 FFS 脚本化讨论
 
-> **状态**：🔄 讨论中（SK1~SK14 已收敛；Q2 ✅；Q3 渐进路径已被 Q4 覆盖 → ✅；Q4 服务脚本 ✅ 收敛 — 14 项决策锁定。下一步 → XCALL Spec 输出 + C 阶段实现。语言需求已提交 VM_Summary Lang 表）
+> **状态**：✅ 收敛（SK3 💬 待性能验证外，其余 SK1~SK14-3 + Q1~Q4 全部 ✅。14 项 Q4 设计决策锁定。C-1 Lang-6 ✅ / C-1.5 Lang-7 ✅ / C-2 Lang-8 ✅ 已实现。剩余 C-3 Lang-9 @force_inline 为远期待定）
 > **来源**：需求讨论 — 将 host-side 技能迁移为 FFS 脚本驱动
-> **日期**：2026-04-09（第 26 轮更新）
+> **日期**：2026-04-09（实现状态同步更新）
+
+### 文档格式约定
+
+每个议论点（SK、Q 等）统一使用以下结构呈现：
+
+```
+                              ┌─ [唤起记忆] 一眼看出在讨论什么
+## 议论点名 [状态]            ┘   （过于复杂时可简化为记忆诱导词）
+
+                              ┌─ [唤起记忆] 一眼看出事情最终进度/核心论点
+结论短语                      ┘   意简言赅，不冗余描述，不暴露具体细节
+
+<details>                     ┌─ [详细查询] 供继续深入讨论时查阅细节和接续点
+<summary>📋 详细设计</summary> ┘   最终方案的完整细节（设计文档级）
+</details>
+
+<details>                     ┌─ [历史追踪] 梳理结论怎么得来的、
+<summary>📋 讨论历史</summary> ┘   某个看起来不错的办法被放弃的原因
+</details>
+```
+
+**各区作用**：
+- **标题**：快速唤起"这在讨论什么"的记忆
+- **结论区（直接暴露）**：仅放最终结论的短语级描述——能让人一眼看出核心结论即可，无需展开细节
+- **详细设计折叠区**：最终方案的完整细节，供实现或继续讨论时参考
+- **讨论历史折叠区**：中间过程、已放弃方案、轮次记录——辅助追溯结论的推导过程
+
+**粒度原则**：
+- 每个 `##` 对应**一个独立可判定的论点**——能用一句话描述结论的才是一个议论点
+- 如果一个议题包含多个独立论点，应拆分为子编号（如 SK14-1, SK14-2），每个子编号独立遵循上述结构
+- ⚠️ **避免"整合/汇总/全景"型单节**：将多个独立论点聚合为一个 ## 会导致结论区无法一句话概括、详细设计区过于庞杂。应先识别各论点再分别建节
+
+**状态标记**：
+标题中的 `[状态]` 使用以下图标，一眼识别议题是否需要继续讨论：
+
+| 图标 | 含义 | 色调 | 说明 |
+|------|------|------|------|
+| ✅ | 已完成 | 🟢 绿 | 结论已锁定，无需再讨论 |
+| 💬 | 讨论中 | 🟡 黄 | 有待决事项或待验证内容 |
+| 🔒 | 已关闭 | ⚪ 灰 | 议题已关闭（不再相关、合并到其他议题等） |
+
+**结构规则**：
+- 所有议论点（SK、Q）使用 `##` 级标题，**不允许**使用容器 `##` 来嵌套 `###` 议论点（如 ~~"## 第 N 轮议题" → "### Q1"~~）
+- 文档排列顺序：**决议总览 → 背景 → 全部议论点（SK + Q）→ 评估区（Syscall/宿主）→ 附录**
+- 折叠区命名统一为 `📋 详细设计` 和 `📋 讨论历史`（不使用 `📋 Q1 完整分析` / `📋 Q2 完整讨论历史` 等变体）
 
 ---
 
@@ -15,18 +60,21 @@
 | SK3 | 碰撞框交互方式 | 💬 | 方案 A（脚本推送）vs 方案 B（宿主查询），待性能验证 |
 | SK4 | 姿态 Syscall | ✅ | 可新增 SetStance 等 |
 | SK5 | 命名规则 | ✅ | `skill_<英文名>.ffs` |
-| SK6 | 硬直机制 | ✅ | 方案 A — 宿主时间轴暂停，yield/wait(N) 已支持 |
-| SK7 | 技能条件入口 | ✅ | 方案 D′ — 同实例 checkEnter()/step()。VM 无硬障碍，模块变量已由 Lang-1 实现 |
+| SK6 | 硬直机制 | ✅ | tick/yield 不受硬直影响；帧号从宿主获取（Syscall 或服务脚本）；硬直不执行为纯业务逻辑 |
+| SK7 | 技能条件入口 | ✅ | 同实例 checkEnter()/step() 模块级函数共享变量（Lang-1 模块变量）。💬 函数命名待改善；变量重置时机待讨论 |
 | SK8 | 碰撞框 Syscall | ✅ | SetHitbox/SetHurtbox/ClearHitbox/SetPushBox |
 | SK9 | 受击标记 | ✅ | 分组 mask 混合方向正确 |
-| SK10 | 连招共用环境 | ✅ | V1: 黑板 Syscall；理想形 3（混合式）由 L1+L2+黑板覆盖，需求转入 SK14 |
+| SK10 | 连招共用环境 | ✅ | V1: 黑板 Syscall；理想形 3（混合式）由 L1+L2+黑板覆盖，需求转入 SK14-2 |
 | SK11 | 多阶段技能 | ✅ | Phase 是脚本内行为，提供便利但不强制 |
 | SK12 | ECS 数据归属 | ✅ | 脚本内闭环 → VM；外部需读取 → Syscall 推送到宿主 |
 | SK13 | 属性脚本共享 | ✅ | 方案 A — 预处理器 `include`，全量展开。已由 Lang-2 实现 |
-| SK14 | FFS 语言需求整合 | ✅ | L1 模块变量 ✅ + L2 include ✅ + L3 黑板 ✅ = Phase 1 完成；L4/L5 跨模块 = Q4 服务脚本方案，已提交 VM_Summary |
+| SK14-1 | 语言需求全景与优先级 | ✅ | 4 痛点（P1~P4）；L1+L2 最紧迫，L3 黑板变通可行，L4 远期。L1/L2 正交互补，L2≠L3（编译期≠运行时） |
+| SK14-2 | 连招脚本覆盖度 | ✅ | 理想形 3（混合式: L1+L2+黑板 Syscall）最务实，Phase 1 即可覆盖 |
+| SK14-3 | 实施方向选择 | ✅ | 方向 C（折衷分期）被采纳；Phase 1 (L1+L2+L3) + Phase 2 (L4 XCALL) 全部已实现 |
+| Q1 | OOP/ECS 数据兼容 | 🔒 | 不冲突 — SK12 原则 + blittable VMInstanceState 天然兼容 ECS |
 | Q2 | 硬直+yield 语句级控制 | ✅ | 方案 A — while+GetFrame()+yield，帧区间循环行业标准模式（7/10 语言同构） |
-| Q3 | 跨脚本 VM 使用模式 | ✅ | 6 方向渐进路径（1+2+3 ✅ → 4 → 5），阶段1已完成；方向5 = Q4 服务脚本方案 |
-| Q4 | FFS 封装 — 服务脚本 | ✅ | 方式 C ✅；Y1-Plus ✅；统一语法 ✅；@export ✅；@inline ✅；嵌套 Warn/Unlimited ✅；14 项决策锁定。→ [VM_Summary Lang-6~Lang-8](../../Docs/VM_Summary.md) |
+| Q3 | 跨脚本 VM 使用模式 | ✅ | 6 方向渐进路径：阶段1（方向1+2+3）✅ 完成；阶段3（方向5 服务脚本 = Q4）✅ C-1~C-2 已实现 |
+| Q4 | FFS 封装 — 服务脚本 | ✅ | 方式 C ✅；Y1-Plus ✅；统一语法 ✅；@export ✅；@inline ✅；嵌套 Warn/Unlimited ✅；14 项决策锁定。C-1~C-2 已实现（Lang-6/7/8 ✅ 1259 tests）。剩余 C-3 @force_inline 远期 |
 
 ---
 
@@ -41,7 +89,12 @@ VM 桥接层已就绪（`GameVMBridge` + `GameSyscalls` ~40 syscall），但 `KO
 
 ## SK1: 首批脚本范围 ✅
 
-**结论**：8 个脚本，覆盖主循环各阶段。命名规则 `skill_<英文名>.ffs`。
+**结论**：8 个脚本，覆盖 idle→walk→attack→hit→recover 全生命周期。命名规则 `skill_<英文名>.ffs`。
+
+<details>
+<summary>📋 详细设计</summary>
+
+**首批脚本清单**：
 
 | # | 技能 | 分类 | 脚本模式 | 文件名 |
 |---|------|------|---------|--------|
@@ -59,13 +112,12 @@ VM 桥接层已就绪（`GameVMBridge` + `GameSyscalls` ~40 syscall），但 `KO
 | 模式 | 特征 | 代表技能 | 核心 Syscall |
 |------|------|---------|-------------|
 | **循环型** | `while true { yield }`, 输入驱动退出 | Idle, Walk | GetInput, SetVelocity |
-| **有限帧型** | `while f < N { yield }`, 帧计数驱动 | LightPunch, HitHigh | BeginAction, EndAction |
+| **有限帧型** | `while GetFrame() < N { yield }`, 宿主帧号驱动 | LightPunch, HitHigh | BeginAction, EndAction |
 | **物理型** | 初始速度 + 等待落地 | Jump | SetVelocity, IsGrounded |
 | **被动型** | 宿主切换层激活, 脚本只播放动作 | HitHigh, Knockdown | BeginAction, SpawnEffectSelf |
 | **攻击型** | 帧窗口内命中检测 + 分支处理 | LightPunch, CrouchPunch | CheckAttackHit, ApplyDamage |
 
-<details>
-<summary>📋 选择原则</summary>
+**选择原则**：
 
 根据 D_GameArchitecture.md §2.3 VM 应用分级（稳赚/模糊/稳亏）：
 
@@ -82,7 +134,14 @@ VM 桥接层已就绪（`GameVMBridge` + `GameSyscalls` ~40 syscall），但 `KO
 
 ## SK6: 硬直实现机制 ✅
 
-**结论**：方案 A — 宿主时间轴暂停。硬直期间宿主不调用 VM Tick，脚本自然冻结。`yield` / `wait(N)` 已支持，无需新增语法。
+**结论**：
+
+1. **tick 与 yield 不受硬直影响**。tick 是宿主驱动入口，不刻意和帧关联（虽然客观上可与宿主世界帧同步）
+2. **实际帧号从宿主获取**，可通过 Syscall 或服务脚本。从便利性角度应优先服务脚本（💬 需确认自动退化优化能否使服务脚本调用性能 ≥ Syscall）
+3. **硬直不执行为纯业务逻辑**。业务如关心硬直特殊处理，通过判断是否处于硬直中进行分支处理
+
+<details>
+<summary>📋 详细设计</summary>
 
 **两层配合**：
 1. **宿主层**：`ApplyHitstun()` → 设置 `Character.HitstunFrames` → 暂停角色时间轴推进
@@ -91,8 +150,14 @@ VM 桥接层已就绪（`GameVMBridge` + `GameSyscalls` ~40 syscall），但 `KO
 2. **技能层**：攻击方 `ApplyHitstun()` 同时附加受击标记 → 宿主在硬直结束后根据标记触发受击技能切换
 3. **安全兜底**：`HitstunFrames` 倒计时到 0 后，若没有受击技能接管，自动恢复 idle
 
+</details>
+
 <details>
 <summary>📋 讨论历史</summary>
+
+> ⚠️ 以下为早期讨论（"方案 A 宿主时间轴暂停"），结论已被上方更新取代。保留供参考。
+
+**早期结论**：方案 A — 宿主时间轴暂停。硬直期间宿主不调用 VM Tick，脚本自然冻结。`yield` / `wait(N)` 已支持，无需新增语法。
 
 #### 前置模型：角色逻辑时间轴
 
@@ -152,6 +217,11 @@ VM 桥接层已就绪（`GameVMBridge` + `GameSyscalls` ~40 syscall），但 `KO
 
 **结论**：分层候选池（姿态分组 + 优先级 + 脚本条件）— 工业标准格斗游戏方案。
 
+> 💬 **待完善**：裁决层流程中的打断优先级和启动优先级的具体交互尚未详细描述。
+
+<details>
+<summary>📋 详细设计</summary>
+
 ```
 宿主裁决层 (每帧):
   1. 查询当前姿态 (Stance) → 获取该姿态的候选技能列表
@@ -181,6 +251,8 @@ class SkillDef {
 - 每姿态约 15-20 个候选 → 通用规则过滤后约 3-5 个需要 VM 条件检查
 - VM 条件检查 = spawn + 执行约 3-5 条指令 + return → 约 1-2μs/次
 - 最坏情况: 5 × 2μs = 10μs/帧，完全可接受
+
+</details>
 
 <details>
 <summary>📋 讨论历史</summary>
@@ -221,170 +293,23 @@ class SkillDef {
 
 ## SK7: 技能条件入口 ✅
 
-**结论**：方案 D′ — 独立 `checkEnter()` + `step()` 函数，**同一 VM 实例**。
+**结论**：方案 D′ — 独立条件检查函数 + 执行函数，同一 VM 实例。两者作为模块级函数共享模块变量（Lang-1 已实现）。
 
-> ⚠️ **第 8 轮修正**：第 7 轮分析误将 checkEnter 和 step 描述为"独立 VM 实例"，这是**严重误解**。设计意图始终是：一个技能 = 一个 VM 实例贯穿整个生命周期（从条件检查到执行完毕）。
+> 💬 **待讨论**：
+> - `checkEnter`/`step` 名称待改善（需要更好的命名）
+> - 模块变量重置时机问题未讨论（当技能实例被复用时，模块变量如何重置？可能属于业务代码范畴）
 
-> 📌 **第 9 轮澄清**：VM 运行时层面**无硬阻碍**。一个 `.ffs` 文件编译为一个 `VMProgram`（ROM），多个函数共存于同一字节码流，`TryGetFunction(name)` 只是查出不同的入口 IP。同一实例的 64 个寄存器（r0~r63）在 `checkEnter` → redirect → `step` 全程物理持续存在，值不会被擦除。
->
-> 当前"无法复用变量"的限制在 **编译器/语言层面**：FFVM 编译器对每个函数**独立**做寄存器分配（r16+ local zone），`checkEnter` 的 `var a` 和 `step` 的 `var a` 可能编译到同一个 r16，但语义上是两个独立变量。FFS 语言目前没有"模块级 var"语法，因此无法通过语言层面声明跨函数共享的命名变量。详见下方"全局变量"讨论。
+<details>
+<summary>📋 详细设计</summary>
 
-### 核心设计
-
-技能脚本包含两个约定函数：
+**核心设计**：
 
 | 函数 | 职责 | 宿主调用时机 | 返回语义 |
 |------|------|-------------|---------|
-| `func checkEnter(): int` | 条件检测 | 裁决层 Layer 3（候选池筛选） | `return 0` = 不满足；`return 1` = 满足 |
+| `func checkEnter(): int` | 条件检测 | 裁决层候选池筛选 | `return 0` = 不满足；`return 1` = 满足 |
 | `func step()` | 技能执行 | 技能激活后每帧驱动 | `yield` = 继续；`return` = 技能结束 |
 
-**同实例生命周期**：
-
-```
-[spawn] → [checkEnter] → return 0 → [destroy]  ← 条件不满足
-                       → return 1 → [redirect to step] → [tick] → [tick] → ... → [完成/destroy]
-                                     ↑ 同一实例继续      ← 条件满足后执行
-```
-
-### 宿主侧实现
-
-```csharp
-// 1. 条件检测：spawn at checkEnter
-var program = World.Modules.Get(def.VMModuleSlot);
-if (!program.TryGetFunction("checkEnter", out var checkEntry)) continue;
-
-int vmId = World.SpawnInstance(def.VMModuleSlot, checkEntry.EntryIP);
-_instanceToOwner[vmId] = charId;
-World.TickInstance(vmId);
-
-// 读取返回值 (r0)
-ref var inst = ref World.Pool.Instances[vmId];
-bool passed = inst.Registers[0].IsNonZero;
-
-if (!passed)
-{
-    // 条件不满足 → 销毁实例
-    World.DestroyInstance(vmId);
-    _instanceToOwner.Remove(vmId);
-    continue;
-}
-
-// 2. 条件满足 → 同一实例重定向到 step
-if (program.TryGetFunction("step", out var stepEntry))
-{
-    // 重置实例到 step 入口（保留寄存器状态）
-    inst.IP = stepEntry.EntryIP;
-    inst.StateFlags &= ~VMStateFlags.Completed;  // 清除完成标记
-    // 寄存器空间保留 — checkEnter 中计算的值可在 step 中使用
-
-    // 挂载到技能实例，后续每帧 tick
-    skill.VMInstanceId = vmId;
-}
-```
-
-### checkEnter 和 step 共享状态
-
-由于是同一实例，寄存器空间在 checkEnter 和 step 之间**物理上共享**。不过需注意：
-
-| 维度 | 说明 |
-|------|------|
-| **函数局部变量** | 各自独立声明、独立编译。checkEnter 的 `var a` 和 step 的 `var a` 虽可能占据相同物理寄存器（如 r16），但语义上是两个独立变量 |
-| **寄存器残留** | checkEnter 写入的寄存器值在 redirect 后**物理存在**。step 可以通过约定使用相同寄存器编号读取，但缺乏语言层面的命名保证 |
-| **根本瓶颈** | **语言/编译器**层面：FFS 没有模块级 `var` 语法，编译器不支持跨函数的命名变量分配。**VM 运行时**层面：无障碍 |
-
-**结论**：VM 运行时完全支持同实例跨函数状态共享（寄存器物理持续）。瓶颈在编译器/语言。解法见下方"全局变量"讨论。
-
-### FFVM 改动需求
-
-方案 D′ 需要 FFVM 提供"实例重定向"能力：
-
-```csharp
-/// <summary>
-/// 将一个已完成的实例重定向到新入口点，保留寄存器状态。
-/// 用于同实例从 checkEnter 过渡到 step。
-/// </summary>
-public void RedirectInstance(int instanceId, int newEntryIP)
-{
-    ref var inst = ref Pool.Instances[instanceId];
-    inst.IP = newEntryIP;
-    inst.StateFlags &= ~VMStateFlags.Completed;
-    inst.StackTop = 0;  // 重置调用栈（新函数从零开始）
-    // 寄存器保留（不清零）
-}
-```
-
-> 📌 这是一个轻量 API 新增（~5 行实现），不影响现有 VM 逻辑。
-
-### 复合条件与全局变量（第 7~9 轮议题）
-
-> **第 9 轮方向**：探索全局变量机制作为优先路径。原则：**数据尽量留在 VM 内**（SK12），黑板只在跨脚本/跨角色真正需要时使用。全局变量还能统一解决连招共用环境（SK10）。
-
-> **第 8 轮修正**：第 7 轮分析基于"独立实例"假设得出"路径 2 不可行"的结论。同实例模型下需重新评估。
-
-| 模式 | 行为 | 适用场景 |
-|------|------|---------|
-| **无状态检查** | 每次 `checkEnter()` 都检查 A∧B | 简单条件（按键+姿态）— 90%+ 技能 |
-| **有状态检查** | 首次 A 满足后记录，后续只检查 B | 蓄力、连招窗口 |
-
-**有状态检查的实现路径**：
-
-| 路径 | 机制 | 可行性 | 第 9 轮评估 |
-|------|------|--------|-----------|
-| **路径 1：宿主黑板** | checkEnter 通过 Syscall 读写宿主 component | ✅ 不依赖实例模型 | 适合跨脚本/跨角色共享数据（如被击数、连招伤害递减） |
-| **路径 2：寄存器残留** | checkEnter 将状态写入特定寄存器 | ⚠️ 不可靠 — checkEnter 每次 spawn 会重入函数开头 | ~~不推荐~~ |
-| **路径 3：全局变量** ⭐ | FFS 增加模块级 `var` 声明，编译器分配到保留寄存器段 | 需编译器改动，VM 运行时**无需改动** | **优先探索** — 同实例天然受益，符合 SK12 原则 |
-
-#### 路径 3 深入分析：全局变量
-
-**语言层设计**：
-
-```ffs
-// 模块级 var — 跨函数可见，同实例内持久
-var chargeReady: int = 0
-var comboCount: int = 0
-
-func checkEnter(): int {
-    if chargeReady == 0 { return 0 }
-    if IsInputPressed(5) == 0 { return 0 }
-    return 1
-}
-
-func step() {
-    comboCount = comboCount + 1
-    // ... 使用 chargeReady、comboCount
-}
-```
-
-**编译器实现思路**：
-
-| 层面 | 改动 | 复杂度 |
-|------|------|--------|
-| **Parser** | 允许模块顶层 `var` 声明（当前仅允许 `const`） | ⭐ 低 |
-| **编译器寄存器分配** | 全局 var 分配到保留段（如 r56~r63，8 个全局槽），函数局部变量仍用 r16~r47 | ⭐ 中 — 需调整寄存器区域划分 |
-| **VM 运行时** | **零改动** — 寄存器在实例中天然持久 | ⭐ 无 |
-| **初始化** | 全局 var 初始值在 SpawnInstance 时由模块的 `_init` 代码段设置（类似构造函数） | ⭐ 中 |
-
-**寄存器布局调整**：
-
-```
-当前:  r0~r15 scratch | r16~r47 local | r48~r63 temp
-提案:  r0~r15 scratch | r16~r47 local | r48~r55 temp | r56~r63 global (8 slots)
-```
-
-8 个全局槽对于技能脚本足够（蓄力标记、连招计数、Phase 编号等）。
-
-**与 SK10 连招共用环境的关系**：
-
-全局变量机制可直接替代 SK10 V1 黑板方案中**同一脚本内**的状态需求。跨脚本共享仍需宿主黑板（或未来 include 共享模块变量）。但 90%+ 的有状态需求（蓄力进度、连招段数、Phase index）属于**单脚本内**跨函数共享，全局变量即可满足。
-
-**结论（第 9 轮）**：
-
-1. **路径 3（全局变量）为优先探索方向** — 符合"数据留 VM 内"原则，VM 运行时零改动
-2. **路径 1（宿主黑板）降级为补充** — 仅用于真正需要跨脚本/跨角色共享的数据
-3. **连招共用环境（SK10 V1）可被全局变量部分覆盖** — 同脚本内的连招状态无需外推到宿主
-4. **实现优先级**：全局变量可纳入 include（SK13）之后的编译器改动批次
-
-> 💬 **待讨论**：全局变量的寄存器段划分（r56~r63 或其他）、初始化时机（SpawnInstance 时执行 `_init` 段 vs 编译器常量填充）、与 include 共享的交互。
+> ✅ checkEnter 和 step 为**模块级函数**，通过模块变量（Lang-1）自然共享状态。早期关于"无法复用变量"的讨论已过期。
 
 **通用规则**（宿主侧，所有技能共享）：
 - 姿态匹配（候选技能必须在当前姿态的 AllowedStances 中）
@@ -402,81 +327,117 @@ func step() {
 - 若脚本不含 `step()` 而有 `main()`，宿主可使用 `main` 作为执行入口（过渡期）
 - 最终目标：所有 VM 技能统一使用 `checkEnter()` + `step()` 双入口
 
+**同实例生命周期**：
+
+```
+[spawn] → [checkEnter] → return 0 → [destroy]  ← 条件不满足
+                       → return 1 → [redirect to step] → [tick] → [tick] → ... → [完成/destroy]
+                                     ↑ 同一实例继续      ← 条件满足后执行
+```
+
+**宿主侧实现**（⚠️ 仅为示范草案，非最终实现）：
+
+```csharp
+var program = World.Modules.Get(def.VMModuleSlot);
+if (!program.TryGetFunction("checkEnter", out var checkEntry)) continue;
+
+int vmId = World.SpawnInstance(def.VMModuleSlot, checkEntry.EntryIP);
+_instanceToOwner[vmId] = charId;
+World.TickInstance(vmId);
+
+ref var inst = ref World.Pool.Instances[vmId];
+bool passed = inst.Registers[0].IsNonZero;
+
+if (!passed)
+{
+    World.DestroyInstance(vmId);
+    _instanceToOwner.Remove(vmId);
+    continue;
+}
+
+if (program.TryGetFunction("step", out var stepEntry))
+{
+    inst.IP = stepEntry.EntryIP;
+    inst.StateFlags &= ~VMStateFlags.Completed;
+    skill.VMInstanceId = vmId;
+}
+```
+
+**FFVM 改动需求**：方案 D′ 需要"实例重定向"能力（`RedirectInstance`，~5 行实现）。
+
+**有状态条件检查**：
+
+| 模式 | 行为 | 适用场景 |
+|------|------|---------|
+| **无状态检查** | 每次 `checkEnter()` 都检查 A∧B | 简单条件（按键+姿态）— 90%+ 技能 |
+| **有状态检查** | 首次 A 满足后记录，后续只检查 B | 蓄力、连招窗口 |
+
+有状态检查通过模块变量（Lang-1）实现。早期讨论的"路径 3 全局变量"即为模块变量的前身。
+
+**脚本示例**：
+
 ```ffs
 // skill_light_punch.ffs — 方案 D′ 示例
-
-/// 技能进入条件（独立入口，由裁决层调用）
 func checkEnter(): int {
     var lpPressed: int = IsInputPressed(4)
     var grounded: int = IsGrounded()
     if lpPressed == 0 || grounded == 0 {
-        return 0    // 条件不满足
+        return 0
     }
-    return 1        // 条件满足
+    return 1
 }
 
-/// 技能执行主体（激活后每帧驱动，同一实例从 checkEnter redirect 而来）
 func step() {
     BeginAction(10, 20)
     defer { EndAction() }
-
-    var f: int = 0
     var hitDone: int = 0
-    while f < 20 {
-        if f >= 5 && f < 10 && hitDone == 0 {
+    while GetFrame() < 20 {
+        if GetFrame() >= 5 && GetFrame() < 10 && hitDone == 0 {
             var target: int = CheckAttackHit(1001)
             if target > 0 {
                 ApplyDamage(target, 1.0, 102)
                 hitDone = 1
             }
         }
-        f = f + 1
         yield
     }
 }
 ```
 
+</details>
+
 <details>
 <summary>📋 讨论历史</summary>
 
+> ⚠️ 以下讨论中关于"全局变量"的部分已由 Lang-1 模块变量实现。关于"跨脚本共享"的部分已由服务脚本（Lang-6/7/8 XCALL）覆盖。保留供参考。
+
+**早期"全局变量"讨论**（第 7~9 轮，现已由 Lang-1 模块变量实现）：
+
+路径 3（全局变量 = 模块变量前身）为优先探索方向 — 符合"数据留 VM 内"原则。路径 1（宿主黑板）降级为补充 — 仅用于跨脚本/跨角色共享。
+
+**早期"checkEnter/step 共享状态"讨论**：
+
+第 8 轮修正：第 7 轮分析误将 checkEnter 和 step 描述为"独立 VM 实例"，这是误解。设计意图始终是同一 VM 实例。第 9 轮确认 VM 运行时无硬阻碍，"无法复用变量"为编译器/语言层限制（现已由 Lang-1 模块变量解决）。
+
 #### 第 5 轮
 
-倾向提供**专有条件检测入口**，由宿主侧的调用结构决定。宿主架构中角色技能执行可能存在多个阶段（phase），宿主按顺序调用各 phase：
-```
-for s in skills:
-    s.phaseCondition()  // 条件检测阶段
-    s.phaseExecute()    // 执行阶段
-```
+倾向提供**专有条件检测入口**，由宿主侧的调用结构决定。
 
 #### 第 6 轮
 
-经审查发现原方案 C（条件在 main 开头、靠 return/yield 信号区分）与第 5 轮补充的"专有条件检测入口"存在矛盾。实际实现中 `ProbeSkillCondition` 虽已就绪但未被调用，所有 4 个已有脚本仍依赖宿主侧 `CanActivate` lambda。
-
-**根本原因**：方案 C 把条件和执行混在同一个 `func main()` 中，导致：
-1. 条件检查和技能执行的生命周期耦合
-2. 脚本结构不直观（读者难以区分"条件部分"和"执行部分"）
-3. 无法独立复用条件逻辑
-
-修正为方案 D：独立条件函数（多入口）。checkEnter() + step() 双入口。
-
-FFVM 编译器和运行时**原生支持**多入口调用：
-1. `BytecodeCompiler.Compile(source, entryFunc, ...)` 编译所有 func
-2. `VMProgram.TryGetFunction(name, out entry)` 按名称查找入口 IP
-3. `VMWorld.SpawnInstance(moduleSlot, entryIP)` 接受任意入口 IP
+经审查发现原方案 C（条件在 main 开头）存在问题，修正为方案 D：独立条件函数（多入口）。
 
 #### 第 7 轮
 
-追加复合条件分析。提出无状态/有状态两种检查模式。
-
-**⚠️ 误解**：将 checkEnter 和 step 描述为"独立 VM 实例"，据此得出"路径 2（脚本内 var）不可行"的结论。
+追加复合条件分析。提出无状态/有状态两种检查模式。⚠️ 误将 checkEnter 和 step 描述为"独立 VM 实例"。
 
 #### 第 8 轮
 
 修正实例模型：checkEnter 和 step 应为**同一 VM 实例**。提出 `RedirectInstance` API。
 
-#### 第 9 轮（当前）
+#### 第 9 轮
 
-用户反馈：VM 运行时不存在硬阻碍，"无法复用变量"是编译器/语言层限制。要求探索全局变量作为优先路径（路径 3），遵循 SK12"数据留 VM 内"原则。全局变量机制可覆盖 SK10 连招共用环境的部分需求。
+用户反馈：VM 运行时不存在硬阻碍。要求探索全局变量作为优先路径（路径 3），遵循 SK12"数据留 VM 内"原则。
 
 </details>
 
@@ -486,9 +447,12 @@ FFVM 编译器和运行时**原生支持**多入口调用：
 
 **结论**：碰撞数据完全由技能脚本决定，通过 Syscall 推送到宿主。
 
-**设计原则**：每个技能脚本负责声明自己在各帧的碰撞框（受击框、攻击框、推挤框）。宿主不做碰撞框的静态预定义。
-
 **需新增 Syscall**：`SetHitbox(groupId, x, y, w, h)`, `SetHurtbox(x, y, w, h)`, `ClearHitbox`, `SetPushBox`
+
+<details>
+<summary>📋 详细设计</summary>
+
+**设计原则**：每个技能脚本负责声明自己在各帧的碰撞框（受击框、攻击框、推挤框）。宿主不做碰撞框的静态预定义。
 
 ```ffs
 // 脚本内碰撞框示例
@@ -499,16 +463,23 @@ if f >= 4 && f < 8 {
 
 > 结构体方案（将碰撞框参数封装为 struct）取决于 FFVM 结构体支持进度（B-γ7 SN1 嵌套结构体）。
 
+</details>
+
 ---
 
 ## SK3: 碰撞框交互方式 💬
 
-**结论**：待性能验证后定夺。
+**结论**：暂定方案 A（脚本推送到宿主）。待性能验证后最终定夺。
+
+<details>
+<summary>📋 详细设计</summary>
 
 | 方案 | 描述 | 优点 | 缺点 |
 |------|------|------|------|
 | **A: 脚本推送到宿主** | 每帧通过 Syscall 将碰撞框参数推送到宿主 component | 性能好 | 宿主存冗余数据 |
 | **B: 宿主向脚本查询** | 碰撞系统需要时向脚本查询碰撞框 | VM 数据隔离好 | 性能待验证 |
+
+</details>
 
 ---
 
@@ -521,6 +492,9 @@ if f >= 4 && f < 8 {
 ## SK12: ECS 纯数据化与数据归属 ✅
 
 **结论**：脚本内闭环 → 留 VM 内；外部系统必须读取 → Syscall 推送到宿主纯数据 component。
+
+<details>
+<summary>📋 详细设计</summary>
 
 | 归属 | 条件 | 示例 |
 |------|------|------|
@@ -549,11 +523,16 @@ if f >= 4 && f < 8 {
 
 > 📌 后续所有新增 Syscall 设计都应先自检数据归属：**脚本内闭环 → 留 VM 内；外部系统必须读取 → Syscall 推送到宿主纯数据 component**。
 
+</details>
+
 ---
 
 ## SK10: 连招共用环境 ✅
 
 **结论**：V1 用黑板变量（key-value Syscall），理想目标用连招描述脚本集中管理。
+
+<details>
+<summary>📋 详细设计</summary>
 
 | 方案 | 描述 | 优点 | 缺点 |
 |------|------|------|------|
@@ -561,11 +540,16 @@ if f >= 4 && f < 8 {
 | **B: 黑板变量** ✅ V1 | 角色级 key-value，Syscall 读写 | 脚本自主管理 | 需约定 key 命名 |
 | **C: 连招描述脚本** ⭐ V2 | 专门的 `combo_xxx.ffs` 管理连招 | 逻辑集中 | 需脚本间协调机制 |
 
+</details>
+
 ---
 
 ## SK11: 多阶段技能 ✅
 
-**结论**：Phase 是脚本内实现行为。提供 `BeginAction` 支持多次调用切换动作，但不强制所有多阶段技能必须用 Phase 机制。
+**结论**：Phase 是脚本内行为，`BeginAction` 支持多次调用切换动作（非强制）。符合 SK12 数据归属原则。
+
+<details>
+<summary>📋 详细设计</summary>
 
 ```ffs
 func step() {
@@ -573,35 +557,36 @@ func step() {
     BeginAction(101, 10)
     defer { EndAction() }
 
-    var f: int = 0
     var hit: int = 0
-    while f < 10 {
-        if f >= 3 && f < 7 && hit == 0 {
+    while GetFrame() < 10 {
+        if GetFrame() >= 3 && GetFrame() < 7 && hit == 0 {
             var t: int = CheckAttackHit(1001)
             if t > 0 { hit = 1 }
         }
-        f = f + 1
         yield
     }
     if hit == 0 { return }  // 未命中, 技能结束
 
     // Phase 2: 追加段
     BeginAction(102, 15)
-    var f2: int = 0
-    while f2 < 15 {
-        f2 = f2 + 1
+    while GetFrame() < 15 {
         yield
     }
 }
 ```
 
-> Phase index 留 VM 内（脚本定义+消费），`BeginAction` 推送动画/碰撞框到宿主。符合 SK12 数据归属原则。
+</details>
 
 ---
 
 ## SK13: 属性脚本共享机制 ✅
 
-**结论**：方案 A — 预处理器 `include`，全量展开（const + struct + func）。跳过 V0 过渡，直接实现编译器原生 include。
+**结论**：方案 A — 预处理器 `include`，全量展开（const + struct + func）。已由 Lang-2 实现。
+
+> 💬 **待讨论**：include 混入后脚本位置移动的处理方式（路径解析倾向项目根相对路径，但尚未最终确认）。
+
+<details>
+<summary>📋 详细设计</summary>
 
 ### 核心设计
 
@@ -703,6 +688,8 @@ func foo(): int { return 2 }    // ❌ 编译错误
 | V0 过渡 | 是否先实现宿主侧合并 | ✅ **跳过** |
 | 入口函数 LSP | 强感知 vs 弱感知 | ⏸️ 暂缓讨论，后期优化项 |
 
+</details>
+
 <details>
 <summary>📋 讨论历史</summary>
 
@@ -755,239 +742,17 @@ FFS 设计约束：零 GC、零动态分配、无类/无继承、无模块系统
 
 ---
 
-## Syscall 需求评估
 
-| 需求 | 现有 Syscall | 是否需要新增 |
-|------|------------|------------|
-| 动作管理 | BeginAction, EndAction, GetFrame | ✅ 足够 |
-| 命中检测 | CheckAttackHit, CheckAttackBlocked | ✅ 足够 |
-| 伤害/硬直 | ApplyDamage, ApplyHitstun, ApplyHorizKB_* | ⚠️ ApplyDamage 需拆分（§4.2），新增 ApplyHitReaction |
-| 速度控制 | SetVelocity | ✅ 足够 |
-| 输入查询 | GetInput, GetInputDir | ✅ 足够 |
-| 落地检测 | IsGrounded | ✅ 足够 |
-| 效果 | SpawnEffectHit, SpawnEffectSelf | ✅ 足够 |
-| 碰撞框设置 | — | 🆕 需要 `SetHitbox`, `SetHurtbox`, `ClearHitbox` |
-| 蹲姿/姿态切换 | — | 🆕 需要 `SetStance` |
-| 倒地状态 | — | ❓ 可能需要 `SetKnockdownState` / `SetInvincible` |
+## SK14-1: 语言需求全景与优先级 ✅
 
-**结论**：前 4 个脚本（S01~S04）可直接用现有 Syscall 实现。S05~S08 及碰撞框脚本化需新增少量 Syscall。
+**结论**：4 痛点（P1~P4）；L1+L2 最紧迫，L3 黑板变通可行，L4 远期。L1/L2 正交互补覆盖 90%+，L2≠L3（编译期≠运行时，不应整合应分层递进）。
 
----
+> ⚠️ **归档说明**：所有需求已实现（Lang-1~Lang-8），下方仅供追溯。详见 [VM_Summary](../../Docs/VM_Summary.md)。
 
-## 宿主侧变更评估
+<details>
+<summary>📋 详细设计</summary>
 
-| 变更 | 说明 | 影响范围 |
-|------|------|---------|
-| `CanActivate` → 脚本 `checkEnter()` | 宿主通过 `TryGetFunction("checkEnter")` 获取入口 IP，spawn + tick + 读返回值 | GameVMBridge + SkillManager Layer 3 |
-| `OnFrame` → `step()` 函数 | 条件通过后同实例 redirect 到 `step()` 入口，每帧 tick | GameVMBridge |
-| `CanContinue` → 脚本控制 | 循环技能退出由脚本 return 或宿主 Kill | SkillManager |
-| `CollisionFrames` → 脚本内设置 | 碰撞框数据迁移到脚本 Syscall | 需新增 Syscall |
-| `ProbeSkillCondition` → redirect 模型 | 重构为 checkEnter + redirect（非 yield/return 信号） | 需修改 |
-| `VMWorld.RedirectInstance` | 新增 API：重定向完成实例到新入口 | FFVM 新增 ~5 行 |
-| 裁决层改造 | 实现分层候选池机制 | SkillManager 重构 |
-| `ApplyDamage` → 拆分 | 拆为 `ApplyDamage` (数值) + `ApplyHitReaction` (标记) | Syscall 重设计 |
-
----
-
-## 附录 A：技能全集分类
-
-> 方括号 `[]` 表示可选/高级变体，非基础集合。
-
-| 分类 | 技能列表 |
-|------|---------|
-| **基础移动** | 站立待机, 前进, 后退, 前跑, 蹲, 跳, 前跳, 后跳, [前影跳], [后影跳] |
-| **防御** | 站防御, 蹲防御, [空中防御] |
-| **闪避** | 前闪避, 后闪避, [原地侧闪], [前影闪], [后影闪] |
-| **基本攻击** | 近拳, 远拳, 蹲拳, 跳拳, 近脚, 远脚, 蹲脚, 跳脚 |
-| **抓投** | 前投, 后投, 空中投, 指令投起手, 拆投 |
-| **受击** | 上受击, 中受击, 下受击, 被绊倒 |
-| **空中受击** | 被吹飞, 浮空, 旋转吹飞 |
-| **倒地** | 硬倒地, 软倒地, 仰面倒地, 趴伏倒地 |
-| **起身** | 原地起身, 受身(快速起身), 前滚起身, 后滚起身 |
-| **特殊** | 被破防, 眩晕, 瘫软, 版边反弹 |
-| **死亡** | 基础死亡, 属性死亡, 磨血死亡, 剧情死亡 |
-| **流程** | 开始, 胜利, 战败, 续关, 完美胜利 |
-| **挑衅** | 基础挑衅, 击败挑衅 |
-
----
-
-## 附录 B：参考脚本参数模式提取
-
-> 从 `skill_114`（飞燕旋风腿）和 `skill_25`（上盘被击中）提取通用参数表示，作为首批脚本的 Syscall 参数设计参考。
-
-### 动作声明
-
-```
-BeginAction(actionId, totalFrames)
-defer { EndAction() }
-```
-
-- `actionId`: 技能定义 ID，宿主用于查找动画/碰撞框数据
-- `totalFrames`: 动作总帧数
-- `defer + EndAction()`: 确保技能结束时清理
-
-### 伤害参数与受击标记
-
-两个概念的区分：
-
-| 概念 | 用途 | 生命周期 |
-|------|------|---------|
-| **伤害参数** (Damage Params) | 用于计算伤害数值（系数、属性克制等） | 命中瞬间消费 |
-| **受击标记** (HitReactionTag) | 攻击方附加到受击方，受击方据此决定进哪种受击技能 | 附加→受击方读取→消费 |
-
-```
-// 伤害参数：用于数值计算
-ApplyDamage(targetId, coefficient)
-
-// 受击标记：通知受击方选择受击技能
-ApplyHitReaction(targetId, reactionTag)
-```
-
-- `coefficient`: 伤害系数（不是绝对值），宿主用公式换算
-- `reactionTag`: 受击反应标记（唯一枚举 ID，不做 mask 组合）
-
-### 硬直参数
-
-```
-ApplyHitstun(targetId, startFrame, durationFrames, level, shakeFlag)
-```
-
-### 击退参数
-
-```
-// 模式 A: 距离+时间 (定距移动)
-ApplyHorizKB_Dist(targetId, distance, durationFrames)
-
-// 模式 B: 速度 (直到着地)
-ApplyHorizKB_Speed(targetId, speed)
-
-// 垂直击退
-ApplyVertKB(targetId, speed, durationFrames)
-
-// 自身位移
-ApplySelfHorizKB(distance, durationFrames)
-ApplySelfVertKB(initialSpeed, acceleration)
-```
-
-### 互斥分组
-
-```ffs
-var mutex1: int = 0
-if mutex1 == 0 {
-    // 检测命中...
-    mutex1 = 1
-}
-```
-
-用局部变量实现（非 Syscall）。同一攻击段只生效一次。
-
-### 能量系数
-
-```
-SetEnergyCoeff(multiplier)
-```
-
-临时修改下次 ApplyDamage 的能量获取倍率。首批脚本可暂不使用。
-
----
-
-## 附录 C：首批脚本伪代码示例
-
-> 第 9 轮更新：所有示例已改为 `checkEnter()` + `step()` 双入口结构（方案 D′）。
-
-### 脚本书写风格约定
-
-- **必须提取为变量**：多次引用的值（帧数 `totalFrames`、攻击窗口边界）
-- **可内联**：仅出现一次的常量参数（effectId, groupId 等），注释说明含义
-- **注意**：`while f < N` 中的 `N` 若在 `BeginAction` 中已声明则应统一变量
-- **结构约定**：所有 VM 技能脚本包含 `func checkEnter(): int`（条件）+ `func step()`（执行）
-
-### S01 — 站立待机 (Idle)
-
-```ffs
-/// Idle 不需要条件检查 — 作为最低优先级兜底，总是可进入
-func checkEnter(): int {
-    return 1
-}
-
-func step() {
-    BeginAction(1, -1)    // -1 = 无限循环
-    defer { EndAction() }
-
-    while true {
-        yield
-    }
-}
-```
-
-### S04 — 近拳 (LightPunch)
-
-```ffs
-func checkEnter(): int {
-    var lpPressed: int = IsInputPressed(4)   // 4 = LP button
-    var grounded: int = IsGrounded()
-    if lpPressed == 0 || grounded == 0 {
-        return 0
-    }
-    return 1
-}
-
-func step() {
-    var frames: int = 20
-
-    BeginAction(101, frames)
-    defer { EndAction() }
-
-    var hit: int = 0
-    var f: int = 0
-    while f < frames {
-        if f >= 4 && f < 8 && hit == 0 {
-            var t: int = CheckAttackHit(1001)
-            if t > 0 {
-                ApplyDamage(t, 3, 102)
-                ApplyHitstun(t, 0, 10, 0, 1)
-                ApplyHorizKB_Dist(t, 0.5, 5)
-                SpawnEffectHit(3001, 30)
-                hit = 1
-            }
-        }
-        f = f + 1
-        yield
-    }
-}
-```
-
-### S06 — 上受击 (HitHigh)
-
-```ffs
-/// 受击技能由宿主裁决层触发，checkEnter 总是通过
-func checkEnter(): int {
-    return 1
-}
-
-func step() {
-    var frames: int = 20
-
-    BeginAction(25, frames)
-    defer { EndAction() }
-
-    SpawnEffectSelf(4001, 60)
-
-    var f: int = 0
-    while f < frames {
-        f = f + 1
-        yield
-    }
-}
-```
-
----
-
-## SK14: FFS 语言需求整合（第 10 轮新增） ✅
-
-> **背景**：SK7（全局变量）、SK10（连招共用环境）、SK13（include）三个议题各自衍生出语言层需求，分散在不同 SK 小节中。需要整合成统一视图，明确依赖关系和实现优先级，提交 VM_Summary 作为 FFS 语言演进计划。
-
-### 需求全景
+**需求全景**：
 
 | ID | 名称 | 作用域 | 机制 | VM 运行时改动 | 编译器改动 | 来源 |
 |----|------|--------|------|--------------|-----------|------|
@@ -996,30 +761,9 @@ func step() {
 | **L3** | 跨模块共享变量 | 运行时跨脚本 | 需要共享内存区域或黑板 Syscall | ⚠️ **需要** — 新增跨实例数据通道 | ⭐⭐⭐ 高 | SK10 连招 |
 | **L4** | 跨模块函数调用 | 运行时跨脚本 | ModuleTable 跨模块函数解析 + CALL 扩展 | ⚠️ **需要** — 跨模块 CALL 协议 | ⭐⭐⭐ 高 | SK10 连招 (理想) |
 
-### L1 与 L2 的关系：正交互补
+> **核心观察**：P1+P2 是当前最紧迫的缺失，P3 有成熟变通（黑板 Syscall），P4 是远期理想。
 
-L1（模块变量）和 L2（include）是**正交**的，且**组合使用**时最强：
-
-```ffs
-// shared/combo_state.ffs — 共享模块变量模板
-var comboCount: int = 0         // L1: 模块级 var
-var lastHitFrame: int = 0
-
-func resetComboState() {        // 共享函数
-    comboCount = 0
-    lastHitFrame = 0
-}
-
-// skill_light_punch.ffs
-include "shared/combo_state"     // L2: 引入 var 声明 + func
-include "configs/ground_attack"  // L2: 引入 const
-
-func checkEnter(): int { ... }
-func step() {
-    comboCount = comboCount + 1  // L1: 模块变量跨函数可见
-    // ...
-}
-```
+**L1 与 L2 的关系 — 正交互补**：
 
 | 单独使用 | 效果 |
 |----------|------|
@@ -1027,217 +771,107 @@ func step() {
 | 仅 L2 | 共享 const/func ✅，但 include 的 var 在每个脚本中是**独立副本** — 不能跨脚本运行时共享 |
 | L1 + L2 | 共享 var 声明模板 + 每个脚本实例内持久 ✅ — **覆盖 90%+ 有状态需求** |
 
-### L2 与 L3 的关系：编译期 vs 运行时
-
-用户问到 include (L2) 和全局变量/函数 (L3/L4) "貌似类似但机制不同，能否整合"。
-
-**本质区别**：
+**L2 与 L3 的关系 — 编译期 vs 运行时**：
 
 | 维度 | L2 (include) | L3/L4 (跨模块运行时共享) |
 |------|-------------|----------------------|
 | **时机** | 编译期 — 源码文本展开 | 运行时 — 实例间数据通道 |
-| **var 共享** | 每个脚本有**独立副本**（各自实例各自寄存器） | 多个脚本**同一份**数据（共享内存或黑板） |
-| **func 共享** | 代码**复制**到每个脚本（二进制膨胀但零运行时开销） | 代码**不复制**，跨模块 CALL（需调用协议但零膨胀） |
+| **var 共享** | 每个脚本有**独立副本** | 多个脚本**同一份**数据 |
+| **func 共享** | 代码**复制**（零运行时开销但膨胀） | 代码**不复制**（跨模块 CALL，零膨胀） |
 | **类比** | C `#include` / GLSL include | Lua `require` / C# `using` |
-| **VM 改动** | 无 | 需要 |
 
-**结论：不应整合，而是分层递进**。
+结论：不应整合，而是分层递进（Phase 1 编译期 → Phase 2+ 运行时）。
 
-L2 是编译期文本机制，L3/L4 是运行时通信机制，解决不同层面的问题。正确策略是：
+</details>
 
-1. **Phase 1**: L1（模块变量）+ L2（include）— 纯编译器改动，VM 运行时零变更
-2. **Phase 2**: L3（跨模块共享变量）— 需要时再引入，可先用 **黑板 Syscall** 作为过渡
-3. **Phase 3**: L4（跨模块函数调用）— 最高复杂度，仅在"连招描述脚本"理想形真正需要时
+---
 
-### 连招描述脚本覆盖度分析
+## SK14-2: 连招脚本覆盖度 ✅
 
-> 用户问：**当前需求点覆盖了连招描述脚本了吗？连招描述脚本的理想形是什么？**
+**结论**：理想形 3（混合式: L1+L2+黑板 Syscall）最务实，Phase 1 即可覆盖。
 
-**当前 SK10 三种方案的语言需求映射**：
+<details>
+<summary>📋 详细设计</summary>
+
+SK10 连招描述脚本需要哪些语言特性？
 
 | SK10 方案 | 需要的语言特性 | Phase 1 覆盖？ | 说明 |
 |-----------|--------------|---------------|------|
-| **A: 宿主 ComboContext** | 无 FFS 需求 | ✅ | 完全宿主侧 C# 实现，最简单 |
-| **B: 黑板变量 (V1)** | 黑板 Syscall（已有框架） | ✅ | 脚本通过 `GetBlackboard`/`SetBlackboard` Syscall 读写，无语言层改动 |
-| **C: 连招描述脚本 (V2 理想形)** | L2 + L3 或 L4 | ⚠️ 部分 | 需要进一步分析 |
+| **A: 宿主 ComboContext** | 无 FFS 需求 | ✅ | 完全宿主侧 C# 实现 |
+| **B: 黑板变量 (V1)** | 黑板 Syscall | ✅ | 脚本通过 Get/SetBlackboard 读写 |
+| **C: 连招描述脚本 (V2 理想形)** | L2 + L3 或 L4 | ⚠️ 部分 | 需进一步分析 |
 
-**方案 C 的理想形分析**：
-
-连招描述脚本的核心诉求是：**一个集中管理连招链的地方，决定当前哪些后续技能可以激活**。
-
-```
-理想形 1: 查询式
-─────────────────
-combo_ground.ffs 是一个常驻运行的"连招管理器"实例
-↓ 技能脚本通过 Syscall 查询:
-  skill_light_punch.ffs → QueryComboAllow("heavy_punch") → 1/0
-                        
-需要: L3 (跨模块共享状态) + 新 Syscall 协议
-VM 改动: 中等
-```
-
-```
-理想形 2: 声明式（include 模板）
-─────────────────────────────────
-shared/combo_ground_chain.ffs 定义连招表:
-  const CHAIN_LP_TO_HP: int = 1
-  func canChainTo(skillId: int): int { ... }
-
-每个技能 include 这个连招表:
-  include "shared/combo_ground_chain"
-  func checkEnter(): int {
-      if canChainTo(SKILL_HEAVY_PUNCH) == 0 { return 0 }
-      ...
-  }
-
-需要: L1 + L2 (仅 Phase 1)
-VM 改动: 无
-```
-
-```
-理想形 3: 混合式
-─────────────────
-连招窗口判断在脚本内 (L1 模块变量追踪帧数)
-连招关系表通过 include 共享 (L2)
-跨技能的连招计数器通过黑板 Syscall 共享 (已有)
-
-需要: L1 + L2 + 黑板 Syscall
-VM 改动: 无
-```
-
-**评估**：
+**三种理想形对比**：
 
 | 理想形 | 逻辑集中度 | 实现复杂度 | Phase 1 可实现 |
 |--------|-----------|-----------|---------------|
-| 1: 查询式（独立管理器） | ⭐⭐⭐ 最集中 | ⭐⭐⭐ 高 — 需跨模块通信 | ❌ |
-| 2: 声明式（include 模板） | ⭐⭐ 集中 | ⭐ 低 — 纯编译期 | ✅ |
-| 3: 混合式 | ⭐⭐ 集中 | ⭐ 低 — L1+L2+现有 Syscall | ✅ |
+| 1: 查询式（独立管理器） | ⭐⭐⭐ | ⭐⭐⭐ 高 — 需跨模块通信 | ❌ |
+| 2: 声明式（include 模板） | ⭐⭐ | ⭐ 低 — 纯编译期 | ✅ |
+| 3: 混合式 | ⭐⭐ | ⭐ 低 — L1+L2+现有 Syscall | ✅ |
 
-**结论**：**理想形 3（混合式）是最务实的推荐**。
-
+**理想形 3 具体分工**：
 - 连招关系表（哪些技能可以衔接）→ include 共享 const/func（L2）
 - 连招内部状态（当前段数、窗口帧计数）→ 模块变量（L1）
 - 跨技能通信（"轻拳命中了"通知"重拳可以衔接"）→ 黑板 Syscall（已有）
-- Phase 1（L1+L2）即可覆盖，无需等 L3/L4
 
-### 向 VM/语言方提交的需求背景与建议方向
+</details>
 
-> 📌 本节面向 **语言方**（FFVM 编译器/运行时设计者）。需求侧只提供背景、痛点和建议方向；最终方案由语言方从语言视角取舍，或根据需求完全整合。
->
-> 待语言方确认后，同步更新到 `Docs/VM_Summary.md` §5.2 / §7。
+---
 
-#### 一、需求痛点：当前 FFS 语言缺失导致的问题
+## SK14-3: 实施方向选择（A/B/C） ✅
+
+**结论**：方向 C（折衷分期）被采纳并执行完毕 — Phase 1 (L1+L2+L3 = Lang-1/2/3) ✅ + Phase 2 (L4 XCALL = Lang-6/7/8) ✅ 全部已实现。
+
+> ⚠️ **归档说明**：所有阶段已实现，下方仅供追溯。详见 [VM_Summary](../../Docs/VM_Summary.md)。
+
+<details>
+<summary>📋 详细设计</summary>
+
+**需求痛点**：
 
 | # | 痛点 | 受阻需求 | 当前变通 | 变通代价 |
 |---|------|---------|---------|---------|
-| **P1** | **函数间无法共享变量** — FFS 无模块级 `var`，checkEnter() 和 step() 即使在同一实例内也无法通过语言层共享状态 | SK7 有状态条件（蓄力、连招窗口）、SK11 多阶段 Phase index | 宿主黑板 Syscall 绕行 | 每次读写额外 Syscall 开销；状态散落宿主侧，不符合 SK12"脚本内闭环"原则 |
-| **P2** | **脚本间无法复用声明** — 无 include/import，多个技能脚本的共享属性（优先级 const、辅助函数）必须手动复制 | SK13 属性共享（M1~M5 混入需求）、连招关系表复用 | 每个脚本手动粘贴相同 const/func | 维护成本高，修改时易遗漏；脚本数量增长后不可持续 |
-| **P3** | **跨脚本运行时无法共享数据** — 技能 A 的命中结果无法直接通知技能 B 的 checkEnter | SK10 连招共用环境（"轻拳命中→重拳可衔接"） | 宿主黑板 Syscall（已有框架） | 可接受 — 黑板 Syscall 是成熟方案，但逻辑分散于宿主与脚本两侧 |
-| **P4** | **跨脚本无法调用函数** — 无法从技能脚本调用另一个模块的函数 | SK10 理想形 1（连招管理器独立脚本） | 无直接变通，只能用理想形 2/3 绕过 | 放弃"连招逻辑集中到一个脚本"的理想形 |
+| **P1** | **函数间无法共享变量** | SK7 有状态条件、SK11 Phase index | 宿主黑板 Syscall | 额外开销；不符合 SK12 脚本内闭环 |
+| **P2** | **脚本间无法复用声明** | SK13 属性共享、连招关系表 | 手动粘贴 | 维护成本高 |
+| **P3** | **跨脚本运行时无法共享数据** | SK10 连招 | 黑板 Syscall（成熟） | 可接受 |
+| **P4** | **跨脚本无法调用函数** | SK10 理想形 1 | 无直接变通 | 放弃理想形 |
 
-> **核心观察**：P1+P2 是当前最紧迫的缺失，P3 有成熟变通（黑板 Syscall），P4 是远期理想。
+**三个方向对比**：
 
-#### 二、三个建议方向
+| 方向 | 范围 | VM 运行时改动 | 优点 | 缺点 |
+|------|------|-------------|------|------|
+| **A: 长期理想** | L1+L2+L3+L4 全部 | ⚠️ 需要 | 覆盖所有需求 | A-3/A-4 复杂度高，周期长 |
+| **B: 最速** | L1+L2+黑板正式化 | 无 | 快速交付 | 放弃 SK10 理想形 1 |
+| **C: 折衷** ✅ | Phase 1 = B 全部; Phase 2+ = A 的 A-3/A-4 按需 | 分阶段 | 兼顾速度与远期 | Phase 2/3 可能部分回溯 |
 
-##### 方向 A: 长期理想（最完整）
+**方向 C 被采纳的实际路线**：
 
-**思路**：一步到位，让 FFS 具备模块变量、include、跨模块共享变量、跨模块函数调用全部能力。
+| 阶段 | 步骤 | 内容 | 状态 |
+|------|------|------|------|
+| **Phase 1** | C-1 | 模块变量 (L1) | ✅ Lang-1 |
+| | C-2 | include (L2) | ✅ Lang-2 |
+| | C-3 | 黑板 Syscall 正式化 | ✅ Lang-3 |
+| **Phase 2** | C-4 | 跨模块函数调用 (L4 = XCALL 服务脚本) | ✅ Lang-6/7/8 |
+| **远期** | C-5 | @force_inline | ⏳ Lang-9 待定 |
 
-| 步骤 | 对应痛点 | 内容 | 改动范围 | 复杂度 |
-|------|---------|------|---------|--------|
-| A-1 | P1 | **模块变量 (L1)** — Parser 顶层 `var` + 编译器保留寄存器段 | 编译器 | ⭐⭐ |
-| A-2 | P2 | **include (L2)** — 预处理器递归展开 + const/struct/func/var 重定义规则 | 编译器（新 Preprocessor 模块） | ⭐⭐ |
-| A-3 | P3 | **跨模块共享变量 (L3)** — 共享内存区域或专用寄存器段，多实例可读写同一份数据 | ⚠️ 编译器 + VM 运行时 | ⭐⭐⭐ |
-| A-4 | P4 | **跨模块函数调用 (L4)** — ModuleTable + CALL 指令扩展 | ⚠️ 编译器 + VM 运行时 | ⭐⭐⭐ |
+**语言方细则 Q&A**（已归档 — 全部已在实现中解决）：
+1. 方向选择 → C ✅
+2. L1 寄存器段 → 按需分配（r56+ 动态段）
+3. L1 初始化 → `_init` 代码段
+4. L2 路径解析 → 项目根相对路径
+5. 实施顺序 → L1 先（Lang-1）→ L2（Lang-2）→ L3（Lang-3）
+6. 统一设计 → L4 由 Q4 服务脚本讨论进一步收敛为 XCALL+@export 方案
 
-**优点**：覆盖所有需求，含 SK10 理想形 1（连招管理器独立脚本）。
-**缺点**：A-3/A-4 需要 VM 运行时改动，复杂度高，周期长。
-
-**细则**：
-- A-1 寄存器段选项：固定段（r56~r63，8 槽）vs 编译器按需分配（更灵活但复杂度更高）
-- A-1 初始化：SpawnInstance 时执行 `_init` 代码段 vs 编译器将初始值写入常量表并静态填充
-- A-2 路径解析：项目根相对路径（推荐）vs 当前文件相对路径
-- A-3 共享机制：专用共享寄存器段 vs 黑板 Syscall 升级为语言内建 vs 显式 `shared var` 语法
-- A-4 调用协议：编译期链接（include 变体，代码复制）vs 运行时分派（真跨模块 CALL）
-
----
-
-##### 方向 B: 最速/改动最小
-
-**思路**：只解决最紧迫的 P1+P2，P3 用已有黑板 Syscall 覆盖，P4 暂不处理。
-
-| 步骤 | 对应痛点 | 内容 | 改动范围 | 复杂度 |
-|------|---------|------|---------|--------|
-| B-1 | P1 | **模块变量 (L1)** — 同 A-1 | 编译器 | ⭐⭐ |
-| B-2 | P2 | **include (L2)** — 同 A-2 | 编译器 | ⭐⭐ |
-| B-3 | P3 | **黑板 Syscall 正式化** — Get/SetBlackboard(key, value) 作为标准 Syscall | 宿主 Syscall 注册 | ⭐ |
-
-**优点**：VM 运行时零改动，纯编译器工作，可快速交付。P3 用黑板 Syscall 过渡，实测证明可行（KOF98 连招 V1 方案）。
-**缺点**：放弃 SK10 理想形 1。连招逻辑分散在技能脚本 + 宿主黑板两侧。
-
-**细则**：
-- B-1/B-2 细则同 A-1/A-2
-- B-3 黑板 Key 类型：int ID（编译期静态分配）vs string key（灵活但有 hash 开销）
-- B-1 和 B-2 无依赖关系，可并行实施
+</details>
 
 ---
 
-##### 方向 C: 折衷（长期理想 + 最速分期）
+## Q1: OOP/ECS 数据兼容 🔒
 
-**思路**：先交付方向 B 全部内容解决紧迫需求，为方向 A 的 A-3/A-4 预留设计空间但不立即实现。
-
-| 阶段 | 步骤 | 内容 | 时间线 |
-|------|------|------|--------|
-| **Phase 1（立即）** | C-1 = B-1 | 模块变量 (L1) | 近期 |
-| | C-2 = B-2 | include (L2) | 近期 |
-| | C-3 = B-3 | 黑板 Syscall 正式化 | 近期（或随 C1 宿主集成） |
-| **Phase 2（需求驱动）** | C-4 = A-3 | 跨模块共享变量 (L3) | 当 P3 黑板 Syscall 被证明不够时 |
-| **Phase 3（远期）** | C-5 = A-4 | 跨模块函数调用 (L4) | 仅在连招管理器独立脚本被确认为必要时 |
-
-**优点**：兼顾速度和远期扩展。Phase 1 纯编译器改动，风险低。Phase 2/3 按需触发，避免过度设计。
-**缺点**：Phase 2/3 可能需要对 Phase 1 设计做部分回溯调整（如寄存器段布局变更）。
-
-**预留设计空间建议**（供语言方参考）：
-- L1 寄存器段划分时，预留"未来可能扩展为跨实例共享段"的可能性
-- include 的重定义规则设计时，考虑未来 `import` 语义是否需要与 include 区分
-- 黑板 Syscall 的 Key 分配机制，考虑未来编译器可能接管自动分配
-
----
-
-#### 三、需求侧推荐
-
-**推荐方向 C（折衷）**，理由：
-
-1. Phase 1（L1+L2）已覆盖 KOF98 当前全部需求 — SK7 有状态条件、SK11 Phase、SK13 属性共享、SK10 连招（混合式理想形 3）
-2. P3 黑板 Syscall 是成熟且已验证的方案，不阻塞业务推进
-3. P4 跨模块函数调用在 KOF98 范围内尚无刚性需求
-4. Phase 2/3 按需触发 — 如果未来项目（1vN、NvN）证明黑板不够，再升级
-
-**但最终决策权在语言方** — 语言方可能发现 A-3/A-4 的某些底层机制可以和 A-1/A-2 统一设计，一次性实现更优于分期。这种情况下方向 A 可能整体成本更低。
-
-#### 四、待语言方回复
-
-1. **方向选择**：A / B / C / 或语言方自己的整合方案？
-2. **L1 寄存器段**：固定段（r56~r63）vs 按需分配？
-3. **L1 初始化**：`_init` 代码段 vs 编译器常量填充？
-4. **L2 路径解析**：项目根 vs 当前文件相对？
-5. **实施顺序**：L1 先 / L2 先 / 并行？
-6. **是否有语言层面的统一设计**：能否将 L1~L4 中若干项合并为一个统一机制？
-
----
-
-## 第 12 轮+ 议题
-
-> 第 12~13.5 轮讨论的 3 个议题。每个议题仅展示最新结论和未决问题，完整讨论过程在折叠区域内。
-
----
-
-### Q1: OOP/ECS 数据兼容 ✅ 已关闭
-
-**结论**：不冲突。SK12 原则（脚本输出走 Syscall）+ blittable `VMInstanceState` 已天然兼容 ECS。无需现在额外考虑。唯一远期注意点：闭环数据变为外部需读取时，增量加 Syscall 推送即可。
+**结论**：不冲突 — SK12 原则 + blittable VMInstanceState 天然兼容 ECS，无需额外考虑。
 
 <details>
-<summary>📋 Q1 完整分析</summary>
+<summary>📋 详细设计</summary>
 
 
 > 用户原话：目前的数据使用原则是在脚本中定义并消费就封闭在脚本内。当将来在 ECS 场景中, 会有让数据进入 ECS 中的 C 的需求。这两个需求看起来会对同一份数据有不同的要求。当前要考虑吗？暂时感觉不用, 因为当前以 OOP 风格熟悉, 会自动兼容 ECS, 我的感觉对吗？
@@ -1296,9 +930,12 @@ SK12 已确立的数据归属原则：
 
 ---
 
-### Q2: 硬直+yield 语句级控制 ✅
+## Q2: 硬直+yield 语句级控制 ✅
 
-**结论（第 18 轮收敛）**：**方案 A — while + GetFrame() + yield** 为帧区间循环的标准模式。
+**结论**：方案 A — while+GetFrame()+yield 帧区间循环，行业标准模式（7/10 语言同构），零 VM 改动。
+
+<details>
+<summary>📋 详细设计</summary>
 
 | 要素 | 说明 |
 |------|------|
@@ -1333,8 +970,10 @@ func step() {
 2. ✅ 帧号推进模型正确 — 宿主根据硬直决定是否增加帧号，VM tick 照常
 3. ✅ 零 VM/语言改动、零混淆、零耦合、极低样板、行业共识
 
+</details>
+
 <details>
-<summary>📋 Q2 完整讨论历史（第 12~17 轮）</summary>
+<summary>📋 讨论历史（第 12~17 轮）</summary>
 
 > **用户修改**（第 16 轮）：想明白了需求 — 不是"从上一个 yield 点重放"，而是"指定一段代码让它循环"。给出示例代码：用 while + yield + GetFrame() 条件 break 来实现帧区间内循环执行。这个粗暴做法完全满足需求。要求：(1) 用 while 循环模拟实现具体场景看看效果；(2) 用特定语法实现看看能简单到什么程度。
 
@@ -1859,7 +1498,7 @@ func step() {
 
 #### 第 12 轮 — 原始提案
 
-### Q2: 硬直期间是否让脚本进入（时间轴暂停时的 VM Tick 策略）
+#### Q2 早期提案: 硬直期间是否让脚本进入（时间轴暂停时的 VM Tick 策略）
 
 > 用户原话：希望角色时间轴暂停时脚本能进入, 这样能有更多自由度。如果真想不执行也是简单跳过, 不会太拖累性能。但是硬直进入虚拟机之后, yield/wait 可能要正确区分时间轴(包含了硬直)暂停期间是否要算在等待帧内的问题。
 
@@ -2580,18 +2219,21 @@ if (inst.WaitCounter > 0 && !killed)
 
 ---
 
-### Q3: 跨脚本 VM 使用模式 ✅
+## Q3: 跨脚本 VM 使用模式 ✅
 
-**结论**：6 种方向渐进路径。阶段 1（方向 1+2+3）✅ 已完成。方向 5（服务脚本）已由 Q4 收敛设计。
+**结论**：6 方向渐进路径；阶段 1（方向 1+2+3）✅ + 阶段 3（方向 5 服务脚本）✅ 已完成。
 
-| # | 方向 | 数据共享机制 | VM 改动 | 当前可用 | 推荐度 |
-|---|------|-----------|--------|---------|--------|
-| 0 | **宿主直调** | 宿主持有 instanceId，直接 API 操作 | 无 | ✅ | 基础 |
-| 1 | **黑板中介** | 宿主 key-value Syscall | 无 | ✅ Lang-3 | ⭐⭐⭐⭐⭐ |
-| 2 | **Include 共享模板** | 编译期代码复用（数据独立） | 无 | ✅ Lang-2 | ⭐⭐⭐⭐⭐ |
-| 3 | **宿主编排** | 宿主 C# 协调 + Syscall | 无 | ✅ SK2 裁决 | ⭐⭐⭐⭐ |
-| 4 | **共享变量区** | VM 跨实例共享内存 | ⭐⭐ | ❌ Lang-4 待定 | ⭐⭐⭐ |
-| 5 | **服务脚本 + 跨模块调用** | VM 跨模块函数调用 | ⭐⭐⭐ | → **Q4 XCALL 设计** | ⭐⭐ |
+<details>
+<summary>📋 详细设计</summary>
+
+| # | 方向 | 数据共享机制 | VM 改动 | 状态 |
+|---|------|-----------|--------|------|
+| 0 | **宿主直调** | 宿主持有 instanceId，直接 API 操作 | 无 | ✅ 基础 |
+| 1 | **黑板中介** | 宿主 key-value Syscall | 无 | ✅ Lang-3 |
+| 2 | **Include 共享模板** | 编译期代码复用（数据独立） | 无 | ✅ Lang-2 |
+| 3 | **宿主编排** | 宿主 C# 协调 + Syscall | 无 | ✅ SK2 裁决 |
+| 4 | **共享变量区** | VM 跨实例共享内存 | ⭐⭐ | ⏳ 需求驱动 |
+| 5 | **服务脚本 + 跨模块调用** | VM 跨模块函数调用 | ⭐⭐⭐ | ✅ Lang-6/7/8 |
 
 **渐进路径**：
 
@@ -2599,7 +2241,7 @@ if (inst.WaitCounter > 0 && !killed)
 |------|------|------|
 | **阶段 1** | 方向 1 + 2 + 3 — 黑板 + include + 宿主编排 | ✅ 已完成（Lang-1/2/3） |
 | **阶段 2（需求驱动）** | + 方向 4 — 共享变量区 | ⏳ 黑板 Syscall 频率成为瓶颈时触发 |
-| **阶段 3** | + 方向 5 — 服务脚本 | → Q4 收敛，实现路径 C-0~C-3 已排入 [VM_Summary](../../Docs/VM_Summary.md) |
+| **阶段 3** | + 方向 5 — 服务脚本 | ✅ C-1~C-2 已实现（Lang-6 XCALL + Lang-7 自动退化 + Lang-8 统一语法）。剩余 C-3 @force_inline 远期 |
 
 **关键确认**：
 
@@ -2609,12 +2251,14 @@ if (inst.WaitCounter > 0 && !killed)
 | 实例重定向 | ✅ 修改 3 个字段（IP, StateFlags, CallStackDepth）即可让同一实例换函数执行，寄存器保留 |
 | 方向 0（宿主直调） | ✅ SpawnInstance → TickInstance → 读寄存器 → DestroyInstance，是所有方向的基础 |
 
+</details>
+
 <details>
-<summary>📋 Q3 讨论历史（第 12~12.5 轮）</summary>
+<summary>📋 讨论历史（第 12~12.5 轮）</summary>
 
 #### 第 12 轮 — 5 种方向详解
 
-### Q3: 跨脚本 VM 使用模式推荐
+#### Q3 第 12 轮详解: 跨脚本 VM 使用模式推荐
 
 > 用户原话：想要继续讨论虚拟机跨脚本使用的方式, 先帮我推荐几种不同方向的使用方法。
 
@@ -3260,11 +2904,16 @@ func step() {
 </details>
 ---
 
-### Q4: FFS 无对象语言的宿主参数封装 ✅
+## Q4: FFS 封装 — 服务脚本 ✅
 
-> **第 18~26 轮。✅ 收敛（第 26 轮）。** 14 项设计决策全部锁定。语言需求已提交 [VM_Summary Lang-6~Lang-8](../../Docs/VM_Summary.md)。
+**结论**：方式 C（语言级引用）✅；Y1-Plus ✅；svc.member 统一语法 ✅；@export ✅；@inline ✅；14 项决策锁定。C-1~C-2 已实现（Lang-6/7/8 ✅）。剩余 C-3 @force_inline 远期。
 
-#### 核心结论
+<details>
+<summary>📋 详细设计</summary>
+
+> **第 18~26 轮。✅ 收敛（第 26 轮）。** 14 项设计决策全部锁定。**C-1（Lang-6）✅ / C-1.5（Lang-7）✅ / C-2（Lang-8）✅ 已实现**（1259 tests pass）。剩余 C-3（Lang-9 @force_inline）为远期。详见 [VM_Summary Lang-6~Lang-8](../../Docs/VM_Summary.md)。
+
+**14 项核心决策**：
 
 | 决策 | 结论 | 轮次 |
 |------|------|------|
@@ -3283,9 +2932,7 @@ func step() {
 | XCALL 优化 | O1+O2（C-1），A1/A2（C-1.5），O7+@inline（C-2），O4/A5+@force_inline（C-3+） | R22-24 ✅ |
 | 优化退化策略 | 编译期自动退化，运行时零决策开销 | R22 ✅ |
 
-**下一步** → 输出 **XCALL Spec 设计文档**，正式进入 C 阶段实现。
-
-#### OpCode 基线设计（C-1 同时实现）
+**OpCode 基线设计（C-1 同时实现）**：
 
 | OpCode | 操作 | 编码 | 开销 |
 |--------|------|------|------|
@@ -3293,7 +2940,7 @@ func step() {
 | **XLOAD_MVAR** | 跨实例变量读取 | A=dest, B=instanceId_reg, C=mvarIndex | ~3-5 ns |
 | **XSTORE_MVAR** | 跨实例变量写入 | A=src, B=instanceId_reg, C=mvarIndex | ~3-5 ns |
 
-#### 嵌套深度配置（C-1.5）
+**嵌套深度配置（C-1.5）**：
 
 ```csharp
 public class VMConfig {
@@ -3302,18 +2949,20 @@ public class VMConfig {
 }
 ```
 
-#### 实现路径
+**实现路径**：
 
-| 阶段 | 内容 | 说明 |
-|------|------|------|
-| C-0 | 零改动原型验证 | 宿主 C# 桥接模拟跨实例调用 |
-| C-1 | XCALL + XLOAD_MVAR + XSTORE_MVAR | 三个 OpCode + @export + Y1-Plus 编译期 yield 禁止 |
-| C-1.5 | A1/A2 自动退化 + MaxXCallDepth 配置 | getter/setter 自动优化为直接变量访问 |
-| C-2 | `svc.member` 统一语法 + @inline + LSP 诊断 | 语法糖 + 编译期内联 hint + 调用链深度诊断 |
-| C-3 | @force_inline + A5 深度内联 | 强制内联 + 函数体展开 |
+| 阶段 | 内容 | 说明 | 状态 |
+|------|------|------|------|
+| C-0 | 零改动原型验证 | 宿主 C# 桥接模拟跨实例调用 | ⏭️ 跳过（直接 C-1） |
+| C-1 | XCALL + XLOAD_MVAR + XSTORE_MVAR | 三个 OpCode + @export + Y1-Plus 编译期 yield 禁止 | ✅ Lang-6 |
+| C-1.5 | A1/A2 自动退化 + MaxXCallDepth 配置 | getter/setter 自动优化为直接变量访问 | ✅ Lang-7 |
+| C-2 | `svc.member` 统一语法 + @inline + LSP 诊断 | 语法糖 + 编译期内联 hint + 调用链深度诊断 | ✅ Lang-8 |
+| C-3 | @force_inline + A5 深度内联 | 强制内联 + 函数体展开 | ⏳ 远期（Lang-9） |
+
+</details>
 
 <details>
-<summary>📋 Q4 完整讨论历史（第 18~26 轮）</summary>
+<summary>📋 讨论历史（第 18~26 轮）</summary>
 
 #### 背景
 
@@ -5513,9 +5162,9 @@ case OpCode.XCALL:
 
 **Q4 服务脚本设计 — ✅ 收敛（第 26 轮）**
 
-所有 14 项设计决策已确认。下一步 → 输出 **XCALL Spec 设计文档**，正式进入 C 阶段实现。
+所有 14 项设计决策已确认。**C-1~C-2 已全部实现**（Lang-6/7/8 ✅，1259 tests pass）。剩余 C-3（Lang-9 @force_inline）为远期。
 
-##### 待用户确认（第 26 轮）
+##### 第 26 轮待确认项（已全部确认）
 
 1. **编译期常量 vs 运行时配置无性能差异**的分析是否认可？→ 确认使用运行时配置方案
 2. **Q4 收敛** — 14 项决策全部锁定，下一步输出 XCALL Spec？
@@ -5527,7 +5176,7 @@ case OpCode.XCALL:
 <details>
 <summary>📋 讨论轮次总览</summary>
 
-#### 第 26 轮（当前）
+#### 第 26 轮（最终轮 — Q4 收敛）
 
 用户回应第 25 轮 4 个确认问题：
 - Q1: 嵌套深度含义清楚。希望常量可配 + 运行时 fallback（类似扩展寄存器），但前提是常量配置对性能有显著提升
@@ -5768,3 +5417,233 @@ Q2 基本收敛。
 - 语言演进路线 Lang-1~Lang-5 提出，待同步到 VM_Summary
 
 </details>
+## Syscall 需求评估
+
+**结论**：前 4 个脚本（S01~S04）可直接用现有 Syscall 实现。S05~S08 及碰撞框脚本化需新增少量 Syscall。
+
+<details>
+<summary>📋 详细设计</summary>
+
+| 需求 | 现有 Syscall | 是否需要新增 |
+|------|------------|------------|
+| 动作管理 | BeginAction, EndAction, GetFrame | ✅ 足够 |
+| 命中检测 | CheckAttackHit, CheckAttackBlocked | ✅ 足够 |
+| 伤害/硬直 | ApplyDamage, ApplyHitstun, ApplyHorizKB_* | ⚠️ ApplyDamage 需拆分（§4.2），新增 ApplyHitReaction |
+| 速度控制 | SetVelocity | ✅ 足够 |
+| 输入查询 | GetInput, GetInputDir | ✅ 足够 |
+| 落地检测 | IsGrounded | ✅ 足够 |
+| 效果 | SpawnEffectHit, SpawnEffectSelf | ✅ 足够 |
+| 碰撞框设置 | — | 🆕 需要 `SetHitbox`, `SetHurtbox`, `ClearHitbox` |
+| 蹲姿/姿态切换 | — | 🆕 需要 `SetStance` |
+| 倒地状态 | — | ❓ 可能需要 `SetKnockdownState` / `SetInvincible` |
+
+> 📌 **宿主前置依赖**：需先实现上述新增 Syscall 的宿主侧逻辑（碰撞框管理、姿态系统、倒地状态系统），然后才能在脚本中使用。
+
+</details>
+
+---
+
+## 宿主侧变更评估
+
+| 变更 | 说明 | 影响范围 |
+|------|------|---------|
+| `CanActivate` → 脚本 `checkEnter()` | 宿主通过 `TryGetFunction("checkEnter")` 获取入口 IP，spawn + tick + 读返回值 | GameVMBridge + SkillManager Layer 3 |
+| `OnFrame` → `step()` 函数 | 条件通过后同实例 redirect 到 `step()` 入口，每帧 tick | GameVMBridge |
+| `CanContinue` → 脚本控制 | 循环技能退出由脚本 return 或宿主 Kill | SkillManager |
+| `CollisionFrames` → 脚本内设置 | 碰撞框数据迁移到脚本 Syscall | 需新增 Syscall |
+| `ProbeSkillCondition` → redirect 模型 | 重构为 checkEnter + redirect（非 yield/return 信号） | 需修改 |
+| `VMWorld.RedirectInstance` | 新增 API：重定向完成实例到新入口 | FFVM 新增 ~5 行 |
+| 裁决层改造 | 实现分层候选池机制 | SkillManager 重构 |
+| `ApplyDamage` → 拆分 | 拆为 `ApplyDamage` (数值) + `ApplyHitReaction` (标记) | Syscall 重设计 |
+
+---
+
+## 附录 A：技能全集分类
+
+> 方括号 `[]` 表示可选/高级变体，非基础集合。
+
+| 分类 | 技能列表 |
+|------|---------|
+| **基础移动** | 站立待机, 前进, 后退, 前跑, 蹲, 跳, 前跳, 后跳, [前影跳], [后影跳] |
+| **防御** | 站防御, 蹲防御, [空中防御] |
+| **闪避** | 前闪避, 后闪避, [原地侧闪], [前影闪], [后影闪] |
+| **基本攻击** | 近拳, 远拳, 蹲拳, 跳拳, 近脚, 远脚, 蹲脚, 跳脚 |
+| **抓投** | 前投, 后投, 空中投, 指令投起手, 拆投 |
+| **受击** | 上受击, 中受击, 下受击, 被绊倒 |
+| **空中受击** | 被吹飞, 浮空, 旋转吹飞 |
+| **倒地** | 硬倒地, 软倒地, 仰面倒地, 趴伏倒地 |
+| **起身** | 原地起身, 受身(快速起身), 前滚起身, 后滚起身 |
+| **特殊** | 被破防, 眩晕, 瘫软, 版边反弹 |
+| **死亡** | 基础死亡, 属性死亡, 磨血死亡, 剧情死亡 |
+| **流程** | 开始, 胜利, 战败, 续关, 完美胜利 |
+| **挑衅** | 基础挑衅, 击败挑衅 |
+
+---
+
+## 附录 B：参考脚本参数模式提取
+
+> 从 `skill_114`（飞燕旋风腿）和 `skill_25`（上盘被击中）提取通用参数表示，作为首批脚本的 Syscall 参数设计参考。
+
+### 动作声明
+
+```
+BeginAction(actionId, totalFrames)
+defer { EndAction() }
+```
+
+- `actionId`: 技能定义 ID，宿主用于查找动画/碰撞框数据
+- `totalFrames`: 动作总帧数
+- `defer + EndAction()`: 确保技能结束时清理
+
+### 伤害参数与受击标记
+
+两个概念的区分：
+
+| 概念 | 用途 | 生命周期 |
+|------|------|---------|
+| **伤害参数** (Damage Params) | 用于计算伤害数值（系数、属性克制等） | 命中瞬间消费 |
+| **受击标记** (HitReactionTag) | 攻击方附加到受击方，受击方据此决定进哪种受击技能 | 附加→受击方读取→消费 |
+
+```
+// 伤害参数：用于数值计算
+ApplyDamage(targetId, coefficient)
+
+// 受击标记：通知受击方选择受击技能
+ApplyHitReaction(targetId, reactionTag)
+```
+
+- `coefficient`: 伤害系数（不是绝对值），宿主用公式换算
+- `reactionTag`: 受击反应标记（唯一枚举 ID，不做 mask 组合）
+
+### 硬直参数
+
+```
+ApplyHitstun(targetId, startFrame, durationFrames, level, shakeFlag)
+```
+
+### 击退参数
+
+```
+// 模式 A: 距离+时间 (定距移动)
+ApplyHorizKB_Dist(targetId, distance, durationFrames)
+
+// 模式 B: 速度 (直到着地)
+ApplyHorizKB_Speed(targetId, speed)
+
+// 垂直击退
+ApplyVertKB(targetId, speed, durationFrames)
+
+// 自身位移
+ApplySelfHorizKB(distance, durationFrames)
+ApplySelfVertKB(initialSpeed, acceleration)
+```
+
+### 互斥分组
+
+```ffs
+var mutex1: int = 0
+if mutex1 == 0 {
+    // 检测命中...
+    mutex1 = 1
+}
+```
+
+用局部变量实现（非 Syscall）。同一攻击段只生效一次。
+
+### 能量系数
+
+```
+SetEnergyCoeff(multiplier)
+```
+
+临时修改下次 ApplyDamage 的能量获取倍率。首批脚本可暂不使用。
+
+---
+
+## 附录 C：首批脚本伪代码示例
+
+> 第 9 轮更新：所有示例已改为 `checkEnter()` + `step()` 双入口结构（方案 D′）。
+
+### 脚本书写风格约定
+
+- **必须提取为变量**：多次引用的值（帧数 `totalFrames`、攻击窗口边界）
+- **可内联**：仅出现一次的常量参数（effectId, groupId 等），注释说明含义
+- **帧号获取**：统一使用 `GetFrame()` Syscall 从宿主获取帧号，**不在脚本内自行维护帧计数器**（参见 Q2 结论）
+- **结构约定**：所有 VM 技能脚本包含 `func checkEnter(): int`（条件）+ `func step()`（执行）
+
+### S01 — 站立待机 (Idle)
+
+```ffs
+/// Idle 不需要条件检查 — 作为最低优先级兜底，总是可进入
+func checkEnter(): int {
+    return 1
+}
+
+func step() {
+    BeginAction(1, -1)    // -1 = 无限循环
+    defer { EndAction() }
+
+    while true {
+        yield
+    }
+}
+```
+
+### S04 — 近拳 (LightPunch)
+
+```ffs
+func checkEnter(): int {
+    var lpPressed: int = IsInputPressed(4)   // 4 = LP button
+    var grounded: int = IsGrounded()
+    if lpPressed == 0 || grounded == 0 {
+        return 0
+    }
+    return 1
+}
+
+func step() {
+    var frames: int = 20
+
+    BeginAction(101, frames)
+    defer { EndAction() }
+
+    var hit: int = 0
+    while GetFrame() < frames {
+        if GetFrame() >= 4 && GetFrame() < 8 && hit == 0 {
+            var t: int = CheckAttackHit(1001)
+            if t > 0 {
+                ApplyDamage(t, 3, 102)
+                ApplyHitstun(t, 0, 10, 0, 1)
+                ApplyHorizKB_Dist(t, 0.5, 5)
+                SpawnEffectHit(3001, 30)
+                hit = 1
+            }
+        }
+        yield
+    }
+}
+```
+
+### S06 — 上受击 (HitHigh)
+
+```ffs
+/// 受击技能由宿主裁决层触发，checkEnter 总是通过
+func checkEnter(): int {
+    return 1
+}
+
+func step() {
+    var frames: int = 20
+
+    BeginAction(25, frames)
+    defer { EndAction() }
+
+    SpawnEffectSelf(4001, 60)
+
+    while GetFrame() < frames {
+        yield
+    }
+}
+```
+
+---
