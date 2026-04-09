@@ -1,6 +1,6 @@
 # KOF98 技能 FFS 脚本化讨论
 
-> **状态**：✅ 收敛（SK3 💬 待性能验证外，其余 SK1~SK14-3 + Q1~Q4 全部 ✅。14 项 Q4 设计决策锁定。C-1 Lang-6 ✅ / C-1.5 Lang-7 ✅ / C-2 Lang-8 ✅ 已实现。剩余 C-3 Lang-9 @force_inline 为远期待定）
+> **状态**：✅ 收敛（SK3 💬 待性能验证外，其余 SK1~SK14-3 + Q1~Q4 全部 ✅。14 项 Q4 设计决策锁定。C-1 Lang-6 ✅ / C-1.5 Lang-7 ✅ / C-2 Lang-8 ✅ 已实现。`@force_inline` 关键字已取消 — A5 深度内联为远期计划，内联失败严格程度改由编译器配置控制）
 > **来源**：需求讨论 — 将 host-side 技能迁移为 FFS 脚本驱动
 > **日期**：2026-04-09（实现状态同步更新）
 
@@ -74,7 +74,7 @@
 | Q1 | OOP/ECS 数据兼容 | 🔒 | 不冲突 — SK12 原则 + blittable VMInstanceState 天然兼容 ECS |
 | Q2 | 硬直+yield 语句级控制 | ✅ | 方案 A — while+GetFrame()+yield，帧区间循环行业标准模式（7/10 语言同构） |
 | Q3 | 跨脚本 VM 使用模式 | ✅ | 6 方向渐进路径：阶段1（方向1+2+3）✅ 完成；阶段3（方向5 服务脚本 = Q4）✅ C-1~C-2 已实现 |
-| Q4 | FFS 封装 — 服务脚本 | ✅ | 方式 C ✅；Y1-Plus ✅；统一语法 ✅；@export ✅；@inline ✅；嵌套 Warn/Unlimited ✅；14 项决策锁定。C-1~C-2 已实现（Lang-6/7/8 ✅ 1259 tests）。剩余 C-3 @force_inline 远期 |
+| Q4 | FFS 封装 — 服务脚本 | ✅ | 方式 C ✅；Y1-Plus ✅；统一语法 ✅；@export ✅；@inline ✅；嵌套 Warn/Unlimited ✅；14 项决策锁定。C-1~C-2 已实现（Lang-6/7/8 ✅ 1259 tests）。`@force_inline` 已取消，A5 深度内联远期 |
 
 ---
 
@@ -852,7 +852,7 @@ SK10 连招描述脚本需要哪些语言特性？
 | | C-2 | include (L2) | ✅ Lang-2 |
 | | C-3 | 黑板 Syscall 正式化 | ✅ Lang-3 |
 | **Phase 2** | C-4 | 跨模块函数调用 (L4 = XCALL 服务脚本) | ✅ Lang-6/7/8 |
-| **远期** | C-5 | @force_inline | ⏳ Lang-9 待定 |
+| **远期** | C-5 | A5 深度内联（`@force_inline` 已取消） | ⏳ Lang-9 待定 |
 
 **语言方细则 Q&A**（已归档 — 全部已在实现中解决）：
 1. 方向选择 → C ✅
@@ -2241,7 +2241,7 @@ if (inst.WaitCounter > 0 && !killed)
 |------|------|------|
 | **阶段 1** | 方向 1 + 2 + 3 — 黑板 + include + 宿主编排 | ✅ 已完成（Lang-1/2/3） |
 | **阶段 2（需求驱动）** | + 方向 4 — 共享变量区 | ⏳ 黑板 Syscall 频率成为瓶颈时触发 |
-| **阶段 3** | + 方向 5 — 服务脚本 | ✅ C-1~C-2 已实现（Lang-6 XCALL + Lang-7 自动退化 + Lang-8 统一语法）。剩余 C-3 @force_inline 远期 |
+| **阶段 3** | + 方向 5 — 服务脚本 | ✅ C-1~C-2 已实现（Lang-6 XCALL + Lang-7 自动退化 + Lang-8 统一语法）。A5 深度内联远期（`@force_inline` 已取消） |
 
 **关键确认**：
 
@@ -2906,12 +2906,12 @@ func step() {
 
 ## Q4: FFS 封装 — 服务脚本 ✅
 
-**结论**：方式 C（语言级引用）✅；Y1-Plus ✅；svc.member 统一语法 ✅；@export ✅；@inline ✅；14 项决策锁定。C-1~C-2 已实现（Lang-6/7/8 ✅）。剩余 C-3 @force_inline 远期。
+**结论**：方式 C（语言级引用）✅；Y1-Plus ✅；svc.member 统一语法 ✅；@export ✅；@inline ✅；14 项决策锁定。C-1~C-2 已实现（Lang-6/7/8 ✅）。`@force_inline` 已取消，A5 深度内联远期。
 
 <details>
 <summary>📋 详细设计</summary>
 
-> **第 18~26 轮。✅ 收敛（第 26 轮）。** 14 项设计决策全部锁定。**C-1（Lang-6）✅ / C-1.5（Lang-7）✅ / C-2（Lang-8）✅ 已实现**（1259 tests pass）。剩余 C-3（Lang-9 @force_inline）为远期。详见 [VM_Summary Lang-6~Lang-8](../../Docs/VM_Summary.md)。
+> **第 18~26 轮。✅ 收敛（第 26 轮）。** 14 项设计决策全部锁定。**C-1（Lang-6）✅ / C-1.5（Lang-7）✅ / C-2（Lang-8）✅ 已实现**（1259 tests pass）。`@force_inline` 已取消，A5 深度内联（Lang-9）为远期。详见 [VM_Summary Lang-6~Lang-8](../../Docs/VM_Summary.md)。
 
 **14 项核心决策**：
 
@@ -2925,11 +2925,11 @@ func step() {
 | L4/L5 关系 | 同基线设计：XCALL + XLOAD_MVAR + XSTORE_MVAR 在 C-1 同时实现 | R23 ✅ |
 | 导出声明 | **`@export` 唯一形式** | R24-25 ✅ |
 | 自动优化 | A1/A2 自动 getter/setter→直接访问退化（C-1.5） | R23 ✅ |
-| 用户引导内联 | `@inline`（hint，C-2）+ `@force_inline`（强制，C-3）+ LSP 诊断 | R24 ✅ |
-| 实现路径 | C-0 → C-1(XCALL+XL4) → C-1.5(A1/A2+配置) → C-2(语法糖+@inline+LSP) → C-3(A5+@force_inline) | R23-26 ✅ |
+| 用户引导内联 | `@inline`（hint，C-2）+ LSP 诊断。`@force_inline` 已取消 — 内联失败严格程度改由编译器配置控制 | R24 ✅ |
+| 实现路径 | C-0 → C-1(XCALL+XL4) → C-1.5(A1/A2+配置) → C-2(语法糖+@inline+LSP) → 远期(A5 深度内联) | R23-26 ✅ |
 | 嵌套调用 | **运行时配置 MaxXCallDepth（默认4）+ Warn/Unlimited 两种策略** | R21→R26 ✅ |
 | 性能影响 | 可忽略（< 0.02% 帧预算；深度检查 +1 ns/XCALL；常量 vs 变量无差异） | R20-26 ✅ |
-| XCALL 优化 | O1+O2（C-1），A1/A2（C-1.5），O7+@inline（C-2），O4/A5+@force_inline（C-3+） | R22-24 ✅ |
+| XCALL 优化 | O1+O2（C-1），A1/A2（C-1.5），O7+@inline（C-2），O4/A5 深度内联（远期） | R22-24 ✅ |
 | 优化退化策略 | 编译期自动退化，运行时零决策开销 | R22 ✅ |
 
 **OpCode 基线设计（C-1 同时实现）**：
@@ -2957,7 +2957,7 @@ public class VMConfig {
 | C-1 | XCALL + XLOAD_MVAR + XSTORE_MVAR | 三个 OpCode + @export + Y1-Plus 编译期 yield 禁止 | ✅ Lang-6 |
 | C-1.5 | A1/A2 自动退化 + MaxXCallDepth 配置 | getter/setter 自动优化为直接变量访问 | ✅ Lang-7 |
 | C-2 | `svc.member` 统一语法 + @inline + LSP 诊断 | 语法糖 + 编译期内联 hint + 调用链深度诊断 | ✅ Lang-8 |
-| C-3 | @force_inline + A5 深度内联 | 强制内联 + 函数体展开 | ⏳ 远期（Lang-9） |
+| 远期 | A5 深度内联（`@force_inline` 已取消） | 函数体展开优化，内联失败严格程度由编译器配置控制 | ⏳ 远期（Lang-9） |
 
 </details>
 
@@ -4701,20 +4701,19 @@ var result = svc.complex_calc(x, y)
 //              Add @inline to force attempt, or increase threshold.
 ```
 
-###### 层面 3：强制内联（Force Inline）
+###### 层面 3：~~强制内联（Force Inline）~~ 已取消
 
-对于高级用户，提供强制内联选项：
+> **设计变更**：`@force_inline` 关键字已取消。`@inline` 和 `@force_inline` 都不影响实际优化决策，区别仅在于诊断级别（warning vs error）。这种粒度差异不值得引入新关键字，内联失败的严格程度改由编译器配置控制（类似 VMConfig 的 `XCallDepthPolicy` 模式）。
+
+~~对于高级用户，提供强制内联选项：~~
 
 ```ffs
+// 已取消的设计（仅供历史参考）：
 // @force_inline：编译器必须内联，否则编译错误
-@export @force_inline func get_hp() {
-    return hp;
-}
-
-// 如果函数体不满足内联条件 → 编译错误（不是警告）
-@export @force_inline func complex() {  // ERROR: cannot force-inline: contains loop
-    while (x > 0) { ... }
-}
+// @export @force_inline func get_hp() { return hp; }
+//
+// 替代方案：通过编译器配置 InlineFailurePolicy 控制 @inline 失败时的严格程度
+// InlineFailurePolicy: Warn（默认）| Error（全局升级为编译错误）
 ```
 
 ###### 内联优化方案总结
@@ -4722,8 +4721,8 @@ var result = svc.complex_calc(x, y)
 | 机制 | 触发方式 | 编译器行为 | 失败处理 |
 |------|---------|-----------|---------|
 | **自动内联（A5）** | 编译器自动检测 | 条件满足→内联，否则 XCALL | 静默退化 |
-| **@inline 提示** | 用户在函数声明标记 | 尝试内联 + 诊断反馈 | 警告 + 退化 |
-| **@force_inline** | 用户强制要求 | 必须内联 | **编译错误** |
+| **@inline 提示** | 用户在函数声明标记 | 尝试内联 + 诊断反馈 | 警告 + 退化（可通过编译器配置升级为错误） |
+| ~~**@force_inline**~~ | ~~用户强制要求~~ | ~~必须内联~~ | ~~**编译错误**~~（已取消） |
 | **LSP 诊断** | IDE 实时显示 | 每个 XCALL 调用点显示内联决策 | 信息提示 |
 
 ###### 分阶段实现
@@ -4733,11 +4732,11 @@ var result = svc.complex_calc(x, y)
 | C-1 | 无内联 | XCALL 基线 |
 | C-1.5 | A1/A2 自动 getter/setter 退化 | 不需要 @inline（纯自动） |
 | C-2 | `@inline` 提示 + LSP 诊断 | 用户引导 + 编译器反馈 |
-| C-3 | A5 自动内联 + `@force_inline` | 完整内联支持 |
+| 远期 | A5 自动内联 | 函数体展开（`@force_inline` 已取消，严格程度由编译器配置控制） |
 
 **关键设计原则**：
 1. **渐进式**：不加 @inline 也能享受 A1/A2 自动优化；加了 @inline 获得更激进的优化 + 反馈
-2. **安全退化**：@inline 是 hint 不是命令；只有 @force_inline 会导致编译失败
+2. **安全退化**：@inline 是 hint 不是命令；失败严格程度由编译器配置控制（类似 VMConfig 模式）
 3. **透明性**：LSP 让用户清楚看到每个调用点的内联决策，不是黑箱
 
 ##### 更新后的收敛决策表
@@ -4752,11 +4751,11 @@ var result = svc.complex_calc(x, y)
 | L4/L5 关系 | 同基线设计：XCALL + XLOAD_MVAR + XSTORE_MVAR 在 C-1 同时实现 | R23 ✅ |
 | 导出声明 | `@export var/const/func` — C-1 即支持；`public` 可作为 C-2 别名 | R23-24 ✅ |
 | 自动优化 | A1/A2 自动 getter/setter→直接访问退化（C-1.5） | R23 ✅ |
-| 用户引导内联 | `@inline`（hint，C-2）+ `@force_inline`（强制，C-3）+ LSP 诊断 | R24 ✅ |
-| 实现路径 | C-0 → C-1(XCALL+XL4) → C-1.5(A1/A2) → C-2(语法糖+@inline) → C-3(A5+@force_inline) | R23-24 ✅ |
+| 用户引导内联 | `@inline`（hint，C-2）+ LSP 诊断。`@force_inline` 已取消 | R24 ✅ |
+| 实现路径 | C-0 → C-1(XCALL+XL4) → C-1.5(A1/A2) → C-2(语法糖+@inline) → 远期(A5 深度内联) | R23-24 ✅ |
 | 嵌套调用 | 允许，最大深度 4 层 | R21 ✅ |
 | 性能影响 | 可忽略（< 0.02% 帧预算） | R20-21 ✅ |
-| XCALL 优化 | O1+O2（C-1），A1/A2（C-1.5），O7+@inline（C-2），O4/A5+@force_inline（C-3+） | R22-24 ✅ |
+| XCALL 优化 | O1+O2（C-1），A1/A2（C-1.5），O7+@inline（C-2），O4/A5 深度内联（远期） | R22-24 ✅ |
 | 优化退化策略 | 编译期自动退化，运行时零决策开销 | R22 ✅ |
 
 ##### 待用户确认（第 24 轮）
@@ -4770,7 +4769,7 @@ var result = svc.complex_calc(x, y)
 
 1. **统一成员语法确认**：`svc.property`/`svc.field`/`svc.method()`/`svc.function()` — 底层机制透明，编译器自动路由。是否就是你 Q3 所确认的？
 2. **@export 保持，public 作为 C-2 可选别名** — 是否接受这个折衷？
-3. **@inline 提示 + LSP 诊断 + @force_inline 分层设计**是否满足"用户引导内联优化"的需求？
+3. **@inline 提示 + LSP 诊断分层设计**是否满足"用户引导内联优化"的需求？（`@force_inline` 已取消）
 4. **Q4 现在是否可以认为已基本收敛？** — 如果是，下一步输出 XCALL spec 设计文档
 
 ---
@@ -4993,11 +4992,11 @@ LSP 也可以在编译期提供类似的警告：
 | L4/L5 关系 | 同基线设计：XCALL + XLOAD_MVAR + XSTORE_MVAR 在 C-1 同时实现 | R23 ✅ |
 | 导出声明 | **`@export` 唯一形式**（不保留 `public` 别名） | R24-25 ✅ |
 | 自动优化 | A1/A2 自动 getter/setter→直接访问退化（C-1.5） | R23 ✅ |
-| 用户引导内联 | `@inline`（hint，C-2）+ `@force_inline`（强制，C-3）+ LSP 诊断 | R24 ✅ |
-| 实现路径 | C-0 → C-1(XCALL+XL4) → C-1.5(A1/A2+配置) → C-2(语法糖+@inline+LSP) → C-3(A5+@force_inline) | R23-25 ✅ |
+| 用户引导内联 | `@inline`（hint，C-2）+ LSP 诊断。`@force_inline` 已取消 | R24 ✅ |
+| 实现路径 | C-0 → C-1(XCALL+XL4) → C-1.5(A1/A2+配置) → C-2(语法糖+@inline+LSP) → 远期(A5 深度内联) | R23-25 ✅ |
 | 嵌套调用 | 默认最大 4 层，**宿主可配置 MaxXCallDepth + Policy(Error/Warn/Unlimited)** | R21→R25 |
 | 性能影响 | 可忽略（< 0.02% 帧预算；深度检查 +1 ns/XCALL） | R20-25 ✅ |
-| XCALL 优化 | O1+O2（C-1），A1/A2（C-1.5），O7+@inline（C-2），O4/A5+@force_inline（C-3+） | R22-24 ✅ |
+| XCALL 优化 | O1+O2（C-1），A1/A2（C-1.5），O7+@inline（C-2），O4/A5 深度内联（远期） | R22-24 ✅ |
 | 优化退化策略 | 编译期自动退化，运行时零决策开销 | R22 ✅ |
 
 ##### 待用户确认（第 25 轮）
@@ -5153,16 +5152,16 @@ case OpCode.XCALL:
 | L4/L5 关系 | 同基线设计：XCALL + XLOAD_MVAR + XSTORE_MVAR 在 C-1 同时实现 | R23 ✅ |
 | 导出声明 | **`@export` 唯一形式** | R24-25 ✅ |
 | 自动优化 | A1/A2 自动 getter/setter→直接访问退化（C-1.5） | R23 ✅ |
-| 用户引导内联 | `@inline`（hint，C-2）+ `@force_inline`（强制，C-3）+ LSP 诊断 | R24 ✅ |
-| 实现路径 | C-0 → C-1(XCALL+XL4) → C-1.5(A1/A2+配置) → C-2(语法糖+@inline+LSP) → C-3(A5+@force_inline) | R23-26 ✅ |
+| 用户引导内联 | `@inline`（hint，C-2）+ LSP 诊断。`@force_inline` 已取消 — 内联失败严格程度改由编译器配置控制 | R24 ✅ |
+| 实现路径 | C-0 → C-1(XCALL+XL4) → C-1.5(A1/A2+配置) → C-2(语法糖+@inline+LSP) → 远期(A5 深度内联) | R23-26 ✅ |
 | 嵌套调用 | **运行时配置 MaxXCallDepth（默认4）+ Warn/Unlimited 两种策略** | R21→R26 ✅ |
 | 性能影响 | 可忽略（< 0.02% 帧预算；深度检查 +1 ns/XCALL；常量 vs 变量无差异） | R20-26 ✅ |
-| XCALL 优化 | O1+O2（C-1），A1/A2（C-1.5），O7+@inline（C-2），O4/A5+@force_inline（C-3+） | R22-24 ✅ |
+| XCALL 优化 | O1+O2（C-1），A1/A2（C-1.5），O7+@inline（C-2），O4/A5 深度内联（远期） | R22-24 ✅ |
 | 优化退化策略 | 编译期自动退化，运行时零决策开销 | R22 ✅ |
 
 **Q4 服务脚本设计 — ✅ 收敛（第 26 轮）**
 
-所有 14 项设计决策已确认。**C-1~C-2 已全部实现**（Lang-6/7/8 ✅，1259 tests pass）。剩余 C-3（Lang-9 @force_inline）为远期。
+所有 14 项设计决策已确认。**C-1~C-2 已全部实现**（Lang-6/7/8 ✅，1259 tests pass）。`@force_inline` 已取消，A5 深度内联（Lang-9）为远期。
 
 ##### 第 26 轮待确认项（已全部确认）
 
@@ -5219,7 +5218,7 @@ case OpCode.XCALL:
 语言方回应：
 1. 统一语法确认：svc.member 底层 5 种路径（XLOAD/XSTORE/A1退化/XCALL/A5内联）对用户完全透明
 2. @export 保持为规范形式；public 可作为 C-2 别名（可逆低风险决策）
-3. 用户引导内联三层设计：@inline（hint，C-2）+ @force_inline（强制，C-3）+ LSP 内联诊断
+3. 用户引导内联设计：@inline（hint，C-2）+ LSP 内联诊断。`@force_inline` 已取消 — 内联失败严格程度改由编译器配置控制
 4. 收敛决策表更新至 14 项
 
 #### 第 23 轮
