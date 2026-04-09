@@ -3263,6 +3263,77 @@ namespace FFVM.Compiler
         }
 
         /// <summary>
+        /// Lang-7: A1/A2 auto-degradation detection result.
+        /// </summary>
+        private struct DegradationInfo
+        {
+            public DegradationType Type;
+            public int MvarSlot;
+        }
+
+        /// <summary>
+        /// Lang-7: Detect pure getter (A1) or pure setter (A2) pattern in an @export function.
+        /// A1 pure getter: 0 params, body = single ReturnStmt whose value is an IdentifierExpr referencing a module variable.
+        /// A2 pure setter: 1 param, body = single ExprStmt(AssignExpr) where target is module var IdentifierExpr and value is IdentifierExpr of the param.
+        /// Returns DegradationType.None if no pattern detected (safe fallback to XCALL).
+        /// </summary>
+        private DegradationInfo DetectFuncDegradation(FuncDecl func)
+        {
+            var result = new DegradationInfo { Type = DegradationType.None, MvarSlot = -1 };
+
+            if (func.Body == null || func.Body.Statements == null || func.Body.Statements.Count != 1)
+                return result;
+
+            var stmt = func.Body.Statements[0];
+
+            // A1: Pure getter — func has 0 params, body is: return <moduleVar>
+            if (func.Parameters.Count == 0 && stmt is ReturnStmt ret && ret.Value is IdentifierExpr retId)
+            {
+                int mvarSlot = GetModuleVarMvarSlot(retId.Name);
+                if (mvarSlot >= 0)
+                {
+                    result.Type = DegradationType.Getter;
+                    result.MvarSlot = mvarSlot;
+                }
+                return result;
+            }
+
+            // A2: Pure setter — func has 1 param, body is: <moduleVar> = <param>
+            if (func.Parameters.Count == 1 && stmt is ExprStmt exprStmt && exprStmt.Expression is AssignExpr assign)
+            {
+                if (assign.Target is IdentifierExpr targetId && assign.Value is IdentifierExpr valueId)
+                {
+                    if (valueId.Name == func.Parameters[0].Name)
+                    {
+                        int mvarSlot = GetModuleVarMvarSlot(targetId.Name);
+                        if (mvarSlot >= 0)
+                        {
+                            result.Type = DegradationType.Setter;
+                            result.MvarSlot = mvarSlot;
+                        }
+                    }
+                }
+                return result;
+            }
+
+            return result;
+        }
+
+        /// <summary>
+        /// Lang-7: Get mvar slot for a module variable by name. Returns -1 if not a module variable.
+        /// </summary>
+        private int GetModuleVarMvarSlot(string name)
+        {
+            if (_moduleVarRegisters == null || !_moduleVarRegisters.TryGetValue(name, out int reg))
+                return -1;
+
+            // Same mapping as BuildExportTable variable collection
+            return reg >= VMConstants.MaxRegisters
+                ? (reg - VMConstants.MaxRegisters) + VMConstants.ModuleVarSlots
+                : reg - VMConstants.ModuleVarRegBase;
+        }
+
+        /// <summary>
         /// Lang-6: Build ExportTable from @export declarations. Returns null if no exports.
         /// </summary>
         private ExportTable BuildExportTable(ModuleNode module, List<FunctionEntry> functionEntries)
@@ -3336,7 +3407,12 @@ namespace FFVM.Compiler
                 }
 
                 if (funcIdx >= 0)
-                    exportFuncs.Add(new ExportFuncEntry(f.Name, funcIdx, f.Parameters.Count));
+                {
+                    // Lang-7: A1/A2 auto-degradation detection
+                    var degradation = DetectFuncDegradation(f);
+                    exportFuncs.Add(new ExportFuncEntry(f.Name, funcIdx, f.Parameters.Count,
+                        degradation.Type, degradation.MvarSlot));
+                }
             }
 
             if (exportVars.Count == 0 && exportFuncs.Count == 0)

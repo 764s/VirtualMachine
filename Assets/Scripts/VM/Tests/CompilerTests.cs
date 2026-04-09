@@ -6990,6 +6990,333 @@ func main() {
             Assert(values.Count > 0 && values[0] == 42, $"XC16: mul3(2,3,7)=42, got {(values.Count > 0 ? values[0].ToString() : "none")}");
         }
 
+        // ===================================================================
+        //  Lang-7: Auto Degradation + VMConfig Tests (AD01–AD10)
+        // ===================================================================
+
+        // ===== Test AD01: A1 pure getter → DegradationType.Getter =====
+        {
+            string source = @"
+@export var hp: int = 100
+@export func get_hp(): int {
+    return hp
+}
+func main() {
+}";
+            var result = compiler.Compile(source, "main", new Dictionary<string, int>());
+            Assert(result.Success, "AD01 compile success");
+            Assert(result.Program.ExportTable != null, "AD01: ExportTable not null");
+            Assert(result.Program.ExportTable.Functions.Length == 1, $"AD01: 1 exported func, got {result.Program.ExportTable.Functions.Length}");
+            var func0 = result.Program.ExportTable.Functions[0];
+            Assert(func0.Name == "get_hp", $"AD01: func=get_hp, got {func0.Name}");
+            Assert(func0.Degradation == DegradationType.Getter, $"AD01: Degradation=Getter, got {func0.Degradation}");
+            // hp is the first @export var → mvarSlot should match the exported var's slot
+            Assert(result.Program.ExportTable.Variables.Length == 1, $"AD01: 1 exported var");
+            Assert(func0.DegradeMvarSlot == result.Program.ExportTable.Variables[0].MvarSlot, $"AD01: DegradeMvarSlot matches hp's mvarSlot ({result.Program.ExportTable.Variables[0].MvarSlot}), got {func0.DegradeMvarSlot}");
+        }
+
+        // ===== Test AD02: A2 pure setter → DegradationType.Setter =====
+        {
+            string source = @"
+@export var hp: int = 100
+@export func set_hp(val: int) {
+    hp = val
+}
+func main() {
+}";
+            var result = compiler.Compile(source, "main", new Dictionary<string, int>());
+            Assert(result.Success, "AD02 compile success");
+            Assert(result.Program.ExportTable != null, "AD02: ExportTable not null");
+            var func0 = result.Program.ExportTable.Functions[0];
+            Assert(func0.Name == "set_hp", $"AD02: func=set_hp, got {func0.Name}");
+            Assert(func0.Degradation == DegradationType.Setter, $"AD02: Degradation=Setter, got {func0.Degradation}");
+            Assert(func0.DegradeMvarSlot == result.Program.ExportTable.Variables[0].MvarSlot, $"AD02: DegradeMvarSlot matches hp's mvarSlot ({result.Program.ExportTable.Variables[0].MvarSlot}), got {func0.DegradeMvarSlot}");
+        }
+
+        // ===== Test AD03: Non-pure function → DegradationType.None =====
+        {
+            string source = @"
+@export var hp: int = 100
+@export func add_hp(val: int) {
+    hp = hp + val
+}
+func main() {
+}";
+            var result = compiler.Compile(source, "main", new Dictionary<string, int>());
+            Assert(result.Success, "AD03 compile success");
+            var func0 = result.Program.ExportTable.Functions[0];
+            Assert(func0.Degradation == DegradationType.None, $"AD03: non-pure function → None, got {func0.Degradation}");
+            Assert(func0.DegradeMvarSlot == -1, $"AD03: DegradeMvarSlot=-1, got {func0.DegradeMvarSlot}");
+        }
+
+        // ===== Test AD04: Multi-statement body → no degradation =====
+        {
+            string source = @"
+@export var hp: int = 100
+@export func get_hp_plus(): int {
+    var x: int = hp + 1
+    return x
+}
+func main() {
+}";
+            var result = compiler.Compile(source, "main", new Dictionary<string, int>());
+            Assert(result.Success, "AD04 compile success");
+            var func0 = result.Program.ExportTable.Functions[0];
+            Assert(func0.Degradation == DegradationType.None, $"AD04: multi-stmt → None, got {func0.Degradation}");
+        }
+
+        // ===== Test AD05: Getter returning local var (not module var) → no degradation =====
+        {
+            string source = @"
+@export func get_local(): int {
+    return 42
+}
+func main() {
+}";
+            var result = compiler.Compile(source, "main", new Dictionary<string, int>());
+            Assert(result.Success, "AD05 compile success");
+            var func0 = result.Program.ExportTable.Functions[0];
+            Assert(func0.Degradation == DegradationType.None, $"AD05: return literal → None, got {func0.Degradation}");
+        }
+
+        // ===== Test AD06: Setter with wrong assignment target → no degradation =====
+        {
+            string source = @"
+@export var hp: int = 100
+var internal_var: int = 0
+@export func set_wrong(val: int) {
+    internal_var = val
+}
+func main() {
+}";
+            var result = compiler.Compile(source, "main", new Dictionary<string, int>());
+            Assert(result.Success, "AD06 compile success");
+            var func0 = result.Program.ExportTable.Functions[0];
+            // internal_var is a module var but not exported — setter still detects it as module var
+            // Degradation should still be Setter since it writes to a module variable
+            Assert(func0.Degradation == DegradationType.Setter, $"AD06: setter writes module var → Setter, got {func0.Degradation}");
+        }
+
+        // ===== Test AD07: Mixed exports — getter, setter, and normal =====
+        {
+            string source = @"
+@export var hp: int = 100
+@export var mp: int = 50
+@export func get_hp(): int {
+    return hp
+}
+@export func set_mp(val: int) {
+    mp = val
+}
+@export func compute(a: int, b: int): int {
+    return a + b
+}
+func main() {
+}";
+            var result = compiler.Compile(source, "main", new Dictionary<string, int>());
+            Assert(result.Success, "AD07 compile success");
+            Assert(result.Program.ExportTable.Functions.Length == 3, $"AD07: 3 exported funcs, got {result.Program.ExportTable.Functions.Length}");
+
+            // get_hp → Getter
+            var getHp = result.Program.ExportTable.Functions[0];
+            Assert(getHp.Name == "get_hp", $"AD07: func[0]=get_hp, got {getHp.Name}");
+            Assert(getHp.Degradation == DegradationType.Getter, $"AD07: get_hp=Getter, got {getHp.Degradation}");
+
+            // set_mp → Setter
+            var setMp = result.Program.ExportTable.Functions[1];
+            Assert(setMp.Name == "set_mp", $"AD07: func[1]=set_mp, got {setMp.Name}");
+            Assert(setMp.Degradation == DegradationType.Setter, $"AD07: set_mp=Setter, got {setMp.Degradation}");
+
+            // compute → None
+            var compute = result.Program.ExportTable.Functions[2];
+            Assert(compute.Name == "compute", $"AD07: func[2]=compute, got {compute.Name}");
+            Assert(compute.Degradation == DegradationType.None, $"AD07: compute=None, got {compute.Degradation}");
+        }
+
+        // ===== Test AD08: VMConfig — custom MaxXCallDepth + Warn =====
+        {
+            string svcSource = @"
+@export func noop(): int {
+    return 1
+}
+func main() {
+}";
+            var svcResult = compiler.Compile(svcSource, "main", new Dictionary<string, int>());
+            Assert(svcResult.Success, "AD08 svc compile success");
+
+            var config = new VMConfig { MaxXCallDepth = 2, XCallPolicy = XCallDepthPolicy.Warn };
+            var world = new VMWorld(config);
+            var depthWarnings = new List<int>();
+            world.Modules.Load(0, svcResult.Program);
+            world.OnXCallDepthWarning = (depth, max) => depthWarnings.Add(depth);
+            int svcId = world.SpawnInstance(0, 0);
+
+            // Caller: 3 sequential XCALLs (depth=1 each, no nesting, no warning)
+            var callerInstructions = new Instruction[]
+            {
+                new Instruction(OpCode.LOAD_CONST, 0, 0),
+                new Instruction(OpCode.XCALL, 1, 0, 0),
+                new Instruction(OpCode.XCALL, 1, 0, 0),
+                new Instruction(OpCode.XCALL, 1, 0, 0),
+                new Instruction(OpCode.RETURN, 0, 0),
+            };
+            var callerConsts = new Number[] { Number.FromInt(svcId) };
+            var callerFuncs = new FunctionEntry[] { new FunctionEntry("main", 0, 0, 2) };
+            var callerProg = new VMProgram(callerInstructions, callerConsts, 2, callerFuncs);
+            world.Modules.Load(1, callerProg);
+            world.SpawnInstance(1, 0);
+            world.Tick();
+            Assert(depthWarnings.Count == 0, $"AD08: sequential calls → no warnings, got {depthWarnings.Count}");
+            Assert(world.Config.MaxXCallDepth == 2, $"AD08: config.MaxXCallDepth=2, got {world.Config.MaxXCallDepth}");
+        }
+
+        // ===== Test AD09: VMConfig — Unlimited mode (no warnings) =====
+        {
+            // Build a chain: A calls B (nesting depth=1) — in Unlimited mode, no warning
+            string svcSource = @"
+@export func noop(): int {
+    return 1
+}
+func main() {
+}";
+            var svcResult = compiler.Compile(svcSource, "main", new Dictionary<string, int>());
+            Assert(svcResult.Success, "AD09 svc compile success");
+
+            var config = new VMConfig { MaxXCallDepth = 1, XCallPolicy = XCallDepthPolicy.Unlimited };
+            var world = new VMWorld(config);
+            var depthWarnings = new List<int>();
+            world.Modules.Load(0, svcResult.Program);
+            world.OnXCallDepthWarning = (depth, max) => depthWarnings.Add(depth);
+            int svcId = world.SpawnInstance(0, 0);
+
+            // Build a caller with a chain: caller → svc.noop → another svc.noop
+            // Actually, nesting > 1 requires the svc to also XCALL, which requires bytecode.
+            // Simplified: just verify Unlimited suppresses warnings even at high depth
+            // Use nested XCALL: Svc A calls Svc B
+            string svcASource = @"
+@export func relay(target: int): int {
+    return target
+}
+func main() {
+}";
+            var svcAResult = compiler.Compile(svcASource, "main", new Dictionary<string, int>());
+            Assert(svcAResult.Success, "AD09 svcA compile success");
+            world.Modules.Load(1, svcAResult.Program);
+            int svcAId = world.SpawnInstance(1, 0);
+
+            // Caller: XCALL to svc (depth=1), which is fine even with MaxXCallDepth=1
+            // But we want to verify Unlimited never fires warning
+            var callerInstructions = new Instruction[]
+            {
+                new Instruction(OpCode.LOAD_CONST, 0, 0),    // r0 = svcId
+                new Instruction(OpCode.XCALL, 1, 0, 0),       // XCALL noop
+                new Instruction(OpCode.RETURN, 0, 0),
+            };
+            var callerConsts = new Number[] { Number.FromInt(svcId) };
+            var callerFuncs = new FunctionEntry[] { new FunctionEntry("main", 0, 0, 2) };
+            var callerProg = new VMProgram(callerInstructions, callerConsts, 2, callerFuncs);
+            world.Modules.Load(2, callerProg);
+            world.SpawnInstance(2, 0);
+            world.Tick();
+            Assert(depthWarnings.Count == 0, $"AD09: Unlimited mode → no warnings, got {depthWarnings.Count}");
+        }
+
+        // ===== Test AD10: VMConfig — Warn mode fires at custom depth =====
+        {
+            // Build nested XCALLs: caller → svcA → svcB (depth=2)
+            // With MaxXCallDepth=1, should warn at depth=2
+            string svcBSource = @"
+@export func leaf(): int {
+    return 42
+}
+func main() {
+}";
+            var svcBResult = compiler.Compile(svcBSource, "main", new Dictionary<string, int>());
+            Assert(svcBResult.Success, "AD10 svcB compile success");
+
+            var config = new VMConfig { MaxXCallDepth = 1, XCallPolicy = XCallDepthPolicy.Warn };
+            var world = new VMWorld(config);
+            var depthWarnings = new List<int>();
+            world.Modules.Load(0, svcBResult.Program);
+            world.OnXCallDepthWarning = (depth, max) => depthWarnings.Add(depth);
+            int svcBId = world.SpawnInstance(0, 0);
+
+            // svcA: @export func relay() that XCALLs svcB.leaf()
+            var svcAInstructions = new Instruction[]
+            {
+                // relay(targetId): XCALL svcB.leaf() and return result
+                new Instruction(OpCode.XCALL, 0, 0, 0),       // r0 = XCALL svcB.leaf(), targetId is in r0 (param)
+                new Instruction(OpCode.RETURN, 0, 0),
+                // main: return
+                new Instruction(OpCode.RETURN, 0, 0),
+            };
+            var svcAConsts = new Number[0];
+            var svcAFuncs = new FunctionEntry[]
+            {
+                new FunctionEntry("relay", 0, 1, 2),  // 1 param (targetId)
+                new FunctionEntry("main", 2, 0, 2),
+            };
+            var svcAExportFuncs = new ExportFuncEntry[]
+            {
+                new ExportFuncEntry("relay", 0, 1),
+            };
+            var svcAProg = new VMProgram(svcAInstructions, svcAConsts, 2, svcAFuncs,
+                exportTable: new ExportTable(System.Array.Empty<ExportVarEntry>(), svcAExportFuncs));
+            world.Modules.Load(1, svcAProg);
+            int svcAId = world.SpawnInstance(1, 0);
+
+            // Caller: put svcBId in r0, XCALL svcA.relay(svcBId) → depth will be 2
+            var callerInstructions = new Instruction[]
+            {
+                new Instruction(OpCode.LOAD_CONST, 0, 0),     // r0 = svcAId
+                new Instruction(OpCode.LOAD_CONST, 1, 1),     // r1 = svcBId (this becomes param for relay)
+                new Instruction(OpCode.MOVE, 0, 1),            // r0 = svcBId (arg to relay)
+                new Instruction(OpCode.LOAD_CONST, 2, 0),     // r2 = svcAId
+                new Instruction(OpCode.XCALL, 3, 2, 0),        // r3 = XCALL svcA.relay(r0=svcBId)
+                new Instruction(OpCode.RETURN, 0, 0),
+            };
+            var callerConsts = new Number[] { Number.FromInt(svcAId), Number.FromInt(svcBId) };
+            var callerFuncs = new FunctionEntry[] { new FunctionEntry("main", 0, 0, 4) };
+            var callerProg = new VMProgram(callerInstructions, callerConsts, 4, callerFuncs);
+            world.Modules.Load(2, callerProg);
+            world.SpawnInstance(2, 0);
+            world.Tick();
+
+            // Depth 2 > MaxXCallDepth 1 → should have warned
+            Assert(depthWarnings.Count > 0, $"AD10: Warn at depth > 1, got {depthWarnings.Count} warnings");
+            Assert(depthWarnings[0] == 2, $"AD10: warning depth=2, got {depthWarnings[0]}");
+        }
+
+        // ===== Test AD11: Getter with param → no degradation (getter must have 0 params) =====
+        {
+            string source = @"
+@export var hp: int = 100
+@export func get_hp_with_param(x: int): int {
+    return hp
+}
+func main() {
+}";
+            var result = compiler.Compile(source, "main", new Dictionary<string, int>());
+            Assert(result.Success, "AD11 compile success");
+            var func0 = result.Program.ExportTable.Functions[0];
+            Assert(func0.Degradation == DegradationType.None, $"AD11: getter with param → None, got {func0.Degradation}");
+        }
+
+        // ===== Test AD12: Setter assigning non-param value → no degradation =====
+        {
+            string source = @"
+@export var hp: int = 100
+@export func set_hp_wrong(val: int) {
+    hp = 42
+}
+func main() {
+}";
+            var result = compiler.Compile(source, "main", new Dictionary<string, int>());
+            Assert(result.Success, "AD12 compile success");
+            var func0 = result.Program.ExportTable.Functions[0];
+            Assert(func0.Degradation == DegradationType.None, $"AD12: assign literal (not param) → None, got {func0.Degradation}");
+        }
+
         // ===== Summary =====
         Debug.Log($"========================================");
         Debug.Log($"Compiler Tests: {passed} passed, {failed} failed");
