@@ -542,13 +542,13 @@ B 阶段 20 个步骤（B-R1 → B-δ5）全部完成，已归入上方 A 区表
 
 ---
 
-### Lang. 语言需求实现（SK14 — 最优先）⏳
+### Lang. 语言需求实现（SK14 + Q4）⏳
 
-> **来源**：[KOF98/Docs/Discussion/D_SkillScripting.md](../KOF98/Docs/Discussion/D_SkillScripting.md) SK14 — FFS 语言需求整合（第 11 轮）
+> **来源**：[KOF98/Docs/Discussion/D_SkillScripting.md](../KOF98/Docs/Discussion/D_SkillScripting.md) SK14 — FFS 语言需求整合 + Q4 服务脚本设计（第 26 轮收敛，14 项决策锁定）
 >
 > **原则**：总是优先考虑理想方案（方向 A），仅当理想方案被证明不可行或代价过高时才退而求其次。对性能变化敏感 — 任何语言层改动必须运行 B01-B06 benchmark 确认无回归。
 >
-> **背景**：KOF98 技能脚本化讨论（SK14）整合了 4 个语言层痛点（P1 模块变量、P2 include、P3 跨脚本数据共享、P4 跨模块函数调用），提出 3 个建议方向（A 完整 / B 最速 / C 折衷）。需求侧推荐方向 C，但最终由语言方从语言视角取舍。
+> **背景**：KOF98 技能脚本化讨论（SK14）整合了 4 个语言层痛点（P1 模块变量、P2 include、P3 跨脚本数据共享、P4 跨模块函数调用），提出 3 个建议方向（A 完整 / B 最速 / C 折衷）。需求侧推荐方向 C，但最终由语言方从语言视角取舍。**Q4 服务脚本讨论（第 18~26 轮）进一步收敛了 L4/L5 的具体设计：XCALL + XLOAD_MVAR + XSTORE_MVAR 统一基线、@export 导出声明、`svc.member` 统一语法、编译期优化路径。**
 
 | 序号 | 步骤 | 状态 | 内容 | 对应痛点 | 改动范围 | 复杂度 |
 |------|------|------|------|---------|---------|--------|
@@ -557,24 +557,58 @@ B 阶段 20 个步骤（B-R1 → B-δ5）全部完成，已归入上方 A 区表
 | Lang-1.1b | 扩展寄存器 | ✅ | 独立于 `NumberRegisters` 的按需扩展寄存器池（`Number[]` 堆数组）+ 专用 LOAD_XREG/STORE_XREG opcode 访问。不使用时零开销（不分配堆内存）。模块变量超过 ModuleVarSlots 时自动溢出到扩展寄存器。编译器辅助方法 `EmitLoadModuleVar` / `EmitStoreModuleVar` 统一路由固定/扩展寄存器。快照系统深拷贝扩展数组 | 寄存器容量兜底 | 编译器 + VM 运行时 | ⭐⭐ |
 | Lang-2 | include (L2) | ✅ | 预处理器递归展开 + const/struct/func/var 重定义规则 | P2: 脚本间无法复用声明 | 编译器（新 Preprocessor） | ⭐⭐ |
 | Lang-3 | 黑板 Syscall 正式化 | ✅ | Get/SetBlackboard(key, value) 标准 Syscall + BB01-BB10 测试套件覆盖基础读写、多 Key 独立性、默认值、覆盖写入、跨函数持久、模块变量集成、include 集成、defer cleanup 集成、字符串 Key 集成、循环批量读写 | P3: 跨脚本运行时数据共享 | 宿主 Syscall | ⭐ |
-| *Lang-4* | *跨模块共享变量 (L3)* | *⏳* | *共享内存区域或专用寄存器段* | *P3 升级* | *⚠️ 编译器 + VM 运行时* | *⭐⭐⭐* |
-| *Lang-5* | *跨模块函数调用 (L4)* | *⏳* | *ModuleTable + CALL 指令扩展* | *P4: 跨模块函数调用* | *⚠️ 编译器 + VM 运行时* | *⭐⭐⭐* |
+| *Lang-4* | *跨模块共享变量 (L3)* | *⏳* | *共享内存区域或专用寄存器段。按需触发 — 当黑板 Syscall 频率成为性能瓶颈时* | *P3 升级* | *⚠️ 编译器 + VM 运行时* | *⭐⭐⭐* |
+| **Lang-6** | **XCALL 基线 (C-1)** | **⏳** | **三个新 OpCode: XCALL（跨实例函数调用）+ XLOAD_MVAR（跨实例变量读取）+ XSTORE_MVAR（跨实例变量写入）。`@export` 导出声明。Y1-Plus 编译期 yield 禁止（服务函数不可 yield）。运行时 `_xcallDepth` 计数 + Warn 模式（默认 MaxXCallDepth=4）。编译器跨模块导出表解析** | P4: 跨模块函数调用 + Q4 服务脚本 | ⚠️ 编译器 + VM 运行时 | ⭐⭐⭐ |
+| **Lang-7** | **自动退化 + 配置 (C-1.5)** | **⏳** | **A1: 自动 getter→XLOAD_MVAR 退化（纯 getter 函数 → 直接变量读取，~15ns→~3ns）。A2: 自动 setter→XSTORE_MVAR 退化。VMConfig.MaxXCallDepth + XCallDepthWarning 运行时配置。两种策略: Warn（默认）/ Unlimited** | 性能优化 + 宿主配置 | 编译器 + VMConfig | ⭐⭐ |
+| **Lang-8** | **统一语法 + @inline + LSP (C-2)** | **⏳** | **`svc.member` 统一成员访问语法（编译器根据导出表自动路由 XCALL/XLOAD_MVAR/XSTORE_MVAR）。`@inline` hint 声明。LSP 调用链深度诊断 + 内联建议 + 性能估算** | 易用性 + 开发体验 | 编译器 + LSP | ⭐⭐⭐ |
+| *Lang-9* | *@force_inline + 深度内联 (C-3)* | *⏳* | *`@force_inline` 强制内联声明。A5 函数体展开优化。O4 跨模块常量折叠。编译期完整语义保持* | *极致优化* | *编译器* | *⭐⭐⭐* |
 
-> 斜体 = 远期展望，当前阶段不排期，按需触发。Lang-1 和 Lang-2 无依赖关系，可并行实施。Lang-1.1a/b 在 Lang-1 之后，与 Lang-2 无依赖。
+> Phase 1（Lang-1~Lang-3）✅ 完成。Phase 2 = Lang-6~Lang-8（Q4 服务脚本 XCALL 路径），前置条件：XCALL Spec 设计文档输出。Lang-4 按需触发（黑板瓶颈时）。Lang-9 远期。
+>
+> **Lang-6 子计划 checklist**（C-1 XCALL 基线）：
+> - [ ] 输出 XCALL Spec 设计文档（OpCode 编码、导出表格式、跨实例寻址协议）
+> - [ ] 新增 `@export` 关键字（Lexer + Parser + AST）
+> - [ ] 编译器导出表生成（被 @export 标记的 var/const/func → ExportTable）
+> - [ ] 新增 XCALL OpCode（A=dest, B=instanceId_reg, C=funcIndex）+ VMWorld 执行逻辑
+> - [ ] 新增 XLOAD_MVAR OpCode（A=dest, B=instanceId_reg, C=mvarIndex）+ 执行逻辑
+> - [ ] 新增 XSTORE_MVAR OpCode（A=src, B=instanceId_reg, C=mvarIndex）+ 执行逻辑
+> - [ ] Y1-Plus: 编译期检查 @export 函数不含 yield/wait
+> - [ ] 运行时嵌套深度检查（_xcallDepth inc/dec + Warn 日志）
+> - [ ] 跨实例调用协议：参数传递、返回值、状态保存/恢复
+> - [ ] 测试套件：XC01-XC12+（基础 XCALL、跨实例变量读写、嵌套调用、导出表、yield 禁止、深度警告）
+> - [ ] B01-B06 benchmark 确认无回归
+>
+> **Lang-7 子计划 checklist**（C-1.5 自动退化 + 配置）：
+> - [ ] A1 自动 getter 退化检测（AST 分析：单 return + 单变量读取 → 替换 XCALL 为 XLOAD_MVAR）
+> - [ ] A2 自动 setter 退化检测（AST 分析：单赋值 → 替换 XCALL 为 XSTORE_MVAR）
+> - [ ] VMConfig 新增 MaxXCallDepth / XCallDepthWarning 配置字段
+> - [ ] 测试套件：退化正确性、配置生效验证、Unlimited 模式验证
+> - [ ] B01-B06 benchmark 确认退化带来预期加速
+>
+> **Lang-8 子计划 checklist**（C-2 统一语法 + @inline + LSP）：
+> - [ ] Parser 支持 `svc.member` 点号访问语法（MemberAccessExpr）
+> - [ ] 编译器根据目标模块导出表自动路由：var → XLOAD/XSTORE，func → XCALL，纯 getter → A1 退化
+> - [ ] `@inline` hint 关键字（Lexer + Parser + 编译器 inline 标记）
+> - [ ] LSP: 调用链深度诊断（Warning: XCALL depth > N）
+> - [ ] LSP: 内联建议（"this getter can be inlined"）
+> - [ ] 测试套件：统一语法解析、路由正确性、@inline 标记验证
+>
 >
 > **Lang-1 保留段决策**：保留 r56~r63 模块变量段，跟随 MaxRegisters 变化。公式 `ModuleVarSlots = (MaxRegisters / 64) * 8`（即每 64 寄存器保留 8 个 slot）。`ModuleVarRegBase = MaxRegisters - ModuleVarSlots`。全部使用 VMConstants 常量配置。模块变量通过专用 LOAD_MVAR/STORE_MVAR 指令绝对寻址，Reg() 保持最简形式 `r < ScratchZoneSize ? r : r + regBase`，热循环无额外分支。超过 ModuleVarSlots 的模块变量自动溢出到 Lang-1.1b 扩展寄存器池（`Number[]` 堆数组），通过 LOAD_XREG/STORE_XREG 访问。编译器辅助方法 `EmitLoadModuleVar`/`EmitStoreModuleVar` 自动路由固定/扩展路径。
 >
 > **Lang-1.1 分析结论**：MaxRegisters 64→128→const 对热循环零性能影响（`fixed (long* rawRegs = inst.Registers.Raw)` 后为裸指针偏移，JIT 生成 `ptr + index * 8`，不关心数组总大小）。唯一客观影响为每实例内存增长（64 slots = 512B → 128 slots = 1024B）及快照 memcpy 体积，但 O10 仅拷贝活跃实例（典型 3-10 个），可忽略。Lang-1.1a 已完成常量配置化（NumberRegisters 改为 `fixed long Raw[MaxRegisters]`，所有边界常量化）。Lang-1.1b ✅ 已完成扩展寄存器：`Number[][] ExtendedRegs` 存储在 InstancePool（每实例一个堆数组，null = 未使用），通过 LOAD_XREG/STORE_XREG 专用指令访问。模块变量超过 ModuleVarSlots 时自动溢出。不使用时零开销（无分配）。
 >
-> ⚠️ **性能敏感**：每个 Lang 步骤完成后必须运行 B01-B06 benchmark，确认无性能回归。涉及 VM 运行时改动的步骤（Lang-4/5）需额外关注 ExecuteInstance 热循环影响。
+> ⚠️ **性能敏感**：每个 Lang 步骤完成后必须运行 B01-B06 benchmark，确认无性能回归。涉及 VM 运行时改动的步骤（Lang-6/7/8）需额外关注 ExecuteInstance 热循环影响。
 >
-> 🔧 **专用指令优化原则**（Lang-1 经验）：任何需要特殊寄存器寻址的语言特性，必须使用专用 OpCode（如 LOAD_MVAR/STORE_MVAR、LOAD_XREG/STORE_XREG）而非在 Reg() 热路径中增加分支。Reg() 是每条指令执行 1~3 次的最内层函数，额外分支会被放大为系统性回归。Lang-1 初始实现在 Reg() 增加 `|| r >= ModuleVarRegBase` 分支后发现性能回归，改为专用指令后 Reg() 恢复为 `r < ScratchZoneSize ? r : r + regBase` 最简形式。Lang-1.1b 扩展寄存器同样遵循此原则——用 LOAD_XREG/STORE_XREG 专用指令访问堆数组，Reg() 无任何改动。后续 Lang-4（跨模块共享变量）等涉及新寄存器段/寻址模式的步骤，亦须遵循此原则。
+> 🔧 **专用指令优化原则**（Lang-1 经验）：任何需要特殊寄存器寻址的语言特性，必须使用专用 OpCode（如 LOAD_MVAR/STORE_MVAR、LOAD_XREG/STORE_XREG）而非在 Reg() 热路径中增加分支。Reg() 是每条指令执行 1~3 次的最内层函数，额外分支会被放大为系统性回归。Lang-1 初始实现在 Reg() 增加 `|| r >= ModuleVarRegBase` 分支后发现性能回归，改为专用指令后 Reg() 恢复为 `r < ScratchZoneSize ? r : r + regBase` 最简形式。Lang-1.1b 扩展寄存器同样遵循此原则——用 LOAD_XREG/STORE_XREG 专用指令访问堆数组，Reg() 无任何改动。**Lang-6 XCALL/XLOAD_MVAR/XSTORE_MVAR 亦遵循此原则 — 专用 OpCode 访问目标实例寄存器，Reg() 无改动。**
 >
-> 详细需求背景、痛点分析、3 个建议方向的细则与待回复问题，见 [D_SkillScripting.md SK14](../KOF98/Docs/Discussion/D_SkillScripting.md)「向 VM/语言方提交的需求背景与建议方向」一节。
+> 详细需求背景、痛点分析、3 个建议方向的细则与 Q4 收敛决策，见 [D_SkillScripting.md](../KOF98/Docs/Discussion/D_SkillScripting.md)「Q4 核心结论」一节。
 >
 > **Lang-2 实现总结**：新增 `Preprocessor` 类（`Preprocessor.cs`）+ `IFileResolver` / `DictionaryFileResolver` 接口。Lexer 新增 `Include` TokenType，Parser 解析 `include "path"` → `ImportDecl`（AST 基础设施已预置）。Preprocessor 递归深度优先展开 include，支持菱形依赖（diamond include）。重定义规则：跨文件覆盖允许（后者覆盖前者），同文件重定义禁止，var/const 交叉覆盖禁止。BytecodeCompiler 新增 `Compile(source, entry, syscalls, syscallTable, fileResolver, filePath)` 重载，原有 `Compile(source, entry, syscalls)` 向后兼容不变。INC01-INC16 共 16 个测试用例覆盖：基础 include、多 include、多级 include、循环检测、跨文件覆盖、同文件重定义错误、const/var 交叉覆盖错误、struct/func 覆盖、全集成、文件未找到、向后兼容。Reg() 热路径无改动，纯编译期特性。
+>
+> **Lang-6 设计来源（Q4 收敛）**：Q4 讨论历经 9 轮（R18~R26），14 项设计决策全部锁定。核心方案：方式 C（语言级引用），服务脚本为 FFS 运行时实体。统一基线设计 XIMA（Cross-Instance Member Access）：`svc.member` 点号语法，编译器根据导出表自动路由 XCALL/XLOAD_MVAR/XSTORE_MVAR。Y1-Plus 编译期保证服务函数不可 yield（无运行时负担）。嵌套深度运行时配置（MaxXCallDepth 默认 4，Warn/Unlimited 两种策略）。性能影响可忽略（< 0.02% 帧预算）。
 
-**Lang-3 ✅ 完成（BB01-BB10 全通过，1111 测试全通过）。Lang-1 ✅ 完成。Lang-1.1a ✅ 完成（MR01-MR08 全通过）。Lang-1.1b ✅ 完成（XR01-XR06 全通过）。Lang-2 ✅ 完成（INC01-INC16 全通过）。Lang 阶段全部完成（P0 语言需求 Phase 1 完毕）。下一步 → C 阶段（宿主集成）或远期 Lang-4/5（按需触发）。**
+**Lang-3 ✅ 完成（BB01-BB10 全通过，1111 测试全通过）。Lang-1 ✅ 完成。Lang-1.1a ✅ 完成（MR01-MR08 全通过）。Lang-1.1b ✅ 完成（XR01-XR06 全通过）。Lang-2 ✅ 完成（INC01-INC16 全通过）。P0 语言需求 Phase 1 完毕。下一步 → Lang-6（XCALL 基线），前置条件：XCALL Spec 设计文档输出。**
 
 ---
 
