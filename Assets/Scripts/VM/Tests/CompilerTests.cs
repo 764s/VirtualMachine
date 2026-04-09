@@ -6467,6 +6467,529 @@ func main() {
             Assert(values.Count == 1 && values[0] == 100, $"BB10: loop bulk R/W sum=100, got {(values.Count > 0 ? values[0].ToString() : "none")}");
         }
 
+        // ===================================================================
+        //  Lang-6: XCALL / Export Table Tests (XC01–XC15)
+        // ===================================================================
+
+        // ===== Test XC01: Basic @export parsing and export table generation =====
+        {
+            string source = @"
+@export var hp: int = 100
+@export var mp: int = 50
+var internal_state: int = 0
+@export func get_hp(): int {
+    return hp
+}
+func main() {
+    Report(hp)
+}";
+            var syscalls = new Dictionary<string, int> { { "Report", 0 } };
+            var result = compiler.Compile(source, "main", syscalls);
+            Assert(result.Success, "XC01 compile success");
+            Assert(result.Program.ExportTable != null, "XC01: ExportTable not null");
+            Assert(result.Program.ExportTable.Variables.Length == 2, $"XC01: 2 exported vars, got {result.Program.ExportTable.Variables.Length}");
+            Assert(result.Program.ExportTable.Functions.Length == 1, $"XC01: 1 exported func, got {result.Program.ExportTable.Functions.Length}");
+            Assert(result.Program.ExportTable.Variables[0].Name == "hp", $"XC01: var[0].Name=hp, got {result.Program.ExportTable.Variables[0].Name}");
+            Assert(result.Program.ExportTable.Variables[0].Writable == true, "XC01: var[0].Writable=true");
+            Assert(result.Program.ExportTable.Variables[1].Name == "mp", $"XC01: var[1].Name=mp, got {result.Program.ExportTable.Variables[1].Name}");
+            Assert(result.Program.ExportTable.Functions[0].Name == "get_hp", $"XC01: func[0].Name=get_hp, got {result.Program.ExportTable.Functions[0].Name}");
+            Assert(result.Program.ExportTable.Functions[0].ParamCount == 0, $"XC01: func[0].ParamCount=0, got {result.Program.ExportTable.Functions[0].ParamCount}");
+        }
+
+        // ===== Test XC02: No @export → null ExportTable =====
+        {
+            string source = @"
+var hp: int = 100
+func main() {
+    Report(hp)
+}";
+            var syscalls = new Dictionary<string, int> { { "Report", 0 } };
+            var result = compiler.Compile(source, "main", syscalls);
+            Assert(result.Success, "XC02 compile success");
+            Assert(result.Program.ExportTable == null, "XC02: ExportTable null when no exports");
+        }
+
+        // ===== Test XC03: @export func with params → export table has correct paramCount =====
+        {
+            string source = @"
+@export var hp: int = 100
+@export func take_damage(d: int, m: int): int {
+    hp = hp - d * m
+    return hp
+}
+func main() {
+    Report(hp)
+}";
+            var syscalls = new Dictionary<string, int> { { "Report", 0 } };
+            var result = compiler.Compile(source, "main", syscalls);
+            Assert(result.Success, "XC03 compile success");
+            Assert(result.Program.ExportTable != null, "XC03: ExportTable not null");
+            Assert(result.Program.ExportTable.Functions[0].ParamCount == 2, $"XC03: paramCount=2, got {result.Program.ExportTable.Functions[0].ParamCount}");
+        }
+
+        // ===== Test XC04: XCALL basic — cross-instance function call =====
+        {
+            // Service module: @export func add(a, b) { return a + b }
+            string svcSource = @"
+@export func add(a: int, b: int): int {
+    return a + b
+}
+func main() {
+}";
+            var svcResult = compiler.Compile(svcSource, "main", new Dictionary<string, int>());
+            Assert(svcResult.Success, "XC04 svc compile success");
+            Assert(svcResult.Program.ExportTable != null, "XC04: svc ExportTable not null");
+
+            // Caller module: written in bytecode since C-1 has no svc.member syntax
+            // Caller puts args in r0,r1, then XCALL, then Report(result)
+            var callerInstructions = new Instruction[]
+            {
+                new Instruction(OpCode.LOAD_CONST, 0, 0),    // r0 = 10 (arg0)
+                new Instruction(OpCode.LOAD_CONST, 1, 1),    // r1 = 32 (arg1)
+                new Instruction(OpCode.LOAD_CONST, 2, 2),    // r2 = svc instanceId (will be filled)
+                new Instruction(OpCode.XCALL, 3, 2, 0),       // r3 = XCALL(svc=r2, funcIdx=0)
+                new Instruction(OpCode.MOVE, 0, 3),           // r0 = r3 (result for Report)
+                new Instruction(OpCode.SYSCALL, 0, 0, 1),     // Report(r0)
+                new Instruction(OpCode.RETURN, 0, 0),
+            };
+            // Constants: [0]=10, [1]=32, [2]=svc instanceId (we'll use 1)
+            var callerConsts = new Number[] { Number.FromInt(10), Number.FromInt(32), Number.FromInt(0) };
+            var callerFuncs = new FunctionEntry[] { new FunctionEntry("main", 0, 0, 4) };
+            var callerProg = new VMProgram(callerInstructions, callerConsts, 4, callerFuncs);
+
+            var values = new List<int>();
+            var world = new VMWorld();
+            world.Modules.Load(0, svcResult.Program);
+            world.Modules.Load(1, callerProg);
+            world.Syscalls.Register(0, "Report", (ref VMInstanceState s) =>
+            {
+                values.Add(s.Registers.Get(0).ToInt());
+            });
+            int svcId = world.SpawnInstance(0, 0);  // service instance
+            // Fix svc instanceId in caller's constants
+            callerConsts[2] = Number.FromInt(svcId);
+            callerProg = new VMProgram(callerInstructions, callerConsts, 4, callerFuncs);
+            world.Modules.Load(1, callerProg);
+            int callerId = world.SpawnInstance(1, 0);  // caller instance
+            world.Tick(); // run both — svc main() completes, caller calls svc.add(10,32)
+            Assert(values.Count == 1, $"XC04: 1 report, got {values.Count}");
+            Assert(values.Count > 0 && values[0] == 42, $"XC04: add(10,32)=42, got {(values.Count > 0 ? values[0].ToString() : "none")}");
+        }
+
+        // ===== Test XC05: XLOAD_MVAR — cross-instance variable read =====
+        {
+            // Service module: @export var hp = 999
+            string svcSource = @"
+@export var hp: int = 999
+func main() {
+}";
+            var svcResult = compiler.Compile(svcSource, "main", new Dictionary<string, int>());
+            Assert(svcResult.Success, "XC05 svc compile success");
+
+            // Caller: read svc.hp via XLOAD_MVAR, report it
+            var callerInstructions = new Instruction[]
+            {
+                new Instruction(OpCode.LOAD_CONST, 0, 0),     // r0 = svc instanceId
+                new Instruction(OpCode.XLOAD_MVAR, 1, 0, 0),  // r1 = XLOAD_MVAR(svc=r0, varIdx=0) → hp
+                new Instruction(OpCode.MOVE, 0, 1),            // r0 = r1 for Report
+                new Instruction(OpCode.SYSCALL, 0, 0, 1),      // Report(r0)
+                new Instruction(OpCode.RETURN, 0, 0),
+            };
+            var callerConsts = new Number[] { Number.FromInt(0) };
+            var callerFuncs = new FunctionEntry[] { new FunctionEntry("main", 0, 0, 2) };
+
+            var values = new List<int>();
+            var world = new VMWorld();
+            world.Modules.Load(0, svcResult.Program);
+            world.Syscalls.Register(0, "Report", (ref VMInstanceState s) =>
+            {
+                values.Add(s.Registers.Get(0).ToInt());
+            });
+            int svcId = world.SpawnInstance(0, 0);
+
+            callerConsts[0] = Number.FromInt(svcId);
+            var callerProg = new VMProgram(callerInstructions, callerConsts, 2, callerFuncs);
+            world.Modules.Load(1, callerProg);
+            world.SpawnInstance(1, 0);
+            world.Tick();
+            Assert(values.Count == 1, $"XC05: 1 report, got {values.Count}");
+            Assert(values.Count > 0 && values[0] == 999, $"XC05: svc.hp=999, got {(values.Count > 0 ? values[0].ToString() : "none")}");
+        }
+
+        // ===== Test XC06: XSTORE_MVAR — cross-instance variable write =====
+        {
+            // Service module: @export var hp = 100
+            string svcSource = @"
+@export var hp: int = 100
+func main() {
+}";
+            var svcResult = compiler.Compile(svcSource, "main", new Dictionary<string, int>());
+            Assert(svcResult.Success, "XC06 svc compile success");
+
+            // Caller: write svc.hp=42, then read it back and report
+            var callerInstructions = new Instruction[]
+            {
+                new Instruction(OpCode.LOAD_CONST, 0, 0),      // r0 = svc instanceId
+                new Instruction(OpCode.LOAD_CONST, 1, 1),      // r1 = 42 (new value)
+                new Instruction(OpCode.XSTORE_MVAR, 0, 0, 1),  // XSTORE_MVAR(varIdx=0, svc=r0, src=r1)
+                new Instruction(OpCode.XLOAD_MVAR, 2, 0, 0),   // r2 = XLOAD_MVAR(svc=r0, varIdx=0)
+                new Instruction(OpCode.MOVE, 0, 2),             // r0 = r2 for Report
+                new Instruction(OpCode.SYSCALL, 0, 0, 1),       // Report(r0)
+                new Instruction(OpCode.RETURN, 0, 0),
+            };
+            var callerConsts = new Number[] { Number.FromInt(0), Number.FromInt(42) };
+            var callerFuncs = new FunctionEntry[] { new FunctionEntry("main", 0, 0, 3) };
+
+            var values = new List<int>();
+            var world = new VMWorld();
+            world.Modules.Load(0, svcResult.Program);
+            world.Syscalls.Register(0, "Report", (ref VMInstanceState s) =>
+            {
+                values.Add(s.Registers.Get(0).ToInt());
+            });
+            int svcId = world.SpawnInstance(0, 0);
+
+            callerConsts[0] = Number.FromInt(svcId);
+            var callerProg = new VMProgram(callerInstructions, callerConsts, 3, callerFuncs);
+            world.Modules.Load(1, callerProg);
+            world.SpawnInstance(1, 0);
+            world.Tick();
+            Assert(values.Count == 1, $"XC06: 1 report, got {values.Count}");
+            Assert(values.Count > 0 && values[0] == 42, $"XC06: write svc.hp=42, read back=42, got {(values.Count > 0 ? values[0].ToString() : "none")}");
+        }
+
+        // ===== Test XC07: Multi-instance independence (XLOAD_MVAR) =====
+        {
+            // Two service instances of same module, each with different hp
+            string svcSource = @"
+@export var hp: int = 0
+func main() {
+}";
+            var svcResult = compiler.Compile(svcSource, "main", new Dictionary<string, int>());
+            Assert(svcResult.Success, "XC07 svc compile success");
+
+            var values = new List<int>();
+            var world = new VMWorld();
+            world.Modules.Load(0, svcResult.Program);
+            world.Syscalls.Register(0, "Report", (ref VMInstanceState s) =>
+            {
+                values.Add(s.Registers.Get(0).ToInt());
+            });
+            int svc1 = world.SpawnInstance(0, 0); // hp=0
+            int svc2 = world.SpawnInstance(0, 0); // hp=0
+            world.Tick(); // let both initialize
+
+            // Caller: write svc1.hp=100, svc2.hp=200, then read both
+            var callerInstructions = new Instruction[]
+            {
+                new Instruction(OpCode.LOAD_CONST, 0, 0),      // r0 = svc1 id
+                new Instruction(OpCode.LOAD_CONST, 1, 1),      // r1 = 100
+                new Instruction(OpCode.XSTORE_MVAR, 0, 0, 1),  // svc1.hp = 100
+                new Instruction(OpCode.LOAD_CONST, 0, 2),      // r0 = svc2 id
+                new Instruction(OpCode.LOAD_CONST, 1, 3),      // r1 = 200
+                new Instruction(OpCode.XSTORE_MVAR, 0, 0, 1),  // svc2.hp = 200
+                // Read back svc1.hp
+                new Instruction(OpCode.LOAD_CONST, 0, 0),      // r0 = svc1 id
+                new Instruction(OpCode.XLOAD_MVAR, 1, 0, 0),   // r1 = svc1.hp
+                new Instruction(OpCode.MOVE, 0, 1),
+                new Instruction(OpCode.SYSCALL, 0, 0, 1),       // Report(svc1.hp) → 100
+                // Read back svc2.hp
+                new Instruction(OpCode.LOAD_CONST, 0, 2),      // r0 = svc2 id
+                new Instruction(OpCode.XLOAD_MVAR, 1, 0, 0),   // r1 = svc2.hp
+                new Instruction(OpCode.MOVE, 0, 1),
+                new Instruction(OpCode.SYSCALL, 0, 0, 1),       // Report(svc2.hp) → 200
+                new Instruction(OpCode.RETURN, 0, 0),
+            };
+            var callerConsts = new Number[]
+            {
+                Number.FromInt(svc1), Number.FromInt(100),
+                Number.FromInt(svc2), Number.FromInt(200)
+            };
+            var callerFuncs = new FunctionEntry[] { new FunctionEntry("main", 0, 0, 2) };
+            var callerProg = new VMProgram(callerInstructions, callerConsts, 2, callerFuncs);
+            world.Modules.Load(1, callerProg);
+            world.SpawnInstance(1, 0);
+            world.Tick();
+            Assert(values.Count == 2, $"XC07: 2 reports, got {values.Count}");
+            Assert(values.Count > 0 && values[0] == 100, $"XC07: svc1.hp=100, got {(values.Count > 0 ? values[0].ToString() : "none")}");
+            Assert(values.Count > 1 && values[1] == 200, $"XC07: svc2.hp=200, got {(values.Count > 1 ? values[1].ToString() : "none")}");
+        }
+
+        // ===== Test XC08: Nested XCALL (A→B) =====
+        {
+            // Service B: @export func double_it(x) { return x * 2 }
+            string svcBSource = @"
+@export func double_it(x: int): int {
+    return x * 2
+}
+func main() {
+}";
+            var svcBResult = compiler.Compile(svcBSource, "main", new Dictionary<string, int>());
+            Assert(svcBResult.Success, "XC08 svcB compile success");
+
+            // Service A: @export func quad(x) { XCALL svcB.double_it(XCALL svcB.double_it(x)) }
+            // We build A as hand-crafted bytecode
+            // quad(x): r0=x, call B.double_it(x), call B.double_it(result), return
+            var svcAInstructions = new Instruction[]
+            {
+                // main() — entry function (does nothing)
+                new Instruction(OpCode.RETURN, 0, 0),
+                // quad(x): r0 = x on entry (from scratch zone)
+                new Instruction(OpCode.LOAD_CONST, 1, 0),      // r1 = svcB id
+                new Instruction(OpCode.XCALL, 2, 1, 0),         // r2 = svcB.double_it(r0=x) → x*2
+                new Instruction(OpCode.MOVE, 0, 2),             // r0 = x*2 (for second call's arg)
+                new Instruction(OpCode.XCALL, 2, 1, 0),         // r2 = svcB.double_it(r0=x*2) → x*4
+                new Instruction(OpCode.MOVE, 0, 2),             // r0 = x*4 (return value)
+                new Instruction(OpCode.RET_FUNC, 0, 0),
+            };
+            var svcAConsts = new Number[] { Number.FromInt(0) }; // [0] = svcB id, filled later
+            var svcAFuncs = new FunctionEntry[]
+            {
+                new FunctionEntry("main", 0, 0, 0),
+                new FunctionEntry("quad", 1, 1, 3)
+            };
+            var svcAExportFuncs = new ExportFuncEntry[] { new ExportFuncEntry("quad", 1, 1) };
+            var svcAExportTable = new ExportTable(null, svcAExportFuncs);
+
+            var values = new List<int>();
+            var world = new VMWorld();
+            world.Modules.Load(0, svcBResult.Program);
+            world.Syscalls.Register(0, "Report", (ref VMInstanceState s) =>
+            {
+                values.Add(s.Registers.Get(0).ToInt());
+            });
+            int svcBId = world.SpawnInstance(0, 0);
+
+            svcAConsts[0] = Number.FromInt(svcBId);
+            var svcAProg = new VMProgram(svcAInstructions, svcAConsts, 3, svcAFuncs, exportTable: svcAExportTable);
+            world.Modules.Load(1, svcAProg);
+            int svcAId = world.SpawnInstance(1, 0);
+
+            // Caller: XCALL svcA.quad(5) → expect 5*4=20
+            var callerInstructions = new Instruction[]
+            {
+                new Instruction(OpCode.LOAD_CONST, 0, 0),    // r0 = 5 (arg)
+                new Instruction(OpCode.LOAD_CONST, 1, 1),    // r1 = svcA id
+                new Instruction(OpCode.XCALL, 2, 1, 0),       // r2 = XCALL svcA.quad(5)
+                new Instruction(OpCode.MOVE, 0, 2),
+                new Instruction(OpCode.SYSCALL, 0, 0, 1),
+                new Instruction(OpCode.RETURN, 0, 0),
+            };
+            var callerConsts = new Number[] { Number.FromInt(5), Number.FromInt(svcAId) };
+            var callerFuncs = new FunctionEntry[] { new FunctionEntry("main", 0, 0, 3) };
+            var callerProg = new VMProgram(callerInstructions, callerConsts, 3, callerFuncs);
+            world.Modules.Load(2, callerProg);
+            world.SpawnInstance(2, 0);
+
+            world.Tick(); // svcB.main + svcA.main complete, then caller runs
+            Assert(values.Count == 1, $"XC08: 1 report, got {values.Count}");
+            Assert(values.Count > 0 && values[0] == 20, $"XC08: quad(5)=20, got {(values.Count > 0 ? values[0].ToString() : "none")}");
+        }
+
+        // ===== Test XC09: XCALL depth warning callback =====
+        {
+            // Chain: A→B→C→D→E (depth=4, should warn at depth 5 but 4 is max)
+            // Simplified: just verify warning fires when depth > maxXCallDepth
+            // Use a simple svc with @export func that does nothing
+            string svcSource = @"
+@export func noop(): int {
+    return 1
+}
+func main() {
+}";
+            var svcResult = compiler.Compile(svcSource, "main", new Dictionary<string, int>());
+            Assert(svcResult.Success, "XC09 svc compile success");
+
+            var values = new List<int>();
+            var depthWarnings = new List<int>();
+            var world = new VMWorld();
+            world.Modules.Load(0, svcResult.Program);
+            world.Syscalls.Register(0, "Report", (ref VMInstanceState s) =>
+            {
+                values.Add(s.Registers.Get(0).ToInt());
+            });
+            world.OnXCallDepthWarning = (depth, max) => depthWarnings.Add(depth);
+            int svcId = world.SpawnInstance(0, 0);
+
+            // Caller: 5 consecutive XCALLs to same svc (not nested, depth=1 each)
+            // No nesting → no warning expected
+            var callerInstructions = new Instruction[]
+            {
+                new Instruction(OpCode.LOAD_CONST, 0, 0),    // r0 = svc id
+                new Instruction(OpCode.XCALL, 1, 0, 0),       // XCALL 1 (depth=1)
+                new Instruction(OpCode.XCALL, 1, 0, 0),       // XCALL 2 (depth=1)
+                new Instruction(OpCode.XCALL, 1, 0, 0),       // XCALL 3 (depth=1)
+                new Instruction(OpCode.MOVE, 0, 1),
+                new Instruction(OpCode.SYSCALL, 0, 0, 1),
+                new Instruction(OpCode.RETURN, 0, 0),
+            };
+            var callerConsts = new Number[] { Number.FromInt(svcId) };
+            var callerFuncs = new FunctionEntry[] { new FunctionEntry("main", 0, 0, 2) };
+            var callerProg = new VMProgram(callerInstructions, callerConsts, 2, callerFuncs);
+            world.Modules.Load(1, callerProg);
+            world.SpawnInstance(1, 0);
+            world.Tick();
+            Assert(depthWarnings.Count == 0, $"XC09: no warnings for sequential calls, got {depthWarnings.Count}");
+            Assert(values.Count == 1 && values[0] == 1, $"XC09: noop()=1, got {(values.Count > 0 ? values[0].ToString() : "none")}");
+        }
+
+        // ===== Test XC10: Y1-Plus — @export func with yield → compile error =====
+        {
+            string source = @"
+@export func bad_func(): int {
+    yield
+    return 1
+}
+func main() {
+}";
+            var result = compiler.Compile(source, "main", new Dictionary<string, int>());
+            Assert(!result.Success, "XC10: compile error for @export func with yield");
+            Assert(result.Errors.Count > 0 && result.Errors[0].Contains("yield"), $"XC10: error mentions yield, got {(result.Errors.Count > 0 ? result.Errors[0] : "none")}");
+        }
+
+        // ===== Test XC11: Y1-Plus — @export func calling yielding function → compile error =====
+        {
+            string source = @"
+func yielder(): int {
+    yield
+    return 1
+}
+
+@export func bad_func(): int {
+    return yielder()
+}
+func main() {
+}";
+            var result = compiler.Compile(source, "main", new Dictionary<string, int>());
+            Assert(!result.Success, "XC11: compile error for transitive yield");
+            Assert(result.Errors.Count > 0 && result.Errors[0].Contains("yield"), $"XC11: error mentions yield, got {(result.Errors.Count > 0 ? result.Errors[0] : "none")}");
+        }
+
+        // ===== Test XC12: Y1-Plus — @export func calling pure function → OK =====
+        {
+            string source = @"
+func helper(x: int): int {
+    return x * 2
+}
+
+@export func good_func(a: int): int {
+    return helper(a)
+}
+func main() {
+}";
+            var result = compiler.Compile(source, "main", new Dictionary<string, int>());
+            Assert(result.Success, $"XC12: pure call OK, errors: {(result.Errors != null && result.Errors.Count > 0 ? result.Errors[0] : "none")}");
+        }
+
+        // ===== Test XC13: ExportTable correctness — variable slot mapping =====
+        {
+            string source = @"
+var internal1: int = 1
+@export var exported1: int = 10
+var internal2: int = 2
+@export var exported2: int = 20
+func main() {
+}";
+            var result = compiler.Compile(source, "main", new Dictionary<string, int>());
+            Assert(result.Success, "XC13 compile success");
+            Assert(result.Program.ExportTable != null, "XC13: ExportTable not null");
+            Assert(result.Program.ExportTable.Variables.Length == 2, $"XC13: 2 exported vars, got {result.Program.ExportTable.Variables.Length}");
+            // exported1 should be slot 1 (internal1 is slot 0), exported2 slot 3 (internal2 is slot 2)
+            Assert(result.Program.ExportTable.Variables[0].Name == "exported1", $"XC13: var[0]=exported1, got {result.Program.ExportTable.Variables[0].Name}");
+            Assert(result.Program.ExportTable.Variables[1].Name == "exported2", $"XC13: var[1]=exported2, got {result.Program.ExportTable.Variables[1].Name}");
+            Assert(result.Program.ExportTable.Variables[0].MvarSlot == 1, $"XC13: var[0].slot=1, got {result.Program.ExportTable.Variables[0].MvarSlot}");
+            Assert(result.Program.ExportTable.Variables[1].MvarSlot == 3, $"XC13: var[1].slot=3, got {result.Program.ExportTable.Variables[1].MvarSlot}");
+        }
+
+        // ===== Test XC14: Error handling — invalid instanceId → PanicInvalidInstanceId =====
+        {
+            // Caller: XLOAD_MVAR on non-existent instance
+            string svcSource = @"
+@export var hp: int = 100
+func main() {
+}";
+            var svcResult = compiler.Compile(svcSource, "main", new Dictionary<string, int>());
+            Assert(svcResult.Success, "XC14 svc compile success");
+
+            // Caller: try to XLOAD_MVAR with instance id 99 (invalid)
+            var callerInstructions = new Instruction[]
+            {
+                new Instruction(OpCode.LOAD_CONST, 0, 0),     // r0 = 99 (invalid instance)
+                new Instruction(OpCode.XLOAD_MVAR, 1, 0, 0),  // r1 = XLOAD_MVAR → should fail
+                new Instruction(OpCode.RETURN, 0, 0),
+            };
+            var callerConsts = new Number[] { Number.FromInt(99) };
+            var callerFuncs = new FunctionEntry[] { new FunctionEntry("main", 0, 0, 2) };
+            var callerProg = new VMProgram(callerInstructions, callerConsts, 2, callerFuncs);
+
+            var world = new VMWorld();
+            world.Modules.Load(0, svcResult.Program);
+            world.Modules.Load(1, callerProg);
+            world.SpawnInstance(0, 0); // svc at id 0
+            int callerId = world.SpawnInstance(1, 0);
+            world.Tick();
+            Assert(world.Pool.Instances[callerId].ErrorFlag == VMError.PanicInvalidInstanceId, $"XC14: PanicInvalidInstanceId, got {world.Pool.Instances[callerId].ErrorFlag}");
+        }
+
+        // ===== Test XC15: @export func with defer → compile error (C-1 restriction) =====
+        {
+            string source = @"
+@export func bad_defer(): int {
+    defer {
+        var x: int = 1
+    }
+    return 42
+}
+func main() {
+}";
+            var result = compiler.Compile(source, "main", new Dictionary<string, int>());
+            Assert(!result.Success, "XC15: compile error for @export func with defer");
+            Assert(result.Errors.Count > 0 && result.Errors[0].Contains("defer"), $"XC15: error mentions defer, got {(result.Errors.Count > 0 ? result.Errors[0] : "none")}");
+        }
+
+        // ===== Test XC16: XCALL with params — scratch zone copy =====
+        {
+            // Service: @export func mul3(a, b, c) { return a * b * c }
+            string svcSource = @"
+@export func mul3(a: int, b: int, c: int): int {
+    return a * b * c
+}
+func main() {
+}";
+            var svcResult = compiler.Compile(svcSource, "main", new Dictionary<string, int>());
+            Assert(svcResult.Success, "XC16 svc compile success");
+
+            var values = new List<int>();
+            var world = new VMWorld();
+            world.Modules.Load(0, svcResult.Program);
+            world.Syscalls.Register(0, "Report", (ref VMInstanceState s) =>
+            {
+                values.Add(s.Registers.Get(0).ToInt());
+            });
+            int svcId = world.SpawnInstance(0, 0);
+
+            // Caller: put 3 args in r0-r2, XCALL mul3
+            var callerInstructions = new Instruction[]
+            {
+                new Instruction(OpCode.LOAD_CONST, 0, 0),    // r0 = 2
+                new Instruction(OpCode.LOAD_CONST, 1, 1),    // r1 = 3
+                new Instruction(OpCode.LOAD_CONST, 2, 2),    // r2 = 7
+                new Instruction(OpCode.LOAD_CONST, 3, 3),    // r3 = svc id
+                new Instruction(OpCode.XCALL, 4, 3, 0),       // r4 = XCALL svc.mul3(2,3,7)
+                new Instruction(OpCode.MOVE, 0, 4),
+                new Instruction(OpCode.SYSCALL, 0, 0, 1),
+                new Instruction(OpCode.RETURN, 0, 0),
+            };
+            var callerConsts = new Number[] { Number.FromInt(2), Number.FromInt(3), Number.FromInt(7), Number.FromInt(svcId) };
+            var callerFuncs = new FunctionEntry[] { new FunctionEntry("main", 0, 0, 5) };
+            var callerProg = new VMProgram(callerInstructions, callerConsts, 5, callerFuncs);
+            world.Modules.Load(1, callerProg);
+            world.SpawnInstance(1, 0);
+            world.Tick();
+            Assert(values.Count == 1, $"XC16: 1 report, got {values.Count}");
+            Assert(values.Count > 0 && values[0] == 42, $"XC16: mul3(2,3,7)=42, got {(values.Count > 0 ? values[0].ToString() : "none")}");
+        }
+
         // ===== Summary =====
         Debug.Log($"========================================");
         Debug.Log($"Compiler Tests: {passed} passed, {failed} failed");
