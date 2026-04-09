@@ -1,0 +1,30 @@
+{
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "KOF98: Attach FFVM",
+            "type": "ffvm",
+            "request": "attach",
+            "port": 4711
+        },
+        {
+            "name": "KOF98: C# Debug (Raylib)",
+            "type": "coreclr",
+            "request": "launch",
+            "program": "${workspaceFolder}/KOF98/bin/Debug/net8.0/KOF98",
+            "args": ["--raylib", "--debug"],
+            "cwd": "${workspaceFolder}",
+            "console": "integratedTerminal",
+            "preLaunchTask": "build-kof98"
+        }
+    ],
+    "compounds": [
+        {
+            "name": "KOF98: C# + FFVM Debug",
+            "configurations": [
+                "KOF98: C# Debug (Raylib)",
+                "KOF98: Attach FFVM"
+            ]
+        }
+    ]
+}
