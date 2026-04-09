@@ -21,7 +21,7 @@ func main() {
     }
 
     // Visual feedback: spawn hit effect on self
-    SpawnEffectSelf(FX_HURT_EFFECT, 300)
+    SpawnEffectSelf(FX_HURT_EFFECT, FX_DUR_HURT)
 
     // Wait for the hit animation to complete
     var f: int = 0

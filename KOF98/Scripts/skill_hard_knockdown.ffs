@@ -23,7 +23,7 @@ func main() {
     }
 
     // Impact effect
-    SpawnEffectSelf(FX_HURT_EFFECT, 300)
+    SpawnEffectSelf(FX_HURT_EFFECT, FX_DUR_HURT)
 
     // Lie on ground for the full duration
     var f: int = 0

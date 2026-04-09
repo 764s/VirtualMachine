@@ -28,7 +28,7 @@ func main() {
             if target > 0 {
                 ApplyDamage(target, 1.2, DMG_NORMAL_LOWER)
                 ApplyHitstun(target, 0, 10, 0, 0)
-                SpawnEffectHit(FX_LIGHT_HIT, 30)
+                SpawnEffectHit(FX_LIGHT_HIT, FX_DUR_LIGHT_HIT)
                 hitDone = 1
             }
         }

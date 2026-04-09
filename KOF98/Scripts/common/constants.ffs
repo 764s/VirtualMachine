@@ -29,6 +29,10 @@ const FX_BLOCK: int = 3004
 const FX_HEAVY_HIT: int = 3005
 const FX_HURT_EFFECT: int = 4001
 
+// ── Effect Durations (frames) ───────────────────────────────
+const FX_DUR_LIGHT_HIT: int = 30
+const FX_DUR_HURT: int = 300
+
 // ── Tag IDs (skill tag bitfield positions) ───────────────────
 const TAG_AIR_STATE: int = 11
 
