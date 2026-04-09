@@ -100,6 +100,72 @@ echo [OK] KOF98 build succeeded.
 ) > KOF98\run-kof98.cmd
 echo [OK] Generated KOF98\run-kof98.cmd
 
+:: ─── Step 5: Set up VS Code debug configuration ─────────────
+
+if not exist ".vscode" mkdir ".vscode"
+
+:: Copy launch.json and tasks.json from KOF98/.vscode/
+copy /y "KOF98\.vscode\launch.json" ".vscode\launch.json" >nul 2>&1
+copy /y "KOF98\.vscode\tasks.json"  ".vscode\tasks.json"  >nul 2>&1
+
+if exist ".vscode\launch.json" (
+    echo [OK] Copied .vscode/launch.json  (C# + FFVM debug)
+) else (
+    echo [WARN] Could not copy launch.json
+)
+
+:: ─── Step 6: Install VS Code extension (best-effort) ────────
+
+echo.
+echo [*] Attempting VS Code extension installation...
+
+:: Check for npm
+npm --version >nul 2>&1
+if errorlevel 1 (
+    echo [SKIP] npm not found — skipping VS Code extension installation.
+    echo        To install manually: cd vscode-ffvm-debug ^&^& npm install
+    goto :ext_done
+)
+
+:: Install extension dependencies
+pushd vscode-ffvm-debug
+call npm install --silent 2>nul
+if errorlevel 1 (
+    echo [WARN] npm install failed in vscode-ffvm-debug/
+    popd
+    goto :ext_done
+)
+
+:: Package VSIX
+echo        Packaging extension with vsce...
+call npx --yes @vscode/vsce package --no-dependencies -o ffvm-debug.vsix >nul 2>&1
+if errorlevel 1 (
+    echo [WARN] Failed to package VS Code extension.
+    echo        Try manually: cd vscode-ffvm-debug ^&^& npx @vscode/vsce package
+    popd
+    goto :ext_done
+)
+popd
+
+:: Check for VS Code CLI
+code --version >nul 2>&1
+if errorlevel 1 (
+    echo [SKIP] VS Code CLI not found.
+    echo        To install manually: code --install-extension vscode-ffvm-debug\ffvm-debug.vsix
+    goto :ext_done
+)
+
+:: Install extension
+code --install-extension "vscode-ffvm-debug\ffvm-debug.vsix" --force >nul 2>&1
+if errorlevel 1 (
+    echo [WARN] Failed to install VS Code extension.
+    echo        Try manually: code --install-extension vscode-ffvm-debug\ffvm-debug.vsix
+) else (
+    echo [OK] VS Code extension installed successfully.
+)
+
+:ext_done
+
 :: ─── Done ───────────────────────────────────────────────────
 
 echo.
@@ -108,16 +174,24 @@ echo   Initialization complete!
 echo  ========================================================
 echo.
 echo   [92m[Generated][0m  KOF98\run-kof98.cmd
+echo   [92m[Generated][0m  .vscode\launch.json  (C# + FFVM debug)
 echo.
 echo   Next steps:
 echo     1. Double-click  [93mKOF98\run-kof98.cmd[0m  to launch the game
 echo     2. Use WASD/Arrow keys to move, J/K/U/I to attack
 echo     3. Ctrl+C to stop
 echo.
+echo   VS Code debugging (C# + FFScript):
+echo     1. Open this folder in VS Code
+echo     2. Set breakpoints in .cs and .ffs files
+echo     3. Press F5 — select "KOF98: C# + FFVM Debug"
+echo     4. The game window opens, breakpoints work in both C# and FFScript
+echo.
 echo   Command-line options:
-echo     KOF98.exe                  Console rendering (default)
-echo     KOF98.exe --headless       Simulation only (no rendering)
-echo     KOF98.exe --frames 600     Run for N frames then exit
+echo     KOF98.exe --raylib             Raylib window rendering
+echo     KOF98.exe --raylib --debug     Raylib + DAP debugger (port 4711)
+echo     KOF98.exe --headless           Simulation only (no rendering)
+echo     KOF98.exe --frames 600         Run for N frames then exit
 echo.
 
 pause
