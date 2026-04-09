@@ -100,18 +100,35 @@ echo [OK] KOF98 build succeeded.
 ) > KOF98\run-kof98.cmd
 echo [OK] Generated KOF98\run-kof98.cmd
 
-:: ─── Step 5: Set up VS Code debug configuration ─────────────
+:: ─── Step 5: Generate VS Code debug configuration from templates ──
 
 if not exist ".vscode" mkdir ".vscode"
 
-:: Copy launch.json and tasks.json from KOF98/.vscode/
-copy /y "KOF98\.vscode\launch.json" ".vscode\launch.json" >nul 2>&1
-copy /y "KOF98\.vscode\tasks.json"  ".vscode\tasks.json"  >nul 2>&1
+:: Detect TargetFramework from KOF98.csproj (e.g. net8.0)
+set "NET_TFM=net8.0"
+for /f "tokens=*" %%L in ('findstr /i "TargetFramework" KOF98\KOF98.csproj') do (
+    for /f "tokens=2 delims=<>" %%T in ("%%L") do set "NET_TFM=%%T"
+)
+
+:: Generate launch.json from template (replace __NET_TFM__)
+if exist "KOF98\launch.json.template" (
+    (for /f "usebackq delims=" %%L in ("KOF98\launch.json.template") do (
+        set "LINE=%%L"
+        setlocal enabledelayedexpansion
+        echo(!LINE:__NET_TFM__=%NET_TFM%!
+        endlocal
+    )) > ".vscode\launch.json"
+)
+
+:: Copy tasks.json from template (no substitution needed)
+if exist "KOF98\tasks.json.template" (
+    copy /y "KOF98\tasks.json.template" ".vscode\tasks.json" >nul
+)
 
 if exist ".vscode\launch.json" (
-    echo [OK] Copied .vscode/launch.json  (C# + FFVM debug)
+    echo [OK] Generated .vscode/launch.json  (C# + FFVM debug, TFM=%NET_TFM%)
 ) else (
-    echo [WARN] Could not copy launch.json
+    echo [WARN] Could not generate launch.json
 )
 
 :: ─── Step 6: Install VS Code extension (best-effort) ────────

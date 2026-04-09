@@ -77,7 +77,6 @@ crashlytics-build.properties
 
 .vscode/
 !Sandbox/.vscode/
-!KOF98/.vscode/
 .idea/
 
 /StandaloneRunner/bin/

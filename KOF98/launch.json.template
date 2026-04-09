@@ -11,7 +11,7 @@
             "name": "KOF98: C# Debug (Raylib)",
             "type": "coreclr",
             "request": "launch",
-            "program": "${workspaceFolder}/KOF98/bin/Debug/net8.0/KOF98",
+            "program": "${workspaceFolder}/KOF98/bin/Debug/__NET_TFM__/KOF98",
             "args": ["--raylib", "--debug"],
             "cwd": "${workspaceFolder}",
             "console": "integratedTerminal",
