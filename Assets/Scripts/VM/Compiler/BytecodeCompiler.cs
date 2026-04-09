@@ -7,6 +7,10 @@ namespace FFVM.Compiler
     {
         public VMProgram Program;
         public List<string> Errors;
+        /// <summary>
+        /// Lang-8: Non-fatal warning messages (compile succeeds but with diagnostics).
+        /// </summary>
+        public List<string> Warnings;
         public bool Success => Errors == null || Errors.Count == 0;
     }
 
@@ -40,6 +44,7 @@ namespace FFVM.Compiler
         private Dictionary<string, int> _syscalls;    // name → slot
         private SyscallTable _syscallTable;            // paired slot lookup (optional, for using)
         private List<string> _errors;
+        private List<string> _warnings;  // Lang-8: non-fatal diagnostics
 
         // DBG1: Source Map — parallel to _instructions, records line number for each emitted instruction
         private List<int> _sourceLines;
@@ -203,6 +208,7 @@ namespace FFVM.Compiler
             _syscalls = syscalls ?? new Dictionary<string, int>();
             _syscallTable = syscallTable;
             _errors = new List<string>();
+            _warnings = new List<string>();
             _pendingCalls = new List<PendingCall>();
             _sourceLines = new List<int>();
             _currentLine = 0;
@@ -376,7 +382,8 @@ namespace FFVM.Compiler
                     _nextExtendedReg,
                     exportTable
                 ),
-                Errors = _errors
+                Errors = _errors,
+                Warnings = _warnings.Count > 0 ? _warnings : null
             };
         }
 
@@ -3223,6 +3230,12 @@ namespace FFVM.Compiler
             else
             {
                 // None → standard XCALL
+                // Lang-8: warn if @inline hint but no degradation possible
+                if (funcEntry.IsInlineHint)
+                {
+                    _warnings.Add($"@inline function '{mc.MemberName}' could not be degraded to direct variable access. XCALL will be used. (line {mc.Line})");
+                }
+
                 // Validate argument count
                 if (mc.Arguments.Count != funcEntry.ParamCount)
                 {
@@ -3231,6 +3244,9 @@ namespace FFVM.Compiler
                 }
 
                 // Phase 1: Compile arguments into temp registers
+                // (two-phase approach: arguments may be IdentifierExpr that resolve to local
+                // registers; CompileExpr ignores destReg for idents. Compiling all to temps first
+                // then MOVEing to scratch zone avoids register conflicts.)
                 int[] argRegs = new int[mc.Arguments.Count];
                 for (int i = 0; i < mc.Arguments.Count; i++)
                     argRegs[i] = CompileExpr(mc.Arguments[i]);

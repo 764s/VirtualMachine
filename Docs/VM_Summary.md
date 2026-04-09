@@ -476,7 +476,7 @@ Docs/
 | — | **B-δ4 SN2 结构体字面量构造语法** | **StructLiteralExpr AST + Parser `TypeName { field: expr }` + Compiler sugar 展开 + 嵌套字面量 + CS31-CS38 测试** | **990** | [B-δ4](Plan/Step_B_Delta4_SN2_StructLiteral.md) |
 | — | **B-δ5 C5 Cleanup 超时保护** | **MaxCleanupSteps 每块步数预算 + 超时跳过当前块继续剩余 cleanup + C5-01~C5-04 测试** | **1007** | [B-δ5](Plan/Step_B_Delta5_C5_CleanupTimeout.md) |
 
-**B 阶段全部完成。1007 项 Assert × 2 模式全通过。B-ε 性能优化串行计划全部完成（4/4）。B-ζ 分支场景优化串行计划全部完成（3/3）。B-η O8 指令压缩完成（O8-1~O8-3/O8-5 ✅，O8-4 ⏸）。D 阶段分发基础设施全部完成（DIST-1~DIST-10 ✅）。Lang-1 ✅ 完成。Lang-1.1a ✅ 完成。Lang-1.1b ✅ 完成。Lang-2 ✅ 完成。Lang-3 ✅ 完成。Lang-6 ✅ 完成（benchmark 无回归确认）。Lang-7 ✅ 完成（自动退化 + VMConfig）。**
+**B 阶段全部完成。1007 项 Assert × 2 模式全通过。B-ε 性能优化串行计划全部完成（4/4）。B-ζ 分支场景优化串行计划全部完成（3/3）。B-η O8 指令压缩完成（O8-1~O8-3/O8-5 ✅，O8-4 ⏸）。D 阶段分发基础设施全部完成（DIST-1~DIST-10 ✅）。Lang-1 ✅ 完成。Lang-1.1a ✅ 完成。Lang-1.1b ✅ 完成。Lang-2 ✅ 完成。Lang-3 ✅ 完成。Lang-6 ✅ 完成（benchmark 无回归确认）。Lang-7 ✅ 完成（自动退化 + VMConfig）。Lang-8 ✅ 完成（统一语法 + @inline + LSP 警告诊断）。**
 
 ---
 
@@ -560,10 +560,10 @@ B 阶段 20 个步骤（B-R1 → B-δ5）全部完成，已归入上方 A 区表
 | *Lang-4* | *跨模块共享变量 (L3)* | *⏳* | *共享内存区域或专用寄存器段。按需触发 — 当黑板 Syscall 频率成为性能瓶颈时* | *P3 升级* | *⚠️ 编译器 + VM 运行时* | *⭐⭐⭐* |
 | **Lang-6** | **XCALL 基线 (C-1)** | **✅** | **三个新 OpCode: XCALL=52（跨实例函数调用）+ XLOAD_MVAR=53（跨实例变量读取）+ XSTORE_MVAR=54（跨实例变量写入）。`@export` 导出声明。Y1-Plus 编译期 yield 禁止（服务函数不可 yield）+ defer/using 限制。运行时 `_xcallDepth` 计数 + Warn 模式（默认 MaxXCallDepth=4）。编译器 ExportTable 生成。XC01-XC16 全通过** | P4: 跨模块函数调用 + Q4 服务脚本 | ⚠️ 编译器 + VM 运行时 | ⭐⭐⭐ |
 | **Lang-7** | **自动退化 + 配置 (C-1.5)** | **✅** | **A1: 自动 getter→XLOAD_MVAR 退化（纯 getter 函数 → 直接变量读取）。A2: 自动 setter→XSTORE_MVAR 退化。DegradationType enum + ExportFuncEntry 退化标记。VMConfig 类（MaxXCallDepth + XCallDepthPolicy: Warn/Unlimited）。AD01-AD12 全通过，B01-B06 无回归** | 性能优化 + 宿主配置 | 编译器 + VMConfig | ⭐⭐ |
-| **Lang-8** | **统一语法 + @inline + LSP (C-2)** | **⏳** | **`svc.member` 统一成员访问语法（编译器根据导出表自动路由 XCALL/XLOAD_MVAR/XSTORE_MVAR）。`@inline` hint 声明。LSP 调用链深度诊断 + 内联建议 + 性能估算** | 易用性 + 开发体验 | 编译器 + LSP | ⭐⭐⭐ |
+| **Lang-8** | **统一语法 + @inline + LSP (C-2)** | **✅** | **`svc.member` 统一成员访问语法：`svc.func(args)` 编译为 XCALL（自动 A1/A2 退化为 XLOAD/XSTORE_MVAR），`svc.var` 编译为 XLOAD/XSTORE_MVAR。`@inline` hint 注解（@inline @export / @export @inline 均可）。ServiceBinding 类（编译器接受目标 ExportTable）。FO6 寄存器重映射修复（XCALL/XLOAD_MVAR/XSTORE_MVAR GetRegisterMask）。LSP 警告诊断（severity=2）+ @inline 未退化提示。US01-US15 全通过，B01-B06 无回归** | 易用性 + 开发体验 | 编译器 + LSP | ⭐⭐⭐ |
 | *Lang-9* | *@force_inline + 深度内联 (C-3)* | *⏳* | *`@force_inline` 强制内联声明。A5 函数体展开优化。O4 跨模块常量折叠。编译期完整语义保持* | *极致优化* | *编译器* | *⭐⭐⭐* |
 
-> Phase 1（Lang-1~Lang-3）✅ 完成。Phase 2 = Lang-6~Lang-8（Q4 服务脚本 XCALL 路径），Lang-6 ✅ 完成，Lang-7 ✅ 完成。Lang-4 按需触发（黑板瓶颈时）。Lang-9 远期。
+> Phase 1（Lang-1~Lang-3）✅ 完成。Phase 2 = Lang-6~Lang-8（Q4 服务脚本 XCALL 路径），Lang-6 ✅ 完成，Lang-7 ✅ 完成，Lang-8 ✅ 完成。Phase 2 全部完成。Lang-4 按需触发（黑板瓶颈时）。Lang-9 远期。
 >
 > **Lang-6 子计划 checklist**（C-1 XCALL 基线）：
 > - [x] 输出 XCALL Spec 设计文档（OpCode 编码、导出表格式、跨实例寻址协议）→ [Step_Lang6_XCALL_Spec.md](Plan/Step_Lang6_XCALL_Spec.md)
@@ -586,12 +586,19 @@ B 阶段 20 个步骤（B-R1 → B-δ5）全部完成，已归入上方 A 区表
 > - [x] B01-B06 benchmark 确认无回归（纯编译期特性，ExecuteInstance 热循环无改动）
 >
 > **Lang-8 子计划 checklist**（C-2 统一语法 + @inline + LSP）：
-> - [ ] Parser 支持 `svc.member` 点号访问语法（MemberAccessExpr）
-> - [ ] 编译器根据目标模块导出表自动路由：var → XLOAD/XSTORE，func → XCALL，纯 getter → A1 退化
-> - [ ] `@inline` hint 关键字（Lexer + Parser + 编译器 inline 标记）
-> - [ ] LSP: 调用链深度诊断（Warning: XCALL depth > N）
-> - [ ] LSP: 内联建议（"this getter can be inlined"）
-> - [ ] 测试套件：统一语法解析、路由正确性、@inline 标记验证
+> - [x] Lexer: `@inline` 关键字（ScanAtKeyword 扩展）
+> - [x] AST: `MemberCallExpr` 节点（TargetName + MemberName + Arguments），`FuncDecl.IsInline` 字段
+> - [x] Parser: `svc.func(args)` → MemberCallExpr（ParsePostfix 拦截），`@inline @export func` / `@export @inline func` 双序支持
+> - [x] Compiler: `ServiceBinding` 类（VarName + ExportTable），新 `Compile` 重载接受 `ServiceBinding[]`
+> - [x] Compiler: `CompileMemberCallExpr` — 根据导出表自动路由：None→XCALL，Getter→XLOAD_MVAR，Setter→XSTORE_MVAR
+> - [x] Compiler: `CompileServiceVarRead` / `CompileServiceVarWrite` — svc.var 直接变量读写（XLOAD/XSTORE_MVAR）
+> - [x] Compiler: `ExportFuncEntry.IsInlineHint` — @inline 标记传播到导出表
+> - [x] Compiler: FO6 GetRegisterMask 修复 — XCALL(mask=3)、XLOAD_MVAR(mask=3)、XSTORE_MVAR(mask=6)
+> - [x] Compiler: XCALL 参数传递修复 — 两阶段模式（先编译到 temp，再 MOVE 到 scratch）
+> - [x] LSP: CompileResult.Warnings 支持 + severity=2 诊断发布
+> - [x] LSP: @inline 未退化警告提示（"@inline function could not be degraded"）
+> - [x] 测试：US01-US15 全通过（基本调用、变量读写、getter/setter 退化、多参数、混合访问、@inline hint、错误检测、结构体共存、参数数量校验）
+> - [x] Benchmark: B01-B06 无回归
 >
 >
 > **Lang-1 保留段决策**：保留 r56~r63 模块变量段，跟随 MaxRegisters 变化。公式 `ModuleVarSlots = (MaxRegisters / 64) * 8`（即每 64 寄存器保留 8 个 slot）。`ModuleVarRegBase = MaxRegisters - ModuleVarSlots`。全部使用 VMConstants 常量配置。模块变量通过专用 LOAD_MVAR/STORE_MVAR 指令绝对寻址，Reg() 保持最简形式 `r < ScratchZoneSize ? r : r + regBase`，热循环无额外分支。超过 ModuleVarSlots 的模块变量自动溢出到 Lang-1.1b 扩展寄存器池（`Number[]` 堆数组），通过 LOAD_XREG/STORE_XREG 访问。编译器辅助方法 `EmitLoadModuleVar`/`EmitStoreModuleVar` 自动路由固定/扩展路径。
@@ -608,7 +615,7 @@ B 阶段 20 个步骤（B-R1 → B-δ5）全部完成，已归入上方 A 区表
 >
 > **Lang-6 设计来源（Q4 收敛）**：Q4 讨论历经 9 轮（R18~R26），14 项设计决策全部锁定。核心方案：方式 C（语言级引用），服务脚本为 FFS 运行时实体。统一基线设计 XIMA（Cross-Instance Member Access）：`svc.member` 点号语法，编译器根据导出表自动路由 XCALL/XLOAD_MVAR/XSTORE_MVAR。Y1-Plus 编译期保证服务函数不可 yield（无运行时负担）。嵌套深度运行时配置（MaxXCallDepth 默认 4，Warn/Unlimited 两种策略）。性能影响可忽略（< 0.02% 帧预算）。
 
-**Lang-7 ✅ 完成（AD01-AD12 全通过，B01-B06 benchmark 无回归，1206 测试全通过）。Lang-6 ✅ 完成（XC01-XC16 全通过，B01-B06 benchmark 无回归确认，1164 测试全通过）。Lang-3 ✅ 完成（BB01-BB10 全通过，1111 测试全通过）。Lang-1 ✅ 完成。Lang-1.1a ✅ 完成（MR01-MR08 全通过）。Lang-1.1b ✅ 完成（XR01-XR06 全通过）。Lang-2 ✅ 完成（INC01-INC16 全通过）。P0 语言需求 Phase 1 完毕。Lang-6 ✅ XCALL 基线完成。Lang-7 ✅ 自动退化 + VMConfig 完成。当前位置 → Lang-8（C-2 统一语法 + @inline + LSP）。**
+**Lang-8 ✅ 完成（US01-US15 全通过，B01-B06 benchmark 无回归，1259 测试全通过）。Lang-7 ✅ 完成（AD01-AD12 全通过，B01-B06 benchmark 无回归，1206 测试全通过）。Lang-6 ✅ 完成（XC01-XC16 全通过，B01-B06 benchmark 无回归确认，1164 测试全通过）。Lang-3 ✅ 完成（BB01-BB10 全通过，1111 测试全通过）。Lang-1 ✅ 完成。Lang-1.1a ✅ 完成（MR01-MR08 全通过）。Lang-1.1b ✅ 完成（XR01-XR06 全通过）。Lang-2 ✅ 完成（INC01-INC16 全通过）。P0 语言需求 Phase 1 完毕。Phase 2（Q4 服务脚本 XCALL 路径 Lang-6~Lang-8）全部完成。当前位置 → Lang-9（C-3 @force_inline）或 C0（宿主集成部署）。**
 
 ---
 

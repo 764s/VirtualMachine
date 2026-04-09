@@ -346,6 +346,18 @@ namespace FFVM.Debug
                         diagnostics.Add(diag);
                     }
                 }
+
+                // Lang-8: emit warnings as severity=2 (Warning)
+                if (result.Warnings != null)
+                {
+                    foreach (string warning in result.Warnings)
+                    {
+                        var diag = ErrorToDiagnostic(warning, source);
+                        // Override severity from Error(1) to Warning(2)
+                        diag.Set("severity", 2);
+                        diagnostics.Add(diag);
+                    }
+                }
             }
 
             PublishDiagnostics(uri, diagnostics);
