@@ -3299,7 +3299,7 @@ namespace FFVM.Compiler
                             // Need to retroactively allocate a register for this exported const
                             // Use a virtual mvarSlot referencing the const value
                             // We store exported consts in module var registers
-                            _errors.Add($"@export const '{decl.Name}' not yet supported (const folding removes register allocation). Use '@export var' instead. (line {decl.Line})");
+                            _errors.Add($"@export const '{decl.Name}' is not supported in C-1 phase (compile-time constant folding removes register allocation). Export as 'var' for cross-instance access: '@export var {decl.Name}'. (line {decl.Line})");
                             continue;
                         }
                         exportVars.Add(new ExportVarEntry(decl.Name, mvarSlot, false));
