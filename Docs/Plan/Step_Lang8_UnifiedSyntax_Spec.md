@@ -155,7 +155,7 @@ CompileAssign(target = FieldAccessExpr where target is service ref):
 
 ### 5.4 编译器
 
-当前阶段 `@inline` 仅存储 hint 标记，不改变编译行为（C-3 才做真正内联）。
+当前阶段 `@inline` 仅存储 hint 标记，不改变编译行为（A5 深度内联为远期计划）。
 LSP 可利用此标记提供诊断建议。
 
 ---

@@ -24,11 +24,11 @@
 | L4/L5 关系 | 同基线设计：XCALL + XLOAD_MVAR + XSTORE_MVAR 在 C-1 同时实现 | R23 ✅ |
 | 导出声明 | **`@export` 唯一形式** | R24-25 ✅ |
 | 自动优化 | A1/A2 自动 getter/setter→直接访问退化（C-1.5） | R23 ✅ |
-| 用户引导内联 | `@inline`（hint，C-2）+ `@force_inline`（强制，C-3）+ LSP 诊断 | R24 ✅ |
-| 实现路径 | C-0 → C-1(XCALL+XL4) → C-1.5(A1/A2+配置) → C-2(语法糖+@inline+LSP) → C-3(A5+@force_inline) | R23-26 ✅ |
+| 用户引导内联 | `@inline`（hint，C-2）+ LSP 诊断。`@force_inline` 已取消 — 内联失败严格程度改由编译器配置控制 | R24 ✅ |
+| 实现路径 | C-0 → C-1(XCALL+XL4) → C-1.5(A1/A2+配置) → C-2(语法糖+@inline+LSP) → 远期(A5 深度内联) | R23-26 ✅ |
 | 嵌套调用 | **运行时配置 MaxXCallDepth（默认4）+ Warn/Unlimited 两种策略** | R21→R26 ✅ |
 | 性能影响 | 可忽略（< 0.02% 帧预算；深度检查 +1 ns/XCALL；常量 vs 变量无差异） | R20-26 ✅ |
-| XCALL 优化 | O1+O2（C-1），A1/A2（C-1.5），O7+@inline（C-2），O4/A5+@force_inline（C-3+） | R22-24 ✅ |
+| XCALL 优化 | O1+O2（C-1），A1/A2（C-1.5），O7+@inline（C-2），O4/A5 深度内联（远期） | R22-24 ✅ |
 | 优化退化策略 | 编译期自动退化，运行时零决策开销 | R22 ✅ |
 
 ### 1.2 C-1 阶段范围
@@ -44,7 +44,7 @@ C-1 是 XCALL 的**基线实现**，包含：
 | 参数传递协议 | scratch zone r0-rN 复制 |
 | 测试套件 | XC01-XC12+（基础 XCALL、跨实例变量读写、嵌套调用等） |
 
-**不包含**（后续阶段）：A1/A2 自动退化（C-1.5）、`svc.member` 语法糖（C-2）、`@inline`（C-2）、`@force_inline`（C-3）。
+**不包含**（后续阶段）：A1/A2 自动退化（C-1.5）、`svc.member` 语法糖（C-2）、`@inline`（C-2）、A5 深度内联（远期）。
 
 ---
 
@@ -827,4 +827,4 @@ private static int Reg(int r, int regBase)
 | C-2 (svc.member 语法) | ExportTable + 跨模块导出表解析 | Parser 解析 `svc.member`，编译器查 ExportTable 路由 |
 | C-2 (@inline) | ExportTable.Functions 的 AST 访问 | 内联需要访问目标函数体 AST |
 | C-2 (LSP 诊断) | ExportTable 结构 | LSP 遍历 ExportTable 提供补全/诊断 |
-| C-3 (@force_inline) | C-2 @inline 基础 | 升级为编译错误 |
+| 远期 (A5 深度内联) | C-2 @inline 基础 | A5 函数体展开优化（`@force_inline` 关键字已取消） |
