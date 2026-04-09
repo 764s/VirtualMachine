@@ -21,6 +21,15 @@ namespace FFVM
         private readonly SnapshotRingBuffer _snapshots;
         private int _frameNumber;
 
+        // Lang-6: Cross-instance call state
+        private XCallFrame[] _xcallStack = new XCallFrame[4];
+        private int _xcallDepth;
+        private int _maxXCallDepth = 4;
+        private bool _xcallDepthWarning = true;
+
+        /// <summary>Lang-6: Callback invoked when XCALL nesting depth exceeds MaxXCallDepth.</summary>
+        public System.Action<int, int> OnXCallDepthWarning;
+
         /// <summary>Max instructions executed per instance per Tick to prevent infinite loops.</summary>
         public int MaxStepsPerTick = 1024;
 

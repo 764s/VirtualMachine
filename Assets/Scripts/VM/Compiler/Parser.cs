@@ -35,6 +35,22 @@ namespace FFVM.Compiler
                 {
                     module.Imports.Add(ParseIncludeDecl());
                 }
+                else if (Check(TokenType.Export))
+                {
+                    // @export prefix — next must be var, const, or func
+                    Advance(); // consume @export
+                    if (Check(TokenType.Func))
+                        module.Functions.Add(ParseFuncDecl(isExported: true));
+                    else if (Check(TokenType.Var))
+                        module.ModuleVariables.Add(ParseVarDecl(false, isExported: true));
+                    else if (Check(TokenType.Const))
+                        module.ModuleVariables.Add(ParseVarDecl(true, isExported: true));
+                    else
+                    {
+                        Error($"Expected 'func', 'var' or 'const' after '@export', got '{Current().Text}'");
+                        Advance();
+                    }
+                }
                 else if (Check(TokenType.Func))
                 {
                     module.Functions.Add(ParseFuncDecl());
@@ -53,7 +69,7 @@ namespace FFVM.Compiler
                 }
                 else
                 {
-                    Error($"Expected 'func', 'struct', 'var', 'const' or 'include', got '{Current().Text}'");
+                    Error($"Expected 'func', 'struct', 'var', 'const', '@export' or 'include', got '{Current().Text}'");
                     Advance();
                 }
             }
@@ -122,7 +138,7 @@ namespace FFVM.Compiler
             return new ImportDecl(path);
         }
 
-        private FuncDecl ParseFuncDecl()
+        private FuncDecl ParseFuncDecl(bool isExported = false)
         {
             int line = Current().Line, col = Current().Column;
             Expect(TokenType.Func, "");
@@ -161,7 +177,7 @@ namespace FFVM.Compiler
             }
 
             var body = ParseBlock();
-            var decl = new FuncDecl(name, parameters, returnType, body, false);
+            var decl = new FuncDecl(name, parameters, returnType, body, false, isExported);
             decl.Line = line;
             decl.Column = col;
             AttachDocComment(decl, line);
@@ -299,7 +315,7 @@ namespace FFVM.Compiler
             }
         }
 
-        private VarDeclStmt ParseVarDecl(bool isConst)
+        private VarDeclStmt ParseVarDecl(bool isConst, bool isExported = false)
         {
             int line = Current().Line, col = Current().Column;
             Advance(); // consume 'var' or 'const'
@@ -317,7 +333,7 @@ namespace FFVM.Compiler
                 Error("'const' declaration requires an initializer");
             }
 
-            var stmt = new VarDeclStmt(name, typeName, initializer, isConst);
+            var stmt = new VarDeclStmt(name, typeName, initializer, isConst, isExported);
             stmt.Line = line;
             stmt.Column = col;
             return stmt;

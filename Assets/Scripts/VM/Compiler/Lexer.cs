@@ -16,7 +16,7 @@ namespace FFVM.Compiler
         // Keywords
         Func, Var, Const, If, Else, While, For, Return,
         Wait, WaitFor, Yield, Defer, Using,
-        True, False, Struct, Include,
+        True, False, Struct, Include, Export,
 
         // Operators
         Plus, Minus, Star, Slash, Percent,
@@ -157,6 +157,10 @@ namespace FFVM.Compiler
             if (char.IsLetter(c) || c == '_')
                 return ScanIdentifier(startLine, startCol);
 
+            // @-prefixed keywords (e.g. @export)
+            if (c == '@')
+                return ScanAtKeyword(startLine, startCol);
+
             // Operators and delimiters
             Advance();
             switch (c)
@@ -232,6 +236,20 @@ namespace FFVM.Compiler
                 return new Token(kwType, text, line, col);
 
             return new Token(TokenType.Identifier, text, line, col);
+        }
+
+        private Token ScanAtKeyword(int line, int col)
+        {
+            Advance(); // skip '@'
+            int start = _pos;
+            while (_pos < _source.Length && (char.IsLetterOrDigit(Peek()) || Peek() == '_'))
+                Advance();
+
+            string word = _source.Substring(start, _pos - start);
+            if (word == "export")
+                return new Token(TokenType.Export, "@export", line, col);
+
+            return new Token(TokenType.Error, $"Unknown annotation '@{word}' at {line}:{col}", line, col);
         }
 
         private Token ScanString(int line, int col)

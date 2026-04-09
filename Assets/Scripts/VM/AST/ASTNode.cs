@@ -225,12 +225,14 @@ namespace FFVM.AST
         public string TypeName { get; }
         public Expr Initializer { get; }
         public bool IsConst { get; }
-        public VarDeclStmt(string name, string typeName, Expr initializer, bool isConst = false) : base(NodeKind.VarDecl)
+        public bool IsExported { get; }
+        public VarDeclStmt(string name, string typeName, Expr initializer, bool isConst = false, bool isExported = false) : base(NodeKind.VarDecl)
         {
             Name = name;
             TypeName = typeName;
             Initializer = initializer;
             IsConst = isConst;
+            IsExported = isExported;
         }
     }
 
@@ -361,10 +363,11 @@ namespace FFVM.AST
         public string ReturnType { get; }
         public BlockStmt Body { get; }
         public bool IsPrivate { get; }
+        public bool IsExported { get; }
         public string DocComment { get; set; }
         public string ReturnDoc { get; set; }
 
-        public FuncDecl(string name, List<ParamDecl> parameters, string returnType, BlockStmt body, bool isPrivate)
+        public FuncDecl(string name, List<ParamDecl> parameters, string returnType, BlockStmt body, bool isPrivate, bool isExported = false)
             : base(NodeKind.FuncDecl)
         {
             Name = name;
@@ -372,6 +375,7 @@ namespace FFVM.AST
             ReturnType = returnType;
             Body = body;
             IsPrivate = isPrivate;
+            IsExported = isExported;
         }
     }
 

@@ -94,8 +94,13 @@ namespace FFVM
         LOAD_XREG    = 49,  // A=destReg, B=xidx_lo, C=xidx_hi → Reg[A] = ExtRegs[B | (C<<8)]
         STORE_XREG   = 50,  // A=xidx_lo, B=srcReg, C=xidx_hi → ExtRegs[A | (C<<8)] = Reg[B]
 
+        // --- Lang-6: cross-instance member access (XIMA) ---
+        XCALL        = 52,  // A=destReg, B=instanceId_reg, C=exportFuncIndex
+        XLOAD_MVAR   = 53,  // A=destReg, B=instanceId_reg, C=exportVarIndex
+        XSTORE_MVAR  = 54,  // A=exportVarIndex, B=instanceId_reg, C=srcReg
+
         // --- O15: sentinel (never emitted by compiler) ---
-        SENTINEL     = 51,  // appended by VMProgram ctor; replaces per-instruction boundary check
+        SENTINEL     = 55,  // appended by VMProgram ctor; replaces per-instruction boundary check
     }
 
     /// <summary>
