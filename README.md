@@ -24,12 +24,13 @@ FFVM 是一个寄存器式字节码虚拟机，配套胶水 DSL **FFScript**（`
 **VM 侧已基本成熟**，正在等待宿主接入（C 阶段）。
 
 - ✅ 完整编译器流水线：FFScript 源码 → Lexer → Parser → AST → BytecodeCompiler → 字节码执行
-- ✅ 1111 项自动化测试全部通过（编译器 610 + TreeWalker 112 + 性能 44 + FFScript 18 + 调试 51 + DAP 97 + LSP 179）
+- ✅ 1259 项自动化测试全部通过（编译器 758 + TreeWalker 112 + 性能 44 + FFScript 18 + 调试 51 + DAP 97 + LSP 179）
 - ✅ 曳光弹全部验证门禁通过（零 GC、回滚 bit-exact、单实例 3.8x vs C#、128 实例 < 0.4ms）
 - ✅ DAP 调试器 + VS Code 扩展（断点、单步、变量查看）
-- ✅ LSP 语言服务（实时诊断、符号分析、代码补全、参数提示、Syscall 声明）
+- ✅ LSP 语言服务（实时诊断、符号分析、代码补全、参数提示、Syscall 声明、编译器警告）
 - ✅ 分发基础设施（NuGet 包 + 单文件 CLI + Sandbox 沙盒环境）
 - ✅ 多轮性能优化（Peephole、FORLOOP 超级指令、指令压缩 16B→4B、LICM、跳转表等）
+- ✅ 跨实例调用（@export + XCALL + 统一语法 svc.member + 自动 getter/setter 退化 + @inline 提示）
 
 **未完成**：宿主集成 + 热更覆盖（C1）、帧内 Profiler 验证（C2）、帧同步集成验证（C5）、UI 配置编辑（C6）。
 
@@ -127,11 +128,22 @@ defer { EndAction() }   // 函数退出或被 Kill 时自动执行
 
 // 文件包含
 include "common/math.ffs"
+
+// 跨实例调用（@export + 服务绑定）
+@export var hp: int = 100
+@export func get_hp(): int { return hp }
+
+// 调用方通过 svc.member 统一语法访问
+var result: int = svc.get_hp()
+var currentHP: int = svc.hp
+svc.hp = 50
 ```
 
-### 17 个关键字
+### 17 个关键字 + 2 个注解
 
 `func` `var` `const` `struct` `if` `else` `while` `for` `return` `wait` `wait_for` `yield` `defer` `using` `include` `true` `false`
+
+**注解**：`@export` `@inline`
 
 ---
 
@@ -142,6 +154,7 @@ include "common/math.ffs"
   ✅ 编译器 + 工具链             — 源码到调试的全链路
   ✅ 性能优化 + 功能完善          — 追平 Lua 级别性能
   ✅ 分发基础设施               — NuGet + CLI + VS Code 扩展
+  ✅ 跨实例调用                 — @export + XCALL + svc.member 统一语法
   ⚪ 宿主集成                   — Syscall 接入 + 热更覆盖机制
   ⚪ 帧同步集成验证              — 网络环境下的快照导入导出正确性
   ⚪ UI 配置编辑                 — 传统 UI 方式作为脚本配置的替代入口

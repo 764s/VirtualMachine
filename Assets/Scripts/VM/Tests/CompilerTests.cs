@@ -7317,6 +7317,470 @@ func main() {
             Assert(func0.Degradation == DegradationType.None, $"AD12: assign literal (not param) → None, got {func0.Degradation}");
         }
 
+        // ===== Lang-8: Unified Syntax Tests (US01-US14) =====
+
+        // ===== Test US01: svc.func() basic function call =====
+        {
+            // Service module with @export func add(a, b) → return a+b
+            string svcSource = @"
+@export func add(a: int, b: int): int {
+    return a + b
+}
+func main() {
+}";
+            var svcResult = compiler.Compile(svcSource, "main", new Dictionary<string, int>());
+            Assert(svcResult.Success, "US01 svc compile success");
+
+            // Caller module: uses svc.add(10, 32) unified syntax
+            string callerSource = @"
+var svc: int = 0
+func main() {
+    var result: int = svc.add(10, 32)
+    Report(result)
+}";
+            var svcBindings = new ServiceBinding[] { new ServiceBinding("svc", svcResult.Program.ExportTable) };
+            var callerSyscalls = new Dictionary<string, int> { { "Report", 0 } };
+            var callerResult = compiler.Compile(callerSource, "main", callerSyscalls, null, null, null, svcBindings);
+            Assert(callerResult.Success, $"US01 caller compile success: {(callerResult.Errors != null && callerResult.Errors.Count > 0 ? callerResult.Errors[0] : "ok")}");
+
+            // Run in VMWorld
+            var values = new List<int>();
+            var world = new VMWorld();
+            world.Modules.Load(0, svcResult.Program);
+            world.Modules.Load(1, callerResult.Program);
+            world.Syscalls.Register(0, "Report", (ref VMInstanceState s) =>
+            {
+                values.Add(s.Registers.Get(0).ToInt());
+            });
+            int svcId = world.SpawnInstance(0, 0);
+            // Patch svc variable in caller's module var with actual svc instanceId
+            int callerId = world.SpawnInstance(1, 0);
+            // Set the svc module var to the service instance id
+            world.Pool.Instances[callerId].Registers.Set(VMConstants.ModuleVarRegBase, Number.FromInt(svcId));
+            world.Tick();
+            Assert(values.Count == 1, $"US01: 1 report, got {values.Count}");
+            Assert(values.Count > 0 && values[0] == 42, $"US01: svc.add(10,32)=42, got {(values.Count > 0 ? values[0].ToString() : "none")}");
+        }
+
+        // ===== Test US02: svc.var read =====
+        {
+            string svcSource = @"
+@export var hp: int = 999
+func main() {
+}";
+            var svcResult = compiler.Compile(svcSource, "main", new Dictionary<string, int>());
+            Assert(svcResult.Success, "US02 svc compile success");
+
+            string callerSource = @"
+var svc: int = 0
+func main() {
+    var val: int = svc.hp
+    Report(val)
+}";
+            var svcBindings = new ServiceBinding[] { new ServiceBinding("svc", svcResult.Program.ExportTable) };
+            var callerSyscalls = new Dictionary<string, int> { { "Report", 0 } };
+            var callerResult = compiler.Compile(callerSource, "main", callerSyscalls, null, null, null, svcBindings);
+            Assert(callerResult.Success, $"US02 caller compile success: {(callerResult.Errors != null && callerResult.Errors.Count > 0 ? callerResult.Errors[0] : "ok")}");
+
+            var values = new List<int>();
+            var world = new VMWorld();
+            world.Modules.Load(0, svcResult.Program);
+            world.Modules.Load(1, callerResult.Program);
+            world.Syscalls.Register(0, "Report", (ref VMInstanceState s) =>
+            {
+                values.Add(s.Registers.Get(0).ToInt());
+            });
+            int svcId = world.SpawnInstance(0, 0);
+            int callerId = world.SpawnInstance(1, 0);
+            world.Pool.Instances[callerId].Registers.Set(VMConstants.ModuleVarRegBase, Number.FromInt(svcId));
+            world.Tick();
+            Assert(values.Count == 1, $"US02: 1 report, got {values.Count}");
+            Assert(values.Count > 0 && values[0] == 999, $"US02: svc.hp=999, got {(values.Count > 0 ? values[0].ToString() : "none")}");
+        }
+
+        // ===== Test US03: svc.var write =====
+        {
+            string svcSource = @"
+@export var hp: int = 100
+func main() {
+}";
+            var svcResult = compiler.Compile(svcSource, "main", new Dictionary<string, int>());
+            Assert(svcResult.Success, "US03 svc compile success");
+
+            string callerSource = @"
+var svc: int = 0
+func main() {
+    svc.hp = 500
+    var val: int = svc.hp
+    Report(val)
+}";
+            var svcBindings = new ServiceBinding[] { new ServiceBinding("svc", svcResult.Program.ExportTable) };
+            var callerSyscalls = new Dictionary<string, int> { { "Report", 0 } };
+            var callerResult = compiler.Compile(callerSource, "main", callerSyscalls, null, null, null, svcBindings);
+            Assert(callerResult.Success, $"US03 caller compile success: {(callerResult.Errors != null && callerResult.Errors.Count > 0 ? callerResult.Errors[0] : "ok")}");
+
+            var values = new List<int>();
+            var world = new VMWorld();
+            world.Modules.Load(0, svcResult.Program);
+            world.Modules.Load(1, callerResult.Program);
+            world.Syscalls.Register(0, "Report", (ref VMInstanceState s) =>
+            {
+                values.Add(s.Registers.Get(0).ToInt());
+            });
+            int svcId = world.SpawnInstance(0, 0);
+            int callerId = world.SpawnInstance(1, 0);
+            world.Pool.Instances[callerId].Registers.Set(VMConstants.ModuleVarRegBase, Number.FromInt(svcId));
+            world.Tick();
+            Assert(values.Count == 1, $"US03: 1 report, got {values.Count}");
+            Assert(values.Count > 0 && values[0] == 500, $"US03: svc.hp after write = 500, got {(values.Count > 0 ? values[0].ToString() : "none")}");
+        }
+
+        // ===== Test US04: getter degradation (A1) — svc.get_hp() → XLOAD_MVAR =====
+        {
+            string svcSource = @"
+@export var hp: int = 777
+@export func get_hp(): int {
+    return hp
+}
+func main() {
+}";
+            var svcResult = compiler.Compile(svcSource, "main", new Dictionary<string, int>());
+            Assert(svcResult.Success, "US04 svc compile success");
+            Assert(svcResult.Program.ExportTable.Functions[0].Degradation == DegradationType.Getter,
+                $"US04: get_hp detected as Getter, got {svcResult.Program.ExportTable.Functions[0].Degradation}");
+
+            string callerSource = @"
+var svc: int = 0
+func main() {
+    var val: int = svc.get_hp()
+    Report(val)
+}";
+            var svcBindings = new ServiceBinding[] { new ServiceBinding("svc", svcResult.Program.ExportTable) };
+            var callerSyscalls = new Dictionary<string, int> { { "Report", 0 } };
+            var callerResult = compiler.Compile(callerSource, "main", callerSyscalls, null, null, null, svcBindings);
+            Assert(callerResult.Success, $"US04 caller compile success: {(callerResult.Errors != null && callerResult.Errors.Count > 0 ? callerResult.Errors[0] : "ok")}");
+
+            var values = new List<int>();
+            var world = new VMWorld();
+            world.Modules.Load(0, svcResult.Program);
+            world.Modules.Load(1, callerResult.Program);
+            world.Syscalls.Register(0, "Report", (ref VMInstanceState s) =>
+            {
+                values.Add(s.Registers.Get(0).ToInt());
+            });
+            int svcId = world.SpawnInstance(0, 0);
+            int callerId = world.SpawnInstance(1, 0);
+            world.Pool.Instances[callerId].Registers.Set(VMConstants.ModuleVarRegBase, Number.FromInt(svcId));
+            world.Tick();
+            Assert(values.Count == 1, $"US04: 1 report, got {values.Count}");
+            Assert(values.Count > 0 && values[0] == 777, $"US04: svc.get_hp()=777 (degraded), got {(values.Count > 0 ? values[0].ToString() : "none")}");
+        }
+
+        // ===== Test US05: setter degradation (A2) — svc.set_hp(500) → XSTORE_MVAR =====
+        {
+            string svcSource = @"
+@export var hp: int = 100
+@export func set_hp(val: int) {
+    hp = val
+}
+func main() {
+}";
+            var svcResult = compiler.Compile(svcSource, "main", new Dictionary<string, int>());
+            Assert(svcResult.Success, "US05 svc compile success");
+            Assert(svcResult.Program.ExportTable.Functions[0].Degradation == DegradationType.Setter,
+                $"US05: set_hp detected as Setter, got {svcResult.Program.ExportTable.Functions[0].Degradation}");
+
+            string callerSource = @"
+var svc: int = 0
+func main() {
+    svc.set_hp(500)
+    var val: int = svc.hp
+    Report(val)
+}";
+            var svcBindings = new ServiceBinding[] { new ServiceBinding("svc", svcResult.Program.ExportTable) };
+            var callerSyscalls = new Dictionary<string, int> { { "Report", 0 } };
+            var callerResult = compiler.Compile(callerSource, "main", callerSyscalls, null, null, null, svcBindings);
+            Assert(callerResult.Success, $"US05 caller compile success: {(callerResult.Errors != null && callerResult.Errors.Count > 0 ? callerResult.Errors[0] : "ok")}");
+
+            var values = new List<int>();
+            var world = new VMWorld();
+            world.Modules.Load(0, svcResult.Program);
+            world.Modules.Load(1, callerResult.Program);
+            world.Syscalls.Register(0, "Report", (ref VMInstanceState s) =>
+            {
+                values.Add(s.Registers.Get(0).ToInt());
+            });
+            int svcId = world.SpawnInstance(0, 0);
+            int callerId = world.SpawnInstance(1, 0);
+            world.Pool.Instances[callerId].Registers.Set(VMConstants.ModuleVarRegBase, Number.FromInt(svcId));
+            world.Tick();
+            Assert(values.Count == 1, $"US05: 1 report, got {values.Count}");
+            Assert(values.Count > 0 && values[0] == 500, $"US05: svc.set_hp(500) → svc.hp=500, got {(values.Count > 0 ? values[0].ToString() : "none")}");
+        }
+
+        // ===== Test US06: multi-arg function call =====
+        {
+            string svcSource = @"
+@export func compute(a: int, b: int, c: int): int {
+    return a * b + c
+}
+func main() {
+}";
+            var svcResult = compiler.Compile(svcSource, "main", new Dictionary<string, int>());
+            Assert(svcResult.Success, "US06 svc compile success");
+
+            string callerSource = @"
+var svc: int = 0
+func main() {
+    var r: int = svc.compute(3, 4, 5)
+    Report(r)
+}";
+            var svcBindings = new ServiceBinding[] { new ServiceBinding("svc", svcResult.Program.ExportTable) };
+            var callerSyscalls = new Dictionary<string, int> { { "Report", 0 } };
+            var callerResult = compiler.Compile(callerSource, "main", callerSyscalls, null, null, null, svcBindings);
+            Assert(callerResult.Success, $"US06 caller compile success: {(callerResult.Errors != null && callerResult.Errors.Count > 0 ? callerResult.Errors[0] : "ok")}");
+
+            var values = new List<int>();
+            var world = new VMWorld();
+            world.Modules.Load(0, svcResult.Program);
+            world.Modules.Load(1, callerResult.Program);
+            world.Syscalls.Register(0, "Report", (ref VMInstanceState s) =>
+            {
+                values.Add(s.Registers.Get(0).ToInt());
+            });
+            int svcId = world.SpawnInstance(0, 0);
+            int callerId = world.SpawnInstance(1, 0);
+            world.Pool.Instances[callerId].Registers.Set(VMConstants.ModuleVarRegBase, Number.FromInt(svcId));
+            world.Tick();
+            Assert(values.Count == 1, $"US06: 1 report, got {values.Count}");
+            Assert(values.Count > 0 && values[0] == 17, $"US06: compute(3,4,5)=17, got {(values.Count > 0 ? values[0].ToString() : "none")}");
+        }
+
+        // ===== Test US07: mixed access — var read + func call + var write =====
+        {
+            string svcSource = @"
+@export var hp: int = 100
+@export func add(a: int, b: int): int {
+    return a + b
+}
+func main() {
+}";
+            var svcResult = compiler.Compile(svcSource, "main", new Dictionary<string, int>());
+            Assert(svcResult.Success, "US07 svc compile success");
+
+            string callerSource = @"
+var svc: int = 0
+func main() {
+    var old_hp: int = svc.hp
+    var bonus: int = svc.add(old_hp, 50)
+    svc.hp = bonus
+    Report(svc.hp)
+}";
+            var svcBindings = new ServiceBinding[] { new ServiceBinding("svc", svcResult.Program.ExportTable) };
+            var callerSyscalls = new Dictionary<string, int> { { "Report", 0 } };
+            var callerResult = compiler.Compile(callerSource, "main", callerSyscalls, null, null, null, svcBindings);
+            Assert(callerResult.Success, $"US07 caller compile success: {(callerResult.Errors != null && callerResult.Errors.Count > 0 ? callerResult.Errors[0] : "ok")}");
+
+            var values = new List<int>();
+            var world = new VMWorld();
+            world.Modules.Load(0, svcResult.Program);
+            world.Modules.Load(1, callerResult.Program);
+            world.Syscalls.Register(0, "Report", (ref VMInstanceState s) =>
+            {
+                values.Add(s.Registers.Get(0).ToInt());
+            });
+            int svcId = world.SpawnInstance(0, 0);
+            int callerId = world.SpawnInstance(1, 0);
+            world.Pool.Instances[callerId].Registers.Set(VMConstants.ModuleVarRegBase, Number.FromInt(svcId));
+            world.Tick();
+            Assert(values.Count == 1, $"US07: 1 report, got {values.Count}");
+            Assert(values.Count > 0 && values[0] == 150, $"US07: 100+50=150, got {(values.Count > 0 ? values[0].ToString() : "none")}");
+        }
+
+        // ===== Test US08: @inline hint on @export func =====
+        {
+            string source = @"
+@export var hp: int = 100
+@inline @export func get_hp(): int {
+    return hp
+}
+@export @inline func set_hp(val: int) {
+    hp = val
+}
+func main() {
+}";
+            var result = compiler.Compile(source, "main", new Dictionary<string, int>());
+            Assert(result.Success, $"US08 compile success: {(result.Errors != null && result.Errors.Count > 0 ? result.Errors[0] : "ok")}");
+            Assert(result.Program.ExportTable != null, "US08: ExportTable not null");
+            Assert(result.Program.ExportTable.Functions.Length == 2, $"US08: 2 export funcs, got {result.Program.ExportTable.Functions.Length}");
+            Assert(result.Program.ExportTable.Functions[0].IsInlineHint, "US08: get_hp has @inline hint");
+            Assert(result.Program.ExportTable.Functions[1].IsInlineHint, "US08: set_hp has @inline hint (reversed order)");
+        }
+
+        // ===== Test US09: @inline on non-export func — no crash (hint is stored but not in export table) =====
+        {
+            string source = @"
+@inline func helper(): int {
+    return 42
+}
+func main() {
+    var x: int = helper()
+    Report(x)
+}";
+            var callerSyscalls = new Dictionary<string, int> { { "Report", 0 } };
+            var result = compiler.Compile(source, "main", callerSyscalls);
+            Assert(result.Success, $"US09 compile success: {(result.Errors != null && result.Errors.Count > 0 ? result.Errors[0] : "ok")}");
+            // No ExportTable since no @export
+            Assert(result.Program.ExportTable == null, "US09: no exports → null ExportTable");
+        }
+
+        // ===== Test US10: unknown member function → compile error =====
+        {
+            string svcSource = @"
+@export func add(a: int, b: int): int {
+    return a + b
+}
+func main() {
+}";
+            var svcResult = compiler.Compile(svcSource, "main", new Dictionary<string, int>());
+            Assert(svcResult.Success, "US10 svc compile success");
+
+            string callerSource = @"
+var svc: int = 0
+func main() {
+    var x: int = svc.unknown(1, 2)
+}";
+            var svcBindings = new ServiceBinding[] { new ServiceBinding("svc", svcResult.Program.ExportTable) };
+            var callerResult = compiler.Compile(callerSource, "main", new Dictionary<string, int>(), null, null, null, svcBindings);
+            Assert(!callerResult.Success, "US10: compile error for unknown member");
+            Assert(callerResult.Errors != null && callerResult.Errors.Count > 0 &&
+                   callerResult.Errors[0].Contains("unknown") && callerResult.Errors[0].Contains("not exported"),
+                   $"US10: error mentions 'unknown' and 'not exported', got: {(callerResult.Errors != null && callerResult.Errors.Count > 0 ? callerResult.Errors[0] : "none")}");
+        }
+
+        // ===== Test US11: write to read-only exported variable → compile error =====
+        {
+            // Note: @export const not supported in C-1, so we test with a service that only has @export func (read-only var path)
+            // For this test, create a binding with a non-writable variable
+            var readOnlyVar = new ExportVarEntry("hp", 0, false); // writable=false
+            var readOnlyTable = new ExportTable(new ExportVarEntry[] { readOnlyVar }, new ExportFuncEntry[0]);
+
+            string callerSource = @"
+var svc: int = 0
+func main() {
+    svc.hp = 100
+}";
+            var svcBindings = new ServiceBinding[] { new ServiceBinding("svc", readOnlyTable) };
+            var callerResult = compiler.Compile(callerSource, "main", new Dictionary<string, int>(), null, null, null, svcBindings);
+            Assert(!callerResult.Success, "US11: compile error for read-only write");
+            Assert(callerResult.Errors != null && callerResult.Errors.Count > 0 &&
+                   callerResult.Errors[0].Contains("read-only"),
+                   $"US11: error mentions 'read-only', got: {(callerResult.Errors != null && callerResult.Errors.Count > 0 ? callerResult.Errors[0] : "none")}");
+        }
+
+        // ===== Test US12: no service binding → svc.member falls through to struct field access =====
+        {
+            // Without service bindings, svc.hp is treated as struct field access (fails on unknown struct)
+            string callerSource = @"
+var svc: int = 0
+func main() {
+    var x: int = svc.hp
+}";
+            var callerResult = compiler.Compile(callerSource, "main", new Dictionary<string, int>());
+            // Should fail because 'svc' is not a struct variable
+            Assert(!callerResult.Success, "US12: compile error when no service binding (struct field access fails)");
+        }
+
+        // ===== Test US13: struct field + service ref coexistence =====
+        {
+            string svcSource = @"
+@export var hp: int = 42
+func main() {
+}";
+            var svcResult = compiler.Compile(svcSource, "main", new Dictionary<string, int>());
+            Assert(svcResult.Success, "US13 svc compile success");
+
+            string callerSource = @"
+struct Vec2 {
+    x: int
+    y: int
+}
+var svc: int = 0
+func main() {
+    var pos: Vec2 = Vec2 { x: 10, y: 20 }
+    var px: int = pos.x
+    var sh: int = svc.hp
+    Report(px + sh)
+}";
+            var svcBindings = new ServiceBinding[] { new ServiceBinding("svc", svcResult.Program.ExportTable) };
+            var callerSyscalls = new Dictionary<string, int> { { "Report", 0 } };
+            var callerResult = compiler.Compile(callerSource, "main", callerSyscalls, null, null, null, svcBindings);
+            Assert(callerResult.Success, $"US13 caller compile success: {(callerResult.Errors != null && callerResult.Errors.Count > 0 ? callerResult.Errors[0] : "ok")}");
+
+            var values = new List<int>();
+            var world = new VMWorld();
+            world.Modules.Load(0, svcResult.Program);
+            world.Modules.Load(1, callerResult.Program);
+            world.Syscalls.Register(0, "Report", (ref VMInstanceState s) =>
+            {
+                values.Add(s.Registers.Get(0).ToInt());
+            });
+            int svcId = world.SpawnInstance(0, 0);
+            int callerId = world.SpawnInstance(1, 0);
+            world.Pool.Instances[callerId].Registers.Set(VMConstants.ModuleVarRegBase, Number.FromInt(svcId));
+            world.Tick();
+            Assert(values.Count == 1, $"US13: 1 report, got {values.Count}");
+            Assert(values.Count > 0 && values[0] == 52, $"US13: pos.x(10)+svc.hp(42)=52, got {(values.Count > 0 ? values[0].ToString() : "none")}");
+        }
+
+        // ===== Test US14: svc.member var reference is function → helpful error =====
+        {
+            string svcSource = @"
+@export func do_thing(): int {
+    return 99
+}
+func main() {
+}";
+            var svcResult = compiler.Compile(svcSource, "main", new Dictionary<string, int>());
+            Assert(svcResult.Success, "US14 svc compile success");
+
+            string callerSource = @"
+var svc: int = 0
+func main() {
+    var x: int = svc.do_thing
+}";
+            var svcBindings = new ServiceBinding[] { new ServiceBinding("svc", svcResult.Program.ExportTable) };
+            var callerResult = compiler.Compile(callerSource, "main", new Dictionary<string, int>(), null, null, null, svcBindings);
+            Assert(!callerResult.Success, "US14: compile error when accessing function as variable");
+            Assert(callerResult.Errors != null && callerResult.Errors.Count > 0 &&
+                   callerResult.Errors[0].Contains("do_thing") && callerResult.Errors[0].Contains("function"),
+                   $"US14: error mentions function name, got: {(callerResult.Errors != null && callerResult.Errors.Count > 0 ? callerResult.Errors[0] : "none")}");
+        }
+
+        // ===== Test US15: wrong argument count → compile error =====
+        {
+            string svcSource = @"
+@export func add(a: int, b: int): int {
+    return a + b
+}
+func main() {
+}";
+            var svcResult = compiler.Compile(svcSource, "main", new Dictionary<string, int>());
+            Assert(svcResult.Success, "US15 svc compile success");
+
+            string callerSource = @"
+var svc: int = 0
+func main() {
+    var x: int = svc.add(1)
+}";
+            var svcBindings = new ServiceBinding[] { new ServiceBinding("svc", svcResult.Program.ExportTable) };
+            var callerResult = compiler.Compile(callerSource, "main", new Dictionary<string, int>(), null, null, null, svcBindings);
+            Assert(!callerResult.Success, "US15: compile error for wrong arg count");
+            Assert(callerResult.Errors != null && callerResult.Errors.Count > 0 &&
+                   callerResult.Errors[0].Contains("expects 2") && callerResult.Errors[0].Contains("1 provided"),
+                   $"US15: error mentions arg count, got: {(callerResult.Errors != null && callerResult.Errors.Count > 0 ? callerResult.Errors[0] : "none")}");
+        }
+
         // ===== Summary =====
         Debug.Log($"========================================");
         Debug.Log($"Compiler Tests: {passed} passed, {failed} failed");

@@ -37,10 +37,21 @@ namespace FFVM.Compiler
                 }
                 else if (Check(TokenType.Export))
                 {
-                    // @export prefix — next must be var, const, or func
+                    // @export prefix — next must be var, const, or func (possibly preceded by @inline)
                     Advance(); // consume @export
+                    bool inlineHint = false;
+                    if (Check(TokenType.Inline))
+                    {
+                        inlineHint = true;
+                        Advance(); // consume @inline
+                    }
                     if (Check(TokenType.Func))
-                        module.Functions.Add(ParseFuncDecl(isExported: true));
+                        module.Functions.Add(ParseFuncDecl(isExported: true, isInline: inlineHint));
+                    else if (inlineHint)
+                    {
+                        Error($"@inline can only be applied to functions, got '{Current().Text}'");
+                        Advance();
+                    }
                     else if (Check(TokenType.Var))
                         module.ModuleVariables.Add(ParseVarDecl(false, isExported: true));
                     else if (Check(TokenType.Const))
@@ -48,6 +59,31 @@ namespace FFVM.Compiler
                     else
                     {
                         Error($"Expected 'func', 'var' or 'const' after '@export', got '{Current().Text}'");
+                        Advance();
+                    }
+                }
+                else if (Check(TokenType.Inline))
+                {
+                    // @inline prefix — must be followed by @export func or just func (warning: non-export ignored)
+                    Advance(); // consume @inline
+                    if (Check(TokenType.Export))
+                    {
+                        Advance(); // consume @export
+                        if (Check(TokenType.Func))
+                            module.Functions.Add(ParseFuncDecl(isExported: true, isInline: true));
+                        else
+                        {
+                            Error($"Expected 'func' after '@inline @export', got '{Current().Text}'");
+                            Advance();
+                        }
+                    }
+                    else if (Check(TokenType.Func))
+                    {
+                        module.Functions.Add(ParseFuncDecl(isExported: false, isInline: true));
+                    }
+                    else
+                    {
+                        Error($"Expected '@export' or 'func' after '@inline', got '{Current().Text}'");
                         Advance();
                     }
                 }
@@ -69,7 +105,7 @@ namespace FFVM.Compiler
                 }
                 else
                 {
-                    Error($"Expected 'func', 'struct', 'var', 'const', '@export' or 'include', got '{Current().Text}'");
+                    Error($"Expected 'func', 'struct', 'var', 'const', '@export', '@inline' or 'include', got '{Current().Text}'");
                     Advance();
                 }
             }
@@ -138,7 +174,7 @@ namespace FFVM.Compiler
             return new ImportDecl(path);
         }
 
-        private FuncDecl ParseFuncDecl(bool isExported = false)
+        private FuncDecl ParseFuncDecl(bool isExported = false, bool isInline = false)
         {
             int line = Current().Line, col = Current().Column;
             Expect(TokenType.Func, "");
@@ -177,7 +213,7 @@ namespace FFVM.Compiler
             }
 
             var body = ParseBlock();
-            var decl = new FuncDecl(name, parameters, returnType, body, false, isExported);
+            var decl = new FuncDecl(name, parameters, returnType, body, false, isExported, isInline);
             decl.Line = line;
             decl.Column = col;
             AttachDocComment(decl, line);
@@ -641,10 +677,31 @@ namespace FFVM.Compiler
             {
                 Advance(); // consume '.'
                 string fieldName = Expect(TokenType.Identifier, "after '.'").Text ?? "?";
-                var fa = new FieldAccessExpr(expr, fieldName);
-                fa.Line = expr.Line;
-                fa.Column = expr.Column;
-                expr = fa;
+                // Lang-8: check if followed by '(' → MemberCallExpr (svc.func(args))
+                if (Check(TokenType.LParen) && expr is IdentifierExpr targetIdent)
+                {
+                    Advance(); // consume '('
+                    var args = new List<Expr>();
+                    if (!Check(TokenType.RParen))
+                    {
+                        do
+                        {
+                            args.Add(ParseExpression());
+                        } while (Match(TokenType.Comma));
+                    }
+                    Expect(TokenType.RParen, "after arguments");
+                    var mc = new MemberCallExpr(targetIdent.Name, fieldName, args);
+                    mc.Line = expr.Line;
+                    mc.Column = expr.Column;
+                    expr = mc;
+                }
+                else
+                {
+                    var fa = new FieldAccessExpr(expr, fieldName);
+                    fa.Line = expr.Line;
+                    fa.Column = expr.Column;
+                    expr = fa;
+                }
             }
             return expr;
         }

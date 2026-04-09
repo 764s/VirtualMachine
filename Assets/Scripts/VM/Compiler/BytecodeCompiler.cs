@@ -7,6 +7,10 @@ namespace FFVM.Compiler
     {
         public VMProgram Program;
         public List<string> Errors;
+        /// <summary>
+        /// Lang-8: Non-fatal warning messages (compile succeeds but with diagnostics).
+        /// </summary>
+        public List<string> Warnings;
         public bool Success => Errors == null || Errors.Count == 0;
     }
 
@@ -40,6 +44,7 @@ namespace FFVM.Compiler
         private Dictionary<string, int> _syscalls;    // name → slot
         private SyscallTable _syscallTable;            // paired slot lookup (optional, for using)
         private List<string> _errors;
+        private List<string> _warnings;  // Lang-8: non-fatal diagnostics
 
         // DBG1: Source Map — parallel to _instructions, records line number for each emitted instruction
         private List<int> _sourceLines;
@@ -107,6 +112,9 @@ namespace FFVM.Compiler
         private Dictionary<int, Number> _moduleVarInitValues;    // module var register → init value (for EmitModuleVarInit)
         private int _nextExtendedReg;                            // Lang-1.1b: next extended register index (0-based)
 
+        // Lang-8: Service bindings for unified svc.member syntax
+        private Dictionary<string, ServiceBinding> _serviceBindings;  // varName → binding
+
         // F4: Register lifecycle analysis
         private struct LiveRange
         {
@@ -146,6 +154,17 @@ namespace FFVM.Compiler
         /// <param name="filePath">Logical path of the main file (for include cycle detection and diagnostics)</param>
         public CompileResult Compile(string source, string entryFunc, Dictionary<string, int> syscalls, SyscallTable syscallTable, IFileResolver fileResolver, string filePath)
         {
+            return Compile(source, entryFunc, syscalls, syscallTable, fileResolver, filePath, null);
+        }
+
+        /// <summary>
+        /// Lang-8: Compile source text with include support and service bindings.
+        /// Service bindings enable the svc.member unified syntax by providing target ExportTables.
+        /// </summary>
+        public CompileResult Compile(string source, string entryFunc, Dictionary<string, int> syscalls,
+            SyscallTable syscallTable, IFileResolver fileResolver, string filePath,
+            ServiceBinding[] serviceBindings)
+        {
             ModuleNode module;
             List<string> parseErrors;
 
@@ -163,7 +182,7 @@ namespace FFVM.Compiler
             if (parseErrors != null && parseErrors.Count > 0)
                 return new CompileResult { Errors = parseErrors };
 
-            return CompileModule(module, entryFunc, syscalls, syscallTable);
+            return CompileModule(module, entryFunc, syscalls, syscallTable, serviceBindings);
         }
 
         /// <summary>
@@ -173,6 +192,14 @@ namespace FFVM.Compiler
         /// </summary>
         public CompileResult CompileModule(ModuleNode module, string entryFunc, Dictionary<string, int> syscalls, SyscallTable syscallTable = null)
         {
+            return CompileModule(module, entryFunc, syscalls, syscallTable, null);
+        }
+
+        /// <summary>
+        /// Lang-8: Compile a pre-parsed module with optional service bindings.
+        /// </summary>
+        public CompileResult CompileModule(ModuleNode module, string entryFunc, Dictionary<string, int> syscalls, SyscallTable syscallTable, ServiceBinding[] serviceBindings)
+        {
             _instructions = new List<Instruction>();
             _wideA = new List<int>();
             _constants = new List<Number>();
@@ -181,10 +208,23 @@ namespace FFVM.Compiler
             _syscalls = syscalls ?? new Dictionary<string, int>();
             _syscallTable = syscallTable;
             _errors = new List<string>();
+            _warnings = new List<string>();
             _pendingCalls = new List<PendingCall>();
             _sourceLines = new List<int>();
             _currentLine = 0;
             _symbolEntries = new List<SymbolEntry>();
+
+            // Lang-8: Initialize service bindings for svc.member unified syntax
+            _serviceBindings = new Dictionary<string, ServiceBinding>();
+            if (serviceBindings != null)
+            {
+                for (int i = 0; i < serviceBindings.Length; i++)
+                {
+                    var sb = serviceBindings[i];
+                    if (sb != null && sb.VarName != null && sb.Exports != null)
+                        _serviceBindings[sb.VarName] = sb;
+                }
+            }
 
             // --- Build struct type table ---
             _structTypes = new Dictionary<string, StructDecl>();
@@ -342,7 +382,8 @@ namespace FFVM.Compiler
                     _nextExtendedReg,
                     exportTable
                 ),
-                Errors = _errors
+                Errors = _errors,
+                Warnings = _warnings.Count > 0 ? _warnings : null
             };
         }
 
@@ -806,6 +847,11 @@ namespace FFVM.Compiler
 
                 // No register operands: NOP, SYSCALL(slot,start,count), WAIT, PUSH_CLEANUP,
                 // POP_CLEANUP, RETURN, JUMP, CALL, CALL_LEAF, RET_FUNC, RET_LEAF, SENTINEL
+                // Lang-8: XCALL/XLOAD_MVAR: A=destReg, B=instanceIdReg, C=index (not reg)
+                case OpCode.XCALL:       return 3; // A=destReg, B=instanceIdReg
+                case OpCode.XLOAD_MVAR:  return 3; // A=destReg, B=instanceIdReg
+                // Lang-8: XSTORE_MVAR: A=varIndex (not reg), B=instanceIdReg, C=srcReg
+                case OpCode.XSTORE_MVAR: return 6; // B=instanceIdReg, C=srcReg
                 default: return 0;
             }
         }
@@ -874,6 +920,21 @@ namespace FFVM.Compiler
                 {
                     for (int i = 0; i < call.Arguments.Count; i++)
                         WalkExpr(call.Arguments[i]);
+                }
+                // Lang-8: MemberCallExpr — track target variable usage + recurse into arguments
+                else if (expr is MemberCallExpr mc)
+                {
+                    // Track the service variable reference
+                    if (ranges.ContainsKey(mc.TargetName))
+                    {
+                        var r = ranges[mc.TargetName];
+                        r.LastUseOrder = order;
+                        ranges[mc.TargetName] = r;
+                    }
+                    if (seenAwait && declaredBeforeAwait.Contains(mc.TargetName))
+                        usedAfterAwait.Add(mc.TargetName);
+                    for (int i = 0; i < mc.Arguments.Count; i++)
+                        WalkExpr(mc.Arguments[i]);
                 }
                 else if (expr is StructLiteralExpr structLit)
                 {
@@ -1776,6 +1837,7 @@ namespace FFVM.Compiler
             else if (node is UnaryExpr un) { CollectLoopLiterals(un.Operand, result); }
             else if (node is AssignExpr ae) { CollectLoopLiterals(ae.Target, result); CollectLoopLiterals(ae.Value, result); }
             else if (node is CallExpr ce) { for (int i = 0; i < ce.Arguments.Count; i++) CollectLoopLiterals(ce.Arguments[i], result); }
+            else if (node is MemberCallExpr mc) { for (int i = 0; i < mc.Arguments.Count; i++) CollectLoopLiterals(mc.Arguments[i], result); }
             else if (node is FieldAccessExpr fa) { CollectLoopLiterals(fa.Target, result); }
             else if (node is StructLiteralExpr sl) { for (int i = 0; i < sl.Fields.Count; i++) CollectLoopLiterals(sl.Fields[i].Value, result); }
             else if (node is UsingStmt us2) { for (int i = 0; i < us2.Arguments.Count; i++) CollectLoopLiterals(us2.Arguments[i], result); CollectLoopLiterals(us2.Body, result); }
@@ -2446,6 +2508,13 @@ namespace FFVM.Compiler
 
             if (expr is FieldAccessExpr fieldAccess)
             {
+                // Lang-8: check if target is a service binding → XLOAD_MVAR
+                if (fieldAccess.Target is IdentifierExpr svcIdent &&
+                    _serviceBindings != null && _serviceBindings.TryGetValue(svcIdent.Name, out var svcBinding))
+                {
+                    return CompileServiceVarRead(svcIdent.Name, fieldAccess.FieldName, svcBinding, destReg, fieldAccess.Line);
+                }
+
                 int reg = ResolveFieldAccess(fieldAccess);
                 // Lang-1: module struct field → emit LOAD_MVAR/LOAD_XREG to materialize value
                 if (IsModuleVarReg(reg))
@@ -2455,6 +2524,12 @@ namespace FFVM.Compiler
                     return dest;
                 }
                 return reg;
+            }
+
+            // Lang-8: Cross-instance member function call (svc.func(args))
+            if (expr is MemberCallExpr memberCall)
+            {
+                return CompileMemberCallExpr(memberCall, destReg);
             }
 
             if (expr is BinaryExpr bin)
@@ -2515,6 +2590,13 @@ namespace FFVM.Compiler
                 // Field assignment: d.field = expr  OR  d.inner = other.inner (sub-struct copy)
                 if (assign.Target is FieldAccessExpr fieldTarget)
                 {
+                    // Lang-8: check if target is a service binding → XSTORE_MVAR
+                    if (fieldTarget.Target is IdentifierExpr svcWriteIdent &&
+                        _serviceBindings != null && _serviceBindings.TryGetValue(svcWriteIdent.Name, out var svcWriteBinding))
+                    {
+                        return CompileServiceVarWrite(svcWriteIdent.Name, fieldTarget.FieldName, svcWriteBinding, assign.Value, fieldTarget.Line);
+                    }
+
                     // SN1: check if target field is a sub-struct → whole sub-struct copy
                     if (assign.Value is FieldAccessExpr srcFieldAccess)
                     {
@@ -3040,6 +3122,12 @@ namespace FFVM.Compiler
                 CollectCalleesExpr(assign.Target, callees);
                 CollectCalleesExpr(assign.Value, callees);
             }
+            // Lang-8: MemberCallExpr — cross-instance call, not a local callee, but recurse into args
+            else if (expr is MemberCallExpr mc)
+            {
+                for (int i = 0; i < mc.Arguments.Count; i++)
+                    CollectCalleesExpr(mc.Arguments[i], callees);
+            }
         }
 
         // ===== FO1: Leaf function analysis =====
@@ -3069,6 +3157,201 @@ namespace FFVM.Compiler
                 }
                 _leafFunctions[func.Name] = !ContainsNonLeafNode(func.Body);
             }
+        }
+
+        // ===== Lang-8: Service member access compilation =====
+
+        /// <summary>
+        /// Lang-8: Compile svc.func(args) → XCALL / XLOAD_MVAR (getter) / XSTORE_MVAR (setter).
+        /// Routes based on export table degradation type.
+        /// </summary>
+        private int CompileMemberCallExpr(MemberCallExpr mc, int destReg)
+        {
+            // Check service binding exists
+            if (_serviceBindings == null || !_serviceBindings.TryGetValue(mc.TargetName, out var binding))
+            {
+                _errors.Add($"'{mc.TargetName}' is not a service reference. Use service bindings to enable svc.member syntax. (line {mc.Line})");
+                return destReg >= 0 ? destReg : AllocTemp();
+            }
+
+            // Look up function in export table
+            int funcIdx = -1;
+            ExportFuncEntry funcEntry = default;
+            for (int i = 0; i < binding.Exports.Functions.Length; i++)
+            {
+                if (binding.Exports.Functions[i].Name == mc.MemberName)
+                {
+                    funcIdx = i;
+                    funcEntry = binding.Exports.Functions[i];
+                    break;
+                }
+            }
+
+            if (funcIdx < 0)
+            {
+                _errors.Add($"Function '{mc.MemberName}' is not exported by service '{mc.TargetName}'. (line {mc.Line})");
+                return destReg >= 0 ? destReg : AllocTemp();
+            }
+
+            // Resolve service instance variable register
+            int svcReg = ResolveVar(mc.TargetName);
+            if (IsModuleVarReg(svcReg))
+            {
+                // Module var → need to load into a temp first
+                int tmpSvc = AllocTemp();
+                EmitLoadModuleVar(tmpSvc, svcReg);
+                svcReg = tmpSvc;
+            }
+
+            // Route based on degradation type
+            if (funcEntry.Degradation == DegradationType.Getter)
+            {
+                // A1: Pure getter → XLOAD_MVAR (bypass XCALL, direct variable read)
+                if (mc.Arguments.Count > 0)
+                {
+                    _errors.Add($"Getter '{mc.MemberName}' takes no arguments, but {mc.Arguments.Count} provided. (line {mc.Line})");
+                }
+                int dest = destReg >= 0 ? destReg : AllocTemp();
+                Emit(OpCode.XLOAD_MVAR, dest, svcReg, funcEntry.DegradeMvarSlot);
+                return dest;
+            }
+            else if (funcEntry.Degradation == DegradationType.Setter)
+            {
+                // A2: Pure setter → XSTORE_MVAR (bypass XCALL, direct variable write)
+                if (mc.Arguments.Count != 1)
+                {
+                    _errors.Add($"Setter '{mc.MemberName}' takes exactly 1 argument, but {mc.Arguments.Count} provided. (line {mc.Line})");
+                    return destReg >= 0 ? destReg : AllocTemp();
+                }
+                int argReg = CompileExpr(mc.Arguments[0]);
+                Emit(OpCode.XSTORE_MVAR, funcEntry.DegradeMvarSlot, svcReg, argReg);
+                return argReg;
+            }
+            else
+            {
+                // None → standard XCALL
+                // Lang-8: warn if @inline hint but no degradation possible
+                if (funcEntry.IsInlineHint)
+                {
+                    _warnings.Add($"@inline function '{mc.MemberName}' could not be degraded to direct variable access. XCALL will be used. (line {mc.Line})");
+                }
+
+                // Validate argument count
+                if (mc.Arguments.Count != funcEntry.ParamCount)
+                {
+                    _errors.Add($"Function '{mc.MemberName}' expects {funcEntry.ParamCount} arguments, but {mc.Arguments.Count} provided. (line {mc.Line})");
+                    return destReg >= 0 ? destReg : AllocTemp();
+                }
+
+                // Phase 1: Compile arguments into temp registers
+                // (two-phase approach: arguments may be IdentifierExpr that resolve to local
+                // registers; CompileExpr ignores destReg for idents. Compiling all to temps first
+                // then MOVEing to scratch zone avoids register conflicts.)
+                int[] argRegs = new int[mc.Arguments.Count];
+                for (int i = 0; i < mc.Arguments.Count; i++)
+                    argRegs[i] = CompileExpr(mc.Arguments[i]);
+
+                // Phase 2: Move args to scratch zone r0..r(n-1)
+                for (int i = 0; i < mc.Arguments.Count; i++)
+                {
+                    if (argRegs[i] != i)
+                        Emit(OpCode.MOVE, i, argRegs[i]);
+                }
+
+                // Emit XCALL: A=destReg, B=svcReg, C=exportFuncIndex
+                int dest = destReg >= 0 ? destReg : AllocTemp();
+                Emit(OpCode.XCALL, dest, svcReg, funcIdx);
+                return dest;
+            }
+        }
+
+        /// <summary>
+        /// Lang-8: Compile svc.var read → XLOAD_MVAR.
+        /// </summary>
+        private int CompileServiceVarRead(string svcVarName, string memberName, ServiceBinding binding, int destReg, int line)
+        {
+            // Look up variable in export table
+            int varIdx = -1;
+            for (int i = 0; i < binding.Exports.Variables.Length; i++)
+            {
+                if (binding.Exports.Variables[i].Name == memberName)
+                {
+                    varIdx = i;
+                    break;
+                }
+            }
+
+            if (varIdx < 0)
+            {
+                // Not a variable — check if it's a function (user might have forgotten ())
+                for (int i = 0; i < binding.Exports.Functions.Length; i++)
+                {
+                    if (binding.Exports.Functions[i].Name == memberName)
+                    {
+                        _errors.Add($"'{memberName}' is an exported function of '{svcVarName}'. Use '{svcVarName}.{memberName}()' to call it. (line {line})");
+                        return destReg >= 0 ? destReg : AllocTemp();
+                    }
+                }
+                _errors.Add($"'{memberName}' is not exported by service '{svcVarName}'. (line {line})");
+                return destReg >= 0 ? destReg : AllocTemp();
+            }
+
+            // Resolve service instance variable register
+            int svcReg = ResolveVar(svcVarName);
+            if (IsModuleVarReg(svcReg))
+            {
+                int tmpSvc = AllocTemp();
+                EmitLoadModuleVar(tmpSvc, svcReg);
+                svcReg = tmpSvc;
+            }
+
+            int dest = destReg >= 0 ? destReg : AllocTemp();
+            Emit(OpCode.XLOAD_MVAR, dest, svcReg, varIdx);
+            return dest;
+        }
+
+        /// <summary>
+        /// Lang-8: Compile svc.var = expr → XSTORE_MVAR.
+        /// </summary>
+        private int CompileServiceVarWrite(string svcVarName, string memberName, ServiceBinding binding, Expr value, int line)
+        {
+            // Look up variable in export table
+            int varIdx = -1;
+            ExportVarEntry varEntry = default;
+            for (int i = 0; i < binding.Exports.Variables.Length; i++)
+            {
+                if (binding.Exports.Variables[i].Name == memberName)
+                {
+                    varIdx = i;
+                    varEntry = binding.Exports.Variables[i];
+                    break;
+                }
+            }
+
+            if (varIdx < 0)
+            {
+                _errors.Add($"Variable '{memberName}' is not exported by service '{svcVarName}'. (line {line})");
+                return AllocTemp();
+            }
+
+            if (!varEntry.Writable)
+            {
+                _errors.Add($"Cannot write to read-only exported variable '{svcVarName}.{memberName}'. (line {line})");
+                return AllocTemp();
+            }
+
+            // Resolve service instance variable register
+            int svcReg = ResolveVar(svcVarName);
+            if (IsModuleVarReg(svcReg))
+            {
+                int tmpSvc = AllocTemp();
+                EmitLoadModuleVar(tmpSvc, svcReg);
+                svcReg = tmpSvc;
+            }
+
+            int valueReg = CompileExpr(value);
+            Emit(OpCode.XSTORE_MVAR, varIdx, svcReg, valueReg);
+            return valueReg;
         }
 
         /// <summary>
@@ -3260,6 +3543,12 @@ namespace FFVM.Compiler
             {
                 CollectCalleesExpr(assign.Value, callees);
             }
+            // Lang-8: MemberCallExpr — cross-instance call, not a local callee, but recurse into args
+            else if (expr is MemberCallExpr mc)
+            {
+                for (int i = 0; i < mc.Arguments.Count; i++)
+                    CollectCalleesExpr(mc.Arguments[i], callees);
+            }
         }
 
         /// <summary>
@@ -3410,8 +3699,9 @@ namespace FFVM.Compiler
                 {
                     // Lang-7: A1/A2 auto-degradation detection
                     var degradation = DetectFuncDegradation(f);
+                    // Lang-8: @inline hint
                     exportFuncs.Add(new ExportFuncEntry(f.Name, funcIdx, f.Parameters.Count,
-                        degradation.Type, degradation.MvarSlot));
+                        degradation.Type, degradation.MvarSlot, f.IsInline));
                 }
             }
 
@@ -3549,6 +3839,16 @@ namespace FFVM.Compiler
 
             if (expr is FieldAccessExpr fa)
                 return ContainsNonLeafExpr(fa.Target);
+
+            // Lang-8: MemberCallExpr generates XCALL which is effectively a call
+            if (expr is MemberCallExpr mc)
+            {
+                // XCALL-based: not a local function call but still non-leaf (recursive ExecuteInstance)
+                // Check arguments
+                for (int i = 0; i < mc.Arguments.Count; i++)
+                    if (ContainsNonLeafExpr(mc.Arguments[i])) return true;
+                return true; // XCALL itself disqualifies
+            }
 
             return false;
         }

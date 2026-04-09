@@ -16,7 +16,7 @@ namespace FFVM.Compiler
         // Keywords
         Func, Var, Const, If, Else, While, For, Return,
         Wait, WaitFor, Yield, Defer, Using,
-        True, False, Struct, Include, Export,
+        True, False, Struct, Include, Export, Inline,
 
         // Operators
         Plus, Minus, Star, Slash, Percent,
@@ -248,6 +248,8 @@ namespace FFVM.Compiler
             string word = _source.Substring(start, _pos - start);
             if (word == "export")
                 return new Token(TokenType.Export, "@export", line, col);
+            if (word == "inline")
+                return new Token(TokenType.Inline, "@inline", line, col);
 
             return new Token(TokenType.Error, $"Unknown annotation '@{word}' at {line}:{col}", line, col);
         }

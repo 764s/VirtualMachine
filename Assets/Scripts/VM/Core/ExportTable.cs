@@ -85,6 +85,12 @@ namespace FFVM
         /// </summary>
         public readonly int DegradeMvarSlot;
 
+        /// <summary>
+        /// Lang-8: @inline hint flag. True if the function was declared with @inline.
+        /// Currently informational only (used by LSP diagnostics).
+        /// </summary>
+        public readonly bool IsInlineHint;
+
         public ExportFuncEntry(string name, int funcTableIndex, int paramCount)
         {
             Name = name;
@@ -92,6 +98,7 @@ namespace FFVM
             ParamCount = paramCount;
             Degradation = DegradationType.None;
             DegradeMvarSlot = -1;
+            IsInlineHint = false;
         }
 
         public ExportFuncEntry(string name, int funcTableIndex, int paramCount,
@@ -102,6 +109,37 @@ namespace FFVM
             ParamCount = paramCount;
             Degradation = degradation;
             DegradeMvarSlot = degradeMvarSlot;
+            IsInlineHint = false;
+        }
+
+        public ExportFuncEntry(string name, int funcTableIndex, int paramCount,
+            DegradationType degradation, int degradeMvarSlot, bool isInlineHint)
+        {
+            Name = name;
+            FuncTableIndex = funcTableIndex;
+            ParamCount = paramCount;
+            Degradation = degradation;
+            DegradeMvarSlot = degradeMvarSlot;
+            IsInlineHint = isInlineHint;
+        }
+    }
+
+    /// <summary>
+    /// Lang-8: Service binding — maps a local variable name to a target module's ExportTable.
+    /// Passed to the compiler so it can resolve svc.member unified syntax.
+    /// </summary>
+    public class ServiceBinding
+    {
+        /// <summary>Local variable name in the caller script (e.g. "svc").</summary>
+        public readonly string VarName;
+
+        /// <summary>Target module's export table (pre-compiled).</summary>
+        public readonly ExportTable Exports;
+
+        public ServiceBinding(string varName, ExportTable exports)
+        {
+            VarName = varName;
+            Exports = exports;
         }
     }
 
