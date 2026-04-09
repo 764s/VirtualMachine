@@ -1,8 +1,8 @@
 # KOF98 技能 FFS 脚本化讨论
 
-> **状态**：🔄 讨论中（SK1~SK12 已收敛，SK3 待性能验证；SK14 语言需求已整合；Q2 ✅ 收敛；Q3 渐进路径待确认；Q4 服务脚本 💬 L4/XCALL 统一基线设计 + 自动优化方案 → 接近收敛）
+> **状态**：🔄 讨论中（SK1~SK12 已收敛，SK3 待性能验证；SK14 语言需求已整合；Q2 ✅ 收敛；Q3 渐进路径待确认；Q4 服务脚本 💬 统一语法✅ + @inline用户引导优化 → 接近收敛）
 > **来源**：需求讨论 — 将 host-side 技能迁移为 FFS 脚本驱动
-> **日期**：2026-04-09（第 23 轮更新）
+> **日期**：2026-04-09（第 24 轮更新）
 
 ---
 
@@ -26,7 +26,7 @@
 | SK14 | FFS 语言需求整合 | 💬 | L1 模块变量 + L2 include = Phase 1；L3/L4 跨模块 = 远期 |
 | Q2 | 硬直+yield 语句级控制 | ✅ | 方案 A — while+GetFrame()+yield，帧区间循环行业标准模式（7/10 语言同构） |
 | Q3 | 跨脚本 VM 使用模式 | 💬 | 6 方向渐进路径（1+2+3 → 4 → 5），待用户确认 |
-| Q4 | FFS 封装 — 服务脚本 | 💬 | 方式 C 确认✅；Y1-Plus ✅；XCALL 优化 ✅；L4/XCALL 统一基线设计 + A1/A2 自动优化 + @export；接近收敛 |
+| Q4 | FFS 封装 — 服务脚本 | 💬 | 方式 C ✅；Y1-Plus ✅；XCALL/L4 统一基线 ✅；统一语法 ✅；@export ✅；@inline 用户引导优化；接近收敛 |
 
 ---
 
@@ -4866,11 +4866,13 @@ ExportTable {
 
 ##### 待用户确认（第 23 轮）
 
-// 1. ok
-// 2. 是的, 想到一块区了
-// 3. ok. (确认是否用户使用 m.property, m.field, m.method(), m.function() , 但不区分底层机制, 如果是 ok!, 如果需要进一步解释)
-// 4. 略微考虑 public. (不过意识到你这么做是考虑了 @service 的一致性)(提出初衷仅从使用的便捷度来说, 低权重)
-// 5. 对优化做进一步支持. 如果用户意识到自己想做内联优化, 提供途径让编译器辅助用户.
+> **用户回复（第 24 轮）**：
+> 1. OK ✅
+> 2. 是的，想到一块去了 ✅
+> 3. OK — 确认用户使用 `m.property`, `m.field`, `m.method()`, `m.function()`，但不区分底层机制
+> 4. 略微倾向 `public`（从使用便捷度考虑，低权重）。但认识到 `@export` 和 `@service` 保持一致性
+> 5. **未收敛** — 希望支持用户主动请求内联优化时，提供编译器辅助途径
+
 1. **L4/XCALL 同基线（C-1 同时实现 3 个 OpCode）是否符合预期？** — XCALL + XLOAD_MVAR + XSTORE_MVAR 共享实例查找基础设施
 2. **A1/A2 自动 getter/setter 退化是否就是你说的"更有效的自动优化方案"？** — 编译器自动检测纯 getter/setter 并替换为直接变量访问
 3. **`svc.member` 统一语法（不靠括号区分）是否更好？** — 编译器通过导出表自动路由 L4/L5
@@ -4879,10 +4881,219 @@ ExportTable {
 
 ---
 
+#### Q4-F：统一语法确认 + @export/public 命名 + 用户引导内联优化（第 24 轮）
+
+##### Q3 确认：统一成员访问语法
+
+用户确认的正是我们的设计意图：
+
+```ffs
+// 用户视角 — 统一的 svc.member 语法
+var hp = svc.hp             // 可能是 property, 可能是 field — 用户不关心
+var frame = svc.frame       // 同上
+svc.take_damage(50)         // method 调用
+var result = svc.calc(a,b)  // function 调用
+```
+
+**底层机制对用户完全透明**：
+
+| 用户写法 | 底层可能路径 | 用户需要知道？ |
+|---------|------------|-------------|
+| `svc.hp` | XLOAD_MVAR（直接读变量） | ❌ |
+| `svc.hp = 100` | XSTORE_MVAR（直接写变量） | ❌ |
+| `svc.get_hp()` | A1 自动退化 → XLOAD_MVAR | ❌ |
+| `svc.take_damage(50)` | XCALL（函数调用） | ❌ |
+| `svc.calc(a, b)` | XCALL 或 A5 内联（如果编译器判定可内联） | ❌ |
+
+**编译器通过导出表自动决策**，用户只需写自然的成员访问语法。这正是 **Q3 ✅ 确认**。
+
+##### Q4：`@export` vs `public` 命名分析
+
+用户提出了一个有价值的命名考虑。让我们分析：
+
+| 候选 | 优点 | 缺点 |
+|------|------|------|
+| `@export` | 与 `@service` 一致（都是 `@` 前缀模块属性）；语义精确（"导出给外部"） | 较长（7 字符）；对 C#/Unity 用户可能不如 `public` 直觉 |
+| `public` | 短（6 字符）；C#/Java/TS 用户极其熟悉；使用便捷 | 与 `@service` 风格不一致（一个有 `@`，一个没有）；在 FFS 中可能暗示类/OOP 的访问控制语义 |
+| `@public` | 与 `@service` 一致；熟悉度兼顾 | 不常见；混合了两种风格 |
+
+**分析**：
+
+1. **一致性维度**：`@export` 和 `@service` 都是"模块级声明属性"，用 `@` 前缀表示"这是给编译器的元数据指令"。如果用 `public`（无 `@`），就变成了"关键字"而非"属性"，语法地位不同。
+
+2. **语义维度**：`public` 在 OOP 语言中表示"类成员访问控制"（public/private/protected）。但 FFS 没有类，只有模块。用 `public` 可能暗示未来会有 `private`/`protected`，而实际上 FFS 的设计是"不加 `@export` 就是不导出"——二元选择，不需要完整的访问控制体系。
+
+3. **用户便捷度维度**：`public` 确实更短更熟悉。但在 FFS 脚本中，`@export` 声明通常只写一次（在服务模块定义时），不是高频输入。
+
+**结论**：保持 `@export`，原因是一致性和语义精确性。但这是一个**可逆的低风险决策**——如果在实际使用中发现 `public` 更顺手，C-2 语法糖阶段可以引入 `public` 作为 `@export` 的别名。
+
+```ffs
+// C-1：@export（规范形式）
+@service
+@export var hp = 1000
+@export func take_damage(d) { hp = hp - d; }
+
+// C-2 可选：如果社区反馈强烈，public 作为 @export 别名
+@service
+public var hp = 1000
+public func take_damage(d) { hp = hp - d; }
+```
+
+##### Q5：用户引导的内联优化（User-Directed Inline Hints）
+
+这是用户提出的新需求，非常有价值。当前 A5 内联是**纯自动**的（编译器自行判断），但用户说：**如果用户意识到自己想做内联优化，应该提供编译器辅助途径。**
+
+这里有两个层面：
+
+###### 层面 1：用户请求内联（Inline Hint）
+
+用户可以通过提示告诉编译器："我认为这个调用应该内联"：
+
+```ffs
+// 方案 H1：@inline 属性（标记在函数声明上）
+@export @inline func get_combo_modifier() {
+    return base_modifier + combo_count * 0.1;
+}
+
+// 方案 H2：调用点 inline 提示（标记在调用处）
+var mod = @inline svc.get_combo_modifier()
+
+// 方案 H3：编译器 pragma（文件级或块级）
+@pragma inline_threshold(20)  // 提高内联阈值到 20 条指令
+```
+
+**推荐 H1**（声明侧标记），原因：
+
+| 方案 | 优点 | 缺点 |
+|------|------|------|
+| **H1 @inline** | 声明一次、所有调用点生效；与 @export 语法一致 | 不能对特定调用点差异化 |
+| H2 调用点 | 精确控制每个调用点 | 每个调用处都要写；跨模块需知道内部实现 |
+| H3 pragma | 全局控制简单 | 不够精确；影响范围不可控 |
+
+**H1 语义**：
+
+```ffs
+@export @inline func get_combo_modifier() {
+    return base_modifier + combo_count * 0.1;
+}
+```
+
+`@inline` 告诉编译器：
+- **请尝试在调用点内联此函数**（Best-effort hint，不是强制指令）
+- 如果函数体过大/包含循环/递归/yield → 编译器发出**警告**（不是错误），退化到 XCALL
+- 如果函数体符合内联条件 → 编译器在调用点展开函数体，替换变量引用为 XLOAD_MVAR
+
+###### 层面 2：编译器反馈（Inline Diagnostics）
+
+用户请求内联后，编译器应该告诉用户**是否真的内联了**，以及**为什么没有**：
+
+```
+// 编译器输出（Verbose 模式或 LSP 诊断）
+[INFO] svc.get_combo_modifier() → inlined (2 XLOAD_MVAR + 2 arithmetic)
+[WARN] svc.complex_calc() → NOT inlined: function body has 25 instructions (threshold: 16)
+[WARN] svc.recursive_func() → NOT inlined: function contains recursion
+```
+
+这正是 LSP 可以做的事情——**IDE 内实时显示内联决策**：
+
+```ffs
+// LSP hover 提示
+var mod = svc.get_combo_modifier()
+//        ^^^^^^^^^^^^^^^^^^^^^^^^
+//        ✅ Inlined: 2 XLOAD_MVAR + MUL + ADD (estimated ~8 ns vs ~15 ns XCALL)
+
+var result = svc.complex_calc(x, y)
+//           ^^^^^^^^^^^^^^^^^^^^^^^^^^
+//           ⚠️ Not inlined: 25 instructions exceed threshold (16).
+//              Add @inline to force attempt, or increase threshold.
+```
+
+###### 层面 3：强制内联（Force Inline）
+
+对于高级用户，提供强制内联选项：
+
+```ffs
+// @force_inline：编译器必须内联，否则编译错误
+@export @force_inline func get_hp() {
+    return hp;
+}
+
+// 如果函数体不满足内联条件 → 编译错误（不是警告）
+@export @force_inline func complex() {  // ERROR: cannot force-inline: contains loop
+    while (x > 0) { ... }
+}
+```
+
+###### 内联优化方案总结
+
+| 机制 | 触发方式 | 编译器行为 | 失败处理 |
+|------|---------|-----------|---------|
+| **自动内联（A5）** | 编译器自动检测 | 条件满足→内联，否则 XCALL | 静默退化 |
+| **@inline 提示** | 用户在函数声明标记 | 尝试内联 + 诊断反馈 | 警告 + 退化 |
+| **@force_inline** | 用户强制要求 | 必须内联 | **编译错误** |
+| **LSP 诊断** | IDE 实时显示 | 每个 XCALL 调用点显示内联决策 | 信息提示 |
+
+###### 分阶段实现
+
+| 阶段 | 内联机制 | 说明 |
+|------|---------|------|
+| C-1 | 无内联 | XCALL 基线 |
+| C-1.5 | A1/A2 自动 getter/setter 退化 | 不需要 @inline（纯自动） |
+| C-2 | `@inline` 提示 + LSP 诊断 | 用户引导 + 编译器反馈 |
+| C-3 | A5 自动内联 + `@force_inline` | 完整内联支持 |
+
+**关键设计原则**：
+1. **渐进式**：不加 @inline 也能享受 A1/A2 自动优化；加了 @inline 获得更激进的优化 + 反馈
+2. **安全退化**：@inline 是 hint 不是命令；只有 @force_inline 会导致编译失败
+3. **透明性**：LSP 让用户清楚看到每个调用点的内联决策，不是黑箱
+
+##### 更新后的收敛决策表
+
+| 决策 | 结论 | 轮次 |
+|------|------|------|
+| 服务脚本定位 | FFS 运行时实体，不是 include | R20 |
+| 持有方式 | 方式 C — 语言级引用（instanceId） | R20 |
+| 生命周期管理 | 宿主 C# 创建并注册 | R21 ✅ |
+| 服务函数 yield | 禁止 — 纯编译期保证 Y1-Plus（无运行时负担） | R22 ✅ |
+| 调用语法 | `svc.member` 统一语法，编译器自动路由 L4/L5 | R23-24 ✅ |
+| L4/L5 关系 | 同基线设计：XCALL + XLOAD_MVAR + XSTORE_MVAR 在 C-1 同时实现 | R23 ✅ |
+| 导出声明 | `@export var/const/func` — C-1 即支持；`public` 可作为 C-2 别名 | R23-24 ✅ |
+| 自动优化 | A1/A2 自动 getter/setter→直接访问退化（C-1.5） | R23 ✅ |
+| 用户引导内联 | `@inline`（hint，C-2）+ `@force_inline`（强制，C-3）+ LSP 诊断 | R24 ✅ |
+| 实现路径 | C-0 → C-1(XCALL+XL4) → C-1.5(A1/A2) → C-2(语法糖+@inline) → C-3(A5+@force_inline) | R23-24 ✅ |
+| 嵌套调用 | 允许，最大深度 4 层 | R21 ✅ |
+| 性能影响 | 可忽略（< 0.02% 帧预算） | R20-21 ✅ |
+| XCALL 优化 | O1+O2（C-1），A1/A2（C-1.5），O7+@inline（C-2），O4/A5+@force_inline（C-3+） | R22-24 ✅ |
+| 优化退化策略 | 编译期自动退化，运行时零决策开销 | R22 ✅ |
+
+##### 待用户确认（第 24 轮）
+
+1. **统一成员语法确认**：`svc.property`/`svc.field`/`svc.method()`/`svc.function()` — 底层机制透明，编译器自动路由。是否就是你 Q3 所确认的？
+2. **@export 保持，public 作为 C-2 可选别名** — 是否接受这个折衷？
+3. **@inline 提示 + LSP 诊断 + @force_inline 分层设计**是否满足"用户引导内联优化"的需求？
+4. **Q4 现在是否可以认为已基本收敛？** — 如果是，下一步输出 XCALL spec 设计文档
+
+---
+
 <details>
 <summary>📋 讨论轮次总览</summary>
 
-#### 第 23 轮（当前）
+#### 第 24 轮（当前）
+
+用户回应第 23 轮 5 个确认问题：
+- Q1: L4/XCALL 同基线 OK ✅
+- Q2: A1/A2 自动优化 — "想到一块去了" ✅
+- Q3: 统一语法 OK ✅ — 确认 m.property/m.field/m.method()/m.function()，底层机制透明
+- Q4: 略微倾向 `public`（便捷度，低权重），但认可 @export 与 @service 一致性
+- Q5: 未收敛 — 希望用户可主动请求内联优化，编译器提供辅助途径
+
+语言方回应：
+1. 统一语法确认：svc.member 底层 5 种路径（XLOAD/XSTORE/A1退化/XCALL/A5内联）对用户完全透明
+2. @export 保持为规范形式；public 可作为 C-2 别名（可逆低风险决策）
+3. 用户引导内联三层设计：@inline（hint，C-2）+ @force_inline（强制，C-3）+ LSP 内联诊断
+4. 收敛决策表更新至 14 项
+
+#### 第 23 轮
 
 用户回应第 22 轮 4 个确认问题：
 - Q1: Y1-Plus OK ✅
