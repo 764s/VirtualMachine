@@ -1,8 +1,8 @@
 # KOF98 技能 FFS 脚本化讨论
 
-> **状态**：🔄 讨论中（SK1~SK12 已收敛，SK3 待性能验证；SK14 语言需求已整合；Q2 ✅ 收敛；Q3 渐进路径待确认；Q4 服务脚本 💬 嵌套深度可配置方案 → 接近收敛）
+> **状态**：🔄 讨论中（SK1~SK12 已收敛，SK3 待性能验证；SK14 语言需求已整合；Q2 ✅ 收敛；Q3 渐进路径待确认；Q4 服务脚本 ✅ 收敛 — 14 项决策锁定，待输出 XCALL Spec）
 > **来源**：需求讨论 — 将 host-side 技能迁移为 FFS 脚本驱动
-> **日期**：2026-04-09（第 25 轮更新）
+> **日期**：2026-04-09（第 26 轮更新）
 
 ---
 
@@ -26,7 +26,7 @@
 | SK14 | FFS 语言需求整合 | 💬 | L1 模块变量 + L2 include = Phase 1；L3/L4 跨模块 = 远期 |
 | Q2 | 硬直+yield 语句级控制 | ✅ | 方案 A — while+GetFrame()+yield，帧区间循环行业标准模式（7/10 语言同构） |
 | Q3 | 跨脚本 VM 使用模式 | 💬 | 6 方向渐进路径（1+2+3 → 4 → 5），待用户确认 |
-| Q4 | FFS 封装 — 服务脚本 | 💬 | 方式 C ✅；Y1-Plus ✅；统一语法 ✅；@export ✅；@inline ✅；嵌套深度可配置；接近收敛 |
+| Q4 | FFS 封装 — 服务脚本 | ✅ | 方式 C ✅；Y1-Plus ✅；统一语法 ✅；@export ✅；@inline ✅；嵌套 Warn/Unlimited ✅；14 项决策锁定 |
 
 ---
 
@@ -5309,10 +5309,11 @@ LSP 也可以在编译期提供类似的警告：
 
 ##### 待用户确认（第 25 轮）
 
-// 1. 清楚. 但希望可配置的是常量部分, 兜底是运行时fallback, 类似扩展寄存器. 但前提是常量配置对性能确实有显著提升. 如果没区别使用推荐方案即可.
-// 2. 同上
-// 3. 仅 Unlimited + wan 即可
-// 4. 如果1确定是推荐方案, 则收敛
+> **用户回复（第 26 轮）**：
+> 1. 清楚。但希望可配置的是常量部分，兜底是运行时 fallback，类似扩展寄存器。前提是常量配置对性能确实有显著提升。如果没区别使用推荐方案即可。
+> 2. 同上
+> 3. 仅 Unlimited + Warn 即可（不需要 Error）
+> 4. 如果 Q1 确定是推荐方案，则收敛
 
 1. **嵌套深度"4"的含义**是否清楚？—— 只限制跨实例 XCALL 链深度，不影响模块内 CALL
 2. **方案 N3（可配置 + 静态分析 + 运行时兜底）**是否满足需求？
@@ -5321,10 +5322,180 @@ LSP 也可以在编译期提供类似的警告：
 
 ---
 
+#### Q4-H：编译期常量 vs 运行时配置 — 性能分析 + Q4 收敛（第 26 轮）
+
+##### R25 确认总结
+
+| 问题 | 用户回复 | 结论 |
+|------|---------|------|
+| 嵌套深度含义 | 清楚 | ✅ |
+| 可配置方案 | 希望常量可配 + 运行时 fallback（类似扩展寄存器） | 需分析 |
+| 策略选择 | 只要 Unlimited + Warn | ✅ 简化（删除 Error） |
+| Q4 收敛 | 如果确认推荐方案，则收敛 | 待本轮确认 |
+
+##### 编译期常量 vs 运行时配置：性能对比
+
+用户的类比很精准——扩展寄存器的模式是：**编译期常量决定 fast path，超出部分走 slow path（运行时 fallback）**。
+
+对于嵌套深度，同样的模式意味着：
+- **编译期常量 `MaxXCallDepth = 4`**：编译器可以做静态优化
+- **运行时 fallback**：超出常量限制时走通用检查路径
+
+让我们分析这对嵌套深度检查是否有意义：
+
+**扩展寄存器为何受益于编译期常量**：
+
+```csharp
+// 扩展寄存器：编译期常量决定 fast path vs slow path
+// ModuleVarSlots = 8（编译期常量）
+if (varIndex < ModuleVarSlots) {
+    // FAST: LOAD_MVAR 直接寄存器访问，~0 ns overhead
+    // 编译器生成 LOAD_MVAR 指令，运行时直接操作 fixed 数组
+} else {
+    // SLOW: LOAD_XREG 间接访问 ExtendedRegs 数组，~3-5 ns overhead
+    // 运行时走堆分配的 Number[][] 间接寻址
+}
+```
+
+关键：ModuleVarSlots 是编译期常量，因为它决定了**不同的指令生成**（LOAD_MVAR vs LOAD_XREG），两条路径的**执行代价完全不同**。
+
+**嵌套深度检查的情况完全不同**：
+
+```csharp
+// 嵌套深度：无论限制值是编译期常量还是运行时变量
+// 检查逻辑完全相同：
+case OpCode.XCALL:
+    if (++_xcallDepth > maxDepth) { /* warn/unlimited */ }
+    // ... 执行 XCALL ...
+    // 返回时 --_xcallDepth
+```
+
+| 方面 | 编译期常量 `const int MAX = 4` | 运行时变量 `int _maxDepth = 4` |
+|------|-------------------------------|-------------------------------|
+| 指令数 | 3（inc + cmp + dec） | 3（inc + cmp + dec） |
+| compare 操作 | `cmp reg, 4`（立即数） | `cmp reg, [mem]`（内存读） |
+| 差异 | 立即数 compare ~0.3 ns | 内存 compare ~0.3 ns（L1 cache hit） |
+| **总差异** | — | **< 0.1 ns**（在 L1 cache 中） |
+
+**为什么差异可忽略**：
+1. `_maxDepth` 是 VMWorld 的 int 字段，在执行循环中频繁使用的对象，**永远在 L1 cache 中**
+2. L1 cache hit 的内存读取 ~1-2 cycles = ~0.3-0.6 ns
+3. 立即数 compare 也是 ~1 cycle = ~0.3 ns
+4. 差异 < 0.1 ns/XCALL，即使每帧 50 次 XCALL = 每帧 5 ns 差异 → 0.00003% 帧预算
+
+**结论**：编译期常量 vs 运行时变量对嵌套深度检查**无性能差异**。这与扩展寄存器不同，因为：
+- 扩展寄存器的常量决定了**不同的指令路径**（fast/slow opcode）
+- 嵌套深度的常量只决定了**一个 compare 的操作数来源**（立即数 vs 缓存内存）
+
+**因此：推荐使用运行时配置方案（R25 推荐的 N3 简化版）。**
+
+##### 简化后的最终方案
+
+根据用户反馈，删除 Error 策略，只保留 **Warn + Unlimited**：
+
+```csharp
+// VMConfig
+public class VMConfig {
+    /// <summary>
+    /// XCALL 嵌套深度限制。默认 4。
+    /// 超出时行为由 XCallDepthWarning 控制。
+    /// 设为 0 = 不限制（Unlimited）。
+    /// </summary>
+    public int MaxXCallDepth = 4;
+    
+    /// <summary>
+    /// 是否在超出 MaxXCallDepth 时发出警告。
+    /// true（默认）= Warn 模式：超出时发出警告，继续执行。
+    /// false = Unlimited 模式：不检查，不警告。
+    /// </summary>
+    public bool XCallDepthWarning = true;
+}
+```
+
+两种模式的行为：
+
+| MaxXCallDepth | XCallDepthWarning | 行为 |
+|---------------|-------------------|------|
+| 4（默认） | true（默认） | 超过 4 层 → 警告，继续执行 |
+| 8 | true | 超过 8 层 → 警告，继续执行 |
+| 0 | false | 不检查，不警告（Unlimited） |
+| 任意 | false | 不检查，不警告（Unlimited） |
+
+运行时实现：
+
+```csharp
+// VMWorld 内部
+int _xcallDepth;
+int _maxXCallDepth;      // 从 VMConfig 读取
+bool _xcallDepthWarning;  // 从 VMConfig 读取
+
+case OpCode.XCALL:
+    ++_xcallDepth;
+    if (_xcallDepthWarning && _xcallDepth > _maxXCallDepth) {
+        OnWarning?.Invoke($"XCALL depth {_xcallDepth} exceeds limit {_maxXCallDepth}");
+    }
+    // ... 正常执行 ...
+    // 返回时 --_xcallDepth
+```
+
+`Unlimited` 模式（`_xcallDepthWarning = false`）：`if` 第一个条件就 short-circuit，compare 不执行。overhead ~0.3 ns（仅 inc/dec）。
+
+##### 实现路径更新
+
+| 阶段 | 嵌套深度机制 | 说明 |
+|------|------------|------|
+| C-1 | 运行时计数 + Warn（默认 4 层） | `_xcallDepth` inc/dec + 日志警告 |
+| C-1.5 | + 宿主可配置 `MaxXCallDepth` + `XCallDepthWarning` | 两种模式：Warn / Unlimited |
+| C-2 | + LSP 编译期静态分析 | 调用链深度诊断 + 性能估算 |
+
+##### ✅ Q4 最终收敛决策表
+
+| 决策 | 结论 | 轮次 |
+|------|------|------|
+| 服务脚本定位 | FFS 运行时实体，不是 include | R20 ✅ |
+| 持有方式 | 方式 C — 语言级引用（instanceId） | R20 ✅ |
+| 生命周期管理 | 宿主 C# 创建并注册 | R21 ✅ |
+| 服务函数 yield | 禁止 — 纯编译期保证 Y1-Plus（无运行时负担） | R22 ✅ |
+| 调用语法 | `svc.member` 统一语法，编译器自动路由 L4/L5 | R23-24 ✅ |
+| L4/L5 关系 | 同基线设计：XCALL + XLOAD_MVAR + XSTORE_MVAR 在 C-1 同时实现 | R23 ✅ |
+| 导出声明 | **`@export` 唯一形式** | R24-25 ✅ |
+| 自动优化 | A1/A2 自动 getter/setter→直接访问退化（C-1.5） | R23 ✅ |
+| 用户引导内联 | `@inline`（hint，C-2）+ `@force_inline`（强制，C-3）+ LSP 诊断 | R24 ✅ |
+| 实现路径 | C-0 → C-1(XCALL+XL4) → C-1.5(A1/A2+配置) → C-2(语法糖+@inline+LSP) → C-3(A5+@force_inline) | R23-26 ✅ |
+| 嵌套调用 | **运行时配置 MaxXCallDepth（默认4）+ Warn/Unlimited 两种策略** | R21→R26 ✅ |
+| 性能影响 | 可忽略（< 0.02% 帧预算；深度检查 +1 ns/XCALL；常量 vs 变量无差异） | R20-26 ✅ |
+| XCALL 优化 | O1+O2（C-1），A1/A2（C-1.5），O7+@inline（C-2），O4/A5+@force_inline（C-3+） | R22-24 ✅ |
+| 优化退化策略 | 编译期自动退化，运行时零决策开销 | R22 ✅ |
+
+**Q4 服务脚本设计 — ✅ 收敛（第 26 轮）**
+
+所有 14 项设计决策已确认。下一步 → 输出 **XCALL Spec 设计文档**，正式进入 C 阶段实现。
+
+##### 待用户确认（第 26 轮）
+
+1. **编译期常量 vs 运行时配置无性能差异**的分析是否认可？→ 确认使用运行时配置方案
+2. **Q4 收敛** — 14 项决策全部锁定，下一步输出 XCALL Spec？
+
+---
+
 <details>
 <summary>📋 讨论轮次总览</summary>
 
-#### 第 25 轮（当前）
+#### 第 26 轮（当前）
+
+用户回应第 25 轮 4 个确认问题：
+- Q1: 嵌套深度含义清楚。希望常量可配 + 运行时 fallback（类似扩展寄存器），但前提是常量配置对性能有显著提升
+- Q2: 同 Q1
+- Q3: 仅需 Unlimited + Warn（删除 Error 策略）
+- Q4: 如果确认推荐方案，则收敛
+
+语言方回应：
+1. 编译期常量 vs 运行时配置性能对比：扩展寄存器受益于常量因为决定不同指令路径（LOAD_MVAR vs LOAD_XREG）；嵌套深度检查只影响 compare 操作数来源（立即数 vs L1 cache），差异 < 0.1 ns → 无性能差异
+2. 确认使用运行时配置方案（N3 简化版）
+3. 策略简化：Warn（默认）+ Unlimited（XCallDepthWarning=false）两种模式
+4. Q4 收敛：14 项决策全部锁定
+
+#### 第 25 轮
 
 用户回应第 24 轮 4 个确认问题 + 新疑惑：
 - Q1: 统一语法 OK ✅
