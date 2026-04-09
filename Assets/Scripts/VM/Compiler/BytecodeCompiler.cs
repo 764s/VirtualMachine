@@ -840,6 +840,11 @@ namespace FFVM.Compiler
 
                 // No register operands: NOP, SYSCALL(slot,start,count), WAIT, PUSH_CLEANUP,
                 // POP_CLEANUP, RETURN, JUMP, CALL, CALL_LEAF, RET_FUNC, RET_LEAF, SENTINEL
+                // Lang-8: XCALL/XLOAD_MVAR: A=destReg, B=instanceIdReg, C=index (not reg)
+                case OpCode.XCALL:       return 3; // A=destReg, B=instanceIdReg
+                case OpCode.XLOAD_MVAR:  return 3; // A=destReg, B=instanceIdReg
+                // Lang-8: XSTORE_MVAR: A=varIndex (not reg), B=instanceIdReg, C=srcReg
+                case OpCode.XSTORE_MVAR: return 6; // B=instanceIdReg, C=srcReg
                 default: return 0;
             }
         }
@@ -3225,11 +3230,16 @@ namespace FFVM.Compiler
                     return destReg >= 0 ? destReg : AllocTemp();
                 }
 
-                // Compile arguments into scratch zone r0..r(n-1)
-                ResetTemps();
+                // Phase 1: Compile arguments into temp registers
+                int[] argRegs = new int[mc.Arguments.Count];
+                for (int i = 0; i < mc.Arguments.Count; i++)
+                    argRegs[i] = CompileExpr(mc.Arguments[i]);
+
+                // Phase 2: Move args to scratch zone r0..r(n-1)
                 for (int i = 0; i < mc.Arguments.Count; i++)
                 {
-                    CompileExpr(mc.Arguments[i], destReg: i);
+                    if (argRegs[i] != i)
+                        Emit(OpCode.MOVE, i, argRegs[i]);
                 }
 
                 // Emit XCALL: A=destReg, B=svcReg, C=exportFuncIndex
