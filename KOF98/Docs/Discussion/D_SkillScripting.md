@@ -35,6 +35,11 @@
 - 如果一个议题包含多个独立论点，应拆分为子编号（如 SK14-1, SK14-2），每个子编号独立遵循上述结构
 - ⚠️ **避免"整合/汇总/全景"型单节**：将多个独立论点聚合为一个 ## 会导致结论区无法一句话概括、详细设计区过于庞杂。应先识别各论点再分别建节
 
+**结构规则**：
+- 所有议论点（SK、Q）使用 `##` 级标题，**不允许**使用容器 `##` 来嵌套 `###` 议论点（如 ~~"## 第 N 轮议题" → "### Q1"~~）
+- 文档排列顺序：**决议总览 → 背景 → 全部议论点（SK + Q）→ 评估区（Syscall/宿主）→ 附录**
+- 折叠区命名统一为 `📋 详细设计` 和 `📋 讨论历史`（不使用 `📋 Q1 完整分析` / `📋 Q2 完整讨论历史` 等变体）
+
 ---
 
 ## 决议总览
@@ -731,240 +736,6 @@ FFS 设计约束：零 GC、零动态分配、无类/无继承、无模块系统
 
 ---
 
-## Syscall 需求评估
-
-**结论**：前 4 个脚本（S01~S04）可直接用现有 Syscall 实现。S05~S08 及碰撞框脚本化需新增少量 Syscall。
-
-<details>
-<summary>📋 详细设计</summary>
-
-| 需求 | 现有 Syscall | 是否需要新增 |
-|------|------------|------------|
-| 动作管理 | BeginAction, EndAction, GetFrame | ✅ 足够 |
-| 命中检测 | CheckAttackHit, CheckAttackBlocked | ✅ 足够 |
-| 伤害/硬直 | ApplyDamage, ApplyHitstun, ApplyHorizKB_* | ⚠️ ApplyDamage 需拆分（§4.2），新增 ApplyHitReaction |
-| 速度控制 | SetVelocity | ✅ 足够 |
-| 输入查询 | GetInput, GetInputDir | ✅ 足够 |
-| 落地检测 | IsGrounded | ✅ 足够 |
-| 效果 | SpawnEffectHit, SpawnEffectSelf | ✅ 足够 |
-| 碰撞框设置 | — | 🆕 需要 `SetHitbox`, `SetHurtbox`, `ClearHitbox` |
-| 蹲姿/姿态切换 | — | 🆕 需要 `SetStance` |
-| 倒地状态 | — | ❓ 可能需要 `SetKnockdownState` / `SetInvincible` |
-
-> 📌 **宿主前置依赖**：需先实现上述新增 Syscall 的宿主侧逻辑（碰撞框管理、姿态系统、倒地状态系统），然后才能在脚本中使用。
-
-</details>
-
----
-
-## 宿主侧变更评估
-
-| 变更 | 说明 | 影响范围 |
-|------|------|---------|
-| `CanActivate` → 脚本 `checkEnter()` | 宿主通过 `TryGetFunction("checkEnter")` 获取入口 IP，spawn + tick + 读返回值 | GameVMBridge + SkillManager Layer 3 |
-| `OnFrame` → `step()` 函数 | 条件通过后同实例 redirect 到 `step()` 入口，每帧 tick | GameVMBridge |
-| `CanContinue` → 脚本控制 | 循环技能退出由脚本 return 或宿主 Kill | SkillManager |
-| `CollisionFrames` → 脚本内设置 | 碰撞框数据迁移到脚本 Syscall | 需新增 Syscall |
-| `ProbeSkillCondition` → redirect 模型 | 重构为 checkEnter + redirect（非 yield/return 信号） | 需修改 |
-| `VMWorld.RedirectInstance` | 新增 API：重定向完成实例到新入口 | FFVM 新增 ~5 行 |
-| 裁决层改造 | 实现分层候选池机制 | SkillManager 重构 |
-| `ApplyDamage` → 拆分 | 拆为 `ApplyDamage` (数值) + `ApplyHitReaction` (标记) | Syscall 重设计 |
-
----
-
-## 附录 A：技能全集分类
-
-> 方括号 `[]` 表示可选/高级变体，非基础集合。
-
-| 分类 | 技能列表 |
-|------|---------|
-| **基础移动** | 站立待机, 前进, 后退, 前跑, 蹲, 跳, 前跳, 后跳, [前影跳], [后影跳] |
-| **防御** | 站防御, 蹲防御, [空中防御] |
-| **闪避** | 前闪避, 后闪避, [原地侧闪], [前影闪], [后影闪] |
-| **基本攻击** | 近拳, 远拳, 蹲拳, 跳拳, 近脚, 远脚, 蹲脚, 跳脚 |
-| **抓投** | 前投, 后投, 空中投, 指令投起手, 拆投 |
-| **受击** | 上受击, 中受击, 下受击, 被绊倒 |
-| **空中受击** | 被吹飞, 浮空, 旋转吹飞 |
-| **倒地** | 硬倒地, 软倒地, 仰面倒地, 趴伏倒地 |
-| **起身** | 原地起身, 受身(快速起身), 前滚起身, 后滚起身 |
-| **特殊** | 被破防, 眩晕, 瘫软, 版边反弹 |
-| **死亡** | 基础死亡, 属性死亡, 磨血死亡, 剧情死亡 |
-| **流程** | 开始, 胜利, 战败, 续关, 完美胜利 |
-| **挑衅** | 基础挑衅, 击败挑衅 |
-
----
-
-## 附录 B：参考脚本参数模式提取
-
-> 从 `skill_114`（飞燕旋风腿）和 `skill_25`（上盘被击中）提取通用参数表示，作为首批脚本的 Syscall 参数设计参考。
-
-### 动作声明
-
-```
-BeginAction(actionId, totalFrames)
-defer { EndAction() }
-```
-
-- `actionId`: 技能定义 ID，宿主用于查找动画/碰撞框数据
-- `totalFrames`: 动作总帧数
-- `defer + EndAction()`: 确保技能结束时清理
-
-### 伤害参数与受击标记
-
-两个概念的区分：
-
-| 概念 | 用途 | 生命周期 |
-|------|------|---------|
-| **伤害参数** (Damage Params) | 用于计算伤害数值（系数、属性克制等） | 命中瞬间消费 |
-| **受击标记** (HitReactionTag) | 攻击方附加到受击方，受击方据此决定进哪种受击技能 | 附加→受击方读取→消费 |
-
-```
-// 伤害参数：用于数值计算
-ApplyDamage(targetId, coefficient)
-
-// 受击标记：通知受击方选择受击技能
-ApplyHitReaction(targetId, reactionTag)
-```
-
-- `coefficient`: 伤害系数（不是绝对值），宿主用公式换算
-- `reactionTag`: 受击反应标记（唯一枚举 ID，不做 mask 组合）
-
-### 硬直参数
-
-```
-ApplyHitstun(targetId, startFrame, durationFrames, level, shakeFlag)
-```
-
-### 击退参数
-
-```
-// 模式 A: 距离+时间 (定距移动)
-ApplyHorizKB_Dist(targetId, distance, durationFrames)
-
-// 模式 B: 速度 (直到着地)
-ApplyHorizKB_Speed(targetId, speed)
-
-// 垂直击退
-ApplyVertKB(targetId, speed, durationFrames)
-
-// 自身位移
-ApplySelfHorizKB(distance, durationFrames)
-ApplySelfVertKB(initialSpeed, acceleration)
-```
-
-### 互斥分组
-
-```ffs
-var mutex1: int = 0
-if mutex1 == 0 {
-    // 检测命中...
-    mutex1 = 1
-}
-```
-
-用局部变量实现（非 Syscall）。同一攻击段只生效一次。
-
-### 能量系数
-
-```
-SetEnergyCoeff(multiplier)
-```
-
-临时修改下次 ApplyDamage 的能量获取倍率。首批脚本可暂不使用。
-
----
-
-## 附录 C：首批脚本伪代码示例
-
-> 第 9 轮更新：所有示例已改为 `checkEnter()` + `step()` 双入口结构（方案 D′）。
-
-### 脚本书写风格约定
-
-- **必须提取为变量**：多次引用的值（帧数 `totalFrames`、攻击窗口边界）
-- **可内联**：仅出现一次的常量参数（effectId, groupId 等），注释说明含义
-- **注意**：`while f < N` 中的 `N` 若在 `BeginAction` 中已声明则应统一变量
-- **结构约定**：所有 VM 技能脚本包含 `func checkEnter(): int`（条件）+ `func step()`（执行）
-
-### S01 — 站立待机 (Idle)
-
-```ffs
-/// Idle 不需要条件检查 — 作为最低优先级兜底，总是可进入
-func checkEnter(): int {
-    return 1
-}
-
-func step() {
-    BeginAction(1, -1)    // -1 = 无限循环
-    defer { EndAction() }
-
-    while true {
-        yield
-    }
-}
-```
-
-### S04 — 近拳 (LightPunch)
-
-```ffs
-func checkEnter(): int {
-    var lpPressed: int = IsInputPressed(4)   // 4 = LP button
-    var grounded: int = IsGrounded()
-    if lpPressed == 0 || grounded == 0 {
-        return 0
-    }
-    return 1
-}
-
-func step() {
-    var frames: int = 20
-
-    BeginAction(101, frames)
-    defer { EndAction() }
-
-    var hit: int = 0
-    var f: int = 0
-    while f < frames {
-        if f >= 4 && f < 8 && hit == 0 {
-            var t: int = CheckAttackHit(1001)
-            if t > 0 {
-                ApplyDamage(t, 3, 102)
-                ApplyHitstun(t, 0, 10, 0, 1)
-                ApplyHorizKB_Dist(t, 0.5, 5)
-                SpawnEffectHit(3001, 30)
-                hit = 1
-            }
-        }
-        f = f + 1
-        yield
-    }
-}
-```
-
-### S06 — 上受击 (HitHigh)
-
-```ffs
-/// 受击技能由宿主裁决层触发，checkEnter 总是通过
-func checkEnter(): int {
-    return 1
-}
-
-func step() {
-    var frames: int = 20
-
-    BeginAction(25, frames)
-    defer { EndAction() }
-
-    SpawnEffectSelf(4001, 60)
-
-    var f: int = 0
-    while f < frames {
-        f = f + 1
-        yield
-    }
-}
-```
-
----
 
 ## SK14-1: 语言需求全景与优先级 ✅
 
@@ -1089,18 +860,12 @@ SK10 连招描述脚本需要哪些语言特性？
 
 ---
 
-## 第 12 轮+ 议题
+## Q1: OOP/ECS 数据兼容 ✅ 已关闭
 
-> 第 12~13.5 轮讨论的 3 个议题。每个议题仅展示最新结论和未决问题，完整讨论过程在折叠区域内。
-
----
-
-### Q1: OOP/ECS 数据兼容 ✅ 已关闭
-
-**结论**：不冲突。SK12 原则（脚本输出走 Syscall）+ blittable `VMInstanceState` 已天然兼容 ECS。无需现在额外考虑。唯一远期注意点：闭环数据变为外部需读取时，增量加 Syscall 推送即可。
+**结论**：不冲突 — SK12 原则 + blittable VMInstanceState 天然兼容 ECS，无需额外考虑。
 
 <details>
-<summary>📋 Q1 完整分析</summary>
+<summary>📋 详细设计</summary>
 
 
 > 用户原话：目前的数据使用原则是在脚本中定义并消费就封闭在脚本内。当将来在 ECS 场景中, 会有让数据进入 ECS 中的 C 的需求。这两个需求看起来会对同一份数据有不同的要求。当前要考虑吗？暂时感觉不用, 因为当前以 OOP 风格熟悉, 会自动兼容 ECS, 我的感觉对吗？
@@ -1159,9 +924,12 @@ SK12 已确立的数据归属原则：
 
 ---
 
-### Q2: 硬直+yield 语句级控制 ✅
+## Q2: 硬直+yield 语句级控制 ✅
 
-**结论（第 18 轮收敛）**：**方案 A — while + GetFrame() + yield** 为帧区间循环的标准模式。
+**结论**：方案 A — while+GetFrame()+yield 帧区间循环，行业标准模式（7/10 语言同构），零 VM 改动。
+
+<details>
+<summary>📋 详细设计</summary>
 
 | 要素 | 说明 |
 |------|------|
@@ -1196,8 +964,10 @@ func step() {
 2. ✅ 帧号推进模型正确 — 宿主根据硬直决定是否增加帧号，VM tick 照常
 3. ✅ 零 VM/语言改动、零混淆、零耦合、极低样板、行业共识
 
+</details>
+
 <details>
-<summary>📋 Q2 完整讨论历史（第 12~17 轮）</summary>
+<summary>📋 讨论历史（第 12~17 轮）</summary>
 
 > **用户修改**（第 16 轮）：想明白了需求 — 不是"从上一个 yield 点重放"，而是"指定一段代码让它循环"。给出示例代码：用 while + yield + GetFrame() 条件 break 来实现帧区间内循环执行。这个粗暴做法完全满足需求。要求：(1) 用 while 循环模拟实现具体场景看看效果；(2) 用特定语法实现看看能简单到什么程度。
 
@@ -1722,7 +1492,7 @@ func step() {
 
 #### 第 12 轮 — 原始提案
 
-### Q2: 硬直期间是否让脚本进入（时间轴暂停时的 VM Tick 策略）
+#### Q2 早期提案: 硬直期间是否让脚本进入（时间轴暂停时的 VM Tick 策略）
 
 > 用户原话：希望角色时间轴暂停时脚本能进入, 这样能有更多自由度。如果真想不执行也是简单跳过, 不会太拖累性能。但是硬直进入虚拟机之后, yield/wait 可能要正确区分时间轴(包含了硬直)暂停期间是否要算在等待帧内的问题。
 
@@ -2443,9 +2213,12 @@ if (inst.WaitCounter > 0 && !killed)
 
 ---
 
-### Q3: 跨脚本 VM 使用模式 ✅
+## Q3: 跨脚本 VM 使用模式 ✅
 
-**结论**：6 种方向渐进路径。阶段 1（方向 1+2+3）✅ + 阶段 3（方向 5 服务脚本）✅ 已完成。
+**结论**：6 方向渐进路径；阶段 1（方向 1+2+3）✅ + 阶段 3（方向 5 服务脚本）✅ 已完成。
+
+<details>
+<summary>📋 详细设计</summary>
 
 | # | 方向 | 数据共享机制 | VM 改动 | 状态 |
 |---|------|-----------|--------|------|
@@ -2455,9 +2228,6 @@ if (inst.WaitCounter > 0 && !killed)
 | 3 | **宿主编排** | 宿主 C# 协调 + Syscall | 无 | ✅ SK2 裁决 |
 | 4 | **共享变量区** | VM 跨实例共享内存 | ⭐⭐ | ⏳ 需求驱动 |
 | 5 | **服务脚本 + 跨模块调用** | VM 跨模块函数调用 | ⭐⭐⭐ | ✅ Lang-6/7/8 |
-
-<details>
-<summary>📋 详细设计</summary>
 
 **渐进路径**：
 
@@ -2478,11 +2248,11 @@ if (inst.WaitCounter > 0 && !killed)
 </details>
 
 <details>
-<summary>📋 Q3 讨论历史（第 12~12.5 轮）</summary>
+<summary>📋 讨论历史（第 12~12.5 轮）</summary>
 
 #### 第 12 轮 — 5 种方向详解
 
-### Q3: 跨脚本 VM 使用模式推荐
+#### Q3 第 12 轮详解: 跨脚本 VM 使用模式推荐
 
 > 用户原话：想要继续讨论虚拟机跨脚本使用的方式, 先帮我推荐几种不同方向的使用方法。
 
@@ -3128,11 +2898,16 @@ func step() {
 </details>
 ---
 
-### Q4: FFS 无对象语言的宿主参数封装 ✅
+## Q4: FFS 封装 — 服务脚本 ✅
+
+**结论**：方式 C（语言级引用）✅；Y1-Plus ✅；svc.member 统一语法 ✅；@export ✅；@inline ✅；14 项决策锁定。C-1~C-2 已实现（Lang-6/7/8 ✅）。剩余 C-3 @force_inline 远期。
+
+<details>
+<summary>📋 详细设计</summary>
 
 > **第 18~26 轮。✅ 收敛（第 26 轮）。** 14 项设计决策全部锁定。**C-1（Lang-6）✅ / C-1.5（Lang-7）✅ / C-2（Lang-8）✅ 已实现**（1259 tests pass）。剩余 C-3（Lang-9 @force_inline）为远期。详见 [VM_Summary Lang-6~Lang-8](../../Docs/VM_Summary.md)。
 
-#### 核心结论
+**14 项核心决策**：
 
 | 决策 | 结论 | 轮次 |
 |------|------|------|
@@ -3151,9 +2926,7 @@ func step() {
 | XCALL 优化 | O1+O2（C-1），A1/A2（C-1.5），O7+@inline（C-2），O4/A5+@force_inline（C-3+） | R22-24 ✅ |
 | 优化退化策略 | 编译期自动退化，运行时零决策开销 | R22 ✅ |
 
-**实现状态**：C-1（Lang-6 XCALL+@export+Y1-Plus）✅ / C-1.5（Lang-7 A1/A2 自动退化+VMConfig）✅ / C-2（Lang-8 svc.member 统一语法+@inline+LSP）✅。剩余 C-3（Lang-9 @force_inline+A5 深度内联）为远期。
-
-#### OpCode 基线设计（C-1 同时实现）
+**OpCode 基线设计（C-1 同时实现）**：
 
 | OpCode | 操作 | 编码 | 开销 |
 |--------|------|------|------|
@@ -3161,7 +2934,7 @@ func step() {
 | **XLOAD_MVAR** | 跨实例变量读取 | A=dest, B=instanceId_reg, C=mvarIndex | ~3-5 ns |
 | **XSTORE_MVAR** | 跨实例变量写入 | A=src, B=instanceId_reg, C=mvarIndex | ~3-5 ns |
 
-#### 嵌套深度配置（C-1.5）
+**嵌套深度配置（C-1.5）**：
 
 ```csharp
 public class VMConfig {
@@ -3170,7 +2943,7 @@ public class VMConfig {
 }
 ```
 
-#### 实现路径
+**实现路径**：
 
 | 阶段 | 内容 | 说明 | 状态 |
 |------|------|------|------|
@@ -3180,8 +2953,10 @@ public class VMConfig {
 | C-2 | `svc.member` 统一语法 + @inline + LSP 诊断 | 语法糖 + 编译期内联 hint + 调用链深度诊断 | ✅ Lang-8 |
 | C-3 | @force_inline + A5 深度内联 | 强制内联 + 函数体展开 | ⏳ 远期（Lang-9） |
 
+</details>
+
 <details>
-<summary>📋 Q4 完整讨论历史（第 18~26 轮）</summary>
+<summary>📋 讨论历史（第 18~26 轮）</summary>
 
 #### 背景
 
@@ -5636,3 +5411,237 @@ Q2 基本收敛。
 - 语言演进路线 Lang-1~Lang-5 提出，待同步到 VM_Summary
 
 </details>
+## Syscall 需求评估
+
+**结论**：前 4 个脚本（S01~S04）可直接用现有 Syscall 实现。S05~S08 及碰撞框脚本化需新增少量 Syscall。
+
+<details>
+<summary>📋 详细设计</summary>
+
+| 需求 | 现有 Syscall | 是否需要新增 |
+|------|------------|------------|
+| 动作管理 | BeginAction, EndAction, GetFrame | ✅ 足够 |
+| 命中检测 | CheckAttackHit, CheckAttackBlocked | ✅ 足够 |
+| 伤害/硬直 | ApplyDamage, ApplyHitstun, ApplyHorizKB_* | ⚠️ ApplyDamage 需拆分（§4.2），新增 ApplyHitReaction |
+| 速度控制 | SetVelocity | ✅ 足够 |
+| 输入查询 | GetInput, GetInputDir | ✅ 足够 |
+| 落地检测 | IsGrounded | ✅ 足够 |
+| 效果 | SpawnEffectHit, SpawnEffectSelf | ✅ 足够 |
+| 碰撞框设置 | — | 🆕 需要 `SetHitbox`, `SetHurtbox`, `ClearHitbox` |
+| 蹲姿/姿态切换 | — | 🆕 需要 `SetStance` |
+| 倒地状态 | — | ❓ 可能需要 `SetKnockdownState` / `SetInvincible` |
+
+> 📌 **宿主前置依赖**：需先实现上述新增 Syscall 的宿主侧逻辑（碰撞框管理、姿态系统、倒地状态系统），然后才能在脚本中使用。
+
+</details>
+
+---
+
+## 宿主侧变更评估
+
+| 变更 | 说明 | 影响范围 |
+|------|------|---------|
+| `CanActivate` → 脚本 `checkEnter()` | 宿主通过 `TryGetFunction("checkEnter")` 获取入口 IP，spawn + tick + 读返回值 | GameVMBridge + SkillManager Layer 3 |
+| `OnFrame` → `step()` 函数 | 条件通过后同实例 redirect 到 `step()` 入口，每帧 tick | GameVMBridge |
+| `CanContinue` → 脚本控制 | 循环技能退出由脚本 return 或宿主 Kill | SkillManager |
+| `CollisionFrames` → 脚本内设置 | 碰撞框数据迁移到脚本 Syscall | 需新增 Syscall |
+| `ProbeSkillCondition` → redirect 模型 | 重构为 checkEnter + redirect（非 yield/return 信号） | 需修改 |
+| `VMWorld.RedirectInstance` | 新增 API：重定向完成实例到新入口 | FFVM 新增 ~5 行 |
+| 裁决层改造 | 实现分层候选池机制 | SkillManager 重构 |
+| `ApplyDamage` → 拆分 | 拆为 `ApplyDamage` (数值) + `ApplyHitReaction` (标记) | Syscall 重设计 |
+
+---
+
+## 附录 A：技能全集分类
+
+> 方括号 `[]` 表示可选/高级变体，非基础集合。
+
+| 分类 | 技能列表 |
+|------|---------|
+| **基础移动** | 站立待机, 前进, 后退, 前跑, 蹲, 跳, 前跳, 后跳, [前影跳], [后影跳] |
+| **防御** | 站防御, 蹲防御, [空中防御] |
+| **闪避** | 前闪避, 后闪避, [原地侧闪], [前影闪], [后影闪] |
+| **基本攻击** | 近拳, 远拳, 蹲拳, 跳拳, 近脚, 远脚, 蹲脚, 跳脚 |
+| **抓投** | 前投, 后投, 空中投, 指令投起手, 拆投 |
+| **受击** | 上受击, 中受击, 下受击, 被绊倒 |
+| **空中受击** | 被吹飞, 浮空, 旋转吹飞 |
+| **倒地** | 硬倒地, 软倒地, 仰面倒地, 趴伏倒地 |
+| **起身** | 原地起身, 受身(快速起身), 前滚起身, 后滚起身 |
+| **特殊** | 被破防, 眩晕, 瘫软, 版边反弹 |
+| **死亡** | 基础死亡, 属性死亡, 磨血死亡, 剧情死亡 |
+| **流程** | 开始, 胜利, 战败, 续关, 完美胜利 |
+| **挑衅** | 基础挑衅, 击败挑衅 |
+
+---
+
+## 附录 B：参考脚本参数模式提取
+
+> 从 `skill_114`（飞燕旋风腿）和 `skill_25`（上盘被击中）提取通用参数表示，作为首批脚本的 Syscall 参数设计参考。
+
+### 动作声明
+
+```
+BeginAction(actionId, totalFrames)
+defer { EndAction() }
+```
+
+- `actionId`: 技能定义 ID，宿主用于查找动画/碰撞框数据
+- `totalFrames`: 动作总帧数
+- `defer + EndAction()`: 确保技能结束时清理
+
+### 伤害参数与受击标记
+
+两个概念的区分：
+
+| 概念 | 用途 | 生命周期 |
+|------|------|---------|
+| **伤害参数** (Damage Params) | 用于计算伤害数值（系数、属性克制等） | 命中瞬间消费 |
+| **受击标记** (HitReactionTag) | 攻击方附加到受击方，受击方据此决定进哪种受击技能 | 附加→受击方读取→消费 |
+
+```
+// 伤害参数：用于数值计算
+ApplyDamage(targetId, coefficient)
+
+// 受击标记：通知受击方选择受击技能
+ApplyHitReaction(targetId, reactionTag)
+```
+
+- `coefficient`: 伤害系数（不是绝对值），宿主用公式换算
+- `reactionTag`: 受击反应标记（唯一枚举 ID，不做 mask 组合）
+
+### 硬直参数
+
+```
+ApplyHitstun(targetId, startFrame, durationFrames, level, shakeFlag)
+```
+
+### 击退参数
+
+```
+// 模式 A: 距离+时间 (定距移动)
+ApplyHorizKB_Dist(targetId, distance, durationFrames)
+
+// 模式 B: 速度 (直到着地)
+ApplyHorizKB_Speed(targetId, speed)
+
+// 垂直击退
+ApplyVertKB(targetId, speed, durationFrames)
+
+// 自身位移
+ApplySelfHorizKB(distance, durationFrames)
+ApplySelfVertKB(initialSpeed, acceleration)
+```
+
+### 互斥分组
+
+```ffs
+var mutex1: int = 0
+if mutex1 == 0 {
+    // 检测命中...
+    mutex1 = 1
+}
+```
+
+用局部变量实现（非 Syscall）。同一攻击段只生效一次。
+
+### 能量系数
+
+```
+SetEnergyCoeff(multiplier)
+```
+
+临时修改下次 ApplyDamage 的能量获取倍率。首批脚本可暂不使用。
+
+---
+
+## 附录 C：首批脚本伪代码示例
+
+> 第 9 轮更新：所有示例已改为 `checkEnter()` + `step()` 双入口结构（方案 D′）。
+
+### 脚本书写风格约定
+
+- **必须提取为变量**：多次引用的值（帧数 `totalFrames`、攻击窗口边界）
+- **可内联**：仅出现一次的常量参数（effectId, groupId 等），注释说明含义
+- **注意**：`while f < N` 中的 `N` 若在 `BeginAction` 中已声明则应统一变量
+- **结构约定**：所有 VM 技能脚本包含 `func checkEnter(): int`（条件）+ `func step()`（执行）
+
+### S01 — 站立待机 (Idle)
+
+```ffs
+/// Idle 不需要条件检查 — 作为最低优先级兜底，总是可进入
+func checkEnter(): int {
+    return 1
+}
+
+func step() {
+    BeginAction(1, -1)    // -1 = 无限循环
+    defer { EndAction() }
+
+    while true {
+        yield
+    }
+}
+```
+
+### S04 — 近拳 (LightPunch)
+
+```ffs
+func checkEnter(): int {
+    var lpPressed: int = IsInputPressed(4)   // 4 = LP button
+    var grounded: int = IsGrounded()
+    if lpPressed == 0 || grounded == 0 {
+        return 0
+    }
+    return 1
+}
+
+func step() {
+    var frames: int = 20
+
+    BeginAction(101, frames)
+    defer { EndAction() }
+
+    var hit: int = 0
+    var f: int = 0
+    while f < frames {
+        if f >= 4 && f < 8 && hit == 0 {
+            var t: int = CheckAttackHit(1001)
+            if t > 0 {
+                ApplyDamage(t, 3, 102)
+                ApplyHitstun(t, 0, 10, 0, 1)
+                ApplyHorizKB_Dist(t, 0.5, 5)
+                SpawnEffectHit(3001, 30)
+                hit = 1
+            }
+        }
+        f = f + 1
+        yield
+    }
+}
+```
+
+### S06 — 上受击 (HitHigh)
+
+```ffs
+/// 受击技能由宿主裁决层触发，checkEnter 总是通过
+func checkEnter(): int {
+    return 1
+}
+
+func step() {
+    var frames: int = 20
+
+    BeginAction(25, frames)
+    defer { EndAction() }
+
+    SpawnEffectSelf(4001, 60)
+
+    var f: int = 0
+    while f < frames {
+        f = f + 1
+        yield
+    }
+}
+```
+
+---
