@@ -32,6 +32,7 @@ namespace FFVM.AST
         // Expressions - Function/Syscall
         Call,
         SyscallExpr,
+        MemberCall,         // Lang-8: svc.func(args) cross-instance call
 
         // Expressions - Struct literal
         StructLiteral,
@@ -172,6 +173,24 @@ namespace FFVM.AST
         public CallExpr(string functionName, List<Expr> arguments) : base(NodeKind.Call)
         {
             FunctionName = functionName;
+            Arguments = arguments;
+        }
+    }
+
+    /// <summary>
+    /// Lang-8: Cross-instance member function call: svc.func(args)
+    /// Compiler routes to XCALL / XLOAD_MVAR / XSTORE_MVAR based on export table.
+    /// </summary>
+    public class MemberCallExpr : Expr
+    {
+        public string TargetName { get; }
+        public string MemberName { get; }
+        public List<Expr> Arguments { get; }
+        public MemberCallExpr(string targetName, string memberName, List<Expr> arguments)
+            : base(NodeKind.MemberCall)
+        {
+            TargetName = targetName;
+            MemberName = memberName;
             Arguments = arguments;
         }
     }
@@ -364,10 +383,11 @@ namespace FFVM.AST
         public BlockStmt Body { get; }
         public bool IsPrivate { get; }
         public bool IsExported { get; }
+        public bool IsInline { get; }
         public string DocComment { get; set; }
         public string ReturnDoc { get; set; }
 
-        public FuncDecl(string name, List<ParamDecl> parameters, string returnType, BlockStmt body, bool isPrivate, bool isExported = false)
+        public FuncDecl(string name, List<ParamDecl> parameters, string returnType, BlockStmt body, bool isPrivate, bool isExported = false, bool isInline = false)
             : base(NodeKind.FuncDecl)
         {
             Name = name;
@@ -376,6 +396,7 @@ namespace FFVM.AST
             Body = body;
             IsPrivate = isPrivate;
             IsExported = isExported;
+            IsInline = isInline;
         }
     }
 
