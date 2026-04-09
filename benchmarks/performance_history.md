@@ -26,6 +26,22 @@
 
 <!-- HISTORY_START — CI 自动追加区域，请勿手动编辑此标记 -->
 
+### 2026-04-09 15:56 UTC — `1b6f7d1afa05660a63d194e991080af5beb8db4e`
+
+> .NET 8.0.25 | Unix | 4 cores
+
+| Benchmark | VM (μs) | C# (μs) | Ratio | Δ VM | Δ Ratio |
+|-----------|---------|---------|-------|------|---------|
+| B01_ArithLoop | 453.5 | 92.2 | 4.92x | -1019.1 (↓69%) | -1.08x ✅ |
+| B02_Fibonacci | 1.6 | 0.4 | 3.73x | 0 (=) | -1.19x ✅ |
+| B03_NestedLoop | 260.6 | 60.8 | 4.29x | -254.2 (↓49%) | -12.93x ✅ |
+| B04_Branching | 620.1 | 13.4 | 46.27x | -727.2 (↓54%) | +40.63x ⚠️ |
+| B05_Accumulator | 805.3 | 47.4 | 16.98x | -1311.4 (↓62%) | -18.30x ✅ |
+| B06_FuncCall | 269.7 | 15.8 | 17.12x | -284.9 (↓51%) | -3.36x ✅ |
+
+⚠️ **Regression detected**: VM/C# ratio increased >10% on one or more benchmarks.
+
+
 ### 2026-04-09 14:05 UTC — `712e0d91de94a0337791f1a78e57e40fd96a754d`
 
 > .NET 8.0.25 | Unix | 4 cores
