@@ -1359,7 +1359,7 @@ func step() {
 ✅ 可读，直觉清晰：while 循环 = 重复，yield = 每 tick 一次，GetFrame() 条件 = 退出。
 
 **场景 2：帧区间内持续伤害 + 播放特效**
-
+// 小问题, 这个方案下脚本只关心tick yield, f 由宿主提供(GetFrame())
 ```ffs
 func step() {
     var f: int = 0
