@@ -91,7 +91,8 @@
 | KOF-T1 | 界面设计（常驻 HUD + 控制界面） | ✅ 已完成 | 常驻 HUD 显示角色名/血量/能量；控制界面覆盖场景，含 AI 开关、重新开始、自动复活开关 | — | [D_UIDesign.md](Discussion/D_UIDesign.md) |
 | KOF-T2 | 技能脚本化基础设施 | ✅ 已完成 | SkillDef 扩展（AllowedStances/ActivationPriority/InterruptPriority）+ 裁决层重构（分层候选池）+ 条件入口机制（ProbeSkillCondition）+ Stance 枚举 + Character.GetStance() + VMWorld.TickInstance() | KOF-T1 ✅ | [D_SkillScripting.md](Discussion/D_SkillScripting.md) §七 |
 | KOF-T3 | 首批 FFS 脚本 — 前 4 个 (S01~S04) | ✅ 已完成 | skill_idle/walk_forward/jump/light_punch.ffs 编写完成；SkillManager 自动 spawn/kill VM 实例；新增 IsInputHeld/IsInputPressed Syscall；GameScene 支持 VM 技能完成检测和帧计数 | KOF-T2 ✅ | [D_SkillScripting.md](Discussion/D_SkillScripting.md) §五 |
-| KOF-T4 | Syscall 扩展 + 碰撞框脚本化 | ⬚ 待排期 | 新增 SetHitbox/SetHurtbox/ClearHitbox/SetPushBox + ApplyHitReaction；碰撞框由脚本设置 | KOF-T3 | [D_SkillScripting.md](Discussion/D_SkillScripting.md) §八~§九 |
+| KOF-T3.5 | Include 数据支持 + S05-S08 骨架 | ✅ 已完成 | `common/constants.ffs` 共享常量 + `common/input.ffs` 输入帮助 + FileSystemFileResolver + S01-S04 重构使用 include + S05-S08 骨架 + `common/char_service.ffs` 服务模板 | KOF-T3 ✅ | — |
+| KOF-T4 | Syscall 扩展 + 碰撞框脚本化 | ⬚ 待排期 | 新增 SetHitbox/SetHurtbox/ClearHitbox/SetPushBox + ApplyHitReaction；碰撞框由脚本设置 | KOF-T3.5 ✅ | [D_SkillScripting.md](Discussion/D_SkillScripting.md) §八~§九 |
 | KOF-T5 | 首批 FFS 脚本 — 后 4 个 (S05~S08) | ⬚ 待排期 | 编写 skill_crouch_punch/hit_high/hard_knockdown/stand_up.ffs；验证完整攻击→受击→倒地→起身流程 | KOF-T4 | [D_SkillScripting.md](Discussion/D_SkillScripting.md) §五 |
 | KOF-T6 | 多目标命中 + 硬直机制 | ⬚ 待排期 | CheckAttackHit 多目标返回 + 时间轴暂停硬直实现 | KOF-T5 | [D_SkillScripting.md](Discussion/D_SkillScripting.md) §六 |
 | KOF-T7 | 连招 V1（黑板变量） | ⬚ 待排期 | 通过 GetBlackboard/SetBlackboard 实现连招计数器+递减系数，写法朝理想方案 C 靠拢 | KOF-T5 | [D_SkillScripting.md](Discussion/D_SkillScripting.md) §十三.1 |
@@ -123,7 +124,7 @@
 |---|------|------|------|------|
 | KP1 | [Task_DisplayModule.md](Plan/Task_DisplayModule.md) | 显示模块切换 (Raylib 图形化视图) | ✅ 基础完成 | 2026-04-06 |
 | KP2 | [Task_CharacterControl.md](Plan/Task_CharacterControl.md) | 角色控制问题排查 (移动技能 + 输入修复) | ✅ 根因已修 | 2026-04-06 |
-| KP3 | [Step_SkillScripting.md](Plan/Step_SkillScripting.md) | 技能 FFS 脚本化实施计划 (KOF-T2~T10) | ⏳ T2 ✅, T3 待开始 | 2026-04-06 |
+| KP3 | [Step_SkillScripting.md](Plan/Step_SkillScripting.md) | 技能 FFS 脚本化实施计划 (KOF-T2~T10) | ⏳ T2 ✅, T3 ✅, T3.5 ✅ | 2026-04-06 |
 
 ---
 
@@ -159,9 +160,16 @@
 - [x] 现有技能迁移至 AllowedStances + ActivationPriority — **KOF-T2**
 
 ### Phase 3: 首批 FFS 脚本
-- [ ] 前 4 个脚本 (S01~S04: idle/walk/jump/light_punch) — **KOF-T3**
+- [x] 前 4 个脚本 (S01~S04: idle/walk/jump/light_punch) — **KOF-T3** ✅
+- [x] Include 数据支持 + S05-S08 骨架 — **KOF-T3.5** ✅
+  - [x] `common/constants.ffs` 共享常量（消除魔法数字）
+  - [x] `common/input.ffs` 输入帮助函数
+  - [x] FileSystemFileResolver（GameVMBridge include 支持）
+  - [x] S01-S04 重构使用 include
+  - [x] S05-S08 骨架（crouch_punch/hit_high/hard_knockdown/stand_up）
+  - [x] `common/char_service.ffs` 服务脚本模板
 - [ ] Syscall 扩展 + 碰撞框脚本化 — **KOF-T4**
-- [ ] 后 4 个脚本 (S05~S08: crouch_punch/hit_high/hard_knockdown/stand_up) — **KOF-T5**
+- [ ] 后 4 个脚本完善 (S05~S08 从骨架到功能完整) — **KOF-T5**
 - [ ] 验证完整攻击→受击→倒地→起身流程
 
 ### Phase 4: 扩展机制

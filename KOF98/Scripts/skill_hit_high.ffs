@@ -1,0 +1,32 @@
+// ============================================================
+// Skill: Hit High (skill_hit_high)
+// Type: Finite (passive)  |  Frames: 30  |  Priority: 100 (hit)
+// ============================================================
+// 30-frame hit reaction for upper-body hits.
+// Passive script: activated by host when character receives a
+// DMG_NORMAL_UPPER or similar hit while standing.
+// Plays the hit animation and spawns a visual effect, then returns.
+//
+// Activation condition handled entirely by host SkillManager
+// (damage type check + stance check + no hitstun immunity).
+//
+// Syscalls used: BeginAction, EndAction, SpawnEffectSelf
+
+include "common/constants.ffs"
+
+func main() {
+    BeginAction(25, 30)
+    defer {
+        EndAction()
+    }
+
+    // Visual feedback: spawn hit effect on self
+    SpawnEffectSelf(FX_HURT_EFFECT, 300)
+
+    // Wait for the hit animation to complete
+    var f: int = 0
+    while f < 30 {
+        f = f + 1
+        yield
+    }
+}

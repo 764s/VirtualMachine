@@ -1,10 +1,35 @@
 using System;
 using System.Collections.Generic;
+using System.IO;
 using FFVM;
 using FFVM.Compiler;
 
 namespace KOF98
 {
+    /// <summary>
+    /// Filesystem-based file resolver for include directives.
+    /// Resolves include paths relative to a base directory (typically KOF98/Scripts/).
+    /// </summary>
+    public class FileSystemFileResolver : IFileResolver
+    {
+        private readonly string _baseDir;
+
+        public FileSystemFileResolver(string baseDir)
+        {
+            _baseDir = baseDir;
+        }
+
+        public string ReadFile(string path)
+        {
+            string fullPath = Path.Combine(_baseDir, path);
+            // Append .ffs extension if not present (include "common/constants" → common/constants.ffs)
+            if (!fullPath.EndsWith(".ffs", StringComparison.OrdinalIgnoreCase))
+                fullPath += ".ffs";
+            if (!File.Exists(fullPath)) return null;
+            return File.ReadAllText(fullPath);
+        }
+    }
+
     /// <summary>
     /// Bridge between the KOF98 game framework and FFVM.
     ///
@@ -28,6 +53,11 @@ namespace KOF98
         public VMWorld World { get; }
 
         /// <summary>
+        /// File resolver for include directives. Resolves paths relative to the scripts base directory.
+        /// </summary>
+        private readonly IFileResolver _fileResolver;
+
+        /// <summary>
         /// Maps VM instance ID → owning character ID.
         /// Used by syscalls to resolve "self" references.
         /// </summary>
@@ -42,10 +72,11 @@ namespace KOF98
         /// <summary>Next available module slot for auto-loading scripts.</summary>
         private int _nextModuleSlot;
 
-        public GameVMBridge(GameScene scene)
+        public GameVMBridge(GameScene scene, string scriptsBaseDir = null)
         {
             _scene = scene;
             World = new VMWorld();
+            _fileResolver = scriptsBaseDir != null ? new FileSystemFileResolver(scriptsBaseDir) : null;
             GameSyscalls.RegisterAll(World.Syscalls);
             RegisterManagementSyscalls();
         }
@@ -55,13 +86,18 @@ namespace KOF98
         /// <summary>
         /// Compile an .ffs script and register it as a VM module.
         /// Returns the module slot index, or -1 on failure.
+        /// Include directives are resolved relative to the scripts base directory.
         /// </summary>
         public int LoadScript(string scriptPath)
         {
             try
             {
-                string source = System.IO.File.ReadAllText(scriptPath);
-                return CompileAndLoad(source, scriptPath);
+                string source = File.ReadAllText(scriptPath);
+                // Derive a logical file path for include cycle detection.
+                // If we have a file resolver, compute the relative path from the base dir;
+                // otherwise use the raw script path.
+                string logicalPath = Path.GetFileName(scriptPath);
+                return CompileAndLoad(source, logicalPath);
             }
             catch (Exception ex)
             {
@@ -73,12 +109,15 @@ namespace KOF98
         /// <summary>
         /// Compile source code and register as a VM module.
         /// Returns the module slot index.
+        /// When a file resolver is configured (scriptsBaseDir passed to constructor),
+        /// include directives in scripts are resolved automatically.
         /// </summary>
         public int CompileAndLoad(string source, string name = "inline")
         {
             var syscallMap = GameSyscalls.GetSyscallMap();
             var compiler = new BytecodeCompiler();
-            var result = compiler.Compile(source, "main", syscallMap, World.Syscalls);
+            var result = compiler.Compile(source, "main", syscallMap, World.Syscalls,
+                _fileResolver, name);
 
             if (!result.Success)
             {

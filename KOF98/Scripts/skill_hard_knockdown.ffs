@@ -1,0 +1,35 @@
+// ============================================================
+// Skill: Hard Knockdown (skill_hard_knockdown)
+// Type: Finite (passive)  |  Frames: 60  |  Priority: 50 (knockdown)
+// ============================================================
+// 60-frame knockdown state. The character is on the ground.
+// During this period, the character may have invincibility frames
+// (configured on the host side via SkillDef.Tags).
+//
+// After the knockdown duration, the script returns and the host
+// transitions to the stand-up skill.
+//
+// Activation condition handled entirely by host SkillManager
+// (triggered by DMG_KNOCKDOWN hit reaction).
+//
+// Syscalls used: BeginAction, EndAction, SpawnEffectSelf
+
+include "common/constants.ffs"
+
+func main() {
+    BeginAction(30, 60)
+    defer {
+        EndAction()
+    }
+
+    // Impact effect
+    SpawnEffectSelf(FX_HURT_EFFECT, 300)
+
+    // Lie on ground for the full duration
+    var f: int = 0
+    while f < 60 {
+        f = f + 1
+        yield
+    }
+    // Script return → host will activate stand_up skill
+}

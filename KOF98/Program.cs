@@ -44,10 +44,7 @@ namespace KOF98
             var settings = new GameSettings();
 
             // ── Create VM bridge (optional — comment out to run host-only) ──
-            var vmBridge = new GameVMBridge(scene);
-            scene.VMBridge = vmBridge;
-
-            // ── Load FFS skill scripts ───────────────────────────
+            // Resolve scripts directory first so we can pass it to VMBridge for include support.
             string scriptsDir = System.IO.Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "..", "..", "..", "Scripts");
             // Fallback: try relative to working directory
             if (!System.IO.Directory.Exists(scriptsDir))
@@ -55,6 +52,13 @@ namespace KOF98
             // Final fallback: try absolute path relative to project
             if (!System.IO.Directory.Exists(scriptsDir))
                 scriptsDir = "Scripts";
+
+            string resolvedScriptsDir = System.IO.Directory.Exists(scriptsDir)
+                ? System.IO.Path.GetFullPath(scriptsDir) : null;
+            var vmBridge = new GameVMBridge(scene, resolvedScriptsDir);
+            scene.VMBridge = vmBridge;
+
+            // ── Load FFS skill scripts ───────────────────────────
 
             var vmSlots = LoadSkillScripts(vmBridge, scriptsDir);
 
