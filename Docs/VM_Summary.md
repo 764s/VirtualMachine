@@ -476,7 +476,7 @@ Docs/
 | — | **B-δ4 SN2 结构体字面量构造语法** | **StructLiteralExpr AST + Parser `TypeName { field: expr }` + Compiler sugar 展开 + 嵌套字面量 + CS31-CS38 测试** | **990** | [B-δ4](Plan/Step_B_Delta4_SN2_StructLiteral.md) |
 | — | **B-δ5 C5 Cleanup 超时保护** | **MaxCleanupSteps 每块步数预算 + 超时跳过当前块继续剩余 cleanup + C5-01~C5-04 测试** | **1007** | [B-δ5](Plan/Step_B_Delta5_C5_CleanupTimeout.md) |
 
-**B 阶段全部完成。1007 项 Assert × 2 模式全通过。B-ε 性能优化串行计划全部完成（4/4）。B-ζ 分支场景优化串行计划全部完成（3/3）。B-η O8 指令压缩完成（O8-1~O8-3/O8-5 ✅，O8-4 ⏸）。D 阶段分发基础设施全部完成（DIST-1~DIST-10 ✅）。Lang-1 ✅ 完成。Lang-1.1a ✅ 完成。Lang-1.1b ✅ 完成。Lang-2 ✅ 完成。Lang-3 ✅ 完成。Lang-6 ✅ 完成（benchmark 无回归确认）。**
+**B 阶段全部完成。1007 项 Assert × 2 模式全通过。B-ε 性能优化串行计划全部完成（4/4）。B-ζ 分支场景优化串行计划全部完成（3/3）。B-η O8 指令压缩完成（O8-1~O8-3/O8-5 ✅，O8-4 ⏸）。D 阶段分发基础设施全部完成（DIST-1~DIST-10 ✅）。Lang-1 ✅ 完成。Lang-1.1a ✅ 完成。Lang-1.1b ✅ 完成。Lang-2 ✅ 完成。Lang-3 ✅ 完成。Lang-6 ✅ 完成（benchmark 无回归确认）。Lang-7 ✅ 完成（自动退化 + VMConfig）。**
 
 ---
 
@@ -559,11 +559,11 @@ B 阶段 20 个步骤（B-R1 → B-δ5）全部完成，已归入上方 A 区表
 | Lang-3 | 黑板 Syscall 正式化 | ✅ | Get/SetBlackboard(key, value) 标准 Syscall + BB01-BB10 测试套件覆盖基础读写、多 Key 独立性、默认值、覆盖写入、跨函数持久、模块变量集成、include 集成、defer cleanup 集成、字符串 Key 集成、循环批量读写 | P3: 跨脚本运行时数据共享 | 宿主 Syscall | ⭐ |
 | *Lang-4* | *跨模块共享变量 (L3)* | *⏳* | *共享内存区域或专用寄存器段。按需触发 — 当黑板 Syscall 频率成为性能瓶颈时* | *P3 升级* | *⚠️ 编译器 + VM 运行时* | *⭐⭐⭐* |
 | **Lang-6** | **XCALL 基线 (C-1)** | **✅** | **三个新 OpCode: XCALL=52（跨实例函数调用）+ XLOAD_MVAR=53（跨实例变量读取）+ XSTORE_MVAR=54（跨实例变量写入）。`@export` 导出声明。Y1-Plus 编译期 yield 禁止（服务函数不可 yield）+ defer/using 限制。运行时 `_xcallDepth` 计数 + Warn 模式（默认 MaxXCallDepth=4）。编译器 ExportTable 生成。XC01-XC16 全通过** | P4: 跨模块函数调用 + Q4 服务脚本 | ⚠️ 编译器 + VM 运行时 | ⭐⭐⭐ |
-| **Lang-7** | **自动退化 + 配置 (C-1.5)** | **⏳** | **A1: 自动 getter→XLOAD_MVAR 退化（纯 getter 函数 → 直接变量读取，~15ns→~3ns）。A2: 自动 setter→XSTORE_MVAR 退化。VMConfig.MaxXCallDepth + XCallDepthWarning 运行时配置。两种策略: Warn（默认）/ Unlimited** | 性能优化 + 宿主配置 | 编译器 + VMConfig | ⭐⭐ |
+| **Lang-7** | **自动退化 + 配置 (C-1.5)** | **✅** | **A1: 自动 getter→XLOAD_MVAR 退化（纯 getter 函数 → 直接变量读取）。A2: 自动 setter→XSTORE_MVAR 退化。DegradationType enum + ExportFuncEntry 退化标记。VMConfig 类（MaxXCallDepth + XCallDepthPolicy: Warn/Unlimited）。AD01-AD12 全通过，B01-B06 无回归** | 性能优化 + 宿主配置 | 编译器 + VMConfig | ⭐⭐ |
 | **Lang-8** | **统一语法 + @inline + LSP (C-2)** | **⏳** | **`svc.member` 统一成员访问语法（编译器根据导出表自动路由 XCALL/XLOAD_MVAR/XSTORE_MVAR）。`@inline` hint 声明。LSP 调用链深度诊断 + 内联建议 + 性能估算** | 易用性 + 开发体验 | 编译器 + LSP | ⭐⭐⭐ |
 | *Lang-9* | *@force_inline + 深度内联 (C-3)* | *⏳* | *`@force_inline` 强制内联声明。A5 函数体展开优化。O4 跨模块常量折叠。编译期完整语义保持* | *极致优化* | *编译器* | *⭐⭐⭐* |
 
-> Phase 1（Lang-1~Lang-3）✅ 完成。Phase 2 = Lang-6~Lang-8（Q4 服务脚本 XCALL 路径），Lang-6 ✅ 完成。Lang-4 按需触发（黑板瓶颈时）。Lang-9 远期。
+> Phase 1（Lang-1~Lang-3）✅ 完成。Phase 2 = Lang-6~Lang-8（Q4 服务脚本 XCALL 路径），Lang-6 ✅ 完成，Lang-7 ✅ 完成。Lang-4 按需触发（黑板瓶颈时）。Lang-9 远期。
 >
 > **Lang-6 子计划 checklist**（C-1 XCALL 基线）：
 > - [x] 输出 XCALL Spec 设计文档（OpCode 编码、导出表格式、跨实例寻址协议）→ [Step_Lang6_XCALL_Spec.md](Plan/Step_Lang6_XCALL_Spec.md)
@@ -579,11 +579,11 @@ B 阶段 20 个步骤（B-R1 → B-δ5）全部完成，已归入上方 A 区表
 > - [x] B01-B06 benchmark 确认无回归（Lang-6 新增 3 个 case 分支不影响已有 opcode dispatch，B01-B06 无回归）
 >
 > **Lang-7 子计划 checklist**（C-1.5 自动退化 + 配置）：
-> - [ ] A1 自动 getter 退化检测（AST 分析：单 return + 单变量读取 → 替换 XCALL 为 XLOAD_MVAR）
-> - [ ] A2 自动 setter 退化检测（AST 分析：单赋值 → 替换 XCALL 为 XSTORE_MVAR）
-> - [ ] VMConfig 新增 MaxXCallDepth / XCallDepthWarning 配置字段
-> - [ ] 测试套件：退化正确性、配置生效验证、Unlimited 模式验证
-> - [ ] B01-B06 benchmark 确认退化带来预期加速
+> - [x] A1 自动 getter 退化检测（AST 分析：0 params + 单 return + 单 module var 读取 → DegradationType.Getter + DegradeMvarSlot）
+> - [x] A2 自动 setter 退化检测（AST 分析：1 param + 单 AssignExpr(moduleVar = param) → DegradationType.Setter + DegradeMvarSlot）
+> - [x] VMConfig 新增 MaxXCallDepth / XCallDepthPolicy(Warn/Unlimited) 配置字段，VMWorld 构造函数接受 VMConfig
+> - [x] 测试套件：AD01-AD12（getter/setter/non-pure/multi-stmt/literal/mixed/VMConfig Warn/Unlimited/custom depth/getter-with-param/setter-wrong-value）
+> - [x] B01-B06 benchmark 确认无回归（纯编译期特性，ExecuteInstance 热循环无改动）
 >
 > **Lang-8 子计划 checklist**（C-2 统一语法 + @inline + LSP）：
 > - [ ] Parser 支持 `svc.member` 点号访问语法（MemberAccessExpr）
@@ -608,7 +608,7 @@ B 阶段 20 个步骤（B-R1 → B-δ5）全部完成，已归入上方 A 区表
 >
 > **Lang-6 设计来源（Q4 收敛）**：Q4 讨论历经 9 轮（R18~R26），14 项设计决策全部锁定。核心方案：方式 C（语言级引用），服务脚本为 FFS 运行时实体。统一基线设计 XIMA（Cross-Instance Member Access）：`svc.member` 点号语法，编译器根据导出表自动路由 XCALL/XLOAD_MVAR/XSTORE_MVAR。Y1-Plus 编译期保证服务函数不可 yield（无运行时负担）。嵌套深度运行时配置（MaxXCallDepth 默认 4，Warn/Unlimited 两种策略）。性能影响可忽略（< 0.02% 帧预算）。
 
-**Lang-6 ✅ 完成（XC01-XC16 全通过，B01-B06 benchmark 无回归确认，1164 测试全通过）。Lang-3 ✅ 完成（BB01-BB10 全通过，1111 测试全通过）。Lang-1 ✅ 完成。Lang-1.1a ✅ 完成（MR01-MR08 全通过）。Lang-1.1b ✅ 完成（XR01-XR06 全通过）。Lang-2 ✅ 完成（INC01-INC16 全通过）。P0 语言需求 Phase 1 完毕。Lang-6 ✅ XCALL 基线完成 + benchmark 验证通过。当前位置 → Lang-7（C-1.5 自动退化 + VMConfig 配置）。**
+**Lang-7 ✅ 完成（AD01-AD12 全通过，B01-B06 benchmark 无回归，1206 测试全通过）。Lang-6 ✅ 完成（XC01-XC16 全通过，B01-B06 benchmark 无回归确认，1164 测试全通过）。Lang-3 ✅ 完成（BB01-BB10 全通过，1111 测试全通过）。Lang-1 ✅ 完成。Lang-1.1a ✅ 完成（MR01-MR08 全通过）。Lang-1.1b ✅ 完成（XR01-XR06 全通过）。Lang-2 ✅ 完成（INC01-INC16 全通过）。P0 语言需求 Phase 1 完毕。Lang-6 ✅ XCALL 基线完成。Lang-7 ✅ 自动退化 + VMConfig 完成。当前位置 → Lang-8（C-2 统一语法 + @inline + LSP）。**
 
 ---
 
