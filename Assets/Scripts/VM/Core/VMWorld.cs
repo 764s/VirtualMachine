@@ -21,13 +21,14 @@ namespace FFVM
         private readonly SnapshotRingBuffer _snapshots;
         private int _frameNumber;
 
-        // Lang-6: Cross-instance call state
+        // Lang-6/7: Cross-instance call state
         private XCallFrame[] _xcallStack = new XCallFrame[4];
         private int _xcallDepth;
-        private int _maxXCallDepth = 4;
-        private bool _xcallDepthWarning = true;
 
-        /// <summary>Lang-6: Callback invoked when XCALL nesting depth exceeds MaxXCallDepth.</summary>
+        /// <summary>Lang-7: Runtime configuration (XCALL depth policy, etc.).</summary>
+        public VMConfig Config { get; }
+
+        /// <summary>Lang-6: Callback invoked when XCALL nesting depth exceeds MaxXCallDepth (Warn policy only).</summary>
         public System.Action<int, int> OnXCallDepthWarning;
 
         /// <summary>Max instructions executed per instance per Tick to prevent infinite loops.</summary>
@@ -38,8 +39,11 @@ namespace FFVM
 
         public int FrameNumber => _frameNumber;
 
-        public VMWorld()
+        public VMWorld() : this(null) { }
+
+        public VMWorld(VMConfig config)
         {
+            Config = config ?? new VMConfig();
             Pool.Init();
             Syscalls = new SyscallTable();
             Modules = new VMModuleTable();
@@ -852,11 +856,11 @@ namespace FFVM
                             }
                             var targetFunc = targetProgram.Functions[exportFunc.FuncTableIndex];
 
-                            // Nested depth check
+                            // Nested depth check (Lang-7: uses VMConfig)
                             _xcallDepth++;
-                            if (_xcallDepthWarning && _xcallDepth > _maxXCallDepth)
+                            if (Config.XCallPolicy == XCallDepthPolicy.Warn && _xcallDepth > Config.MaxXCallDepth)
                             {
-                                OnXCallDepthWarning?.Invoke(_xcallDepth, _maxXCallDepth);
+                                OnXCallDepthWarning?.Invoke(_xcallDepth, Config.MaxXCallDepth);
                             }
 
                             // Grow stack if needed (Warn mode allows exceeding)
