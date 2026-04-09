@@ -1,8 +1,8 @@
 # KOF98 技能 FFS 脚本化讨论
 
-> **状态**：🔄 讨论中（SK1~SK12 已收敛，SK3 待性能验证；SK14 语言需求已整合；Q2 ✅ 收敛；Q3 渐进路径待确认；Q4 服务脚本 💬 统一语法✅ + @inline用户引导优化 → 接近收敛）
+> **状态**：🔄 讨论中（SK1~SK12 已收敛，SK3 待性能验证；SK14 语言需求已整合；Q2 ✅ 收敛；Q3 渐进路径待确认；Q4 服务脚本 💬 嵌套深度可配置方案 → 接近收敛）
 > **来源**：需求讨论 — 将 host-side 技能迁移为 FFS 脚本驱动
-> **日期**：2026-04-09（第 24 轮更新）
+> **日期**：2026-04-09（第 25 轮更新）
 
 ---
 
@@ -26,7 +26,7 @@
 | SK14 | FFS 语言需求整合 | 💬 | L1 模块变量 + L2 include = Phase 1；L3/L4 跨模块 = 远期 |
 | Q2 | 硬直+yield 语句级控制 | ✅ | 方案 A — while+GetFrame()+yield，帧区间循环行业标准模式（7/10 语言同构） |
 | Q3 | 跨脚本 VM 使用模式 | 💬 | 6 方向渐进路径（1+2+3 → 4 → 5），待用户确认 |
-| Q4 | FFS 封装 — 服务脚本 | 💬 | 方式 C ✅；Y1-Plus ✅；XCALL/L4 统一基线 ✅；统一语法 ✅；@export ✅；@inline 用户引导优化；接近收敛 |
+| Q4 | FFS 封装 — 服务脚本 | 💬 | 方式 C ✅；Y1-Plus ✅；统一语法 ✅；@export ✅；@inline ✅；嵌套深度可配置；接近收敛 |
 
 ---
 
@@ -5068,12 +5068,13 @@ var result = svc.complex_calc(x, y)
 
 ##### 待用户确认（第 24 轮）
 
-// 新疑惑, 最大嵌套4层中4的含义, 考虑可配置的可能. 可配置对性能的影响. 可配置后过大消耗的警告. 以及兜底处理(允许无限, 性能退化)
+> **用户回复（第 25 轮）**：
+> 1. OK ✅ — 统一语法确认
+> 2. 使用 @export，放弃 public（比 R24 提议的"C-2 别名"更果断）
+> 3. OK ✅ — @inline 分层设计确认
+> 4. 等新疑惑 — 先解决嵌套深度问题
+> **新疑惑**：最大嵌套 4 层中"4"的含义？考虑可配置的可能。可配置对性能的影响。可配置后过大消耗的警告。以及兜底处理（允许无限，性能退化）
 
-// 1. ok
-// 2. 使用@export, 放弃public
-// 3. ok
-// 4. 等新疑惑
 1. **统一成员语法确认**：`svc.property`/`svc.field`/`svc.method()`/`svc.function()` — 底层机制透明，编译器自动路由。是否就是你 Q3 所确认的？
 2. **@export 保持，public 作为 C-2 可选别名** — 是否接受这个折衷？
 3. **@inline 提示 + LSP 诊断 + @force_inline 分层设计**是否满足"用户引导内联优化"的需求？
@@ -5081,10 +5082,261 @@ var result = svc.complex_calc(x, y)
 
 ---
 
+#### Q4-G：XCALL 嵌套深度 — 含义、可配置、性能、警告、兜底（第 25 轮）
+
+##### R24 确认总结
+
+| 问题 | 用户回复 | 结论 |
+|------|---------|------|
+| 统一语法 | OK | ✅ 锁定 |
+| @export vs public | 使用 @export，放弃 public | ✅ 锁定（**比 R24 更强**：不保留 public 别名） |
+| @inline 分层设计 | OK | ✅ 锁定 |
+| Q4 是否收敛 | 等新疑惑 | 继续讨论 |
+
+##### "最大嵌套 4 层" — 含义解析
+
+**"4"的来源**：R21 提出跨实例递归调用深度限制 `max 4 层`，这是一个**保守的经验值**：
+
+```
+层 0: 业务脚本 A.step()           ← 不计入嵌套，这是调用起点
+层 1: A → XCALL B.func()          ← 第 1 层嵌套
+层 2: B → XCALL C.func()          ← 第 2 层嵌套
+层 3: C → XCALL D.func()          ← 第 3 层嵌套
+层 4: D → XCALL E.func()          ← 第 4 层嵌套（上限）
+层 5: E → XCALL F.func()          ← ❌ 超出限制
+```
+
+**"4"不是什么**：
+- ❌ 不是语言级 CALL 的递归深度（那由 VM 的 CallStack 大小控制，目前约 256 层）
+- ❌ 不是同一实例内部函数调用的限制
+- ✅ 只限制**跨实例 XCALL 链的深度**——A 调 B，B 调 C，C 调 D...
+
+**为什么选 4？**
+- KOF 格斗游戏中，典型的调用链是：技能脚本 → 伤害服务 → 属性服务。这是 2 层
+- 3 层已经覆盖绝大多数合理的服务组合模式
+- 4 层留了一层余量
+- 超过 4 层通常意味着服务依赖设计有问题（过度解耦/间接调用链太深）
+
+##### 可配置方案
+
+用户提出的是一个很好的设计问题。让我们分析几种方案：
+
+###### 方案 N1：编译期硬限制（当前方案）
+
+```ffs
+// 编译器内置 MAX_XCALL_DEPTH = 4
+// 不可配置
+```
+
+| 优点 | 缺点 |
+|------|------|
+| 实现最简单 | 不灵活 |
+| 编译器可以在编译期静态分析调用链深度 | 不同项目可能有不同需求 |
+| 零运行时开销 | 需要改编译器才能调整 |
+
+###### 方案 N2：宿主可配置 + 运行时检查
+
+```csharp
+// C# 宿主侧配置
+var vmConfig = new VMConfig {
+    MaxXCallDepth = 8  // 默认 4，可调
+};
+var vm = new VMWorld(vmConfig);
+```
+
+```ffs
+// FFS 运行时，每次 XCALL 检查：
+// if (currentXCallDepth >= maxXCallDepth) → 运行时错误
+```
+
+| 优点 | 缺点 |
+|------|------|
+| 灵活，宿主按项目需求配置 | 每次 XCALL 多一次深度检查（1 次 compare + branch） |
+| 不需要改编译器 | 运行时才发现问题（而非编译期） |
+
+**性能影响**：
+
+| 操作 | 不配置 | 配置（N2） | 差异 |
+|------|-------|-----------|------|
+| XCALL 单次 overhead | ~15 ns | ~16 ns | +1 ns（一次 int compare + branch） |
+| 每帧 50 次 XCALL | ~0.75 μs | ~0.80 μs | +0.05 μs |
+| 占帧预算 | 0.005% | 0.005% | **几乎无差异** |
+
+**结论**：运行时检查的性能开销可忽略（每次 XCALL +1 ns）。
+
+###### 方案 N3：可配置 + 编译期静态分析 + 运行时兜底
+
+这是最完整的方案，分三层：
+
+**层 1：编译期静态分析（LSP 诊断）**
+
+编译器通过分析导出表的调用依赖图，可以在编译期检测出**可确定的嵌套深度**：
+
+```ffs
+// service_a.ffs
+@service
+@export func step() {
+    var dmg = damage_svc.calc_damage(10)  // 编译器知道这是 1 层 XCALL
+}
+
+// damage_service.ffs
+@service
+@export func calc_damage(base) {
+    var mult = attr_svc.get_multiplier()  // 编译器知道这是 2 层
+    return base * mult
+}
+```
+
+LSP 诊断：
+```
+[INFO] step() → damage_svc.calc_damage() → attr_svc.get_multiplier()
+       确定嵌套深度: 2 层 (限制: 4 层) ✅
+       
+[WARN] step() → a.f() → b.g() → c.h() → d.i() → e.j()
+       确定嵌套深度: 5 层 (限制: 4 层) ⚠️ 超出限制
+```
+
+**层 2：运行时深度计数（兜底）**
+
+对于编译期无法静态确定的调用链（如通过变量动态持有的服务引用），运行时维护一个 XCALL 深度计数器：
+
+```csharp
+// VMWorld 中
+int _xcallDepth;       // 当前嵌套深度
+int _maxXCallDepth;    // 配置的上限（默认 4）
+
+// XCALL 指令执行时
+case OpCode.XCALL:
+    if (++_xcallDepth > _maxXCallDepth) {
+        // 兜底处理 — 见下方策略
+    }
+    // ... 正常执行 XCALL ...
+    // 返回时 --_xcallDepth
+```
+
+**层 3：兜底策略（超出限制时的处理）**
+
+用户提到了两种思路，让我们分析：
+
+| 策略 | 行为 | 适用场景 |
+|------|------|---------|
+| **B1 硬错误** | `_xcallDepth > max` → 运行时错误，终止脚本 | 生产环境，严格安全 |
+| **B2 警告+继续** | `_xcallDepth > max` → 发出警告，但继续执行 | 开发调试阶段 |
+| **B3 无限（退化）** | `max = 0` 表示不限制，允许任意深度 | 用户明确选择 |
+
+**推荐组合**：
+
+```csharp
+var vmConfig = new VMConfig {
+    MaxXCallDepth = 4,           // 默认 4
+    XCallDepthPolicy = Policy.Error  // Error / Warn / Unlimited
+};
+```
+
+| Policy | 行为 |
+|--------|------|
+| `Error`（默认） | 超出 → 运行时错误，脚本停止 |
+| `Warn` | 超出 → 日志警告，继续执行（开发用） |
+| `Unlimited` | 不检查深度（用户自行承担风险） |
+
+##### 过大消耗的警告
+
+即使在 `Warn` 或 `Unlimited` 模式下，也可以提供**性能退化警告**：
+
+```csharp
+// 可选：深度超过 threshold 时发出性能警告
+if (_xcallDepth > _warnThreshold) {  // 如 _warnThreshold = 8
+    OnPerformanceWarning?.Invoke(
+        $"XCALL depth {_xcallDepth} exceeds recommended maximum {_warnThreshold}. " +
+        $"Estimated overhead: ~{_xcallDepth * 15} ns per call chain."
+    );
+}
+```
+
+LSP 也可以在编译期提供类似的警告：
+
+```
+[PERF] 调用链 A→B→C→D→E→F→G→H 嵌套 8 层。
+       估算每帧开销：8层 × 15ns × 50次 = 6.0 μs (0.036% 帧预算)
+       建议：简化服务依赖，或确认这是有意设计。
+```
+
+##### 方案推荐
+
+**推荐 N3（可配置 + 静态分析 + 运行时兜底）**，分阶段实现：
+
+| 阶段 | 嵌套深度机制 | 说明 |
+|------|------------|------|
+| C-1 | 运行时硬限制（默认 4） | `_xcallDepth` 计数 + Error 策略 |
+| C-1.5 | + 宿主可配置 `MaxXCallDepth` + Policy | 三种策略：Error/Warn/Unlimited |
+| C-2 | + 编译期静态分析 + LSP 诊断 | 调用链深度分析 + 性能估算 |
+
+**关键设计原则**：
+1. **默认安全**：`MaxXCallDepth = 4, Policy = Error` — 不配置就安全
+2. **宿主可控**：C# 侧可以按项目需求调整限制和策略
+3. **渐进发现**：LSP 在开发阶段就能提示嵌套深度问题
+4. **允许突破**：`Unlimited` 模式允许高级用户自行管理
+
+##### 运行时开销分析
+
+| 检查 | 指令 | 耗时 | 影响 |
+|------|------|------|------|
+| `++_xcallDepth` | 1 次 int increment | ~0.3 ns | 可忽略 |
+| `> _maxXCallDepth` | 1 次 int compare | ~0.3 ns | 可忽略 |
+| `--_xcallDepth`（返回时） | 1 次 int decrement | ~0.3 ns | 可忽略 |
+| **总计** | 3 条指令 | ~1 ns | XCALL 总 overhead 15→16 ns (+6.7%) |
+
+**`Unlimited` 模式**：可以用 `_maxXCallDepth = int.MaxValue` 实现，compare 仍然执行但永远不触发，开销与 `Error` 模式完全相同（~1 ns）。无需额外分支。
+
+##### 更新后的收敛决策表
+
+| 决策 | 结论 | 轮次 |
+|------|------|------|
+| 服务脚本定位 | FFS 运行时实体，不是 include | R20 |
+| 持有方式 | 方式 C — 语言级引用（instanceId） | R20 |
+| 生命周期管理 | 宿主 C# 创建并注册 | R21 ✅ |
+| 服务函数 yield | 禁止 — 纯编译期保证 Y1-Plus（无运行时负担） | R22 ✅ |
+| 调用语法 | `svc.member` 统一语法，编译器自动路由 L4/L5 | R23-24 ✅ |
+| L4/L5 关系 | 同基线设计：XCALL + XLOAD_MVAR + XSTORE_MVAR 在 C-1 同时实现 | R23 ✅ |
+| 导出声明 | **`@export` 唯一形式**（不保留 `public` 别名） | R24-25 ✅ |
+| 自动优化 | A1/A2 自动 getter/setter→直接访问退化（C-1.5） | R23 ✅ |
+| 用户引导内联 | `@inline`（hint，C-2）+ `@force_inline`（强制，C-3）+ LSP 诊断 | R24 ✅ |
+| 实现路径 | C-0 → C-1(XCALL+XL4) → C-1.5(A1/A2+配置) → C-2(语法糖+@inline+LSP) → C-3(A5+@force_inline) | R23-25 ✅ |
+| 嵌套调用 | 默认最大 4 层，**宿主可配置 MaxXCallDepth + Policy(Error/Warn/Unlimited)** | R21→R25 |
+| 性能影响 | 可忽略（< 0.02% 帧预算；深度检查 +1 ns/XCALL） | R20-25 ✅ |
+| XCALL 优化 | O1+O2（C-1），A1/A2（C-1.5），O7+@inline（C-2），O4/A5+@force_inline（C-3+） | R22-24 ✅ |
+| 优化退化策略 | 编译期自动退化，运行时零决策开销 | R22 ✅ |
+
+##### 待用户确认（第 25 轮）
+
+1. **嵌套深度"4"的含义**是否清楚？—— 只限制跨实例 XCALL 链深度，不影响模块内 CALL
+2. **方案 N3（可配置 + 静态分析 + 运行时兜底）**是否满足需求？
+3. **三种策略（Error/Warn/Unlimited）**是否覆盖了你说的"兜底处理（允许无限，性能退化）"？
+4. **Q4 现在是否可以认为已基本收敛？**
+
+---
+
 <details>
 <summary>📋 讨论轮次总览</summary>
 
-#### 第 24 轮（当前）
+#### 第 25 轮（当前）
+
+用户回应第 24 轮 4 个确认问题 + 新疑惑：
+- Q1: 统一语法 OK ✅
+- Q2: @export 唯一形式，放弃 public（比 R24 提议更果断）✅
+- Q3: @inline 分层设计 OK ✅
+- Q4: 等新疑惑
+- 新疑惑：嵌套 4 层含义？可配置？性能影响？过大消耗警告？兜底（允许无限+退化）？
+
+语言方回应：
+1. 嵌套 4 层含义解析：只限跨实例 XCALL 链深度，不影响模块内 CALL。4 = KOF 典型 2 层 + 1 层裕量 + 1 层余量
+2. 三种方案分析：N1（硬限制）→ N2（宿主可配置+运行时）→ N3（可配置+静态分析+兜底）
+3. 推荐 N3：MaxXCallDepth（默认4）+ Policy（Error/Warn/Unlimited）+ LSP 深度诊断
+4. 运行时开销：+1 ns/XCALL（3 条指令：inc/cmp/dec），可忽略
+5. @export 锁定为唯一形式（删除 public 别名）
+6. 收敛决策表更新至 14 项
+
+#### 第 24 轮
 
 用户回应第 23 轮 5 个确认问题：
 - Q1: L4/XCALL 同基线 OK ✅
