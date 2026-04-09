@@ -36,7 +36,7 @@ FFScript 是为 FFVM 设计的自定义领域特定语言（DSL），语法风�
 
 不支持块注释（`/* ... */`）。
 
-### 2.2 关键字（17 个）
+### 2.2 关键字（17 个）与注解（2 个）
 
 | 类别 | 关键字 |
 |------|--------|
@@ -46,6 +46,13 @@ FFScript 是为 FFVM 设计的自定义领域特定语言（DSL），语法风�
 | 清理 | `defer`、`using` |
 | 模块导入 | `include` |
 | 布尔字面量 | `true`、`false` |
+
+**注解**（`@` 前缀，不计入关键字）：
+
+| 注解 | 说明 |
+|------|------|
+| `@export` | 导出模块变量或函数，供跨实例访问（Lang-6） |
+| `@inline` | 标记导出函数为内联建议（Lang-8，当前为提示，未来可能自动内联） |
 
 ### 2.3 运算符与分隔符
 
@@ -142,6 +149,7 @@ FFScript 模块的顶层可包含以下声明：
 - `var` — 模块变量（跨函数共享的可变状态）
 - `const` — 模块常量
 - `include` — 包含其他 `.ffs` 文件
+- `@export` — 导出变量或函数供跨实例调用（Lang-6）
 
 模块变量和常量在模块顶层声明，作用域为整个模块，所有函数均可访问：
 
@@ -201,7 +209,106 @@ var resolver = new DictionaryFileResolver(new Dictionary<string, string> {
 var result = compiler.Compile(source, "main", syscalls, syscallTable, resolver, "main.ffs");
 ```
 
-### 4.1 函数声明
+### 4.0.2 @export 声明（跨实例访问）
+
+`@export` 注解用于将模块变量或函数标记为"可被其他模块实例访问"。编译器会为包含 `@export` 声明的模块生成 **ExportTable**，供跨实例调用（XCALL）使用。
+
+```ffs
+// 服务模块（被调用方）
+@export var hp: int = 100
+@export var mp: int = 50
+
+@export func take_damage(d: int): int {
+    hp = hp - d
+    return hp
+}
+
+@export func get_hp(): int {
+    return hp
+}
+
+func main() {
+    // @export 标记的声明仍然可以在本模块内正常使用
+}
+```
+
+**规则**：
+
+- `@export var` — 导出可读写变量
+- `@export const` — 导出只读常量（其他模块不可写入）
+- `@export func` — 导出函数（其他模块可通过 XCALL 调用）
+- 没有 `@export` 的声明仅模块内部可见
+- 编译器自动检测导出函数的 **退化模式**（Lang-7）：
+  - 纯 getter（0 参数、仅返回模块变量）→ 优化为直接读取（XLOAD_MVAR）
+  - 纯 setter（1 参数、仅赋值模块变量）→ 优化为直接写入（XSTORE_MVAR）
+
+### 4.0.3 @inline 注解
+
+`@inline` 注解用于标记导出函数为"建议内联"。当前为编译器提示（记录在 ExportTable 中），未来可能用于自动内联优化。
+
+```ffs
+@inline @export func get_hp(): int {
+    return hp
+}
+
+@export @inline func set_hp(val: int) {
+    hp = val
+}
+```
+
+- `@inline` 和 `@export` 的顺序不限
+- `@inline` 也可用于非导出函数（不报错，但当前无效果）
+- 可用于 LSP 诊断提示
+
+### 4.0.4 跨实例调用——统一语法（svc.member）
+
+当一个模块需要访问另一个模块的导出成员时，使用 **服务绑定** + **统一语法** `svc.member`：
+
+```ffs
+// 调用方模块
+var svc: int = 0    // svc 变量保存服务实例 ID（由宿主设置）
+
+func main() {
+    // 调用服务的导出函数
+    var result: int = svc.add(10, 32)
+
+    // 读取服务的导出变量
+    var hp: int = svc.hp
+
+    // 写入服务的导出变量
+    svc.hp = 500
+}
+```
+
+**工作原理**：
+
+1. 宿主编译服务模块，获取其 ExportTable
+2. 将服务绑定（`ServiceBinding`）传给调用方编译器
+3. 编译器将 `svc.member()` 解析为 XCALL / XLOAD_MVAR / XSTORE_MVAR 指令
+4. 运行时通过 `svc` 变量中的实例 ID 定位目标实例
+
+**编译器 API**：
+
+```csharp
+// 1. 编译服务模块
+var svcResult = compiler.Compile(svcSource, "main", syscalls);
+
+// 2. 创建服务绑定
+var bindings = new ServiceBinding[] {
+    new ServiceBinding("svc", svcResult.Program.ExportTable)
+};
+
+// 3. 编译调用方模块（传入绑定）
+var callerResult = compiler.Compile(callerSource, "main", syscalls,
+    syscallTable, null, null, bindings);
+```
+
+**错误检查**：
+
+- 访问未导出的成员 → 编译错误
+- 写入 `@export const` 变量 → 编译错误
+- 参数数量不匹配 → 编译错误
+- 将导出函数当变量访问（或反之）→ 编译错误
 
 ```ffs
 func 函数名(参数列表): 返回类型 {
@@ -539,13 +646,17 @@ ApplyDamage(t, 5, 101)
 
 ```ebnf
 (* ===== 顶层 ===== *)
-Module          = { IncludeDecl | FuncDecl | StructDecl | ModuleVarDecl | ModuleConstDecl } ;
+Module          = { IncludeDecl | ExportDecl | FuncDecl | StructDecl | ModuleVarDecl | ModuleConstDecl } ;
 
 (* ===== Include ===== *)
 IncludeDecl     = 'include' StringLiteral ;
 
+(* ===== Export / Inline 注解 ===== *)
+ExportDecl      = '@export' ( ModuleVarDecl | ModuleConstDecl | [ '@inline' ] FuncDecl )
+                | '@inline' '@export' FuncDecl ;
+
 (* ===== 声明 ===== *)
-FuncDecl        = 'func' Identifier '(' [ ParamList ] ')' [ ':' TypeName ] Block ;
+FuncDecl        = [ '@inline' ] 'func' Identifier '(' [ ParamList ] ')' [ ':' TypeName ] Block ;
 ParamList       = Param { ',' Param } ;
 Param           = Identifier ':' TypeName [ '=' Expression ] ;
 
@@ -600,7 +711,7 @@ Comparison      = Addition { ( '<' | '>' | '<=' | '>=' ) Addition } ;
 Addition        = Multiplication { ( '+' | '-' ) Multiplication } ;
 Multiplication  = Unary { ( '*' | '/' | '%' ) Unary } ;
 Unary           = ( '-' | '!' ) Unary | Postfix ;
-Postfix         = Primary { '.' Identifier } ;
+Postfix         = Primary { '.' Identifier [ '(' [ ExprList ] ')' ] } ;
 
 Primary         = IntLiteral
                 | FloatLiteral
@@ -711,6 +822,52 @@ func main() {
 ```
 
 更多完整示例见 [Skills/](Skills/) 目录。
+
+### 9.5 跨实例调用 — 服务模块与调用方
+
+**服务模块**（提供导出接口）：
+
+```ffs
+@export var hp: int = 100
+@export var mp: int = 50
+
+@export func take_damage(d: int): int {
+    hp = hp - d
+    if hp < 0 {
+        hp = 0
+    }
+    return hp
+}
+
+@inline @export func get_hp(): int {
+    return hp
+}
+
+func main() {
+}
+```
+
+**调用方模块**（通过服务绑定访问）：
+
+```ffs
+var svc: int = 0    // 服务实例 ID，由宿主在运行时设置
+
+func main() {
+    // 读取服务变量
+    var currentHP: int = svc.hp
+
+    // 调用服务函数
+    var afterHP: int = svc.take_damage(30)
+
+    // 写入服务变量
+    svc.mp = 25
+
+    // getter 函数（编译器自动退化为直接变量读取）
+    var hp2: int = svc.get_hp()
+
+    Report(afterHP)
+}
+```
 
 ---
 

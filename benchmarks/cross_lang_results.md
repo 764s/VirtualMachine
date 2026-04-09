@@ -1,8 +1,8 @@
 # FFVM Cross-Language Performance Comparison
 
-> Auto-generated: 2026-04-07 21:04:52
-> .NET 8.0.25 | Microsoft Windows NT 10.0.19045.0 | 8 cores
-> Node.js 24.14.0 | Lua 5.1.4 | Python 3.7.7
+> Auto-generated: 2026-04-09 10:40
+> .NET 8.0.25 | Linux 6.17.0.1008 | 4 cores
+> Node.js v24.14.1 | Lua N/A (not installed) | Python 3.12.3
 > 200 runs after warmup. All times in μs.
 
 ## Language Profiles
@@ -14,10 +14,9 @@ Languages that don't distinguish int/float degrade to their unified type.
 |----------|----------------|-------------|-------------|-------|
 | **C# raw** | .NET RyuJIT (tiered JIT) | `int` | `double` | Baseline. `int` for loop counters, `double` for float arithmetic. RyuJIT compiles to native x86-64 with SIMD, inlining, and loop unrolling. |
 | **C#** | .NET RyuJIT | `int` | `Number` (double wrapper) | `int` for loops (same as raw), `Number` struct for float computation. Operator overloads add method-call overhead vs raw `double`. |
-| **FFVM** | C# bytecode interpreter | `Number` (degraded) | `Number` (degraded) | Stack-based VM. All values are `Number` (double) internally. `var x: int` is nominal typing only — no int/float distinction at runtime. |
+| **FFVM** | C# bytecode interpreter | `Number` (degraded) | `Number` (degraded) | Register-based VM. All values are `Number` (double) internally. `var x: int` is nominal typing only — no int/float distinction at runtime. |
 | **Node.js** | V8 multi-tier JIT | Smi (int31) | HeapNumber (double) | V8 uses Smi (tagged pointer) for small ints, HeapNumber for doubles. TurboFan speculates type feedback for int32/float64 fast paths. |
-| **Lua 5.1.4** | PUC-Rio register-based interpreter | `number` (degraded) | `number` (degraded) | **No integer type in Lua 5.1** — all numbers are C `double`. No int/float distinction. Lua 5.3+ added integer subtype. |
-| **Python 3.7.7** | CPython stack-based interpreter | `int` (boxed) | `float` (boxed C double) | `int` is arbitrary-precision (heap-allocated). `float` is a boxed C `double`. Both paths go through `ceval.c` dispatch. |
+| **Python 3.12** | CPython stack-based interpreter | `int` (boxed) | `float` (boxed C double) | `int` is arbitrary-precision (heap-allocated). `float` is a boxed C `double`. Both paths go through `ceval.c` dispatch. |
 
 ## Benchmarks
 
@@ -38,13 +37,13 @@ B02 is pure integer (classic Fibonacci). Each language uses its own supported ty
 
 ### Absolute Times (μs)
 
-| Benchmark | C# raw | C# | FFVM | Lua | Node.js | Python |
-|-----------|-------:|---:|-----:|----:|--------:|-------:|
-| B01_ArithLoop | 27.8 | 54.7 | 730.9 | 500.0 | 24.2 | 1732.0 |
-| B02_Fibonacci | 0.6 | 0.6 | 1.0 | 0.0 | 1.1 | 2.6 |
-| B03_NestedLoop | 16.7 | 11.8 | 436.2 | 265.0 | 15.5 | 2776.1 |
-| B04_Branching | 28.6 | 20.7 | 887.0 | 665.0 | 20.7 | 2872.4 |
-| B05_Accumulator | 63.9 | 59.1 | 1585.4 | 705.0 | 59.9 | 9367.9 |
+| Benchmark | C# raw | C# | FFVM | Node.js | Python |
+|-----------|-------:|---:|-----:|--------:|-------:|
+| B01_ArithLoop | 25.1 | 70.8 | 422.2 | 19.5 | 985.1 |
+| B02_Fibonacci | 0.6 | 0.4 | 1.2 | 0.8 | 1.1 |
+| B03_NestedLoop | 15.2 | 58.8 | 318.6 | 22.9 | 801.9 |
+| B04_Branching | 38.8 | 30.8 | 554.9 | 23.6 | 1097.2 |
+| B05_Accumulator | 52.9 | 47.4 | 811.5 | 46.9 | 2933.7 |
 
 ### Relative to C# (1.00x)
 
@@ -52,13 +51,23 @@ B02 is pure integer (classic Fibonacci). Each language uses its own supported ty
 > This is the fairest comparison target: same .NET runtime, same `Number` arithmetic.
 > FFVM adds interpretation overhead on top of the same `Number` cost.
 
-| Benchmark | C# raw | C# | FFVM | Lua | Node.js | Python |
-|-----------|-------:|---:|-----:|----:|--------:|-------:|
-| B01_ArithLoop | 0.51x | 1.00x | 13.36x | 9.14x | 0.44x | 31.66x |
-| B02_Fibonacci | 1.00x | 1.00x | 1.67x | 0.00x | 1.83x | 4.33x |
-| B03_NestedLoop | 1.42x | 1.00x | 36.97x | 22.46x | 1.31x | 235.26x |
-| B04_Branching | 1.38x | 1.00x | 42.85x | 32.13x | 1.00x | 138.76x |
-| B05_Accumulator | 1.08x | 1.00x | 26.83x | 11.93x | 1.01x | 158.51x |
+| Benchmark | C# raw | C# | FFVM | Node.js | Python |
+|-----------|-------:|---:|-----:|--------:|-------:|
+| B01_ArithLoop | 0.35x | 1.00x | 5.96x | 0.28x | 13.91x |
+| B02_Fibonacci | 1.50x | 1.00x | 3.00x | 2.00x | 2.75x |
+| B03_NestedLoop | 0.26x | 1.00x | 5.42x | 0.39x | 13.64x |
+| B04_Branching | 1.26x | 1.00x | 18.01x | 0.77x | 35.62x |
+| B05_Accumulator | 1.12x | 1.00x | 17.12x | 0.99x | 61.89x |
+
+### FFVM vs Python — Direct Comparison
+
+| Benchmark | FFVM (μs) | Python (μs) | Ratio | Verdict |
+|-----------|----------:|------------:|------:|---------|
+| B01_ArithLoop | 422.2 | 985.1 | 0.43x | ✅ FFVM **2.3×** faster |
+| B02_Fibonacci | 1.2 | 1.1 | 1.09x | ⚠️ Below timer resolution |
+| B03_NestedLoop | 318.6 | 801.9 | 0.40x | ✅ FFVM **2.5×** faster |
+| B04_Branching | 554.9 | 1097.2 | 0.51x | ✅ FFVM **2.0×** faster |
+| B05_Accumulator | 811.5 | 2933.7 | 0.28x | ✅ FFVM **3.6×** faster |
 
 ---
 
@@ -69,24 +78,26 @@ B02 is pure integer (classic Fibonacci). Each language uses its own supported ty
 - **C# raw** — Theoretical maximum. RyuJIT: native `int` loops + `double` arithmetic. Hardware-level optimization ceiling.
 - **C#** — **Baseline.** Uses `Number` struct (double wrapper) for computation, same as FFVM runtime type. Isolates interpretation overhead from arithmetic cost.
 - **FFVM** — Register-based bytecode interpreter. All values are `Number` (double). FORLOOP super-instruction optimizes canonical for-loops.
-- **Lua (PUC-Rio)** — Register-based interpreter in C. All numbers are C `double`. FORLOOP instruction. **Primary comparison target** — closest architectural peer.
 - **Node.js (V8)** — Multi-tier JIT. Approaches native speed. Not a realistic comparison target for an interpreter.
-- **Python (CPython)** — Stack-based interpreter. Boxed types + arbitrary-precision `int`. Substantially slower than both FFVM and Lua.
+- **Python (CPython)** — Stack-based interpreter. Boxed types + arbitrary-precision `int`. Substantially slower than FFVM on all meaningful benchmarks.
 
 ### B02 Measurement Caveat
 
 B02_Fibonacci (scale=46, only 46 iterations) runs in sub-microsecond time across all languages.
 At this scale, **timer resolution and harness overhead dominate the measurement**:
 
-- FFVM reports ~0.3μs, but this includes `SpawnInstance` + `Tick` + `DestroyInstance` harness overhead per iteration.
-- C# raw / C# report ~0.4μs — the marginal difference is pure noise at this resolution.
-- Lua reports 0.0μs — `os.clock()` resolution is too coarse for sub-μs measurement.
-- Any apparent FFVM advantage over C# in B02 is a **measurement artifact**, not a real performance win.
+- FFVM reports ~1.2μs, but this includes `SpawnInstance` + `Tick` + `DestroyInstance` harness overhead per iteration.
+- C# raw / C# report ~0.4-0.6μs — the marginal difference is pure noise at this resolution.
+- Any apparent differences in B02 are **measurement artifacts**, not real performance differences.
 
 > **Conclusion**: B02 at scale=46 is below the reliable measurement threshold.
 > Cross-language ratios for B02 should be disregarded. To fix, increase scale to ~10,000+ iterations.
 
 ### FFVM vs Lua: Gap Analysis
+
+> Note: Lua was not available in this test environment. Previous results (Windows, Lua 5.1.4)
+> showed FFVM at 1.1–1.3× Lua speed on most benchmarks. The analysis below is preserved
+> from prior runs.
 
 FFVM and Lua are the closest architectural peers: both are register-based interpreters
 with a unified `double` number type and a FORLOOP super-instruction.

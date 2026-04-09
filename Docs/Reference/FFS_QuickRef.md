@@ -278,6 +278,53 @@ Syscall 列表由宿主决定，不是语言内置的。
 
 ---
 
+## 9.5 跨实例调用（@export + 服务绑定）
+
+FFScript 支持模块间的跨实例调用。一个模块用 `@export` 导出变量和函数，另一个模块通过 `svc.member` 统一语法访问。
+
+### 服务模块（被调用方）
+
+```ffs
+@export var hp: int = 100
+@export const MAX_HP: int = 100
+
+@export func take_damage(d: int): int {
+    hp = hp - d
+    return hp
+}
+
+// @inline 提示编译器此函数可考虑内联（当前为 hint）
+@inline @export func get_hp(): int {
+    return hp
+}
+
+func main() {
+}
+```
+
+### 调用方模块
+
+```ffs
+var svc: int = 0    // 宿主设置为服务实例 ID
+
+func main() {
+    var hp: int = svc.hp               // 读取导出变量
+    svc.hp = 50                        // 写入导出变量
+    var r: int = svc.take_damage(30)   // 调用导出函数
+    var h: int = svc.get_hp()          // 调用（自动退化为直接变量读取）
+}
+```
+
+**关键规则**：
+
+- `@export var` — 读写变量
+- `@export const` — 只读变量（写入报编译错误）
+- `@export func` — 可跨实例调用的函数
+- 纯 getter/setter 自动退化为直接变量访问（性能优化）
+- 编译器在调用方传入 `ServiceBinding[]` 后自动解析 `svc.member` 语法
+
+---
+
 ## 10. C# 宿主集成
 
 ### 最小示例
@@ -416,3 +463,9 @@ func main() {
 | 退出清理 | `defer { ... }` | `try/finally` |
 | 配对资源 | `using F() { ... }` | `using var x = ...;` |
 | 调用宿主函数 | `print(42)` | 由宿主 `SyscallTable.Register` 注册 |
+| 导出变量 | `@export var hp: int = 100` | `public static int hp` |
+| 导出函数 | `@export func f(): int {}` | `public static int f()` |
+| 内联提示 | `@inline @export func f() {}` | `[MethodImpl(Inline)]` |
+| 跨实例函数调用 | `svc.f(args)` | RPC / 接口调用 |
+| 跨实例变量读取 | `var x: int = svc.hp` | `svc.hp` |
+| 跨实例变量写入 | `svc.hp = 50` | `svc.hp = 50` |

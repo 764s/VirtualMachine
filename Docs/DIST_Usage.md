@@ -158,7 +158,7 @@ VirtualMachine/
 │   └── FFVM.Cli/          ← CLI 工具（ffvm-cli：run / compile / lsp / dap）
 ├── Sandbox/               ← 脚本沙盒（交互式测试环境）
 ├── KOF98/                 ← 格斗游戏实践（FFVM 应用示例）
-├── StandaloneRunner/      ← 测试运行器（1111 个断言）
+├── StandaloneRunner/      ← 测试运行器（1259 个断言）
 ├── Assets/Scripts/VM/     ← VM 核心源码（被 FFVM.csproj 引用）
 ├── vscode-ffvm-debug/     ← VS Code 调试扩展
 ├── ffvm.cmd               ← 主命令菜单（sandbox / test / bench）
