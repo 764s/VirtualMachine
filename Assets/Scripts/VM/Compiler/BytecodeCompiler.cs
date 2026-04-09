@@ -306,8 +306,14 @@ namespace FFVM.Compiler
             // FO6: also validates cumulative register window doesn't overflow
             AnalyzeCallDepth(module, entryFunc, functionEntries);
 
+            // Lang-6: Y1-Plus — validate @export functions don't yield/wait and don't use defer/using
+            ValidateExportedFunctions(module);
+
             if (_errors.Count > 0)
                 return new CompileResult { Errors = _errors };
+
+            // Lang-6: Build export table from @export declarations
+            ExportTable exportTable = BuildExportTable(module, functionEntries);
 
             // O6: Peephole optimization pass — eliminate redundant instructions
             PeepholeOptimize(functionEntries);
@@ -333,7 +339,8 @@ namespace FFVM.Compiler
                     _symbolEntries.ToArray(),
                     _stringConstants.Count > 0 ? _stringConstants.ToArray() : null,
                     _jumpTables.Count > 0 ? _jumpTables.ToArray() : null,
-                    _nextExtendedReg
+                    _nextExtendedReg,
+                    exportTable
                 ),
                 Errors = _errors
             };
@@ -3062,6 +3069,280 @@ namespace FFVM.Compiler
                 }
                 _leafFunctions[func.Name] = !ContainsNonLeafNode(func.Body);
             }
+        }
+
+        /// <summary>
+        /// Lang-6 Y1-Plus: Validate that @export functions don't yield/wait (directly or transitively)
+        /// and don't contain defer/using (C-1 restriction).
+        /// Uses yield-taint analysis: mark functions that directly yield, then propagate via call graph.
+        /// </summary>
+        private void ValidateExportedFunctions(ModuleNode module)
+        {
+            bool hasExported = false;
+            for (int i = 0; i < module.Functions.Count; i++)
+            {
+                if (module.Functions[i].IsExported) { hasExported = true; break; }
+            }
+            if (!hasExported) return;
+
+            // Step 1: Mark functions that directly contain yield/wait/wait_for
+            var mayYield = new Dictionary<string, bool>();
+            for (int i = 0; i < module.Functions.Count; i++)
+            {
+                var f = module.Functions[i];
+                mayYield[f.Name] = ContainsYieldOrWait(f.Body);
+            }
+
+            // Step 2: Build call graph and propagate yield taint (transitive closure)
+            var callees = new Dictionary<string, List<string>>();
+            for (int i = 0; i < module.Functions.Count; i++)
+            {
+                var f = module.Functions[i];
+                var calls = new List<string>();
+                CollectCallees(f.Body, calls);
+                callees[f.Name] = calls;
+            }
+
+            bool changed = true;
+            while (changed)
+            {
+                changed = false;
+                for (int i = 0; i < module.Functions.Count; i++)
+                {
+                    var f = module.Functions[i];
+                    if (mayYield[f.Name]) continue;
+                    if (callees.TryGetValue(f.Name, out var cList))
+                    {
+                        for (int j = 0; j < cList.Count; j++)
+                        {
+                            if (mayYield.TryGetValue(cList[j], out bool cy) && cy)
+                            {
+                                mayYield[f.Name] = true;
+                                changed = true;
+                                break;
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Step 3: Check @export functions
+            for (int i = 0; i < module.Functions.Count; i++)
+            {
+                var f = module.Functions[i];
+                if (!f.IsExported) continue;
+
+                if (mayYield.TryGetValue(f.Name, out bool yields) && yields)
+                    _errors.Add($"@export function '{f.Name}' may yield (directly or via called functions). Service functions must complete synchronously. (line {f.Line})");
+
+                // C-1: @export functions cannot use defer/using
+                if (ContainsDeferOrUsing(f.Body))
+                    _errors.Add($"@export function '{f.Name}' cannot use defer/using (C-1 restriction). (line {f.Line})");
+            }
+        }
+
+        /// <summary>
+        /// Returns true if the statement subtree directly contains a yield, wait, or wait_for statement.
+        /// </summary>
+        private bool ContainsYieldOrWait(Stmt stmt)
+        {
+            if (stmt == null) return false;
+            if (stmt is WaitStmt || stmt is WaitForStmt || stmt is YieldStmt) return true;
+
+            if (stmt is BlockStmt block)
+            {
+                for (int i = 0; i < block.Statements.Count; i++)
+                    if (ContainsYieldOrWait(block.Statements[i])) return true;
+            }
+            else if (stmt is IfStmt ifStmt)
+            {
+                if (ContainsYieldOrWait(ifStmt.ThenBranch)) return true;
+                if (ifStmt.ElseBranch != null && ContainsYieldOrWait(ifStmt.ElseBranch)) return true;
+            }
+            else if (stmt is WhileStmt whileStmt)
+            {
+                if (ContainsYieldOrWait(whileStmt.Body)) return true;
+            }
+            else if (stmt is ForStmt forStmt)
+            {
+                if (ContainsYieldOrWait(forStmt.Body)) return true;
+            }
+            else if (stmt is DeferStmt deferStmt)
+            {
+                if (ContainsYieldOrWait(deferStmt.Body)) return true;
+            }
+            else if (stmt is UsingStmt usingStmt)
+            {
+                if (ContainsYieldOrWait(usingStmt.Body)) return true;
+            }
+
+            return false;
+        }
+
+        /// <summary>
+        /// Collect user function names called from the statement subtree.
+        /// </summary>
+        private void CollectCallees(Stmt stmt, List<string> callees)
+        {
+            if (stmt == null) return;
+
+            if (stmt is ExprStmt exprStmt)
+            {
+                CollectCalleesExpr(exprStmt.Expression, callees);
+            }
+            else if (stmt is VarDeclStmt varDecl)
+            {
+                if (varDecl.Initializer != null) CollectCalleesExpr(varDecl.Initializer, callees);
+            }
+            else if (stmt is ReturnStmt retStmt)
+            {
+                if (retStmt.Value != null) CollectCalleesExpr(retStmt.Value, callees);
+            }
+            else if (stmt is BlockStmt block)
+            {
+                for (int i = 0; i < block.Statements.Count; i++)
+                    CollectCallees(block.Statements[i], callees);
+            }
+            else if (stmt is IfStmt ifStmt)
+            {
+                CollectCalleesExpr(ifStmt.Condition, callees);
+                CollectCallees(ifStmt.ThenBranch, callees);
+                if (ifStmt.ElseBranch != null) CollectCallees(ifStmt.ElseBranch, callees);
+            }
+            else if (stmt is WhileStmt whileStmt)
+            {
+                CollectCalleesExpr(whileStmt.Condition, callees);
+                CollectCallees(whileStmt.Body, callees);
+            }
+            else if (stmt is ForStmt forStmt)
+            {
+                if (forStmt.Initializer != null) CollectCallees(forStmt.Initializer, callees);
+                if (forStmt.Condition != null) CollectCalleesExpr(forStmt.Condition, callees);
+                if (forStmt.Increment != null) CollectCalleesExpr(forStmt.Increment, callees);
+                CollectCallees(forStmt.Body, callees);
+            }
+            else if (stmt is DeferStmt deferStmt)
+            {
+                CollectCallees(deferStmt.Body, callees);
+            }
+            else if (stmt is UsingStmt usingStmt)
+            {
+                for (int i = 0; i < usingStmt.Arguments.Count; i++)
+                    CollectCalleesExpr(usingStmt.Arguments[i], callees);
+                CollectCallees(usingStmt.Body, callees);
+            }
+        }
+
+        /// <summary>
+        /// Collect user function names from expression subtree.
+        /// </summary>
+        private void CollectCalleesExpr(Expr expr, List<string> callees)
+        {
+            if (expr == null) return;
+
+            if (expr is CallExpr call)
+            {
+                if (_funcDecls != null && _funcDecls.ContainsKey(call.FunctionName))
+                    callees.Add(call.FunctionName);
+                for (int i = 0; i < call.Arguments.Count; i++)
+                    CollectCalleesExpr(call.Arguments[i], callees);
+            }
+            else if (expr is BinaryExpr bin)
+            {
+                CollectCalleesExpr(bin.Left, callees);
+                CollectCalleesExpr(bin.Right, callees);
+            }
+            else if (expr is UnaryExpr unary)
+            {
+                CollectCalleesExpr(unary.Operand, callees);
+            }
+            else if (expr is AssignExpr assign)
+            {
+                CollectCalleesExpr(assign.Value, callees);
+            }
+        }
+
+        /// <summary>
+        /// Lang-6: Build ExportTable from @export declarations. Returns null if no exports.
+        /// </summary>
+        private ExportTable BuildExportTable(ModuleNode module, List<FunctionEntry> functionEntries)
+        {
+            var exportVars = new List<ExportVarEntry>();
+            var exportFuncs = new List<ExportFuncEntry>();
+
+            // Collect exported variables (var and const)
+            for (int i = 0; i < module.ModuleVariables.Count; i++)
+            {
+                var decl = module.ModuleVariables[i];
+                if (!decl.IsExported) continue;
+
+                if (decl.IsConst)
+                {
+                    // @export const — need a register slot even though internally it may be folded
+                    // For ExportTable, we need an mvarSlot so the caller can XLOAD_MVAR.
+                    // Folded consts don't have registers — they need to be assigned one.
+                    if (_moduleConstValues.ContainsKey(decl.Name))
+                    {
+                        // Const was folded — assign an mvarSlot by counting from module vars
+                        // We need to allocate a real register for exported consts so cross-instance reads work
+                        int mvarSlot;
+                        if (_moduleVarRegisters.ContainsKey(decl.Name))
+                        {
+                            // Already has a register (shouldn't happen for folded consts, but handle it)
+                            int reg = _moduleVarRegisters[decl.Name];
+                            mvarSlot = reg >= VMConstants.MaxRegisters
+                                ? (reg - VMConstants.MaxRegisters) + VMConstants.ModuleVarSlots
+                                : reg - VMConstants.ModuleVarRegBase;
+                        }
+                        else
+                        {
+                            // Need to retroactively allocate a register for this exported const
+                            // Use a virtual mvarSlot referencing the const value
+                            // We store exported consts in module var registers
+                            _errors.Add($"@export const '{decl.Name}' is not supported in C-1 phase (compile-time constant folding removes register allocation). Export as 'var' for cross-instance access: '@export var {decl.Name}'. (line {decl.Line})");
+                            continue;
+                        }
+                        exportVars.Add(new ExportVarEntry(decl.Name, mvarSlot, false));
+                    }
+                }
+                else
+                {
+                    // @export var — must have a register
+                    if (_moduleVarRegisters.TryGetValue(decl.Name, out int reg))
+                    {
+                        int mvarSlot = reg >= VMConstants.MaxRegisters
+                            ? (reg - VMConstants.MaxRegisters) + VMConstants.ModuleVarSlots
+                            : reg - VMConstants.ModuleVarRegBase;
+                        exportVars.Add(new ExportVarEntry(decl.Name, mvarSlot, true));
+                    }
+                }
+            }
+
+            // Collect exported functions
+            for (int i = 0; i < module.Functions.Count; i++)
+            {
+                var f = module.Functions[i];
+                if (!f.IsExported) continue;
+
+                // Find the function's index in functionEntries
+                int funcIdx = -1;
+                for (int j = 0; j < functionEntries.Count; j++)
+                {
+                    if (functionEntries[j].Name == f.Name)
+                    {
+                        funcIdx = j;
+                        break;
+                    }
+                }
+
+                if (funcIdx >= 0)
+                    exportFuncs.Add(new ExportFuncEntry(f.Name, funcIdx, f.Parameters.Count));
+            }
+
+            if (exportVars.Count == 0 && exportFuncs.Count == 0)
+                return null;
+
+            return new ExportTable(exportVars.ToArray(), exportFuncs.ToArray());
         }
 
         /// <summary>

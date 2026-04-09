@@ -19,6 +19,10 @@ namespace FFVM
         PanicUnresolvedExtern = 6,
         PanicStepLimitExceeded = 7,
 
+        // Lang-6: cross-instance call errors
+        PanicInvalidInstanceId = 8,
+        PanicExportNotFound = 9,
+
         // Soft errors — returned in register, script handles
         SoftSyscallFailed = 128,
         SoftContainerOverflow = 129,

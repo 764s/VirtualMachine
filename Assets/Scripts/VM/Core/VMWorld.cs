@@ -21,6 +21,15 @@ namespace FFVM
         private readonly SnapshotRingBuffer _snapshots;
         private int _frameNumber;
 
+        // Lang-6: Cross-instance call state
+        private XCallFrame[] _xcallStack = new XCallFrame[4];
+        private int _xcallDepth;
+        private int _maxXCallDepth = 4;
+        private bool _xcallDepthWarning = true;
+
+        /// <summary>Lang-6: Callback invoked when XCALL nesting depth exceeds MaxXCallDepth.</summary>
+        public System.Action<int, int> OnXCallDepthWarning;
+
         /// <summary>Max instructions executed per instance per Tick to prevent infinite loops.</summary>
         public int MaxStepsPerTick = 1024;
 
@@ -802,6 +811,225 @@ namespace FFVM
                             xregs[op.A | (op.C << 8)] = regs[Reg(op.B, rb)];
                             inst.IP++;
                             break;
+
+                        // --- Lang-6: cross-instance member access (XIMA) ---
+
+                        case OpCode.XCALL:
+                        {
+                            // A=destReg, B=instanceId_reg, C=exportFuncIndex
+                            int targetId = regs[Reg(op.B, rb)].ToInt();
+                            if (targetId < 0 || targetId >= VMConstants.MaxInstances)
+                            {
+                                inst.ErrorFlag = VMError.PanicInvalidInstanceId;
+                                return;
+                            }
+                            ref var targetInst = ref Pool.Instances[targetId];
+                            if (!targetInst.IsAlive)
+                            {
+                                inst.ErrorFlag = VMError.PanicInvalidInstanceId;
+                                return;
+                            }
+
+                            VMProgram targetProgram = Modules.Get(targetInst.ModuleSlot);
+                            if (targetProgram == null || targetProgram.ExportTable == null)
+                            {
+                                inst.ErrorFlag = VMError.PanicExportNotFound;
+                                return;
+                            }
+
+                            int funcIdx = op.C;
+                            if (funcIdx < 0 || funcIdx >= targetProgram.ExportTable.Functions.Length)
+                            {
+                                inst.ErrorFlag = VMError.PanicExportNotFound;
+                                return;
+                            }
+
+                            var exportFunc = targetProgram.ExportTable.Functions[funcIdx];
+                            if (exportFunc.FuncTableIndex < 0 || exportFunc.FuncTableIndex >= targetProgram.Functions.Length)
+                            {
+                                inst.ErrorFlag = VMError.PanicExportNotFound;
+                                return;
+                            }
+                            var targetFunc = targetProgram.Functions[exportFunc.FuncTableIndex];
+
+                            // Nested depth check
+                            _xcallDepth++;
+                            if (_xcallDepthWarning && _xcallDepth > _maxXCallDepth)
+                            {
+                                OnXCallDepthWarning?.Invoke(_xcallDepth, _maxXCallDepth);
+                            }
+
+                            // Grow stack if needed (Warn mode allows exceeding)
+                            if (_xcallDepth > _xcallStack.Length)
+                            {
+                                var newStack = new XCallFrame[_xcallStack.Length * 2];
+                                System.Array.Copy(_xcallStack, newStack, _xcallStack.Length);
+                                _xcallStack = newStack;
+                            }
+
+                            // Save caller state
+                            int destReg = Reg(op.A, rb);
+                            _xcallStack[_xcallDepth - 1] = new XCallFrame
+                            {
+                                CallerInstanceId = inst.InstanceId,
+                                CallerIP = inst.IP + 1,
+                                CallerModuleSlot = inst.ModuleSlot,
+                                CallerRegisterBase = inst.RegisterBase,
+                                CallerCallStackDepth = inst.CallStackDepth,
+                                CallerCleanupDepth = inst.CleanupDepth,
+                                DestReg = destReg
+                            };
+
+                            // Copy parameters: caller scratch r0..r(paramCount-1) → target scratch r0..r(paramCount-1)
+                            int paramCount = exportFunc.ParamCount;
+                            fixed (long* targetRaw = targetInst.Registers.Raw)
+                            {
+                                Number* targetRegs = (Number*)targetRaw;
+                                for (int p = 0; p < paramCount; p++)
+                                    targetRegs[p] = regs[p];
+                            }
+
+                            // Execute target function synchronously (recursive)
+                            targetInst.IP = targetFunc.EntryIP;
+                            targetInst.RegisterBase = 0;
+                            targetInst.CallStackDepth = 0;
+                            targetInst.CleanupDepth = 0;
+
+                            ExecuteInstance(ref targetInst);
+
+                            // Restore caller — re-pin caller registers (may have moved if same instance)
+                            // Read return value from target r0 BEFORE restoring caller
+                            Number returnVal;
+                            fixed (long* targetRaw2 = Pool.Instances[targetId].Registers.Raw)
+                            {
+                                returnVal = ((Number*)targetRaw2)[0];
+                            }
+
+                            // Restore caller state
+                            var xcFrame = _xcallStack[_xcallDepth - 1];
+                            _xcallDepth--;
+
+                            // Check for errors in the target instance
+                            if (Pool.Instances[targetId].ErrorFlag != VMError.None)
+                            {
+                                inst.ErrorFlag = Pool.Instances[targetId].ErrorFlag;
+                                return;
+                            }
+
+                            // Write return value to caller's dest register
+                            // Need to re-reference regs since we're back in caller context
+                            regs[xcFrame.DestReg] = returnVal;
+                            inst.IP = xcFrame.CallerIP;
+                            inst.RegisterBase = xcFrame.CallerRegisterBase;
+                            inst.CallStackDepth = xcFrame.CallerCallStackDepth;
+                            inst.CleanupDepth = (byte)xcFrame.CallerCleanupDepth;
+                            rb = inst.RegisterBase;
+                            break;
+                        }
+
+                        case OpCode.XLOAD_MVAR:
+                        {
+                            // A=destReg, B=instanceId_reg, C=exportVarIndex
+                            int targetId = regs[Reg(op.B, rb)].ToInt();
+                            if (targetId < 0 || targetId >= VMConstants.MaxInstances)
+                            {
+                                inst.ErrorFlag = VMError.PanicInvalidInstanceId;
+                                return;
+                            }
+                            ref var targetInst = ref Pool.Instances[targetId];
+                            if (!targetInst.IsAlive)
+                            {
+                                inst.ErrorFlag = VMError.PanicInvalidInstanceId;
+                                return;
+                            }
+
+                            VMProgram targetProgram = Modules.Get(targetInst.ModuleSlot);
+                            if (targetProgram == null || targetProgram.ExportTable == null)
+                            {
+                                inst.ErrorFlag = VMError.PanicExportNotFound;
+                                return;
+                            }
+
+                            int varIdx = op.C;
+                            if (varIdx < 0 || varIdx >= targetProgram.ExportTable.Variables.Length)
+                            {
+                                inst.ErrorFlag = VMError.PanicExportNotFound;
+                                return;
+                            }
+
+                            int mvarSlot = targetProgram.ExportTable.Variables[varIdx].MvarSlot;
+
+                            if (mvarSlot < VMConstants.ModuleVarSlots)
+                            {
+                                // Fixed register path
+                                fixed (long* targetRaw = targetInst.Registers.Raw)
+                                {
+                                    Number* targetRegs = (Number*)targetRaw;
+                                    regs[Reg(op.A, rb)] = targetRegs[VMConstants.ModuleVarRegBase + mvarSlot];
+                                }
+                            }
+                            else
+                            {
+                                // Extended register path
+                                Number[] txregs = Pool.ExtendedRegs[targetId];
+                                if (txregs == null) { inst.ErrorFlag = VMError.PanicIllegalInstruction; return; }
+                                regs[Reg(op.A, rb)] = txregs[mvarSlot - VMConstants.ModuleVarSlots];
+                            }
+                            inst.IP++;
+                            break;
+                        }
+
+                        case OpCode.XSTORE_MVAR:
+                        {
+                            // A=exportVarIndex, B=instanceId_reg, C=srcReg
+                            int targetId = regs[Reg(op.B, rb)].ToInt();
+                            if (targetId < 0 || targetId >= VMConstants.MaxInstances)
+                            {
+                                inst.ErrorFlag = VMError.PanicInvalidInstanceId;
+                                return;
+                            }
+                            ref var targetInst = ref Pool.Instances[targetId];
+                            if (!targetInst.IsAlive)
+                            {
+                                inst.ErrorFlag = VMError.PanicInvalidInstanceId;
+                                return;
+                            }
+
+                            VMProgram targetProgram = Modules.Get(targetInst.ModuleSlot);
+                            if (targetProgram == null || targetProgram.ExportTable == null)
+                            {
+                                inst.ErrorFlag = VMError.PanicExportNotFound;
+                                return;
+                            }
+
+                            int varIdx = op.A;
+                            if (varIdx < 0 || varIdx >= targetProgram.ExportTable.Variables.Length)
+                            {
+                                inst.ErrorFlag = VMError.PanicExportNotFound;
+                                return;
+                            }
+
+                            int mvarSlot = targetProgram.ExportTable.Variables[varIdx].MvarSlot;
+
+                            if (mvarSlot < VMConstants.ModuleVarSlots)
+                            {
+                                // Fixed register path
+                                fixed (long* targetRaw = targetInst.Registers.Raw)
+                                {
+                                    Number* targetRegs = (Number*)targetRaw;
+                                    targetRegs[VMConstants.ModuleVarRegBase + mvarSlot] = regs[Reg(op.C, rb)];
+                                }
+                            }
+                            else
+                            {
+                                // Extended register path
+                                Number[] txregs = Pool.ExtendedRegs[targetId];
+                                if (txregs == null) { inst.ErrorFlag = VMError.PanicIllegalInstruction; return; }
+                                txregs[mvarSlot - VMConstants.ModuleVarSlots] = regs[Reg(op.C, rb)];
+                            }
+                            inst.IP++;
+                            break;
+                        }
 
                         // --- O15: sentinel (end-of-program guard) ---
 
