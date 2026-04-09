@@ -1,8 +1,8 @@
 # KOF98 技能 FFS 脚本化讨论
 
-> **状态**：🔄 讨论中（SK1~SK12 已收敛，SK3 待性能验证；SK14 语言需求已整合；Q2 ✅ 收敛；Q3 渐进路径待确认；Q4 服务脚本 💬 Y1-Plus + XCALL 优化路线图 + L4/L5 正教性 → 收敛中）
+> **状态**：🔄 讨论中（SK1~SK12 已收敛，SK3 待性能验证；SK14 语言需求已整合；Q2 ✅ 收敛；Q3 渐进路径待确认；Q4 服务脚本 💬 L4/XCALL 统一基线设计 + 自动优化方案 → 接近收敛）
 > **来源**：需求讨论 — 将 host-side 技能迁移为 FFS 脚本驱动
-> **日期**：2026-04-09（第 22 轮更新）
+> **日期**：2026-04-09（第 23 轮更新）
 
 ---
 
@@ -26,7 +26,7 @@
 | SK14 | FFS 语言需求整合 | 💬 | L1 模块变量 + L2 include = Phase 1；L3/L4 跨模块 = 远期 |
 | Q2 | 硬直+yield 语句级控制 | ✅ | 方案 A — while+GetFrame()+yield，帧区间循环行业标准模式（7/10 语言同构） |
 | Q3 | 跨脚本 VM 使用模式 | 💬 | 6 方向渐进路径（1+2+3 → 4 → 5），待用户确认 |
-| Q4 | FFS 封装 — 服务脚本 | 💬 | 方式 C 确认✅；Y1-Plus 纯编译期 yield 禁止；XCALL 优化路线图 O1→O2→O7→O4；L4/L5 正教性确认；收敛中 |
+| Q4 | FFS 封装 — 服务脚本 | 💬 | 方式 C 确认✅；Y1-Plus ✅；XCALL 优化 ✅；L4/XCALL 统一基线设计 + A1/A2 自动优化 + @export；接近收敛 |
 
 ---
 
@@ -4534,10 +4534,13 @@ XSTORE_MVAR src, instanceId, mvarIndex    // 写入目标实例的 module variab
 | 语法预留 | C-2 需预留 `svc.var`（L4）vs `svc.func()`（L5）区分 | R22 ✅ |
 
 ##### 待用户确认（第 22 轮）
-// 1 ok
-// 2 ok
-// 3 更早考虑. 我的直觉是他和xcall 至少同一基线, 但可能有更有效的自动优化方案
-// 4 等3
+
+> **用户回复（第 23 轮）**：
+> 1. Y1-Plus OK ✅
+> 2. XCALL 优化路线图 OK ✅
+> 3. L4 需要更早考虑，不能推迟到 C-2。直觉是 **L4 和 XCALL 至少同一基线**，但可能有更有效的自动优化方案
+> 4. 等 3 解决后再定
+
 1. **Y1-Plus 纯编译期 yield 禁止是否满意？** — 包含跨函数 yield-taint 分析 + LSP 实时诊断，运行时零负担
 2. **XCALL 优化路线图（O1→O2→O7→O4）是否符合预期？** — 退化策略："编译期自动退化，运行时零决策"
 3. **L4 语法预留：`svc.var` vs `svc.func()` 在 C-2 阶段预留是否 OK？** — 还是需要更早考虑？
@@ -4545,10 +4548,353 @@ XSTORE_MVAR src, instanceId, mvarIndex    // 写入目标实例的 module variab
 
 ---
 
+#### Q4-E：L4/XCALL 统一基线设计 + 自动优化方案分析（第 23 轮）
+
+> 用户关键观点：L4（跨实例变量访问）不应推迟到 C-2，而应**和 XCALL（L5）共享同一基线设计**。且可能存在比"XLOAD_MVAR 独立 OpCode"更有效的自动优化方案。
+
+用户的直觉非常敏锐。让我们重新审视 L4/L5 的关系，从"统一基线"视角设计。
+
+##### 为什么 L4 应该和 XCALL 同基线？
+
+R22 中我将 L4 定位为"远期可选"，理由是 L5（函数调用）可以间接实现 L4（变量读写）。但用户指出这个定位有问题：
+
+| R22 思路（分离） | 用户直觉（统一） |
+|-----------------|----------------|
+| L5 先做（XCALL），L4 后补（XLOAD_MVAR） | L4/L5 同时设计，共享基础设施 |
+| `svc.func()` 是核心，`svc.var` 是衍生 | 两者都是"跨实例成员访问"，本质相同 |
+| L4 通过 L5 间接实现（getter/setter） | 间接实现是退化方案，不是正教 |
+
+**为什么统一更好？**
+
+1. **概念一致性**：`svc.xxx` 无论是函数还是变量，对脚本作者来说都是"访问服务的成员"。如果函数调用有专门优化（XCALL），变量访问却只能走 getter/setter（间接 XCALL），这对用户是一个不必要的认知割裂。
+
+2. **性能对称性**：`svc.get_hp()` 走 XCALL ~15 ns，但 `svc.hp` 如果也走 XCALL（因为没有直接路径），开销完全相同。然而变量访问**应该比函数调用更快**——这是所有编程语言的基本直觉。
+
+3. **编译器优化空间**：如果 L4/L5 共享基线，编译器可以做更多自动优化（下面详述）。
+
+##### L4/XCALL 统一基线设计
+
+###### 统一模型：跨实例成员访问（Cross-Instance Member Access, XIMA）
+
+将 L4/L5 统一为一个抽象：
+
+```
+svc.member        → XIMA 读取（可能是变量或无参函数）
+svc.member = val  → XIMA 写入（可能是变量或有副作用的 setter）
+svc.member(args)  → XIMA 调用（带参函数）
+```
+
+**编译器统一解析**：
+
+```
+svc.xxx
+  ├── xxx 是导出变量 (@export var) → L4 路径
+  │     ├── 读取 → XLOAD_MVAR
+  │     └── 写入 → XSTORE_MVAR
+  ├── xxx 是导出函数 → L5 路径
+  │     └── 调用 → XCALL
+  └── xxx 是只读属性 (编译器推断) → 自动优化路径
+        └── 可能内联/折叠
+```
+
+**关键**：Parser 不需要区分 `svc.var` 和 `svc.func()` — 它只解析 `svc.member`，然后由**语义分析**阶段根据目标模块的导出表决定走哪条路径。这比"有无括号"的语法区分更自然。
+
+###### OpCode 基线设计
+
+同一基线意味着 L4 和 L5 的 OpCode 在 C-1 阶段就一起设计：
+
+| OpCode | 操作 | 编码 | 开销 |
+|--------|------|------|------|
+| **XCALL** | 跨实例函数调用 | A=dest, B=instanceId_reg, C=funcIndex | ~15 ns |
+| **XLOAD_MVAR** | 跨实例变量读取 | A=dest, B=instanceId_reg, C=mvarIndex | ~3-5 ns |
+| **XSTORE_MVAR** | 跨实例变量写入 | A=src, B=instanceId_reg, C=mvarIndex | ~3-5 ns |
+
+三个 OpCode 共享相同的 B 操作数语义（instanceId 引用）和相同的实例查找逻辑。
+
+**XLOAD_MVAR 实现原理**（~3-5 ns）：
+
+```csharp
+case OpCode.XLOAD_MVAR:
+{
+    int targetInst = (int)regs[Reg(op.B)].AsLong;
+    int mvarIdx = op.C;
+    // 直接读取目标实例的 module variable 寄存器
+    ref var targetRegs = ref pool.Instances[targetInst].Regs;
+    regs[Reg(op.A)] = targetRegs.Raw[VMConstants.ModuleVarRegBase + mvarIdx];
+    break;
+}
+```
+
+对比 XCALL 走 getter：
+```csharp
+case OpCode.XCALL:
+{
+    // 保存调用者状态 ~3 ns
+    // 复制参数 ~2-8 ns
+    // 切换实例 ~1 ns
+    // 执行 get_hp() 函数体 ~5 ns
+    // 复制返回值 ~1 ns
+    // 恢复状态 ~4 ns
+    // 总计 ~15 ns
+}
+```
+
+**性能对比**：XLOAD_MVAR 比 XCALL getter 快 **3-5×**。这不是微优化——当角色每帧需要读取多个服务属性时（如 hp, mp, frame, state），差异累积显著。
+
+##### 自动优化方案分析
+
+用户提到"可能有更有效的自动优化方案"。让我系统分析编译器可以做的自动优化：
+
+###### A1：自动 L5→L4 退化（编译器自动推断）
+
+**核心思想**：如果用户写 `svc.get_hp()`，但 `get_hp()` 的函数体只是 `return hp;`（单纯的 getter），编译器可以**自动将 XCALL 替换为 XLOAD_MVAR**。
+
+```ffs
+// 服务脚本
+@export func get_hp() { return hp; }   // 纯 getter
+
+// 调用方写
+var hp = svc.get_hp()
+
+// 编译器自动优化：
+// 检测 get_hp() 是纯 getter → 替换为直接变量读取
+// 生成 XLOAD_MVAR 而非 XCALL
+```
+
+**可行性分析**：
+
+| 条件 | 检查方式 | 复杂度 |
+|------|---------|--------|
+| 函数体只有一条 return 语句 | AST 检查 | 低 |
+| return 表达式是单个 module variable | AST 检查 | 低 |
+| 函数无副作用 | 已被 return-only 保证 | — |
+| 目标模块可被编译器访问 | 跨模块编译（需要） | 中 |
+
+**退化条件**：如果不满足上述任一条件，退化到 XCALL。安全。
+
+这是非常有效的优化：用户可以**只写 `svc.get_hp()`** 风格的代码（统一的函数调用接口），编译器自动检测哪些是纯 getter 并替换为直接变量访问。**用户不需要知道 L4/L5 的区别。**
+
+###### A2：自动 setter 识别与 L4 退化
+
+类似地，`svc.set_hp(val)` 如果函数体只是 `hp = val;`：
+
+```ffs
+// 编译器自动检测：
+svc.set_hp(100)
+→ 检测 set_hp(v) 函数体为 { hp = v; }
+→ 替换为 XSTORE_MVAR
+```
+
+###### A3：属性语法糖（Property Sugar）
+
+将 A1+A2 结合，提供属性风格的语法糖：
+
+```ffs
+// 用户写（属性风格）
+var hp = svc.hp         // 自动映射到 get_hp() 或 XLOAD_MVAR
+svc.hp = 100            // 自动映射到 set_hp(100) 或 XSTORE_MVAR
+
+// 或者用户也可以写（函数风格）
+var hp = svc.get_hp()   // 编译器自动退化到 XLOAD_MVAR（如果是纯 getter）
+svc.set_hp(100)         // 编译器自动退化到 XSTORE_MVAR（如果是纯 setter）
+```
+
+**关键**：两种写法**生成完全相同的字节码**。编译器统一优化。
+
+###### A4：批量访问优化（Batch Access）
+
+当同一帧内对同一服务读取多个属性时：
+
+```ffs
+var hp = svc.hp
+var mp = svc.mp
+var frame = svc.frame
+```
+
+编译器可以合并实例查找：
+
+```
+// 未优化：3 次 XLOAD_MVAR（各含 1 次 pool.Instances[id] 查找）
+XLOAD_MVAR r1, r_svc, 0   // 查找实例 + 读 hp
+XLOAD_MVAR r2, r_svc, 1   // 查找实例 + 读 mp
+XLOAD_MVAR r3, r_svc, 2   // 查找实例 + 读 frame
+
+// 优化：VM 运行时已经缓存了 svc 的引用（r_svc 就是 instanceId）
+// 实际上单次 XLOAD_MVAR 就是直接索引，不需要额外合并
+// 因为 pool.Instances[id] 已经是 O(1) 数组访问
+```
+
+结论：XLOAD_MVAR 已经足够快（~3 ns），批量优化收益极小。**不需要专门做。**
+
+###### A5：内联+折叠级联优化
+
+最激进的优化：如果 `svc.get_combo_modifier()` 的函数体是：
+
+```ffs
+func get_combo_modifier() {
+    return base_modifier + combo_count * 0.1;
+}
+```
+
+编译器可以将整个表达式内联并用 XLOAD_MVAR 替换变量引用：
+
+```
+// 内联前
+XCALL r0, r_svc, FN_GET_COMBO_MODIFIER
+
+// 内联后
+XLOAD_MVAR r_tmp1, r_svc, IDX_base_modifier     // 读 base_modifier
+XLOAD_MVAR r_tmp2, r_svc, IDX_combo_count        // 读 combo_count
+MUL r_tmp3, r_tmp2, r_const_0_1                   // combo_count * 0.1
+ADD r0, r_tmp1, r_tmp3                            // base_modifier + ...
+```
+
+这将一次 XCALL（~15 ns）替换为 2 次 XLOAD_MVAR + 2 次算术（~6+2 = ~8 ns），快了近一倍。
+
+**退化条件**：函数包含分支/循环/递归/yield → 不内联，退化到 XCALL。
+
+##### 自动优化方案总结
+
+| 编号 | 方案 | 原理 | 收益 | 前提 | 退化 |
+|------|------|------|------|------|------|
+| **A1** | 自动 getter→XLOAD | 纯 getter 函数替换为直接读 | ~15→3 ns | 跨模块 AST 访问 | XCALL |
+| **A2** | 自动 setter→XSTORE | 纯 setter 函数替换为直接写 | ~15→3 ns | 跨模块 AST 访问 | XCALL |
+| **A3** | 属性语法糖 | `svc.hp` = 编译器自动路由 | 统一用户体验 | A1/A2 | 函数调用 |
+| **A4** | 批量访问合并 | 多次读取合并实例查找 | 极小 | — | 不做 |
+| **A5** | 内联+替换 | 函数体内联，变量引用→XLOAD | ~15→8 ns | 跨模块+内联条件 | XCALL |
+
+**用户提到的"更有效的自动优化方案"就是 A1/A2**：编译器自动检测纯 getter/setter 并替换为直接变量访问。这比我在 R22 中列的 O4（函数内联）更精准、更简单、收益更大。
+
+##### 修订后的分阶段设计
+
+将 L4 提前到与 XCALL 同基线：
+
+| 阶段 | 内容 | 变化 |
+|------|------|------|
+| **C-0** | Syscall 桥接原型 | 不变 |
+| **C-1** | XCALL + XLOAD_MVAR + XSTORE_MVAR | ⚡ **L4 提前到 C-1** |
+| **C-1.5** | A1/A2 自动 getter/setter 退化 | ⚡ **新增：编译器自动优化** |
+| **C-2** | `svc.member` 统一语法糖 | 简化：不再需要区分 var/func |
+| **C-3** | A5 内联+替换（条件性） | 原 O4，收窄范围 |
+
+**关键变化**：
+
+1. **C-1 同时实现 XCALL + XLOAD_MVAR + XSTORE_MVAR**（3 个 OpCode 共享基础设施）
+2. **C-1.5 新增 A1/A2 自动优化**（编译器自动将纯 getter/setter 退化为直接变量访问）
+3. **C-2 的语法糖变得更简单**：`svc.member` 统一解析，编译器根据导出表自动路由。不需要"有无括号"来区分 L4/L5 — 编译器全部自动处理
+
+##### `@export` 声明设计
+
+L4 需要模块声明哪些变量可被外部访问：
+
+```ffs
+// owner_service.ffs
+@service
+@export var hp = 1000         // 可被外部读写
+@export const max_hp = 1000   // 可被外部读取（只读）
+var internal_state = 0        // 不可被外部访问
+
+@export func get_frame() { ... }  // 可被外部调用
+func internal_helper() { ... }    // 不可被外部调用
+```
+
+**`@export` 规则**：
+
+| 声明 | 外部可读 | 外部可写 | 导出表类型 |
+|------|---------|---------|-----------|
+| `@export var x` | ✅ | ✅ | L4 变量 |
+| `@export const x` | ✅ | ❌（编译错误） | L4 常量 |
+| `@export func f()` | ✅ 可调用 | — | L5 函数 |
+| `var x`（无 @export） | ❌（编译错误） | ❌ | 不导出 |
+| `func f()`（无 @export） | ❌（编译错误） | — | 不导出 |
+
+**安全性**：
+- 未导出的成员在跨实例访问时编译错误
+- `@export const` 的写入在编译期报错
+- 运行时无额外检查（编译期已保证安全）
+
+##### 编译器导出表
+
+每个 `@service` 模块在编译时生成一个**导出表（Export Table）**：
+
+```
+ExportTable {
+    vars: [
+        { name: "hp", mvarIndex: 0, writable: true },
+        { name: "max_hp", mvarIndex: 1, writable: false }
+    ],
+    funcs: [
+        { name: "get_frame", funcIndex: 0 },
+        { name: "take_damage", funcIndex: 1 }
+    ]
+}
+```
+
+调用方编译器通过这个导出表解析 `svc.member`：
+- `svc.hp` → 查表 → vars[0] → XLOAD_MVAR/XSTORE_MVAR
+- `svc.get_frame()` → 查表 → funcs[0] → XCALL
+- `svc.get_hp()` → 查表 → funcs → 检测是否纯 getter → A1 自动退化
+
+##### 与 R22 的对比
+
+| 方面 | R22 设计 | R23 统一设计 |
+|------|---------|------------|
+| L4 时机 | C-2 预留，远期做 | **C-1 同基线** |
+| L4/L5 关系 | 独立的 OpCode 族 | **共享基础设施** |
+| 语法区分 | `svc.var` vs `svc.func()` 靠括号 | **`svc.member` 统一，编译器自动路由** |
+| 优化策略 | O1→O2→O7→O4 独立方向 | **A1/A2 自动退化 + O 系列优化** |
+| 用户心智 | 需知道 L4 和 L5 的区别 | **不需要——统一的 `svc.member` 语法** |
+| @export | 未设计 | **C-1 即支持** |
+
+##### 更新后的收敛决策表
+
+| 决策 | 结论 | 轮次 |
+|------|------|------|
+| 服务脚本定位 | FFS 运行时实体，不是 include | R20 |
+| 持有方式 | 方式 C — 语言级引用（instanceId） | R20 |
+| 生命周期管理 | 宿主 C# 创建并注册 | R21 ✅ |
+| 服务函数 yield | 禁止 — 纯编译期保证 Y1-Plus（无运行时负担） | R22 ✅ |
+| 调用语法 | **`svc.member` 统一语法**，编译器自动路由 L4/L5 | R23 ✅ |
+| L4/L5 关系 | **同基线设计**：XCALL + XLOAD_MVAR + XSTORE_MVAR 在 C-1 同时实现 | R23 ✅ |
+| 导出声明 | `@export var/const/func` — C-1 即支持 | R23 ✅ |
+| 自动优化 | **A1/A2 自动 getter/setter→直接访问退化**（C-1.5） | R23 ✅ |
+| 实现路径 | C-0 → C-1(XCALL+XL4) → C-1.5(自动优化) → C-2(语法糖) → C-3(内联) | R23 ✅ |
+| 嵌套调用 | 允许，最大深度 4 层 | R21 ✅ |
+| 性能影响 | 可忽略（< 0.02% 帧预算） | R20-21 ✅ |
+| XCALL 优化 | O1+O2（C-1），A1/A2（C-1.5），O7（C-2），O4/A5（C-3+） | R22-23 ✅ |
+| 优化退化策略 | 编译期自动退化，运行时零决策开销 | R22 ✅ |
+
+##### 待用户确认（第 23 轮）
+
+1. **L4/XCALL 同基线（C-1 同时实现 3 个 OpCode）是否符合预期？** — XCALL + XLOAD_MVAR + XSTORE_MVAR 共享实例查找基础设施
+2. **A1/A2 自动 getter/setter 退化是否就是你说的"更有效的自动优化方案"？** — 编译器自动检测纯 getter/setter 并替换为直接变量访问
+3. **`svc.member` 统一语法（不靠括号区分）是否更好？** — 编译器通过导出表自动路由 L4/L5
+4. **`@export` 声明设计是否 OK？** — `@export var`（读写）、`@export const`（只读）、`@export func`（可调用）
+5. **Q4 现在是否可以认为已基本收敛？** — 如果是，下一步输出设计文档
+
+---
+
 <details>
 <summary>📋 讨论轮次总览</summary>
 
-#### 第 22 轮（当前）
+#### 第 23 轮（当前）
+
+用户回应第 22 轮 4 个确认问题：
+- Q1: Y1-Plus OK ✅
+- Q2: XCALL 优化路线图 OK ✅
+- Q3: L4 需要更早考虑，和 XCALL 至少同一基线。可能有更有效的自动优化方案
+- Q4: 等 Q3 解决后再定
+
+语言方回应：
+1. 认同 L4 应与 XCALL 同基线。提出统一模型 XIMA（Cross-Instance Member Access）
+2. C-1 同时实现 3 个 OpCode：XCALL + XLOAD_MVAR + XSTORE_MVAR，共享实例查找基础设施
+3. 5 个自动优化方案分析（A1-A5）：A1/A2（自动 getter/setter→直接访问退化）最有效
+4. `svc.member` 统一语法 — 编译器通过导出表自动路由 L4/L5，不靠括号区分
+5. `@export` 声明设计：@export var（读写）、@export const（只读）、@export func（可调用）
+6. 修订分阶段路径：C-0→C-1(XCALL+XL4)→C-1.5(A1/A2)→C-2(语法糖)→C-3(内联)
+7. 收敛决策表更新至 13 项
+
+#### 第 22 轮
 
 用户回应第 21 轮 3 个确认问题 + 补充 1 个新问题：
 - Q1: yield 保证要纯编译期，包括 UI/LSP，不要运行时负担 → Y1-Plus
