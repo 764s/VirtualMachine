@@ -1,8 +1,8 @@
 # KOF98 技能 FFS 脚本化讨论
 
-> **状态**：🔄 讨论中（SK1~SK12 已收敛，SK3 待性能验证；SK14 语言需求已整合；Q2 第 17 轮 — while+GetFrame()+yield 确认为行业共识，基本收敛；Q3 渐进路径待确认）
+> **状态**：🔄 讨论中（SK1~SK12 已收敛，SK3 待性能验证；SK14 语言需求已整合；Q2 ✅ 收敛；Q3 渐进路径待确认；Q4 FFS 封装机制 💬 讨论中）
 > **来源**：需求讨论 — 将 host-side 技能迁移为 FFS 脚本驱动
-> **日期**：2026-04-09（第 17 轮更新）
+> **日期**：2026-04-09（第 18 轮更新）
 
 ---
 
@@ -24,8 +24,9 @@
 | SK12 | ECS 数据归属 | ✅ | 脚本内闭环 → VM；外部需读取 → Syscall 推送到宿主 |
 | SK13 | 属性脚本共享 | ✅ | 方案 A — 预处理器 `include`，全量展开。需求转入 SK14 L2 |
 | SK14 | FFS 语言需求整合 | 💬 | L1 模块变量 + L2 include = Phase 1；L3/L4 跨模块 = 远期 |
-| Q2 | 硬直+yield 语句级控制 | 💬→✅? | while+GetFrame()+yield 为帧区间循环标准模式（7/10 语言同构），基本收敛 |
+| Q2 | 硬直+yield 语句级控制 | ✅ | 方案 A — while+GetFrame()+yield，帧区间循环行业标准模式（7/10 语言同构） |
 | Q3 | 跨脚本 VM 使用模式 | 💬 | 6 方向渐进路径（1+2+3 → 4 → 5），待用户确认 |
+| Q4 | FFS 无对象语言的宿主封装 | 💬 | Syscall 前缀命名 + include 组织脚本 + 隐式上下文；需兜底机制 |
 
 ---
 
@@ -1295,16 +1296,45 @@ SK12 已确立的数据归属原则：
 
 ---
 
-### Q2: 硬直+yield 模型 — yield 保持 tick 直觉 + 帧区间重复机制 💬
+### Q2: 硬直+yield 语句级控制 ✅
 
-**核心决定**（第 15 轮）：
-1. ✅ **yield 保持 tick 直觉** — yield 始终意味着"等下一个 tick"，与 C# `yield return` 一致
-2. 🆕 **新增独立机制** — "指定角色帧区间，硬直时重复执行该段逻辑"
-3. 三个设计约束：不与 yield 混淆、建立统一直觉、语言层/宿主层合理分离职责
+**结论（第 18 轮收敛）**：**方案 A — while + GetFrame() + yield** 为帧区间循环的标准模式。
 
----
+| 要素 | 说明 |
+|------|------|
+| **yield 语义** | 始终 = "等下一个 tick"，与 C# `yield return` 一致 |
+| **帧号来源** | 宿主通过 `GetFrame()` Syscall 提供，脚本不维护帧计数器 |
+| **帧号推进** | 宿主根据硬直决定是否增加帧号，但不管是否推帧，VM tick 始终照常执行 |
+| **样板代码** | 每阶段仅 2 行：`while GetFrame() < N { ...; yield }` |
+| **行业共识** | 10 种语言调研，7/10（C#/Lua/GDScript/Kotlin/Wren/Squirrel/Fennel）使用完全同构的 while+yield 模式 |
+| **VM/语言改动** | 零 — 当前 FFS 已完全支持 |
 
-#### 第 15 轮 — 用户决定：yield 保持 tick 直觉，新增帧区间重复效果
+**典型写法**：
+
+```ffs
+func step() {
+    // 阶段1：蓄力（帧 0~9）
+    while GetFrame() < 10 {
+        CreateParticle()
+        yield
+    }
+    // 阶段2：攻击（帧 10~19）
+    while GetFrame() < 20 {
+        SetHitbox(0, 10, 20, 30, 40)
+        yield
+    }
+    ClearHitbox()
+}
+```
+
+**收敛理由**：
+
+1. ✅ 可以收敛 — 算完美了（用户确认）
+2. ✅ 帧号推进模型正确 — 宿主根据硬直决定是否增加帧号，VM tick 照常
+3. ✅ 零 VM/语言改动、零混淆、零耦合、极低样板、行业共识
+
+<details>
+<summary>📋 Q2 完整讨论历史（第 12~17 轮）</summary>
 
 > **用户修改**（第 16 轮）：想明白了需求 — 不是"从上一个 yield 点重放"，而是"指定一段代码让它循环"。给出示例代码：用 while + yield + GetFrame() 条件 break 来实现帧区间内循环执行。这个粗暴做法完全满足需求。要求：(1) 用 while 循环模拟实现具体场景看看效果；(2) 用特定语法实现看看能简单到什么程度。
 
@@ -1756,40 +1786,9 @@ Zig 曾有协程（async/suspend/resume），但在 0.11 后被移除。其设�
 
 > Q2 可以视为**基本收敛** — while+yield 是答案，不需要新语法。
 
-#### 待用户确认（第 17 轮）
+#### 第 15 轮旧待确认项（已由第 18 轮收敛覆盖）
 
-1. **Q2 是否可以收敛为 ✅？** — 路径 A（while + GetFrame() + yield）作为帧区间循环的标准模式
-2. **帧号推进由宿主负责** — 这个假设是否正确？即宿主每 tick 自动递增帧号，脚本通过 `GetFrame()` 查询
-3. **是否还有其他语言/模式想探索？** — 目前调研覆盖 10 种语言
-
-```
-    yield 流（step）          硬直回调流（onHitstun）
-    ─────────────           ──────────────────────
-    tick 1: f=1, yield       
-    tick 2: f=2, yield       
-    tick 3: f=3, yield       
-     ↓ 硬直开始 ↓
-                             hitstun tick 1: ApplyDamage
-                             hitstun tick 2: ApplyDamage
-                             hitstun tick 3: ApplyDamage
-     ↓ 硬直结束 ↓
-    tick 4: f=4, yield       // step 从 f=3 的 yield 恢复
-    tick 5: f=5, yield
-```
-
-局限：onHitstun 无法直接访问 step 的局部变量 `f`。但如果需要，可以把 `f` 提升为模块变量。
-
-如果未来发现 R1 不够（如需要在 step 内部标记重放区间），可以升级到 R2 或 R4。
-
-#### 待用户确认（第 15 轮）
-
-1. **R1（独立函数 onHitstun）是否匹配你的直觉？** — 硬直帧逻辑写在独立函数中，宿主在硬直帧直接调用
-2. **模块变量共享是否足够？** — step 和 onHitstun 通过模块变量交换数据
-3. **是否需要更紧密的集成？** — 如果 onHitstun 需要引用 step 内的帧号/阶段等局部状态，R2 标注块可能更合适
-4. **"帧区间"的具体含义？** — 你说"指定一个角色帧区间" — 是指宿主告知脚本"当前硬直影响的是角色帧 3~3"（即冻结在帧 3），还是"重放帧 1~5"这种回溯区间？
-
-<details>
-<summary>📋 Q2 讨论历史（第 12~17 轮）</summary>
+（已收敛，见上方结论。）
 
 #### 第 17 轮 — 修正 GetFrame() 一致性 + 跨语言调研
 
@@ -3268,10 +3267,207 @@ func step() {
 </details>
 ---
 
+### Q4: FFS 无对象语言的宿主参数封装 💬
+
+> **第 18 轮新增**。随着 `GetFrame()`、`Owner` 等宿主交互点增多，需要合理的组织方式。FFS 不支持对象，如何有效处理 Owner、Scene、Context 等封装需求？
+
+#### 背景
+
+在 Q2 收敛过程中出现了 `GetFrame()` Syscall，更早在 SK7 中出现了 Owner 概念。如果业务展开，宿主侧的参数和方法会不断增加：
+
+- **Owner 域**：GetFrame(), GetHP(), GetStance(), GetPosition(), ...
+- **Target 域**：Target_GetHP(), Target_GetDistance(), ...
+- **Scene 域**：Scene_GetTime(), Scene_GetEntityCount(), ...
+- **Combat 域**：Combat_CheckHit(), Combat_ApplyDamage(), ...
+
+C# 宿主侧自然用对象封装（`owner.GetFrame()`），但 FFS 没有对象。需要在 FFS 侧找到等效的组织方式。
+
+#### 三种手段
+
+##### 手段 1：Syscall 命名前缀 — 隐式绑定 Owner
+
+将 Owner 相关的 Syscall 用前缀分组，运行时自动绑定到当前实例的 Owner：
+
+```ffs
+// FFS 侧 — 平坦调用，前缀作命名空间
+Owner_GetFrame()
+Owner_GetHP()
+Owner_SetStance(STANCE_CROUCH)
+```
+
+C# 宿主侧：
+```csharp
+table.Register(SYS_OWNER_GET_FRAME, "Owner_GetFrame", (ref VMInstanceState s) => {
+    var owner = GetOwner(ref s);  // 隐式解析当前实例的 Owner
+    new SyscallArgs(ref s).SetReturnInt(owner?.Frame ?? 0);
+});
+```
+
+> **用户反馈**：略麻烦，且绑定 Owner。可能有获取其他实体的需求（如 Target），槽位会不够用。
+
+**评估**：
+
+| 维度 | 评价 |
+|------|------|
+| 语言改动 | ✅ 零 |
+| VM 改动 | ✅ 零 |
+| 扩展性 | ⚠️ 每个域 × 每个方法 = 一个槽位。256 个 Syscall 槽位可能不够 |
+| 灵活性 | ⚠️ 域是固定的（Owner/Target/Scene），新增域需要大量新 Syscall |
+
+##### 手段 2：Include 组织脚本 — 配套的 API 头文件
+
+每个实际脚本配套一个 include 头文件，提供常量定义和薄 wrapper 函数：
+
+```ffs
+// skill_api.ffs — 技能 API 组织脚本
+const STANCE_STAND = 0
+const STANCE_CROUCH = 1
+
+func get_frame() { return _GetFrame() }
+func get_hp() { return _GetHP() }
+func get_target_hp(id) { return _GetTargetHP(id) }
+```
+
+```ffs
+// skill_light_punch.ffs
+#include "skill_api.ffs"
+
+func step() {
+    while get_frame() < 10 {
+        // ...
+        yield
+    }
+}
+```
+
+> **用户反馈**：跟我想到一起去了。我也在想每个实际脚本是否需要一个配套的组织脚本。
+
+**评估**：
+
+| 维度 | 评价 |
+|------|------|
+| 语言改动 | ✅ 零 — Lang-2 include 已支持 |
+| VM 改动 | ✅ 零 |
+| 扩展性 | ✅ 无限 — 头文件可定义任意多个 wrapper |
+| 灵活性 | ✅ 高 — 不同类型脚本可 include 不同 API 头文件 |
+| Syscall 节省 | ✅ 底层只需少量泛用 Syscall，头文件负责组织 |
+
+##### 手段 3：泛用参数化 Syscall — 一个 Syscall + 域 ID + 属性 ID
+
+用少量泛用 Syscall 替代大量专用 Syscall：
+
+```ffs
+// 底层：一个 Syscall 解决所有 Get 需求
+// GetAttr(entityId, attrId) → value
+const SELF = 0
+const ATTR_FRAME = 1
+const ATTR_HP = 2
+
+func get_frame() { return GetAttr(SELF, ATTR_FRAME) }
+func get_hp() { return GetAttr(SELF, ATTR_HP) }
+func get_target_hp(target_id) { return GetAttr(target_id, ATTR_HP) }
+```
+
+> **用户反馈**：算是手段 1 的泛用化。
+
+**评估**：
+
+| 维度 | 评价 |
+|------|------|
+| 语言改动 | ✅ 零 |
+| VM 改动 | ✅ 零 |
+| Syscall 槽位 | ✅ 极少 — GetAttr/SetAttr/CallMethod 即可覆盖大部分需求 |
+| 扩展性 | ✅ 极高 — 新增属性只需加 const，不需要新 Syscall |
+| 类型安全 | ⚠️ 弱 — attrId 是 int，编译期无法检查 |
+| 调试友好度 | ⚠️ 中 — 错误消息只能说"attrId 42 未知"，不如"Owner_GetHP not found" |
+
+#### 用户关注：寄存器分配的兜底机制
+
+> 用户指出：扩展方向由业务决定，等于作死了，需要兜底机制。
+
+这里的核心担忧是：**如果宿主参数组织完全由业务侧自行扩展（命名前缀、include 文件等），没有 VM/编译器层面的保护，可能导致资源耗尽**。
+
+潜在风险与兜底方案：
+
+| 风险 | 场景 | 兜底机制 |
+|------|------|---------|
+| **Syscall 槽位耗尽** | 手段 1 按域×方法分配，256 槽位不够 | 手段 2/3 减少底层 Syscall 数量；或扩展 SyscallTable 到 512/1024 |
+| **模块变量溢出** | include 头文件引入大量 const/var | Lang-1.1b 扩展寄存器已兜底（溢出到 ExtendedRegs） |
+| **函数数量爆炸** | 大量 wrapper 函数占 ROM 空间 | 编译器可优化内联简单 wrapper（未来 peephole 扩展） |
+| **编译时间膨胀** | include 展开后源码过大 | Preprocessor 已有 cycle detection；可加文件大小上限警告 |
+
+**结论**：Lang-1.1b 的 ExtendedRegs 已为模块变量溢出提供了兜底。Syscall 槽位是当前唯一硬上限（256），如果业务确实需要更多，扩展 SyscallTable 是简单的 VM 改动。
+
+#### 综合推荐
+
+| 层次 | 推荐 | 理由 |
+|------|------|------|
+| **底层 Syscall** | 手段 3（泛用参数化） | 最省槽位，灵活性最高 |
+| **脚本组织** | 手段 2（include 组织脚本） | 已有基础，零改动，提供类型友好的 API 层 |
+| **命名约定** | 手段 1（前缀命名）用于少量高频 Syscall | 如 GetFrame()、SetHitbox() 等无需参数化的核心 API |
+
+组合模式：**底层用少量泛用 Syscall（手段 3）+ include 头文件提供友好 wrapper（手段 2）+ 少量高频操作保留专用 Syscall（手段 1）**。
+
+```
+┌─────────────────────────────────────────────┐
+│  skill_light_punch.ffs                       │
+│  #include "skill_api.ffs"                    │
+│  func step() { while get_frame() < 10 ... } │
+└─────────────┬───────────────────────────────┘
+              │ include 展开
+┌─────────────▼───────────────────────────────┐
+│  skill_api.ffs  (组织脚本/API 头文件)        │
+│  func get_frame() { return GetFrame() }      │  ← 高频专用 Syscall
+│  func get_hp() { return GetAttr(SELF,HP) }   │  ← 泛用 Syscall + wrapper
+│  func get_target_hp(id) {                    │
+│      return GetAttr(id, HP)                  │  ← 泛用 Syscall + wrapper
+│  }                                           │
+└─────────────┬───────────────────────────────┘
+              │ Syscall 边界
+┌─────────────▼───────────────────────────────┐
+│  C# SyscallTable (256 slots)                 │
+│  [0-15] 专用高频: GetFrame, SetHitbox, ...   │
+│  [16-31] 泛用: GetAttr, SetAttr, CallAction  │
+│  [32-63] 黑板: GetBB, SetBB                  │
+│  [64+] 扩展保留                              │
+└─────────────────────────────────────────────┘
+```
+
+#### 兜底机制建议
+
+1. **Syscall 槽位**：如果 256 不够，SyscallTable 可扩展为 `ushort` 索引（65536 槽位），VM 改动极小（SYSCALL 指令的 B 字段从 byte 改为 ushort）
+2. **模块变量**：ExtendedRegs 已兜底（Lang-1.1b）
+3. **函数表**：当前无上限（动态数组），不需要额外兜底
+4. **编译期检查**：编译器在 include 展开后统计 Syscall 使用数量，超过阈值发出警告
+
+#### 待用户确认
+
+1. **手段 2+3 组合路线是否符合直觉？** — include 头文件做 API 层，底层用少量泛用 Syscall
+2. **"每个脚本配套组织脚本"的具体设想？** — 是一个全局 `skill_api.ffs` 还是每类脚本一个（`attack_api.ffs`、`movement_api.ffs`）？
+3. **兜底机制的优先级？** — Syscall 槽位扩展和编译期检查，是否需要现在就做？还是等业务实际触碰上限？
+4. **泛用 Syscall 的粒度？** — GetAttr/SetAttr 够用？还是需要更细的分类（GetIntAttr/GetFloatAttr）？
+
+---
+
 <details>
 <summary>📋 讨论轮次总览</summary>
 
-#### 第 17 轮（当前）
+#### 第 18 轮（当前）
+
+用户确认 Q2 收敛：方案 A 完美。帧号推进由宿主负责正确。新增 Q4 讨论方向：FFS 无对象语言的宿主参数封装。
+
+用户对三种手段的反馈：
+- 手段 1（前缀命名）：略麻烦，绑定 Owner，槽位会不够用
+- 手段 2（include 组织脚本）：与用户想法一致，每个脚本配套组织脚本
+- 手段 3（泛用参数化）：手段 1 的泛用化
+- 寄存器分配：扩展方向由业务决定等于作死，需要兜底机制
+
+语言方回应：
+1. Q2 正式标记 ✅ 收敛，折叠历史
+2. Q4 正式化：推荐手段 2+3 组合（include 头文件 + 泛用 Syscall）
+3. 兜底机制：分析 4 类风险并提出对策；Syscall 槽位可扩展到 ushort，ExtendedRegs 已兜底模块变量
+
+#### 第 17 轮
 
 用户指出小失误：场景 2/3 用脚本维护 `f` 的写法与场景 1 矛盾 — 既然方案核心是"脚本只关心 tick/yield，帧号由宿主提供 GetFrame()"，所有场景应统一。大方向正确。要求从其他语言（大众+小众）借鉴。
 
