@@ -566,7 +566,7 @@ B 阶段 20 个步骤（B-R1 → B-δ5）全部完成，已归入上方 A 区表
 > Phase 1（Lang-1~Lang-3）✅ 完成。Phase 2 = Lang-6~Lang-8（Q4 服务脚本 XCALL 路径），前置条件：XCALL Spec 设计文档输出。Lang-4 按需触发（黑板瓶颈时）。Lang-9 远期。
 >
 > **Lang-6 子计划 checklist**（C-1 XCALL 基线）：
-> - [ ] 输出 XCALL Spec 设计文档（OpCode 编码、导出表格式、跨实例寻址协议）
+> - [x] 输出 XCALL Spec 设计文档（OpCode 编码、导出表格式、跨实例寻址协议）→ [Step_Lang6_XCALL_Spec.md](Plan/Step_Lang6_XCALL_Spec.md)
 > - [ ] 新增 `@export` 关键字（Lexer + Parser + AST）
 > - [ ] 编译器导出表生成（被 @export 标记的 var/const/func → ExportTable）
 > - [ ] 新增 XCALL OpCode（A=dest, B=instanceId_reg, C=funcIndex）+ VMWorld 执行逻辑
@@ -608,7 +608,7 @@ B 阶段 20 个步骤（B-R1 → B-δ5）全部完成，已归入上方 A 区表
 >
 > **Lang-6 设计来源（Q4 收敛）**：Q4 讨论历经 9 轮（R18~R26），14 项设计决策全部锁定。核心方案：方式 C（语言级引用），服务脚本为 FFS 运行时实体。统一基线设计 XIMA（Cross-Instance Member Access）：`svc.member` 点号语法，编译器根据导出表自动路由 XCALL/XLOAD_MVAR/XSTORE_MVAR。Y1-Plus 编译期保证服务函数不可 yield（无运行时负担）。嵌套深度运行时配置（MaxXCallDepth 默认 4，Warn/Unlimited 两种策略）。性能影响可忽略（< 0.02% 帧预算）。
 
-**Lang-3 ✅ 完成（BB01-BB10 全通过，1111 测试全通过）。Lang-1 ✅ 完成。Lang-1.1a ✅ 完成（MR01-MR08 全通过）。Lang-1.1b ✅ 完成（XR01-XR06 全通过）。Lang-2 ✅ 完成（INC01-INC16 全通过）。P0 语言需求 Phase 1 完毕。下一步 → Lang-6（XCALL 基线），前置条件：XCALL Spec 设计文档输出。**
+**Lang-3 ✅ 完成（BB01-BB10 全通过，1111 测试全通过）。Lang-1 ✅ 完成。Lang-1.1a ✅ 完成（MR01-MR08 全通过）。Lang-1.1b ✅ 完成（XR01-XR06 全通过）。Lang-2 ✅ 完成（INC01-INC16 全通过）。P0 语言需求 Phase 1 完毕。下一步 → Lang-6（XCALL 基线），XCALL Spec 设计文档 ✅ 输出（[Step_Lang6_XCALL_Spec.md](Plan/Step_Lang6_XCALL_Spec.md)），下一步 → 实现 @export 关键字 + 导出表生成。**
 
 ---
 
