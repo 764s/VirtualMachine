@@ -4,6 +4,30 @@
 > **来源**：需求讨论 — 将 host-side 技能迁移为 FFS 脚本驱动
 > **日期**：2026-04-09（实现状态同步更新）
 
+### 文档格式约定
+
+每个议论点（SK、Q 等）统一使用以下结构呈现：
+
+```
+## 议论点名 [状态]
+
+最终结论或最新讨论的简要描述（直接暴露，不折叠）
+
+<details>
+<summary>📋 详细设计</summary>
+最终方案的完整细节（设计文档级）
+</details>
+
+<details>
+<summary>📋 讨论历史</summary>
+历史讨论过程、已放弃的方案、中间轮次记录
+</details>
+```
+
+- **直接暴露区**：仅放最终结论或最新讨论结果的简要描述
+- **详细设计折叠区**：最终方案的完整细节，供实现时参考
+- **讨论历史折叠区**：中间过程、已放弃方案、轮次记录
+
 ---
 
 ## 决议总览
@@ -15,8 +39,8 @@
 | SK3 | 碰撞框交互方式 | 💬 | 方案 A（脚本推送）vs 方案 B（宿主查询），待性能验证 |
 | SK4 | 姿态 Syscall | ✅ | 可新增 SetStance 等 |
 | SK5 | 命名规则 | ✅ | `skill_<英文名>.ffs` |
-| SK6 | 硬直机制 | ✅ | 方案 A — 宿主时间轴暂停，yield/wait(N) 已支持 |
-| SK7 | 技能条件入口 | ✅ | 方案 D′ — 同实例 checkEnter()/step()。VM 无硬障碍，模块变量已由 Lang-1 实现 |
+| SK6 | 硬直机制 | ✅ | tick/yield 不受硬直影响；帧号从宿主获取（Syscall 或服务脚本）；硬直不执行为纯业务逻辑 |
+| SK7 | 技能条件入口 | ✅ | 同实例 checkEnter()/step() 模块级函数共享变量（Lang-1 模块变量）。💬 函数命名待改善；变量重置时机待讨论 |
 | SK8 | 碰撞框 Syscall | ✅ | SetHitbox/SetHurtbox/ClearHitbox/SetPushBox |
 | SK9 | 受击标记 | ✅ | 分组 mask 混合方向正确 |
 | SK10 | 连招共用环境 | ✅ | V1: 黑板 Syscall；理想形 3（混合式）由 L1+L2+黑板覆盖，需求转入 SK14 |
@@ -81,12 +105,15 @@ VM 桥接层已就绪（`GameVMBridge` + `GameSyscalls` ~40 syscall），但 `KO
 ---
 
 ## SK6: 硬直实现机制 ✅
-// 结论过期
-// 已经明确:
-// (1) 确为 tick 和 yield 绑定, 不受硬直影响. tick 本身不刻意和帧关联, 他只是一个宿主驱动入口, 虽然他客观可宿主世界帧同步.
-// (2) 实际帧号从宿主方获得, 可以考虑 SysCall 或者 服务脚本. 从便利的角度应是服务脚本, 需要确认当前的编辑器自动优化是否能让服务脚本调用性能 >= SysCall
-// (3) 硬直不执行作为纯业务逻辑, 业务如果关心对硬直特殊处理, 则通过判断是否处于硬直中分支处理
-**结论**：方案 A — 宿主时间轴暂停。硬直期间宿主不调用 VM Tick，脚本自然冻结。`yield` / `wait(N)` 已支持，无需新增语法。
+
+**结论**：
+
+1. **tick 与 yield 不受硬直影响**。tick 是宿主驱动入口，不刻意和帧关联（虽然客观上可与宿主世界帧同步）
+2. **实际帧号从宿主获取**，可通过 Syscall 或服务脚本。从便利性角度应优先服务脚本（💬 需确认自动退化优化能否使服务脚本调用性能 ≥ Syscall）
+3. **硬直不执行为纯业务逻辑**。业务如关心硬直特殊处理，通过判断是否处于硬直中进行分支处理
+
+<details>
+<summary>📋 详细设计</summary>
 
 **两层配合**：
 1. **宿主层**：`ApplyHitstun()` → 设置 `Character.HitstunFrames` → 暂停角色时间轴推进
@@ -95,8 +122,14 @@ VM 桥接层已就绪（`GameVMBridge` + `GameSyscalls` ~40 syscall），但 `KO
 2. **技能层**：攻击方 `ApplyHitstun()` 同时附加受击标记 → 宿主在硬直结束后根据标记触发受击技能切换
 3. **安全兜底**：`HitstunFrames` 倒计时到 0 后，若没有受击技能接管，自动恢复 idle
 
+</details>
+
 <details>
 <summary>📋 讨论历史</summary>
+
+> ⚠️ 以下为早期讨论（"方案 A 宿主时间轴暂停"），结论已被上方更新取代。保留供参考。
+
+**早期结论**：方案 A — 宿主时间轴暂停。硬直期间宿主不调用 VM Tick，脚本自然冻结。`yield` / `wait(N)` 已支持，无需新增语法。
 
 #### 前置模型：角色逻辑时间轴
 
@@ -154,9 +187,12 @@ VM 桥接层已就绪（`GameVMBridge` + `GameSyscalls` ~40 syscall），但 `KO
 
 ## SK2: 裁决机制 ✅
 
-// 裁决层流程未描述打断优先级和启动优先级, 这里是简单省略, 还单纯忘了
-
 **结论**：分层候选池（姿态分组 + 优先级 + 脚本条件）— 工业标准格斗游戏方案。
+
+> 💬 **待完善**：裁决层流程中的打断优先级和启动优先级的具体交互尚未详细描述。
+
+<details>
+<summary>📋 详细设计</summary>
 
 ```
 宿主裁决层 (每帧):
@@ -187,6 +223,8 @@ class SkillDef {
 - 每姿态约 15-20 个候选 → 通用规则过滤后约 3-5 个需要 VM 条件检查
 - VM 条件检查 = spawn + 执行约 3-5 条指令 + return → 约 1-2μs/次
 - 最坏情况: 5 × 2μs = 10μs/帧，完全可接受
+
+</details>
 
 <details>
 <summary>📋 讨论历史</summary>
@@ -227,182 +265,20 @@ class SkillDef {
 
 ## SK7: 技能条件入口 ✅
 
-// 1. 讨论内容应进折叠区
-// 2. step, checkEnter 需要起更好的名字
-// 3. 通过之后不应该立调用(我把 redirect to 理解为立即调用吗), 还有裁决机制没走完, 例如打断优先级和同时启动优先级
-// 4. `3`暗示裁决机制没有理清楚
-// 5. 业务级代码应该明确仅示范(大概率是不太好的实现), 以免被直接搬用. 且应该进折叠区, 以详细的形式
-// 6. `checkEnter` 和 `step` 已经确认为模块级函数, 他们共享变量. 相关讨论已过期
-// 7. `6` 暗示 `3` 理的 redirect to 可能也过期, 由 `6` 可推断 `checkEnter` 和 `step` 大概率是一个虚拟机实例
-// 8. `复合条件与全局变量` 相关讨论应该已经被模块级变量解决了, 但剩余重置时机问题未讨论(可能也是业务代码). 这里需要进一步讨论
+**结论**：方案 D′ — 独立条件检查函数 + 执行函数，同一 VM 实例。两者作为模块级函数共享模块变量（Lang-1 已实现）。
 
-**结论**：方案 D′ — 独立 `checkEnter()` + `step()` 函数，**同一 VM 实例**。
+> 💬 **待讨论**：
+> - `checkEnter`/`step` 名称待改善（需要更好的命名）
+> - 模块变量重置时机问题未讨论（当技能实例被复用时，模块变量如何重置？可能属于业务代码范畴）
 
-> ⚠️ **第 8 轮修正**：第 7 轮分析误将 checkEnter 和 step 描述为"独立 VM 实例"，这是**严重误解**。设计意图始终是：一个技能 = 一个 VM 实例贯穿整个生命周期（从条件检查到执行完毕）。
-
-> 📌 **第 9 轮澄清**：VM 运行时层面**无硬阻碍**。一个 `.ffs` 文件编译为一个 `VMProgram`（ROM），多个函数共存于同一字节码流，`TryGetFunction(name)` 只是查出不同的入口 IP。同一实例的 64 个寄存器（r0~r63）在 `checkEnter` → redirect → `step` 全程物理持续存在，值不会被擦除。
->
-> 当前"无法复用变量"的限制在 **编译器/语言层面**：FFVM 编译器对每个函数**独立**做寄存器分配（r16+ local zone），`checkEnter` 的 `var a` 和 `step` 的 `var a` 可能编译到同一个 r16，但语义上是两个独立变量。FFS 语言目前没有"模块级 var"语法，因此无法通过语言层面声明跨函数共享的命名变量。详见下方"全局变量"讨论。
-
-### 核心设计
-
-技能脚本包含两个约定函数：
+**核心设计**：
 
 | 函数 | 职责 | 宿主调用时机 | 返回语义 |
 |------|------|-------------|---------|
-| `func checkEnter(): int` | 条件检测 | 裁决层 Layer 3（候选池筛选） | `return 0` = 不满足；`return 1` = 满足 |
+| `func checkEnter(): int` | 条件检测 | 裁决层候选池筛选 | `return 0` = 不满足；`return 1` = 满足 |
 | `func step()` | 技能执行 | 技能激活后每帧驱动 | `yield` = 继续；`return` = 技能结束 |
 
-**同实例生命周期**：
-
-```
-[spawn] → [checkEnter] → return 0 → [destroy]  ← 条件不满足
-                       → return 1 → [redirect to step] → [tick] → [tick] → ... → [完成/destroy]
-                                     ↑ 同一实例继续      ← 条件满足后执行
-```
-
-### 宿主侧实现
-
-```csharp
-// 1. 条件检测：spawn at checkEnter
-var program = World.Modules.Get(def.VMModuleSlot);
-if (!program.TryGetFunction("checkEnter", out var checkEntry)) continue;
-
-int vmId = World.SpawnInstance(def.VMModuleSlot, checkEntry.EntryIP);
-_instanceToOwner[vmId] = charId;
-World.TickInstance(vmId);
-
-// 读取返回值 (r0)
-ref var inst = ref World.Pool.Instances[vmId];
-bool passed = inst.Registers[0].IsNonZero;
-
-if (!passed)
-{
-    // 条件不满足 → 销毁实例
-    World.DestroyInstance(vmId);
-    _instanceToOwner.Remove(vmId);
-    continue;
-}
-
-// 2. 条件满足 → 同一实例重定向到 step
-if (program.TryGetFunction("step", out var stepEntry))
-{
-    // 重置实例到 step 入口（保留寄存器状态）
-    inst.IP = stepEntry.EntryIP;
-    inst.StateFlags &= ~VMStateFlags.Completed;  // 清除完成标记
-    // 寄存器空间保留 — checkEnter 中计算的值可在 step 中使用
-
-    // 挂载到技能实例，后续每帧 tick
-    skill.VMInstanceId = vmId;
-}
-```
-
-### checkEnter 和 step 共享状态
-
-由于是同一实例，寄存器空间在 checkEnter 和 step 之间**物理上共享**。不过需注意：
-
-| 维度 | 说明 |
-|------|------|
-| **函数局部变量** | 各自独立声明、独立编译。checkEnter 的 `var a` 和 step 的 `var a` 虽可能占据相同物理寄存器（如 r16），但语义上是两个独立变量 |
-| **寄存器残留** | checkEnter 写入的寄存器值在 redirect 后**物理存在**。step 可以通过约定使用相同寄存器编号读取，但缺乏语言层面的命名保证 |
-| **根本瓶颈** | **语言/编译器**层面：FFS 没有模块级 `var` 语法，编译器不支持跨函数的命名变量分配。**VM 运行时**层面：无障碍 |
-
-**结论**：VM 运行时完全支持同实例跨函数状态共享（寄存器物理持续）。瓶颈在编译器/语言。解法见下方"全局变量"讨论。
-
-### FFVM 改动需求
-
-方案 D′ 需要 FFVM 提供"实例重定向"能力：
-
-```csharp
-/// <summary>
-/// 将一个已完成的实例重定向到新入口点，保留寄存器状态。
-/// 用于同实例从 checkEnter 过渡到 step。
-/// </summary>
-public void RedirectInstance(int instanceId, int newEntryIP)
-{
-    ref var inst = ref Pool.Instances[instanceId];
-    inst.IP = newEntryIP;
-    inst.StateFlags &= ~VMStateFlags.Completed;
-    inst.StackTop = 0;  // 重置调用栈（新函数从零开始）
-    // 寄存器保留（不清零）
-}
-```
-
-> 📌 这是一个轻量 API 新增（~5 行实现），不影响现有 VM 逻辑。
-
-### 复合条件与全局变量（第 7~9 轮议题）
-
-> **第 9 轮方向**：探索全局变量机制作为优先路径。原则：**数据尽量留在 VM 内**（SK12），黑板只在跨脚本/跨角色真正需要时使用。全局变量还能统一解决连招共用环境（SK10）。
-
-> **第 8 轮修正**：第 7 轮分析基于"独立实例"假设得出"路径 2 不可行"的结论。同实例模型下需重新评估。
-
-| 模式 | 行为 | 适用场景 |
-|------|------|---------|
-| **无状态检查** | 每次 `checkEnter()` 都检查 A∧B | 简单条件（按键+姿态）— 90%+ 技能 |
-| **有状态检查** | 首次 A 满足后记录，后续只检查 B | 蓄力、连招窗口 |
-
-**有状态检查的实现路径**：
-
-| 路径 | 机制 | 可行性 | 第 9 轮评估 |
-|------|------|--------|-----------|
-| **路径 1：宿主黑板** | checkEnter 通过 Syscall 读写宿主 component | ✅ 不依赖实例模型 | 适合跨脚本/跨角色共享数据（如被击数、连招伤害递减） |
-| **路径 2：寄存器残留** | checkEnter 将状态写入特定寄存器 | ⚠️ 不可靠 — checkEnter 每次 spawn 会重入函数开头 | ~~不推荐~~ |
-| **路径 3：全局变量** ⭐ | FFS 增加模块级 `var` 声明，编译器分配到保留寄存器段 | 需编译器改动，VM 运行时**无需改动** | **优先探索** — 同实例天然受益，符合 SK12 原则 |
-
-#### 路径 3 深入分析：全局变量
-// 疑似过期, 已经有模块级变量, 如果确认全部基于过期点讨论, 硬标记未放弃并折叠, 或者干脆删除, 以免产生干扰.
-// `与 SK10 连招共用环境的关系` 疑似过期, 已有`服务脚本`概念完美支持连招
-// `通用规则` `特殊规则` `向后兼容` 疑似有效讨论, 但不属于核心结论, 应该以详细讨论的形式进折叠区
-
-**语言层设计**：
-
-```ffs
-// 模块级 var — 跨函数可见，同实例内持久
-var chargeReady: int = 0
-var comboCount: int = 0
-
-func checkEnter(): int {
-    if chargeReady == 0 { return 0 }
-    if IsInputPressed(5) == 0 { return 0 }
-    return 1
-}
-
-func step() {
-    comboCount = comboCount + 1
-    // ... 使用 chargeReady、comboCount
-}
-```
-
-**编译器实现思路**：
-
-| 层面 | 改动 | 复杂度 |
-|------|------|--------|
-| **Parser** | 允许模块顶层 `var` 声明（当前仅允许 `const`） | ⭐ 低 |
-| **编译器寄存器分配** | 全局 var 分配到保留段（如 r56~r63，8 个全局槽），函数局部变量仍用 r16~r47 | ⭐ 中 — 需调整寄存器区域划分 |
-| **VM 运行时** | **零改动** — 寄存器在实例中天然持久 | ⭐ 无 |
-| **初始化** | 全局 var 初始值在 SpawnInstance 时由模块的 `_init` 代码段设置（类似构造函数） | ⭐ 中 |
-
-**寄存器布局调整**：
-
-```
-当前:  r0~r15 scratch | r16~r47 local | r48~r63 temp
-提案:  r0~r15 scratch | r16~r47 local | r48~r55 temp | r56~r63 global (8 slots)
-```
-
-8 个全局槽对于技能脚本足够（蓄力标记、连招计数、Phase 编号等）。
-
-**与 SK10 连招共用环境的关系**：
-
-全局变量机制可直接替代 SK10 V1 黑板方案中**同一脚本内**的状态需求。跨脚本共享仍需宿主黑板（或未来 include 共享模块变量）。但 90%+ 的有状态需求（蓄力进度、连招段数、Phase index）属于**单脚本内**跨函数共享，全局变量即可满足。
-
-**结论（第 9 轮）**：
-
-1. **路径 3（全局变量）为优先探索方向** — 符合"数据留 VM 内"原则，VM 运行时零改动
-2. **路径 1（宿主黑板）降级为补充** — 仅用于真正需要跨脚本/跨角色共享的数据
-3. **连招共用环境（SK10 V1）可被全局变量部分覆盖** — 同脚本内的连招状态无需外推到宿主
-4. **实现优先级**：全局变量可纳入 include（SK13）之后的编译器改动批次
-
-> 💬 **待讨论**：全局变量的寄存器段划分（r56~r63 或其他）、初始化时机（SpawnInstance 时执行 `_init` 段 vs 编译器常量填充）、与 include 共享的交互。
+> ✅ checkEnter 和 step 为**模块级函数**，通过模块变量（Lang-1）自然共享状态。早期关于"无法复用变量"的讨论已过期。
 
 **通用规则**（宿主侧，所有技能共享）：
 - 姿态匹配（候选技能必须在当前姿态的 AllowedStances 中）
@@ -420,24 +296,72 @@ func step() {
 - 若脚本不含 `step()` 而有 `main()`，宿主可使用 `main` 作为执行入口（过渡期）
 - 最终目标：所有 VM 技能统一使用 `checkEnter()` + `step()` 双入口
 
+<details>
+<summary>📋 详细设计</summary>
+
+**同实例生命周期**：
+
+```
+[spawn] → [checkEnter] → return 0 → [destroy]  ← 条件不满足
+                       → return 1 → [redirect to step] → [tick] → [tick] → ... → [完成/destroy]
+                                     ↑ 同一实例继续      ← 条件满足后执行
+```
+
+**宿主侧实现**（⚠️ 仅为示范草案，非最终实现）：
+
+```csharp
+var program = World.Modules.Get(def.VMModuleSlot);
+if (!program.TryGetFunction("checkEnter", out var checkEntry)) continue;
+
+int vmId = World.SpawnInstance(def.VMModuleSlot, checkEntry.EntryIP);
+_instanceToOwner[vmId] = charId;
+World.TickInstance(vmId);
+
+ref var inst = ref World.Pool.Instances[vmId];
+bool passed = inst.Registers[0].IsNonZero;
+
+if (!passed)
+{
+    World.DestroyInstance(vmId);
+    _instanceToOwner.Remove(vmId);
+    continue;
+}
+
+if (program.TryGetFunction("step", out var stepEntry))
+{
+    inst.IP = stepEntry.EntryIP;
+    inst.StateFlags &= ~VMStateFlags.Completed;
+    skill.VMInstanceId = vmId;
+}
+```
+
+**FFVM 改动需求**：方案 D′ 需要"实例重定向"能力（`RedirectInstance`，~5 行实现）。
+
+**有状态条件检查**：
+
+| 模式 | 行为 | 适用场景 |
+|------|------|---------|
+| **无状态检查** | 每次 `checkEnter()` 都检查 A∧B | 简单条件（按键+姿态）— 90%+ 技能 |
+| **有状态检查** | 首次 A 满足后记录，后续只检查 B | 蓄力、连招窗口 |
+
+有状态检查通过模块变量（Lang-1）实现。早期讨论的"路径 3 全局变量"即为模块变量的前身。
+
+**脚本示例**（⚠️ 仅为示范，帧号获取方式可能过期 — 应从宿主获取而非脚本维护）：
+
 ```ffs
 // skill_light_punch.ffs — 方案 D′ 示例
-
-/// 技能进入条件（独立入口，由裁决层调用）
 func checkEnter(): int {
     var lpPressed: int = IsInputPressed(4)
     var grounded: int = IsGrounded()
     if lpPressed == 0 || grounded == 0 {
-        return 0    // 条件不满足
+        return 0
     }
-    return 1        // 条件满足
+    return 1
 }
 
-/// 技能执行主体（激活后每帧驱动，同一实例从 checkEnter redirect 而来）
 func step() {
     BeginAction(10, 20)
     defer { EndAction() }
-
     var f: int = 0
     var hitDone: int = 0
     while f < 20 {
@@ -454,47 +378,40 @@ func step() {
 }
 ```
 
+</details>
+
 <details>
 <summary>📋 讨论历史</summary>
 
+> ⚠️ 以下讨论中关于"全局变量"的部分已由 Lang-1 模块变量实现。关于"跨脚本共享"的部分已由服务脚本（Lang-6/7/8 XCALL）覆盖。保留供参考。
+
+**早期"全局变量"讨论**（第 7~9 轮，现已由 Lang-1 模块变量实现）：
+
+路径 3（全局变量 = 模块变量前身）为优先探索方向 — 符合"数据留 VM 内"原则。路径 1（宿主黑板）降级为补充 — 仅用于跨脚本/跨角色共享。
+
+**早期"checkEnter/step 共享状态"讨论**：
+
+第 8 轮修正：第 7 轮分析误将 checkEnter 和 step 描述为"独立 VM 实例"，这是误解。设计意图始终是同一 VM 实例。第 9 轮确认 VM 运行时无硬阻碍，"无法复用变量"为编译器/语言层限制（现已由 Lang-1 模块变量解决）。
+
 #### 第 5 轮
 
-倾向提供**专有条件检测入口**，由宿主侧的调用结构决定。宿主架构中角色技能执行可能存在多个阶段（phase），宿主按顺序调用各 phase：
-```
-for s in skills:
-    s.phaseCondition()  // 条件检测阶段
-    s.phaseExecute()    // 执行阶段
-```
+倾向提供**专有条件检测入口**，由宿主侧的调用结构决定。
 
 #### 第 6 轮
 
-经审查发现原方案 C（条件在 main 开头、靠 return/yield 信号区分）与第 5 轮补充的"专有条件检测入口"存在矛盾。实际实现中 `ProbeSkillCondition` 虽已就绪但未被调用，所有 4 个已有脚本仍依赖宿主侧 `CanActivate` lambda。
-
-**根本原因**：方案 C 把条件和执行混在同一个 `func main()` 中，导致：
-1. 条件检查和技能执行的生命周期耦合
-2. 脚本结构不直观（读者难以区分"条件部分"和"执行部分"）
-3. 无法独立复用条件逻辑
-
-修正为方案 D：独立条件函数（多入口）。checkEnter() + step() 双入口。
-
-FFVM 编译器和运行时**原生支持**多入口调用：
-1. `BytecodeCompiler.Compile(source, entryFunc, ...)` 编译所有 func
-2. `VMProgram.TryGetFunction(name, out entry)` 按名称查找入口 IP
-3. `VMWorld.SpawnInstance(moduleSlot, entryIP)` 接受任意入口 IP
+经审查发现原方案 C（条件在 main 开头）存在问题，修正为方案 D：独立条件函数（多入口）。
 
 #### 第 7 轮
 
-追加复合条件分析。提出无状态/有状态两种检查模式。
-
-**⚠️ 误解**：将 checkEnter 和 step 描述为"独立 VM 实例"，据此得出"路径 2（脚本内 var）不可行"的结论。
+追加复合条件分析。提出无状态/有状态两种检查模式。⚠️ 误将 checkEnter 和 step 描述为"独立 VM 实例"。
 
 #### 第 8 轮
 
 修正实例模型：checkEnter 和 step 应为**同一 VM 实例**。提出 `RedirectInstance` API。
 
-#### 第 9 轮（当前）
+#### 第 9 轮
 
-用户反馈：VM 运行时不存在硬阻碍，"无法复用变量"是编译器/语言层限制。要求探索全局变量作为优先路径（路径 3），遵循 SK12"数据留 VM 内"原则。全局变量机制可覆盖 SK10 连招共用环境的部分需求。
+用户反馈：VM 运行时不存在硬阻碍。要求探索全局变量作为优先路径（路径 3），遵循 SK12"数据留 VM 内"原则。
 
 </details>
 
@@ -502,13 +419,14 @@ FFVM 编译器和运行时**原生支持**多入口调用：
 
 ## SK8: 碰撞框数据来源 ✅
 
-// 这里其实只保留结论即可, 其他以详细的形式进折叠区
-
 **结论**：碰撞数据完全由技能脚本决定，通过 Syscall 推送到宿主。
 
-**设计原则**：每个技能脚本负责声明自己在各帧的碰撞框（受击框、攻击框、推挤框）。宿主不做碰撞框的静态预定义。
-
 **需新增 Syscall**：`SetHitbox(groupId, x, y, w, h)`, `SetHurtbox(x, y, w, h)`, `ClearHitbox`, `SetPushBox`
+
+<details>
+<summary>📋 详细设计</summary>
+
+**设计原则**：每个技能脚本负责声明自己在各帧的碰撞框（受击框、攻击框、推挤框）。宿主不做碰撞框的静态预定义。
 
 ```ffs
 // 脚本内碰撞框示例
@@ -519,13 +437,13 @@ if f >= 4 && f < 8 {
 
 > 结构体方案（将碰撞框参数封装为 struct）取决于 FFVM 结构体支持进度（B-γ7 SN1 嵌套结构体）。
 
+</details>
+
 ---
 
 ## SK3: 碰撞框交互方式 💬
 
-// 暂定推送到宿主
-
-**结论**：待性能验证后定夺。
+**结论**：暂定方案 A（脚本推送到宿主）。待性能验证后最终定夺。
 
 | 方案 | 描述 | 优点 | 缺点 |
 |------|------|------|------|
@@ -587,9 +505,12 @@ if f >= 4 && f < 8 {
 
 ## SK11: 多阶段技能 ✅
 
-// 脚本应该进详细区, 且细节过期, frame 应该从宿主获取
+**结论**：Phase 是脚本内实现行为。提供 `BeginAction` 支持多次调用切换动作，但不强制所有多阶段技能必须用 Phase 机制。Phase index 留 VM 内（脚本定义+消费），`BeginAction` 推送动画/碰撞框到宿主。符合 SK12 数据归属原则。
 
-**结论**：Phase 是脚本内实现行为。提供 `BeginAction` 支持多次调用切换动作，但不强制所有多阶段技能必须用 Phase 机制。
+<details>
+<summary>📋 详细设计</summary>
+
+⚠️ 以下脚本示例中帧号获取方式已过期 — 帧号应从宿主获取（`GetFrame()` Syscall 或服务脚本），而非脚本内自行维护计数器。
 
 ```ffs
 func step() {
@@ -619,15 +540,18 @@ func step() {
 }
 ```
 
-> Phase index 留 VM 内（脚本定义+消费），`BeginAction` 推送动画/碰撞框到宿主。符合 SK12 数据归属原则。
+</details>
 
 ---
 
 ## SK13: 属性脚本共享机制 ✅
 
-// include 混入还需要继续讨论脚本位置移动处理
+**结论**：方案 A — 预处理器 `include`，全量展开（const + struct + func）。已由 Lang-2 实现。
 
-**结论**：方案 A — 预处理器 `include`，全量展开（const + struct + func）。跳过 V0 过渡，直接实现编译器原生 include。
+> 💬 **待讨论**：include 混入后脚本位置移动的处理方式（路径解析倾向项目根相对路径，但尚未最终确认）。
+
+<details>
+<summary>📋 详细设计</summary>
 
 ### 核心设计
 
@@ -729,6 +653,8 @@ func foo(): int { return 2 }    // ❌ 编译错误
 | V0 过渡 | 是否先实现宿主侧合并 | ✅ **跳过** |
 | 入口函数 LSP | 强感知 vs 弱感知 | ⏸️ 暂缓讨论，后期优化项 |
 
+</details>
+
 <details>
 <summary>📋 讨论历史</summary>
 
@@ -783,7 +709,10 @@ FFS 设计约束：零 GC、零动态分配、无类/无继承、无模块系统
 
 ## Syscall 需求评估
 
-// 这里应该在详细折叠区整理宿主前置依赖功能
+**结论**：前 4 个脚本（S01~S04）可直接用现有 Syscall 实现。S05~S08 及碰撞框脚本化需新增少量 Syscall。
+
+<details>
+<summary>📋 详细设计</summary>
 
 | 需求 | 现有 Syscall | 是否需要新增 |
 |------|------------|------------|
@@ -798,7 +727,9 @@ FFS 设计约束：零 GC、零动态分配、无类/无继承、无模块系统
 | 蹲姿/姿态切换 | — | 🆕 需要 `SetStance` |
 | 倒地状态 | — | ❓ 可能需要 `SetKnockdownState` / `SetInvincible` |
 
-**结论**：前 4 个脚本（S01~S04）可直接用现有 Syscall 实现。S05~S08 及碰撞框脚本化需新增少量 Syscall。
+> 📌 **宿主前置依赖**：需先实现上述新增 Syscall 的宿主侧逻辑（碰撞框管理、姿态系统、倒地状态系统），然后才能在脚本中使用。
+
+</details>
 
 ---
 
@@ -1013,10 +944,12 @@ func step() {
 
 ## SK14: FFS 语言需求整合（第 10 轮新增） ✅
 
-// 内容过期, 相关功能已经完成
-// 阶段性整合应该是临时的
+**结论**：Phase 1（L1 模块变量 + L2 include + L3 黑板 Syscall）✅ 已全部实现（Lang-1/2/3）。Phase 2（L4 跨模块函数调用 = XCALL 服务脚本）✅ 已实现（Lang-6/7/8）。方向 C（折衷分期）被采纳并执行完毕。
 
-> **背景**：SK7（全局变量）、SK10（连招共用环境）、SK13（include）三个议题各自衍生出语言层需求，分散在不同 SK 小节中。需要整合成统一视图，明确依赖关系和实现优先级，提交 VM_Summary 作为 FFS 语言演进计划。
+> ⚠️ **归档说明**：本节为第 10 轮整合产出的临时阶段性需求视图。所有需求已实现，下方详细内容仅供追溯。具体实现详见 [VM_Summary](../../Docs/VM_Summary.md)。
+
+<details>
+<summary>📋 详细设计（已归档 — 需求全部已实现）</summary>
 
 ### 需求全景
 
@@ -1254,6 +1187,8 @@ VM 改动: 无
 4. **L2 路径解析**：项目根 vs 当前文件相对？
 5. **实施顺序**：L1 先 / L2 先 / 并行？
 6. **是否有语言层面的统一设计**：能否将 L1~L4 中若干项合并为一个统一机制？
+
+</details>
 
 ---
 
@@ -2613,19 +2548,19 @@ if (inst.WaitCounter > 0 && !killed)
 
 ### Q3: 跨脚本 VM 使用模式 ✅
 
-// 可用状态过期
-// 且已由明确结论, 且已经具体实现
+**结论**：6 种方向渐进路径。阶段 1（方向 1+2+3）✅ + 阶段 3（方向 5 服务脚本）✅ 已完成。
 
-**结论**：6 种方向渐进路径。阶段 1（方向 1+2+3）✅ 已完成。方向 5（服务脚本）已由 Q4 收敛设计，**C-1~C-2 已实现**（Lang-6/7/8 ✅）。
+| # | 方向 | 数据共享机制 | VM 改动 | 状态 |
+|---|------|-----------|--------|------|
+| 0 | **宿主直调** | 宿主持有 instanceId，直接 API 操作 | 无 | ✅ 基础 |
+| 1 | **黑板中介** | 宿主 key-value Syscall | 无 | ✅ Lang-3 |
+| 2 | **Include 共享模板** | 编译期代码复用（数据独立） | 无 | ✅ Lang-2 |
+| 3 | **宿主编排** | 宿主 C# 协调 + Syscall | 无 | ✅ SK2 裁决 |
+| 4 | **共享变量区** | VM 跨实例共享内存 | ⭐⭐ | ⏳ 需求驱动 |
+| 5 | **服务脚本 + 跨模块调用** | VM 跨模块函数调用 | ⭐⭐⭐ | ✅ Lang-6/7/8 |
 
-| # | 方向 | 数据共享机制 | VM 改动 | 当前可用 | 推荐度 |
-|---|------|-----------|--------|---------|--------|
-| 0 | **宿主直调** | 宿主持有 instanceId，直接 API 操作 | 无 | ✅ | 基础 |
-| 1 | **黑板中介** | 宿主 key-value Syscall | 无 | ✅ Lang-3 | ⭐⭐⭐⭐⭐ |
-| 2 | **Include 共享模板** | 编译期代码复用（数据独立） | 无 | ✅ Lang-2 | ⭐⭐⭐⭐⭐ |
-| 3 | **宿主编排** | 宿主 C# 协调 + Syscall | 无 | ✅ SK2 裁决 | ⭐⭐⭐⭐ |
-| 4 | **共享变量区** | VM 跨实例共享内存 | ⭐⭐ | ❌ Lang-4 待定 | ⭐⭐⭐ |
-| 5 | **服务脚本 + 跨模块调用** | VM 跨模块函数调用 | ⭐⭐⭐ | ✅ Lang-6/7/8 XCALL 已实现 | ⭐⭐ |
+<details>
+<summary>📋 详细设计</summary>
 
 **渐进路径**：
 
@@ -2642,6 +2577,8 @@ if (inst.WaitCounter > 0 && !killed)
 | 模块变量 = 实例级共享数据 | ✅ 类似 C# 实例字段。`var charge` 分配在 r56，checkEnter 和 step 读写同一个 r56 |
 | 实例重定向 | ✅ 修改 3 个字段（IP, StateFlags, CallStackDepth）即可让同一实例换函数执行，寄存器保留 |
 | 方向 0（宿主直调） | ✅ SpawnInstance → TickInstance → 读寄存器 → DestroyInstance，是所有方向的基础 |
+
+</details>
 
 <details>
 <summary>📋 Q3 讨论历史（第 12~12.5 轮）</summary>
