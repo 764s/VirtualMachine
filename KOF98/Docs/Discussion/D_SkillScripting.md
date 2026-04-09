@@ -4534,7 +4534,10 @@ XSTORE_MVAR src, instanceId, mvarIndex    // 写入目标实例的 module variab
 | 语法预留 | C-2 需预留 `svc.var`（L4）vs `svc.func()`（L5）区分 | R22 ✅ |
 
 ##### 待用户确认（第 22 轮）
-
+// 1 ok
+// 2 ok
+// 3 更早考虑. 我的直觉是他和xcall 至少同一基线, 但可能有更有效的自动优化方案
+// 4 等3
 1. **Y1-Plus 纯编译期 yield 禁止是否满意？** — 包含跨函数 yield-taint 分析 + LSP 实时诊断，运行时零负担
 2. **XCALL 优化路线图（O1→O2→O7→O4）是否符合预期？** — 退化策略："编译期自动退化，运行时零决策"
 3. **L4 语法预留：`svc.var` vs `svc.func()` 在 C-2 阶段预留是否 OK？** — 还是需要更早考虑？
