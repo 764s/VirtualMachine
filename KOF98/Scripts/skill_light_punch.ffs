@@ -11,6 +11,8 @@
 //
 // Syscalls used: BeginAction, EndAction, CheckAttackHit, ApplyDamage
 
+include "common/constants.ffs"
+
 func main() {
     BeginAction(10, 20)
     defer {
@@ -24,7 +26,7 @@ func main() {
         if f >= 5 && f < 10 && hitDone == 0 {
             var target: int = CheckAttackHit(1001)
             if target > 0 {
-                ApplyDamage(target, 1.0, 102)
+                ApplyDamage(target, 1.0, DMG_NORMAL_UPPER)
                 hitDone = 1
             }
         }

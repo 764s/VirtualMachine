@@ -8,31 +8,20 @@
 //
 // Syscalls used: IsInputHeld, GetInputDir, GetFacing, SetVelocity
 
+include "common/input.ffs"
+
 func main() {
-    var walkSpeed: float = 0.06
-    var backWalkSpeed: float = 0.04
-
     while 1 {
-        // Read directional input
-        var rightHeld: int = IsInputHeld(3)
-        var leftHeld: int = IsInputHeld(2)
+        var rawDir: float = getMoveDirX()
         var inputDir: int = GetInputDir()
-
-        // Determine raw world direction (float for arithmetic)
-        var rawDir: float = 0.0
-        if rightHeld != 0 && leftHeld == 0 {
-            rawDir = 1.0
-        } else if leftHeld != 0 && rightHeld == 0 {
-            rawDir = -1.0
-        }
 
         if rawDir == 0.0 {
             // Both directions held or none — zero velocity
             SetVelocity(0.0, 0.0)
         } else {
             // Forward vs backward speed
-            var speed: float = walkSpeed
-            if inputDir < 0 { speed = backWalkSpeed }
+            var speed: float = WALK_SPEED
+            if inputDir < 0 { speed = BACK_WALK_SPEED }
             var vx: float = speed * rawDir
             SetVelocity(vx, 0.0)
         }

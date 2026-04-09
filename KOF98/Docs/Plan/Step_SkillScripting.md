@@ -1,6 +1,6 @@
 # Plan: 技能 FFS 脚本化实施计划
 
-> **状态**：⏳ 等待前置任务 (KOF-T1) → ✅ T2-1~T2-5 基础设施就绪 → ✅ T3-1~T3-4 首批脚本就绪
+> **状态**：⏳ 等待前置任务 (KOF-T1) → ✅ T2-1~T2-5 基础设施就绪 → ✅ T3-1~T3-4 首批脚本就绪 → ✅ T3.5 数据支持(include 基础设施 + 共享常量 + S05~S08 骨架)
 > **来源**：[D_SkillScripting.md](../Discussion/D_SkillScripting.md) 讨论结论
 > **日期**：2026-04-06
 
@@ -51,6 +51,25 @@
 - yield 循环帧数与宿主 Tick 对齐
 
 **完成条件**：4 个 FFS 脚本运行正常，表现与 host-driven 版本一致。
+
+---
+
+### KOF-T3.5: Include 数据支持 + S05-S08 骨架 ✅
+
+> **目标**：利用 Lang-2 include 特性建立共享数据层，消除魔法数字，为全部 8 个脚本提供共享基础设施
+
+| # | 子步骤 | 说明 | 涉及文件 |
+|---|--------|------|---------|
+| T3.5-1 | 共享常量文件 | `common/constants.ffs`: 伤害类型、特效 ID、Tag、移动参数、输入按钮 | 新文件 |
+| T3.5-2 | 输入帮助函数 | `common/input.ffs`: `getMoveDirX()` 等共享方向判断（include constants） | 新文件 |
+| T3.5-3 | FileSystemFileResolver | GameVMBridge 新增文件系统级 IFileResolver，支持脚本 include 指令 | GameVMBridge.cs |
+| T3.5-4 | 重构 S01-S04 | walk/jump/punch 三个脚本改用 include 共享常量，消除魔法数字 | skill_*.ffs |
+| T3.5-5 | S05-S08 骨架 | 4 个脚本骨架：crouch_punch/hit_high/hard_knockdown/stand_up | 新文件 |
+| T3.5-6 | 服务脚本模板 | `common/char_service.ffs`: @export + svc.member 模板，为 KOF-T6+ 铺路 | 新文件 |
+
+**语言特性检查结论**：零阻碍。Lang-1~Lang-8 全部已满足 8 个脚本所需能力。
+
+**完成条件**：全部 8 个脚本可编译（include 解析正确），共享常量消除魔法数字。
 
 ---
 
@@ -119,6 +138,8 @@ KOF-T1 (UI)
 KOF-T2 (基础设施)
     ↓
 KOF-T3 (前4个脚本)
+    ↓
+KOF-T3.5 (include 数据支持 + S05-S08 骨架) ✅
     ↓
 KOF-T4 (Syscall扩展)  →  KOF-T10 (SK3交互验证)
     ↓

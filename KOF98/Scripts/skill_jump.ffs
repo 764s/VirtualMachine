@@ -10,14 +10,12 @@
 //
 // Syscalls used: IsInputHeld, SetVelocity, IsGrounded
 
+include "common/input.ffs"
+
 func main() {
     // --- Launch (first frame) ---
-    var vx: float = 0.0
-    var rightHeld: int = IsInputHeld(3)
-    var leftHeld: int = IsInputHeld(2)
-    if rightHeld != 0 && leftHeld == 0 { vx = 0.06 }
-    if leftHeld != 0 && rightHeld == 0 { vx = -0.06 }
-    SetVelocity(vx, 0.35)
+    var vx: float = getMoveDirX() * WALK_SPEED
+    SetVelocity(vx, JUMP_VY)
     yield
 
     // --- Airborne: wait for landing ---

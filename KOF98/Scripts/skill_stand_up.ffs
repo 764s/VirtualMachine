@@ -1,0 +1,29 @@
+// ============================================================
+// Skill: Stand Up (skill_stand_up)
+// Type: Finite  |  Frames: 20  |  Priority: 80 (recovery)
+// ============================================================
+// 20-frame recovery animation after knockdown.
+// Plays the stand-up animation, then returns.
+// Once complete, the host transitions back to Idle.
+//
+// Activation condition handled by host SkillManager
+// (activated automatically after hard_knockdown completes).
+//
+// Syscalls used: BeginAction, EndAction
+
+include "common/constants.ffs"
+
+func main() {
+    BeginAction(31, 20)
+    defer {
+        EndAction()
+    }
+
+    // Wait for stand-up animation to complete
+    var f: int = 0
+    while f < 20 {
+        f = f + 1
+        yield
+    }
+    // Script return → host transitions to Idle
+}

@@ -1,0 +1,53 @@
+// ============================================================
+// KOF98 Shared Constants
+// ============================================================
+// Include this file in skill scripts to eliminate magic numbers.
+//
+// Usage:  include "common/constants.ffs"
+//
+// Categories:
+//   - Damage types (DMG_*)
+//   - Effect / SFX IDs (FX_*)
+//   - Tag IDs (TAG_*)
+//   - Movement parameters (WALK_SPEED, etc.)
+//   - Input button indices (INPUT_*)
+// ============================================================
+
+// ── Damage Types ─────────────────────────────────────────────
+const DMG_NONE: int = 0
+const DMG_NORMAL_LOWER: int = 101
+const DMG_NORMAL_UPPER: int = 102
+const DMG_KNOCKDOWN: int = 201
+const DMG_THROW: int = 301
+const DMG_SUPER: int = 401
+
+// ── Effect / SFX IDs ────────────────────────────────────────
+const FX_LIGHT_HIT: int = 3001
+const FX_SCREEN_SHAKE_S: int = 3002
+const FX_HEAVY_HIT_SFX: int = 3003
+const FX_BLOCK: int = 3004
+const FX_HEAVY_HIT: int = 3005
+const FX_HURT_EFFECT: int = 4001
+
+// ── Effect Durations (frames) ───────────────────────────────
+const FX_DUR_LIGHT_HIT: int = 30
+const FX_DUR_HURT: int = 300
+
+// ── Tag IDs (skill tag bitfield positions) ───────────────────
+const TAG_AIR_STATE: int = 11
+
+// ── Movement Parameters ─────────────────────────────────────
+const WALK_SPEED: float = 0.06
+const BACK_WALK_SPEED: float = 0.04
+const JUMP_VY: float = 0.35
+
+// ── Input Button Indices ────────────────────────────────────
+// These map to InputButton enum values used by IsInputHeld/IsInputPressed.
+const INPUT_UP: int = 0
+const INPUT_DOWN: int = 1
+const INPUT_LEFT: int = 2
+const INPUT_RIGHT: int = 3
+const INPUT_LP: int = 4
+const INPUT_HP: int = 5
+const INPUT_LK: int = 6
+const INPUT_HK: int = 7

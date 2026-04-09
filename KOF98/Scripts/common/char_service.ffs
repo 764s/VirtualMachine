@@ -1,0 +1,74 @@
+// ============================================================
+// Service Script: Character Service (char_service)
+// ============================================================
+// Template for a character-level service script using @export.
+// Business scripts can access this via svc.member unified syntax.
+//
+// This is a TEMPLATE for future use (KOF-T6+).
+// Currently the 8 base skills use Syscalls directly.
+// When combo/AI systems need organized data access, this service
+// provides a clean FFS-level abstraction layer.
+//
+// Usage (in a business script):
+//   var charSvc: int = 0  // instance ID set by host
+//   var hp: int = charSvc.hp
+//   charSvc.take_damage(30)
+//
+// See: Lang-6/7/8 XCALL + svc.member unified syntax
+// ============================================================
+
+// ── Exported State ──────────────────────────────────────────
+
+@export var hp: int = 1000
+@export var maxHp: int = 1000
+@export var power: float = 0.0
+@export var facing: int = 1
+@export var comboCount: int = 0
+@export var comboDecay: float = 1.0
+
+// ── Exported Getters/Setters (auto-degraded by Lang-7) ──────
+
+@inline @export func get_hp(): int {
+    return hp
+}
+
+@inline @export func get_power(): float {
+    return power
+}
+
+@inline @export func set_facing(dir: int) {
+    facing = dir
+}
+
+// ── Exported Functions ──────────────────────────────────────
+
+@export func take_damage(amount: int): int {
+    var actual: int = amount
+    // Apply combo decay
+    if comboCount > 0 {
+        // Simplified: reduce by 10% per combo hit (integer approximation)
+        var reduction: int = amount * comboCount / 10
+        actual = amount - reduction
+        if actual < 1 { actual = 1 }
+    }
+    hp = hp - actual
+    if hp < 0 { hp = 0 }
+    return hp
+}
+
+@export func add_combo_hit() {
+    comboCount = comboCount + 1
+}
+
+@export func reset_combo() {
+    comboCount = 0
+    comboDecay = 1.0
+}
+
+func main() {
+    // Service scripts are long-lived — yield forever.
+    // Host manages lifecycle (create on character spawn, kill on character death).
+    while 1 {
+        yield
+    }
+}
