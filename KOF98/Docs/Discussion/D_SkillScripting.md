@@ -1,8 +1,8 @@
 # KOF98 技能 FFS 脚本化讨论
 
-> **状态**：🔄 讨论中（SK1~SK14 已收敛；Q2 ✅；Q3 渐进路径已被 Q4 覆盖 → ✅；Q4 服务脚本 ✅ 收敛 — 14 项决策锁定。下一步 → XCALL Spec 输出 + C 阶段实现。语言需求已提交 VM_Summary Lang 表）
+> **状态**：✅ 收敛（SK3 💬 待性能验证外，其余 SK1~SK14 + Q1~Q4 全部 ✅。14 项 Q4 设计决策锁定。C-1 Lang-6 ✅ / C-1.5 Lang-7 ✅ / C-2 Lang-8 ✅ 已实现。剩余 C-3 Lang-9 @force_inline 为远期待定）
 > **来源**：需求讨论 — 将 host-side 技能迁移为 FFS 脚本驱动
-> **日期**：2026-04-09（第 26 轮更新）
+> **日期**：2026-04-09（实现状态同步更新）
 
 ---
 
@@ -23,10 +23,10 @@
 | SK11 | 多阶段技能 | ✅ | Phase 是脚本内行为，提供便利但不强制 |
 | SK12 | ECS 数据归属 | ✅ | 脚本内闭环 → VM；外部需读取 → Syscall 推送到宿主 |
 | SK13 | 属性脚本共享 | ✅ | 方案 A — 预处理器 `include`，全量展开。已由 Lang-2 实现 |
-| SK14 | FFS 语言需求整合 | ✅ | L1 模块变量 ✅ + L2 include ✅ + L3 黑板 ✅ = Phase 1 完成；L4/L5 跨模块 = Q4 服务脚本方案，已提交 VM_Summary |
+| SK14 | FFS 语言需求整合 | ✅ | Phase 1（L1+L2+L3）✅ + Phase 2（Lang-6 XCALL + Lang-7 自动退化 + Lang-8 统一语法）✅ 全部实现；剩余 Lang-9 @force_inline 为远期 |
 | Q2 | 硬直+yield 语句级控制 | ✅ | 方案 A — while+GetFrame()+yield，帧区间循环行业标准模式（7/10 语言同构） |
-| Q3 | 跨脚本 VM 使用模式 | ✅ | 6 方向渐进路径（1+2+3 ✅ → 4 → 5），阶段1已完成；方向5 = Q4 服务脚本方案 |
-| Q4 | FFS 封装 — 服务脚本 | ✅ | 方式 C ✅；Y1-Plus ✅；统一语法 ✅；@export ✅；@inline ✅；嵌套 Warn/Unlimited ✅；14 项决策锁定。→ [VM_Summary Lang-6~Lang-8](../../Docs/VM_Summary.md) |
+| Q3 | 跨脚本 VM 使用模式 | ✅ | 6 方向渐进路径：阶段1（方向1+2+3）✅ 完成；阶段3（方向5 服务脚本 = Q4）✅ C-1~C-2 已实现 |
+| Q4 | FFS 封装 — 服务脚本 | ✅ | 方式 C ✅；Y1-Plus ✅；统一语法 ✅；@export ✅；@inline ✅；嵌套 Warn/Unlimited ✅；14 项决策锁定。C-1~C-2 已实现（Lang-6/7/8 ✅ 1259 tests）。剩余 C-3 @force_inline 远期 |
 
 ---
 
@@ -2582,7 +2582,7 @@ if (inst.WaitCounter > 0 && !killed)
 
 ### Q3: 跨脚本 VM 使用模式 ✅
 
-**结论**：6 种方向渐进路径。阶段 1（方向 1+2+3）✅ 已完成。方向 5（服务脚本）已由 Q4 收敛设计。
+**结论**：6 种方向渐进路径。阶段 1（方向 1+2+3）✅ 已完成。方向 5（服务脚本）已由 Q4 收敛设计，**C-1~C-2 已实现**（Lang-6/7/8 ✅）。
 
 | # | 方向 | 数据共享机制 | VM 改动 | 当前可用 | 推荐度 |
 |---|------|-----------|--------|---------|--------|
@@ -2591,7 +2591,7 @@ if (inst.WaitCounter > 0 && !killed)
 | 2 | **Include 共享模板** | 编译期代码复用（数据独立） | 无 | ✅ Lang-2 | ⭐⭐⭐⭐⭐ |
 | 3 | **宿主编排** | 宿主 C# 协调 + Syscall | 无 | ✅ SK2 裁决 | ⭐⭐⭐⭐ |
 | 4 | **共享变量区** | VM 跨实例共享内存 | ⭐⭐ | ❌ Lang-4 待定 | ⭐⭐⭐ |
-| 5 | **服务脚本 + 跨模块调用** | VM 跨模块函数调用 | ⭐⭐⭐ | → **Q4 XCALL 设计** | ⭐⭐ |
+| 5 | **服务脚本 + 跨模块调用** | VM 跨模块函数调用 | ⭐⭐⭐ | ✅ Lang-6/7/8 XCALL 已实现 | ⭐⭐ |
 
 **渐进路径**：
 
@@ -2599,7 +2599,7 @@ if (inst.WaitCounter > 0 && !killed)
 |------|------|------|
 | **阶段 1** | 方向 1 + 2 + 3 — 黑板 + include + 宿主编排 | ✅ 已完成（Lang-1/2/3） |
 | **阶段 2（需求驱动）** | + 方向 4 — 共享变量区 | ⏳ 黑板 Syscall 频率成为瓶颈时触发 |
-| **阶段 3** | + 方向 5 — 服务脚本 | → Q4 收敛，实现路径 C-0~C-3 已排入 [VM_Summary](../../Docs/VM_Summary.md) |
+| **阶段 3** | + 方向 5 — 服务脚本 | ✅ C-1~C-2 已实现（Lang-6 XCALL + Lang-7 自动退化 + Lang-8 统一语法）。剩余 C-3 @force_inline 远期 |
 
 **关键确认**：
 
@@ -3262,7 +3262,7 @@ func step() {
 
 ### Q4: FFS 无对象语言的宿主参数封装 ✅
 
-> **第 18~26 轮。✅ 收敛（第 26 轮）。** 14 项设计决策全部锁定。语言需求已提交 [VM_Summary Lang-6~Lang-8](../../Docs/VM_Summary.md)。
+> **第 18~26 轮。✅ 收敛（第 26 轮）。** 14 项设计决策全部锁定。**C-1（Lang-6）✅ / C-1.5（Lang-7）✅ / C-2（Lang-8）✅ 已实现**（1259 tests pass）。剩余 C-3（Lang-9 @force_inline）为远期。详见 [VM_Summary Lang-6~Lang-8](../../Docs/VM_Summary.md)。
 
 #### 核心结论
 
@@ -3283,7 +3283,7 @@ func step() {
 | XCALL 优化 | O1+O2（C-1），A1/A2（C-1.5），O7+@inline（C-2），O4/A5+@force_inline（C-3+） | R22-24 ✅ |
 | 优化退化策略 | 编译期自动退化，运行时零决策开销 | R22 ✅ |
 
-**下一步** → 输出 **XCALL Spec 设计文档**，正式进入 C 阶段实现。
+**实现状态**：C-1（Lang-6 XCALL+@export+Y1-Plus）✅ / C-1.5（Lang-7 A1/A2 自动退化+VMConfig）✅ / C-2（Lang-8 svc.member 统一语法+@inline+LSP）✅。剩余 C-3（Lang-9 @force_inline+A5 深度内联）为远期。
 
 #### OpCode 基线设计（C-1 同时实现）
 
@@ -3304,13 +3304,13 @@ public class VMConfig {
 
 #### 实现路径
 
-| 阶段 | 内容 | 说明 |
-|------|------|------|
-| C-0 | 零改动原型验证 | 宿主 C# 桥接模拟跨实例调用 |
-| C-1 | XCALL + XLOAD_MVAR + XSTORE_MVAR | 三个 OpCode + @export + Y1-Plus 编译期 yield 禁止 |
-| C-1.5 | A1/A2 自动退化 + MaxXCallDepth 配置 | getter/setter 自动优化为直接变量访问 |
-| C-2 | `svc.member` 统一语法 + @inline + LSP 诊断 | 语法糖 + 编译期内联 hint + 调用链深度诊断 |
-| C-3 | @force_inline + A5 深度内联 | 强制内联 + 函数体展开 |
+| 阶段 | 内容 | 说明 | 状态 |
+|------|------|------|------|
+| C-0 | 零改动原型验证 | 宿主 C# 桥接模拟跨实例调用 | ⏭️ 跳过（直接 C-1） |
+| C-1 | XCALL + XLOAD_MVAR + XSTORE_MVAR | 三个 OpCode + @export + Y1-Plus 编译期 yield 禁止 | ✅ Lang-6 |
+| C-1.5 | A1/A2 自动退化 + MaxXCallDepth 配置 | getter/setter 自动优化为直接变量访问 | ✅ Lang-7 |
+| C-2 | `svc.member` 统一语法 + @inline + LSP 诊断 | 语法糖 + 编译期内联 hint + 调用链深度诊断 | ✅ Lang-8 |
+| C-3 | @force_inline + A5 深度内联 | 强制内联 + 函数体展开 | ⏳ 远期（Lang-9） |
 
 <details>
 <summary>📋 Q4 完整讨论历史（第 18~26 轮）</summary>
@@ -5513,9 +5513,9 @@ case OpCode.XCALL:
 
 **Q4 服务脚本设计 — ✅ 收敛（第 26 轮）**
 
-所有 14 项设计决策已确认。下一步 → 输出 **XCALL Spec 设计文档**，正式进入 C 阶段实现。
+所有 14 项设计决策已确认。**C-1~C-2 已全部实现**（Lang-6/7/8 ✅，1259 tests pass）。剩余 C-3（Lang-9 @force_inline）为远期。
 
-##### 待用户确认（第 26 轮）
+##### 第 26 轮待确认项（已全部确认）
 
 1. **编译期常量 vs 运行时配置无性能差异**的分析是否认可？→ 确认使用运行时配置方案
 2. **Q4 收敛** — 14 项决策全部锁定，下一步输出 XCALL Spec？
@@ -5527,7 +5527,7 @@ case OpCode.XCALL:
 <details>
 <summary>📋 讨论轮次总览</summary>
 
-#### 第 26 轮（当前）
+#### 第 26 轮（最终轮 — Q4 收敛）
 
 用户回应第 25 轮 4 个确认问题：
 - Q1: 嵌套深度含义清楚。希望常量可配 + 运行时 fallback（类似扩展寄存器），但前提是常量配置对性能有显著提升
