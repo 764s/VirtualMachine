@@ -239,7 +239,7 @@ namespace KOF98
             // Syscalls resolve owner via VMBridge.GetOwnerForInstance(instanceId).
             World.Tick();
 
-            // Post-tick: clean up completed instance mappings
+            // Post-tick: free completed instances back to the pool
             var pool = World.Pool;
             for (int i = pool.ActiveListCount - 1; i >= 0; i--)
             {
@@ -248,6 +248,7 @@ namespace KOF98
                 if ((inst.StateFlags & VMStateFlags.Completed) != 0)
                 {
                     _instanceToOwner.Remove(id);
+                    World.DestroyInstance(id);
                 }
             }
 

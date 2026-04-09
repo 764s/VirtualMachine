@@ -7,7 +7,7 @@ namespace KOF98
     public class GameSettings
     {
         /// <summary>Whether AI is active for AI-controlled characters.</summary>
-        public bool AIEnabled { get; set; } = true;
+        public bool AIEnabled { get; set; } = false;
 
         /// <summary>Whether characters auto-revive at full HP when killed.</summary>
         public bool AutoRevive { get; set; }
