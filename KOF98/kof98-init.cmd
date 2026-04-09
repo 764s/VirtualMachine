@@ -130,6 +130,11 @@ if exist ".vscode\launch.json" (
 ) else (
     echo [WARN] Could not generate launch.json
 )
+if exist ".vscode\tasks.json" (
+    echo [OK] Generated .vscode/tasks.json
+) else (
+    echo [WARN] Could not generate tasks.json
+)
 
 :: ─── Step 6: Install VS Code extension (best-effort) ────────
 
