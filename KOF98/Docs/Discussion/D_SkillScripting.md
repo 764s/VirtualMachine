@@ -1,8 +1,8 @@
 # KOF98 技能 FFS 脚本化讨论
 
-> **状态**：🔄 讨论中（SK1~SK12 已收敛，SK3 待性能验证；SK14 语言需求已整合；Q2 第 15 轮 — yield 保持 tick 直觉，新增帧区间重复机制待设计；Q3 渐进路径待确认）
+> **状态**：🔄 讨论中（SK1~SK12 已收敛，SK3 待性能验证；SK14 语言需求已整合；Q2 第 16 轮 — while+yield 循环 vs 专用语法对比中；Q3 渐进路径待确认）
 > **来源**：需求讨论 — 将 host-side 技能迁移为 FFS 脚本驱动
-> **日期**：2026-04-08（第 15 轮更新）
+> **日期**：2026-04-09（第 16 轮更新）
 
 ---
 
@@ -24,7 +24,7 @@
 | SK12 | ECS 数据归属 | ✅ | 脚本内闭环 → VM；外部需读取 → Syscall 推送到宿主 |
 | SK13 | 属性脚本共享 | ✅ | 方案 A — 预处理器 `include`，全量展开。需求转入 SK14 L2 |
 | SK14 | FFS 语言需求整合 | 💬 | L1 模块变量 + L2 include = Phase 1；L3/L4 跨模块 = 远期 |
-| Q2 | 硬直+yield 语句级控制 | 💬 | yield 保持 tick 直觉（=等下一帧）；硬直帧逻辑用独立"帧区间重复"机制，待设计 |
+| Q2 | 硬直+yield 语句级控制 | 💬 | yield 保持 tick 直觉；帧区间重复 = while+yield 循环（路径 A 推荐），专用语法（B1 frames）备选 |
 | Q3 | 跨脚本 VM 使用模式 | 💬 | 6 方向渐进路径（1+2+3 → 4 → 5），待用户确认 |
 
 ---
@@ -1306,197 +1306,411 @@ SK12 已确立的数据归属原则：
 
 #### 第 15 轮 — 用户决定：yield 保持 tick 直觉，新增帧区间重复效果
 
-// 想明白了我的需求, 从上一个 yield 点重放, 不如说是, 指定一段代码让他循环, 类似下面的代码
-// 这个粗暴的做法完全满足需求, 由循环显式控制重放点
-// 但是感觉起来会有点麻烦, 你来模拟实现的看看
-// 另外一个隐约的方向是实现特定语法(先忽略语言业务耦合问题), 看看会简单到什么程度
+> **用户修改**（第 16 轮）：想明白了需求 — 不是"从上一个 yield 点重放"，而是"指定一段代码让它循环"。给出示例代码：用 while + yield + GetFrame() 条件 break 来实现帧区间内循环执行。这个粗暴做法完全满足需求。要求：(1) 用 while 循环模拟实现具体场景看看效果；(2) 用特定语法实现看看能简单到什么程度。
+
+用户示例：
 ```ffs
 while true {
-   CreatePriticle();
+   CreateParticle()
 
    // 还需要合理处理 owner
    if owner.GetFrame() >= 10
       break
-   yield 
+   yield
 }
 ```
-
-> **用户原话**：保留 yield 随 tick 直觉。新增另一种效果：指定一个角色帧区间，重复执行这段逻辑。需要 1. 不让使用者产生混淆（和 yield），2. 统一建立直觉，3. 对这个效果合理分离职责到语言层和宿主业务层。
-
-**用户的决定拆解**：
-
-| 项目 | 决定 |
-|------|------|
-| **yield 语义** | 保持原样 — yield = "等 1 个 Tick 后恢复"，硬直帧不 Tick 则不恢复（= SK6 方案 A） |
-| **新需求** | 在硬直期间（角色帧暂停时），某些逻辑段需要**被重复执行** |
-| **关键区别** | yield 是"暂停推进"，新机制是"区间回放" — 两者概念正交 |
 
 ---
 
-#### 语言方分析（第 15 轮）
+#### 第 16 轮 — 语言方分析：while 循环 vs 专用语法
 
-##### 问题重述
+##### 关键洞察
 
-用户实际想要两种行为共存：
+用户的示例揭示了一个重要认知转变：
 
-```
-正常流: step() 每 tick 推进一帧（yield 驱动）
-         ↓ 硬直发生
-硬直流: 某些逻辑段在硬直期间反复执行（不推进角色帧，但每个世界帧执行一次）
-         ↓ 硬直结束
-正常流: 从硬直发生前的角色帧继续推进
-```
+> **不需要"硬直重放"这个概念**。需要的仅仅是"在一个帧区间内每 tick 执行某段逻辑"。
 
-yield 负责正常流（保持直觉），新机制负责硬直流。
+这个需求完全可以用 **while + yield + 帧条件** 来表达 — 这就是协程循环，yield 保持"等下一 tick"的直觉，完全不需要新机制。
 
-##### "帧区间重复"的本质是什么？
+##### 路径 A：纯 while 循环实现（粗暴做法）
 
-用户说"指定一个角色帧区间，重复执行这段逻辑"。这本质是：
+以下是用户示例扩展到几个真实场景的完整模拟：
 
-> **宿主请求 VM 在某段时间内，反复执行一个代码段（不推进 yield 流）**
-
-这不是 yield 的变种 — 这是一个**独立的调度需求**。
-
-##### 方案空间：职责分离的 4 种切法
-
-**方案 R1：纯宿主方案 — 宿主层循环调用独立函数**
+**场景 1：帧区间内持续产生粒子**（用户原始示例）
 
 ```ffs
-// 脚本提供两个函数
 func step() {
-    // 正常角色帧逻辑 — yield 驱动
-    while f < 60 {
-        f = f + 1
-        SetFrame(f)
+    // ... 前置逻辑 ...
+    
+    // 帧 5~10：每 tick 产生粒子
+    while true {
+        CreateParticle()
+        if GetFrame() >= 10 {
+            break
+        }
         yield
     }
-}
-
-func onHitstun() {
-    // 硬直帧逻辑 — 无 yield，每次宿主调用执行完整一遍
-    ApplyDamageToNearby()
-    PlayHitEffect()
+    
+    // ... 后续逻辑（帧 10 之后继续）...
+    yield
 }
 ```
 
-```
-宿主调度：
-  正常帧 → Tick(step)     // yield 正常推进
-  硬直帧 → Call(onHitstun) // 直接调用，不走 yield 流
-  硬直结束 → Tick(step)   // 从 yield 恢复
-```
+✅ 可读，直觉清晰：while 循环 = 重复，yield = 每 tick 一次，GetFrame() 条件 = 退出。
 
-| 维度 | 评价 |
-|------|------|
-| 与 yield 混淆 | ✅ 零混淆 — onHitstun 内无 yield |
-| 统一直觉 | ✅ yield = 推进帧，onHitstun = 每次被调用就执行 |
-| 职责分离 | **宿主**决定何时调 onHitstun，**脚本**决定执行什么 |
-| VM 改动 | ⭐ 零 — 已支持 Call 非 yield 函数 |
-| 语言改动 | ⭐ 零 |
-| 局限 | onHitstun 无法访问 step 的局部变量（只能通过模块变量共享状态） |
-
-**方案 R2：语言层标注块 — 编译器识别"重复区间"**
+**场景 2：帧区间内持续伤害 + 播放特效**
 
 ```ffs
 func step() {
     var f: int = 0
-    while f < 60 {
+    
+    // 阶段1：起手（帧 0~4）
+    while f < 5 {
         f = f + 1
         SetFrame(f)
+        yield
+    }
+    
+    // 阶段2：攻击激活（帧 5~15），每 tick 检测伤害
+    while f < 16 {
+        f = f + 1
+        SetFrame(f)
+        SetHitbox(0, 10, 20, 30, 40)       // 每帧推送碰撞框
         
-        @repeat_on_hitstun {    // 语言层标注：硬直帧时重复执行此块
-            ApplyDamageToNearby()
-            PlayHitEffect()
+        if f == 5 {
+            PlaySound(SFX_SLASH)            // 第 5 帧播放音效（只一次）
         }
         
-        yield   // 正常推进
+        yield
     }
-}
-```
-
-编译器将 `@repeat_on_hitstun { ... }` 提取为隐式函数，宿主在硬直帧调用。
-
-| 维度 | 评价 |
-|------|------|
-| 与 yield 混淆 | ✅ 标注块语法完全不同于 yield |
-| 统一直觉 | ⚠️ 需要学习新语法，但语义清晰 |
-| 职责分离 | **语言层**提供标注语法+提取机制，**宿主**决定硬直时机 |
-| VM 改动 | ⭐⭐ 中 — 需要支持"提取块为子函数" |
-| 语言改动 | ⭐⭐⭐ 大 — 新语法 |
-| 优势 | 块内可引用外层局部变量（如 f），编译器可捕获 |
-
-**方案 R3：Syscall 驱动 — 脚本用 Syscall 注册/注销回调**
-
-```ffs
-func step() {
-    var f: int = 0
-    while f < 60 {
+    
+    // 阶段3：收招（帧 16~24）
+    ClearHitbox()
+    while f < 25 {
         f = f + 1
         SetFrame(f)
-        
-        // 注册：硬直帧时调用 hitstunLogic
-        RegisterHitstunCallback(CALLBACK_HITSTUN_LOGIC)
-        
         yield
     }
 }
-
-func hitstunLogic() {
-    ApplyDamageToNearby()
-    PlayHitEffect()
-}
 ```
 
-宿主在硬直帧时检查已注册的回调并调用。
+✅ 完全用 while + yield，帧驱动逻辑自然。唯一的"麻烦"是 `while f < N { ... yield }` 模式会反复出现。
 
-| 维度 | 评价 |
-|------|------|
-| 与 yield 混淆 | ✅ 完全分离 — 回调函数无 yield |
-| 统一直觉 | ⚠️ 注册/注销模式较间接 |
-| 职责分离 | **宿主**提供注册 Syscall + 硬直时调度，**语言**无改动 |
-| VM 改动 | ⭐ 小 — 仅增 Syscall |
-| 语言改动 | ⭐ 零 |
-| 局限 | 同 R1 — 回调函数无法访问 step 局部变量 |
-
-**方案 R4：宿主帧区间标记 + 自动重放**
+**场景 3：多种效果叠加的复杂技能**
 
 ```ffs
+var f: int = 0
+
 func step() {
-    var f: int = 0
-    while f < 60 {
+    f = 0
+    
+    // 帧 0~9：蓄力期，每 tick 产生粒子
+    while f < 10 {
         f = f + 1
         SetFrame(f)
-        
-        // 标记：当前角色帧区间 [f, f] 在硬直时应重放此段
-        BeginHitstunRegion()
+        CreateParticle()
+        yield
+    }
+    
+    // 帧 10~19：释放期，每 tick 造成伤害 + 每 3 帧闪光
+    while f < 20 {
+        f = f + 1
+        SetFrame(f)
+        SetHitbox(0, 10, 20, 30, 40)
         ApplyDamageToNearby()
-        PlayHitEffect()
-        EndHitstunRegion()
         
+        if (f - 10) % 3 == 0 {
+            FlashScreen()
+        }
+        
+        yield
+    }
+    
+    // 帧 20~29：残留火焰，只产生粒子
+    ClearHitbox()
+    while f < 30 {
+        f = f + 1
+        SetFrame(f)
+        CreateFireParticle()
         yield
     }
 }
 ```
 
-VM 记录 `BeginHitstunRegion` 到 `EndHitstunRegion` 之间的指令范围。硬直帧时，VM 自动重新执行该范围。
+✅ 仍然清晰。但注意到模式：**每个阶段都是 `while f < N { f=f+1; SetFrame(f); ...; yield }`**。
+
+##### 路径 A 的评估
 
 | 维度 | 评价 |
 |------|------|
-| 与 yield 混淆 | ✅ Region 标记与 yield 正交 |
-| 统一直觉 | ⚠️ "自动重放"概念需要学习 |
-| 职责分离 | **VM** 提供 region 机制 + 重放，**宿主**触发硬直信号 |
-| VM 改动 | ⭐⭐⭐ 大 — 需要记录指令范围+重放机制 |
-| 语言改动 | ⭐ 仅 Syscall（Begin/End） |
-| 问题 | 重放时局部变量状态如何处理？副作用幂等性？ |
+| **与 yield 混淆** | ✅ 零 — yield 始终是"等下一 tick"，循环只是普通 while |
+| **直觉** | ✅ C#/Lua 协程用户立刻理解 |
+| **职责分离** | ✅ 语言层不感知"帧区间"，宿主通过 Syscall（GetFrame/SetFrame）提供帧信息 |
+| **VM/语言改动** | ⭐ 零 |
+| **麻烦程度** | ⚠️ 中 — `while f < N { f=f+1; SetFrame(f); ...; yield }` 样板代码重复 |
+| **灵活性** | ✅ 极高 — 任意条件、任意嵌套、混合逻辑全部自然表达 |
 
-##### 推荐方向
+**核心问题**：样板代码。每个帧区间都要写 `while f < N { f=f+1; SetFrame(f); ...; yield }`。
 
-**推荐 R1（纯宿主方案）** 作为首选，理由：
+---
 
-1. **零混淆** — yield 只在 step() 中出现，onHitstun() 是普通函数
-2. **零 VM/语言改动** — 完全在宿主调度层解决
-3. **职责清晰** — 宿主决定"何时进入硬直"，脚本决定"硬直时做什么"
-4. **模块变量** 已支持跨函数共享状态（step 和 onHitstun 共享数据）
+##### 路径 B：专用语法（假设不考虑语言-业务耦合）
+
+如果引入一个专用语法来消除样板，能简单到什么程度？
+
+**语法设计 B1：`frames(start, end)` 块**
+
+```ffs
+func step() {
+    var f: int = 0
+    
+    // frames 块 = "从 start 帧到 end 帧，每 tick 执行块内代码，自动推进帧号"
+    frames(0, 4) {
+        // f 自动递增，SetFrame 自动调用
+        // 此块在帧 0~4 的每个 tick 执行一次
+    }
+    
+    frames(5, 15) {
+        SetHitbox(0, 10, 20, 30, 40)
+        if f == 5 {
+            PlaySound(SFX_SLASH)
+        }
+    }
+    
+    frames(16, 24) {
+        ClearHitbox()   // 注意：这会每帧调用，需要幂等或只在首帧调用
+    }
+}
+```
+
+编译器将 `frames(a, b) { body }` 展开为：
+
+```ffs
+while f < b + 1 {
+    f = f + 1
+    SetFrame(f)
+    body
+    yield
+}
+```
+
+**场景 2 对比**：
+
+```ffs
+// 路径 A（while 循环）                    // 路径 B（frames 语法）
+func step() {                              func step() {
+    var f: int = 0                             var f: int = 0
+                                               
+    while f < 5 {                              frames(0, 4) {
+        f = f + 1                                  // 起手 — 空
+        SetFrame(f)                            }
+        yield                                  
+    }                                          frames(5, 15) {
+                                                   SetHitbox(0, 10, 20, 30, 40)
+    while f < 16 {                                 if f == 5 {
+        f = f + 1                                      PlaySound(SFX_SLASH)
+        SetFrame(f)                                }
+        SetHitbox(0, 10, 20, 30, 40)           }
+        if f == 5 {                            
+            PlaySound(SFX_SLASH)               frames(16, 24) {
+        }                                          ClearHitbox()
+        yield                                  }
+    }                                      }
+    
+    ClearHitbox()
+    while f < 25 {
+        f = f + 1
+        SetFrame(f)
+        yield
+    }
+}
+```
+
+**场景 3 对比（复杂技能）**：
+
+```ffs
+// 路径 B
+func step() {
+    var f: int = 0
+    
+    frames(0, 9) {
+        CreateParticle()
+    }
+    
+    frames(10, 19) {
+        SetHitbox(0, 10, 20, 30, 40)
+        ApplyDamageToNearby()
+        if (f - 10) % 3 == 0 {
+            FlashScreen()
+        }
+    }
+    
+    ClearHitbox()
+    frames(20, 29) {
+        CreateFireParticle()
+    }
+}
+```
+
+比路径 A 少约 40% 的行数，消除了所有样板。
+
+**语法设计 B2：`repeat_until_frame(end)` 表达式**
+
+```ffs
+func step() {
+    var f: int = 0
+    
+    // 更轻量 — 只指定结束帧，不自动递增 f
+    repeat_until_frame(5) {
+        f = f + 1
+        SetFrame(f)
+    }
+    
+    repeat_until_frame(16) {
+        f = f + 1
+        SetFrame(f)
+        SetHitbox(0, 10, 20, 30, 40)
+    }
+    
+    ClearHitbox()
+    repeat_until_frame(25) {
+        f = f + 1
+        SetFrame(f)
+    }
+}
+```
+
+这个不如 B1 简洁（没有自动推帧），但耦合更低 — 语言层只提供"循环直到帧条件"，不感知 SetFrame。
+
+##### 路径 B 的评估
+
+| 维度 | B1 `frames(a,b)` | B2 `repeat_until_frame(n)` |
+|------|------|------|
+| **与 yield 混淆** | ✅ 零 — frames 块内无显式 yield | ✅ 零 — 同理 |
+| **直觉** | ✅ 非常直观："帧 5~15 做这些事" | ⚠️ 较好但不如 B1 自然 |
+| **职责分离** | ❌ **语言层耦合帧概念**（f 递增、SetFrame） | ⚠️ 语言层耦合 GetFrame() |
+| **VM 改动** | ⭐⭐ — 新语法节点 + 编译展开 | ⭐⭐ — 同 |
+| **语言改动** | ⭐⭐⭐ — 新关键字 + Parser + 编译器 | ⭐⭐ — 稍少 |
+| **样板消除** | ✅ 极好 — 消除 while/f++/SetFrame/yield | ⚠️ 部分消除 |
+
+##### ⚠️ 路径 B 的核心问题：语言-业务耦合
+
+`frames(a, b)` 意味着语言层需要理解：
+- "帧"是什么（int 帧号？角色帧？世界帧？）
+- 谁来递增帧号（语言自动？脚本手动？）
+- SetFrame 是什么（Syscall？自动调用？）
+- 帧号存在哪个变量里（隐式 f？显式指定？）
+
+这些都是**宿主业务概念** — 不同游戏的帧模型不同。如果烧进语言层，FFS 就不再是通用脚本语言了。
+
+**但这里有一个折中**：如果 `frames` 只是**语法糖**（编译期展开为 while + yield），不引入新的 VM 指令，那么耦合只在**语法层**，不在运行时层。
+
+---
+
+##### 路径 C：折中方案 — 宏/函数模板消除样板
+
+不引入新语法，但提供**可复用模式**来消除样板：
+
+**C1：辅助函数 + 回调模式**
+
+```ffs
+// 公共 include 文件中定义
+// （注：当前 FFS 不支持函数参数为函数指针，此方案暂不可行）
+```
+
+❌ FFS 没有高阶函数/函数指针，此路不通。
+
+**C2：预处理器宏（如果支持的话）**
+
+```ffs
+// 假设支持宏定义
+#define FRAMES(start, end, body) \
+    while f < end + 1 { f = f + 1; SetFrame(f); body; yield }
+```
+
+❌ 当前 Lang-2 预处理器只支持 `#include`，不支持宏定义。
+
+**C3：约定式 — 用注释标注模式**
+
+```ffs
+func step() {
+    var f: int = 0
+    
+    // [frames 0~4]
+    while f < 5 { f = f + 1; SetFrame(f); yield }
+    
+    // [frames 5~15]
+    while f < 16 {
+        f = f + 1
+        SetFrame(f)
+        SetHitbox(0, 10, 20, 30, 40)
+        if f == 5 { PlaySound(SFX_SLASH) }
+        yield
+    }
+    
+    // [frames 16~24]
+    ClearHitbox()
+    while f < 25 { f = f + 1; SetFrame(f); yield }
+}
+```
+
+这就是路径 A + 注释约定，不需要任何改动。
+
+---
+
+##### 综合对比
+
+| | 路径 A（while 循环） | 路径 B1（frames 语法） | 路径 B2（repeat_until） | 路径 C（约定） |
+|---|---|---|---|---|
+| **样板代码** | ⚠️ 多 | ✅ 极少 | ⚠️ 较少 | ⚠️ 多 |
+| **yield 混淆** | ✅ 零 | ✅ 零 | ✅ 零 | ✅ 零 |
+| **学习成本** | ✅ 零 | ⚠️ 新语法 | ⚠️ 新语法 | ✅ 零 |
+| **语言-业务耦合** | ✅ 零 | ❌ 高 | ⚠️ 中 | ✅ 零 |
+| **VM/语言改动** | ✅ 零 | ❌ 大 | ⚠️ 中 | ✅ 零 |
+| **灵活性** | ✅ 极高 | ⚠️ 受限于块模型 | ⚠️ 受限 | ✅ 极高 |
+
+##### 推荐
+
+**先用路径 A（while 循环）上路**。理由：
+
+1. **零改动** — 当前 FFS 已经完全支持，今天就能写
+2. **零混淆** — yield 保持 tick 直觉，循环就是循环
+3. **零耦合** — 语言层不感知帧概念，全部通过 Syscall
+4. **样板代码可接受** — `while f < N { f=f+1; SetFrame(f); ...; yield }` 虽然重复，但每个阶段的主体逻辑不同，样板部分只有 3 行（while/f++/SetFrame），与主体逻辑相比不算严重
+
+如果未来发现样板确实是痛点（比如 50+ 个技能脚本写下来真的很烦），再考虑 **路径 B1 的语法糖版本**（编译期展开、不引入 VM 指令）。那时候有真实脚本作为设计输入，语法设计会更准确。
+
+#### 待用户确认（第 16 轮）
+
+1. **路径 A（while 循环）是否足够？** — 从模拟来看，样板代码约 3 行/阶段，你觉得可接受吗？
+2. **路径 B1 的简洁度值得语法投入吗？** — 如果觉得"必须消除样板"，我们可以设计一个编译期展开的 `frames` 语法糖
+3. **GetFrame() 的归属？** — 你示例中的 `owner.GetFrame()` 暗示帧号来自宿主（而非脚本自己维护的 f）。如果宿主已经维护帧号，那脚本内不需要 `f` 变量，进一步简化为：
+
+```ffs
+// 如果宿主维护帧号，脚本只需要查询
+func step() {
+    // 阶段1：蓄力（帧 0~9）
+    while GetFrame() < 10 {
+        CreateParticle()
+        yield
+    }
+    
+    // 阶段2：攻击（帧 10~19）
+    while GetFrame() < 20 {
+        SetHitbox(0, 10, 20, 30, 40)
+        ApplyDamageToNearby()
+        yield
+    }
+    
+    // 阶段3：收招（帧 20~29）
+    ClearHitbox()
+    while GetFrame() < 30 {
+        yield
+    }
+}
+```
+
+这样样板只剩 `while GetFrame() < N { ... yield }` — 两行开销，基本无痛了。**帧号由宿主推进（每 tick 自动 +1）还是由脚本推进，这个决定会显著影响简洁度。**
 
 ```
     yield 流（step）          硬直回调流（onHitstun）
@@ -1525,7 +1739,13 @@ VM 记录 `BeginHitstunRegion` 到 `EndHitstunRegion` 之间的指令范围。�
 4. **"帧区间"的具体含义？** — 你说"指定一个角色帧区间" — 是指宿主告知脚本"当前硬直影响的是角色帧 3~3"（即冻结在帧 3），还是"重放帧 1~5"这种回溯区间？
 
 <details>
-<summary>📋 Q2 讨论历史（第 12~15 轮）</summary>
+<summary>📋 Q2 讨论历史（第 12~16 轮）</summary>
+
+#### 第 16 轮 — 用户想明白需求：while 循环 vs 专用语法
+
+用户认知转变：不需要"重放"概念，只需要"在帧区间内循环执行"。给出 while+yield+GetFrame() 条件 break 的示例代码，要求模拟实现和对比专用语法。
+
+语言方分析：模拟 3 个真实场景，提出路径 A（while 循环，零改动）和路径 B1（frames 语法糖）。推荐路径 A 先上路。关键发现：如果帧号由宿主维护，样板可简化为 `while GetFrame() < N { ...; yield }`。
 
 #### 第 15 轮 — 用户决定 yield 保持 tick 直觉
 
@@ -2997,7 +3217,18 @@ func step() {
 <details>
 <summary>📋 讨论轮次总览</summary>
 
-#### 第 15 轮（当前）
+#### 第 16 轮（当前）
+
+用户想明白了需求：不是"从上一个 yield 点重放"，而是"指定一段代码让它循环"。给出 while+yield+GetFrame() 条件 break 的示例。要求模拟实现 + 对比专用语法的简洁度。
+
+语言方回应：模拟了 3 个真实场景。提出 3 条路径：
+- 路径 A（while 循环）：零改动、零混淆、灵活性极高，样板代码 ~3 行/阶段
+- 路径 B1（frames 语法糖）：消除 ~40% 样板，但语言-业务耦合
+- 路径 C（辅助函数/宏）：当前 FFS 不支持高阶函数和宏，暂不可行
+
+推荐路径 A 先上路，B1 作为未来样板痛点方案备选。关键发现：如果帧号由宿主维护（GetFrame()），样板可进一步简化为 `while GetFrame() < N { ...; yield }`。
+
+#### 第 15 轮
 
 用户明确决定：yield 保持随 tick 直觉（= C# yield return 一致）。新增独立的"帧区间重复"机制处理硬直帧逻辑。三个设计约束：不与 yield 混淆、统一直觉、语言/宿主层职责分离。
 
