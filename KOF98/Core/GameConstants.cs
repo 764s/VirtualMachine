@@ -138,7 +138,11 @@ namespace KOF98
         public const int SYS_MIN = 203;
         public const int SYS_MAX = 204;
 
-        // 220-239: (reserved — formerly skill metadata, now using @export var)
+        // 220-239: Collision box management (KOF-T4)
+        public const int SYS_SET_HITBOX = 220;     // SetHitbox(groupId, ox, oy, hw, hh)
+        public const int SYS_SET_HURTBOX = 221;    // SetHurtbox(ox, oy, hw, hh)
+        public const int SYS_CLEAR_HITBOX = 222;   // ClearHitbox()
+        public const int SYS_SET_PUSHBOX = 223;    // SetPushBox(ox, oy, hw, hh)
 
         // ── Stance Bits (mirror common/skill_base.ffs) ───────────
         public const int STANCE_BIT_GROUNDED = 1;

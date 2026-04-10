@@ -112,6 +112,12 @@ namespace KOF98
                 { "abs", GameConstants.SYS_ABS },
                 { "min", GameConstants.SYS_MIN },
                 { "max", GameConstants.SYS_MAX },
+
+                // Collision box management (KOF-T4)
+                { "SetHitbox", GameConstants.SYS_SET_HITBOX },
+                { "SetHurtbox", GameConstants.SYS_SET_HURTBOX },
+                { "ClearHitbox", GameConstants.SYS_CLEAR_HITBOX },
+                { "SetPushBox", GameConstants.SYS_SET_PUSHBOX },
             };
         }
 
@@ -501,6 +507,70 @@ namespace KOF98
             // ── VM Instance Management (MI-2, MI-3) ──────────────
             // SpawnScript and KillInstance are registered by GameVMBridge
             // since they need direct access to VMWorld.
+
+            // ── Collision Box Management (KOF-T4) ────────────────────
+            // Scripts push collision data to host each frame via these syscalls.
+            // Inside VM, collision data is organized as structs (zero-cost compile-time
+            // register flattening). At the syscall boundary, fields are passed individually.
+
+            table.Register(GameConstants.SYS_SET_HITBOX, "SetHitbox", (ref VMInstanceState s) =>
+            {
+                // SetHitbox(groupId, ox, oy, hw, hh)
+                var args = new SyscallArgs(ref s);
+                int groupId = args.GetInt(0);
+                float ox = args.GetFloat(1);
+                float oy = args.GetFloat(2);
+                float hw = args.GetFloat(3);
+                float hh = args.GetFloat(4);
+                var owner = GetOwner(ref s);
+                if (owner != null && owner.HitBoxCount < owner.HitBoxes.Length)
+                {
+                    owner.HitBoxes[owner.HitBoxCount++] = new HitBoxEntry(groupId, new FRect(ox, oy, hw, hh));
+                }
+            });
+
+            table.Register(GameConstants.SYS_SET_HURTBOX, "SetHurtbox", (ref VMInstanceState s) =>
+            {
+                // SetHurtbox(ox, oy, hw, hh)
+                var args = new SyscallArgs(ref s);
+                float ox = args.GetFloat(0);
+                float oy = args.GetFloat(1);
+                float hw = args.GetFloat(2);
+                float hh = args.GetFloat(3);
+                var owner = GetOwner(ref s);
+                if (owner != null)
+                {
+                    // Replace hurtboxes: first call clears existing, subsequent calls append
+                    if (owner.HurtBoxCount < owner.HurtBoxes.Length)
+                    {
+                        owner.HurtBoxes[owner.HurtBoxCount++] = new FRect(ox, oy, hw, hh);
+                    }
+                }
+            });
+
+            table.Register(GameConstants.SYS_CLEAR_HITBOX, "ClearHitbox", (ref VMInstanceState s) =>
+            {
+                var owner = GetOwner(ref s);
+                if (owner != null)
+                {
+                    owner.ClearHitBoxes();
+                }
+            });
+
+            table.Register(GameConstants.SYS_SET_PUSHBOX, "SetPushBox", (ref VMInstanceState s) =>
+            {
+                // SetPushBox(ox, oy, hw, hh)
+                var args = new SyscallArgs(ref s);
+                float ox = args.GetFloat(0);
+                float oy = args.GetFloat(1);
+                float hw = args.GetFloat(2);
+                float hh = args.GetFloat(3);
+                var owner = GetOwner(ref s);
+                if (owner != null)
+                {
+                    owner.PushBox = new FRect(ox, oy, hw, hh);
+                }
+            });
 
         }
 

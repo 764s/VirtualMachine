@@ -62,7 +62,7 @@
 | SK5 | 命名规则 | ✅ | `skill_<英文名>.ffs` |
 | SK6 | 硬直机制 | ✅ | tick/yield 不受硬直影响；帧号从宿主获取（Syscall 或服务脚本）；硬直不执行为纯业务逻辑 |
 | SK7 | 技能条件入口 | ✅ | 同实例 checkEnter()/step() 模块级函数共享变量（Lang-1 模块变量）。💬 函数命名待改善；变量重置时机待讨论 |
-| SK8 | 碰撞框 Syscall | ✅ | SetHitbox/SetHurtbox/ClearHitbox/SetPushBox |
+| SK8 | 碰撞框 Syscall | ✅ | SetHitbox/SetHurtbox/ClearHitbox/SetPushBox (slot 220-223) + skill_collision.ffs 关注点模块 |
 | SK9 | 受击标记 | ✅ | 分组 mask 混合方向正确 |
 | SK10 | 连招共用环境 | ✅ | V1: 黑板 Syscall；理想形 3（混合式）由 L1+L2+黑板覆盖，需求转入 SK14-2 |
 | SK11 | 多阶段技能 | ✅ | Phase 是脚本内行为，提供便利但不强制 |
@@ -446,23 +446,55 @@ func step() {
 
 ## SK8: 碰撞框数据来源 ✅
 
-**结论**：碰撞数据完全由技能脚本决定，通过 Syscall 推送到宿主。
+**结论**：碰撞数据完全由技能脚本决定，通过 Syscall 推送到宿主。VM 内以 struct 组织碰撞数据（零开销），推送宿主时以单值模式。
 
-**需新增 Syscall**：`SetHitbox(groupId, x, y, w, h)`, `SetHurtbox(x, y, w, h)`, `ClearHitbox`, `SetPushBox`
+**已实现 Syscall**（slot 220-223）：`SetHitbox(groupId, ox, oy, hw, hh)`, `SetHurtbox(ox, oy, hw, hh)`, `ClearHitbox()`, `SetPushBox(ox, oy, hw, hh)`
+
+**碰撞关注点模块**：`common/skill_collision.ffs` — struct 类型 (Box4, HitPhaseDef) + method 函数 (applyHitbox, applyHurtbox, applyPushbox, pushHitPhase, clearHitbox)
 
 <details>
 <summary>📋 详细设计</summary>
 
 **设计原则**：每个技能脚本负责声明自己在各帧的碰撞框（受击框、攻击框、推挤框）。宿主不做碰撞框的静态预定义。
 
+**结构体传参验证**：FFVM struct 为纯编译期概念——递归拍平为连续寄存器。`Box4`(4 floats) = 4 连续寄存器。作为函数参数传递时展开到 scratch zone（与传 4 个独立 float 完全等价）。≥3 字段用 `COPY_BLOCK` 指令，无堆分配。
+
+**关注点分层**：
+- `common/skill_collision.ffs`：struct 类型定义 + method 函数（关注点模块）
+- 技能脚本 `main()`：在顶部用 struct 声明碰撞配置数据，执行循环中调用 method
+
 ```ffs
-// 脚本内碰撞框示例
-if f >= 4 && f < 8 {
-    SetHitbox(1001, 0.2, 0.3, 0.4, 0.3)   // groupId, x, y, w, h
+// skill_light_punch.ffs — 碰撞配置 + 执行
+func main() {
+    var hitPhase: HitPhaseDef
+    hitPhase.startFrame = 5
+    hitPhase.endFrame = 10
+    hitPhase.groupId = 1001
+    hitPhase.box.ox = 0.3
+    hitPhase.box.oy = 0.5
+    hitPhase.box.hw = 0.25
+    hitPhase.box.hh = 0.15
+
+    // ... execution loop ...
+    while f < 20 {
+        applyHurtbox(hurtBox)       // method: push to host
+        pushHitPhase(f, hitPhase)   // method: frame-aware push
+        // ...
+    }
 }
 ```
 
-> 结构体方案（将碰撞框参数封装为 struct）取决于 FFVM 结构体支持进度（B-γ7 SN1 嵌套结构体）。
+**注意**：`clearHitbox()` 等 user function 不可在 defer 块内调用（FFS 限制）。defer 内需直接使用 `ClearHitbox()` syscall。
+
+</details>
+
+<details>
+<summary>📋 讨论历史</summary>
+
+- 初始方案：碰撞框参数直接传 Syscall 单值（SK8 原始结论）
+- struct 封装讨论：确认 FFVM struct 零运行时开销后，采纳 struct 组织碰撞数据
+- 关注点模块：`skill_collision.ffs` 作为碰撞关注点合并模块（data + methods），类似 `char_service.ffs` 的 method 语义模式
+- FFS 限制：module-level 不支持执行语句 → struct 初始化在 `main()` 顶部完成；defer 不支持 user function → defer 内用 syscall
 
 </details>
 

@@ -2,9 +2,8 @@
 // Skill: Light Punch (skill_light_punch)
 // ============================================================
 // 20-frame attack. Hitbox active during frames [5, 10).
-// Collision frames are defined on the SkillDef (host-side) and
-// applied via SkillManager.UpdateCollisionBoxes each frame.
-// This script checks for hit within the active window and applies damage.
+// Collision data is organized as structs (Box4, HitPhaseDef) via
+// skill_collision.ffs and pushed to host each frame via syscalls.
 // Activation: LP pressed, grounded.
 
 include "common/skill_base.ffs"
@@ -20,18 +19,39 @@ include "common/skill_base.ffs"
 @export var requireInputPressed: int = INPUT_BIT_LP
 
 func main() {
+    // ── Collision Configuration ─────────────────────────────
+    var hitPhase: HitPhaseDef
+    hitPhase.startFrame = 5
+    hitPhase.endFrame = 10
+    hitPhase.groupId = 1001
+    hitPhase.box.ox = 0.3
+    hitPhase.box.oy = 0.5
+    hitPhase.box.hw = 0.25
+    hitPhase.box.hh = 0.15
+
+    var hurtBox: Box4
+    hurtBox.ox = 0.0
+    hurtBox.oy = 0.55
+    hurtBox.hw = 0.2
+    hurtBox.hh = 0.5
+
     // ── Execution ───────────────────────────────────────────
     BeginAction(10, 20)
     defer {
+        ClearHitbox()
         EndAction()
     }
 
     var f: int = 0
     var hitDone: int = 0
     while f < 20 {
-        // Hitbox active during frames [5, 10) — group ID 1001
-        if f >= 5 && f < 10 && hitDone == 0 {
-            var target: int = CheckAttackHit(1001)
+        // Push collision for this frame
+        applyHurtbox(hurtBox)
+        pushHitPhase(f, hitPhase)
+
+        // Hit detection during active window
+        if f >= hitPhase.startFrame && f < hitPhase.endFrame && hitDone == 0 {
+            var target: int = CheckAttackHit(hitPhase.groupId)
             if target > 0 {
                 ApplyDamage(target, 1.0, DMG_NORMAL_UPPER)
                 hitDone = 1

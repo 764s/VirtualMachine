@@ -2,7 +2,7 @@
 // Skill: Crouch Punch (skill_crouch_punch)
 // ============================================================
 // 18-frame crouching attack. Hitbox active during frames [4, 9).
-// Script checks for hit within the active window and applies damage.
+// Collision data organized as structs via skill_collision.ffs.
 // Crouching attacks hit low (DMG_NORMAL_LOWER).
 // Activation: Down held + LP pressed, grounded.
 
@@ -21,18 +21,39 @@ include "common/skill_base.ffs"
 @export var requireInputHeld: int = INPUT_BIT_DOWN
 
 func main() {
+    // ── Collision Configuration ─────────────────────────────
+    var hitPhase: HitPhaseDef
+    hitPhase.startFrame = 4
+    hitPhase.endFrame = 9
+    hitPhase.groupId = 1002
+    hitPhase.box.ox = 0.25
+    hitPhase.box.oy = 0.3
+    hitPhase.box.hw = 0.3
+    hitPhase.box.hh = 0.12
+
+    var hurtBox: Box4
+    hurtBox.ox = 0.0
+    hurtBox.oy = 0.35
+    hurtBox.hw = 0.2
+    hurtBox.hh = 0.35
+
     // ── Execution ───────────────────────────────────────────
     BeginAction(20, 18)
     defer {
+        ClearHitbox()
         EndAction()
     }
 
     var f: int = 0
     var hitDone: int = 0
     while f < 18 {
-        // Hitbox active during frames [4, 9) — group ID 1002
-        if f >= 4 && f < 9 && hitDone == 0 {
-            var target: int = CheckAttackHit(1002)
+        // Push collision for this frame
+        applyHurtbox(hurtBox)
+        pushHitPhase(f, hitPhase)
+
+        // Hit detection during active window
+        if f >= hitPhase.startFrame && f < hitPhase.endFrame && hitDone == 0 {
+            var target: int = CheckAttackHit(hitPhase.groupId)
             if target > 0 {
                 ApplyDamage(target, 1.2, DMG_NORMAL_LOWER)
                 ApplyHitstun(target, 0, 10, 0, 0)
