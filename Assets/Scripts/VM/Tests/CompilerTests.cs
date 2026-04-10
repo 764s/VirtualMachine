@@ -7660,7 +7660,7 @@ func main() {
 
         // ===== Test US11: write to read-only exported variable → compile error =====
         {
-            // Note: @export const not supported in C-1, so we test with a service that only has @export func (read-only var path)
+            // Note: Lang-12 now supports @export const; this test validates via manually-constructed non-writable ExportVarEntry
             // For this test, create a binding with a non-writable variable
             var readOnlyVar = new ExportVarEntry("hp", 0, false); // writable=false
             var readOnlyTable = new ExportTable(new ExportVarEntry[] { readOnlyVar }, new ExportFuncEntry[0]);
@@ -8423,6 +8423,127 @@ func main() {
             Assert(values[1] == 3, $"MSV15: pos.x = {values[1]} (expected 3)");
             Assert(values[2] == 4, $"MSV15: pos.y = {values[2]} (expected 4)");
             Assert(values[3] == 100, $"MSV15: MAX = {values[3]} (expected 100)");
+        }
+
+        // ===== Lang-12: @export const Tests (EC01-EC03) =====
+
+        // ===== Test EC01: @export const basic — ExportTable entry with Writable=false + DefaultValue =====
+        {
+            string source = @"
+@export const MAX_HP: int = 999
+@export const SPEED: float = 3.5
+@export var name: int = 1
+func main() {
+    var x: int = MAX_HP
+    Report(x)
+}";
+            var result = compiler.Compile(source, "main", new Dictionary<string, int> { { "Report", 0 } });
+            Assert(result.Success, $"EC01 compile success: {(result.Errors != null && result.Errors.Count > 0 ? result.Errors[0] : "ok")}");
+            Assert(result.Program.ExportTable != null, "EC01: ExportTable not null");
+            Assert(result.Program.ExportTable.Variables.Length == 3, $"EC01: 3 exported vars, got {result.Program.ExportTable.Variables.Length}");
+
+            // @export const MAX_HP
+            Assert(result.Program.ExportTable.Variables[0].Name == "MAX_HP", "EC01: var[0].Name=MAX_HP");
+            Assert(!result.Program.ExportTable.Variables[0].Writable, "EC01: MAX_HP Writable=false");
+            Assert(result.Program.ExportTable.Variables[0].DefaultValue.ToInt() == 999, "EC01: MAX_HP default=999");
+
+            // @export const SPEED
+            Assert(result.Program.ExportTable.Variables[1].Name == "SPEED", "EC01: var[1].Name=SPEED");
+            Assert(!result.Program.ExportTable.Variables[1].Writable, "EC01: SPEED Writable=false");
+            Assert(System.Math.Abs(result.Program.ExportTable.Variables[1].DefaultValue.ToFloat() - 3.5f) < 0.01f,
+                   $"EC01: SPEED default≈3.5, got {result.Program.ExportTable.Variables[1].DefaultValue.ToFloat()}");
+
+            // @export var name (still writable)
+            Assert(result.Program.ExportTable.Variables[2].Name == "name", "EC01: var[2].Name=name");
+            Assert(result.Program.ExportTable.Variables[2].Writable, "EC01: name Writable=true");
+
+            // Host reads via GetVarDefault
+            Assert(result.Program.ExportTable.GetVarDefault("MAX_HP", Number.Zero).ToInt() == 999,
+                   "EC01: GetVarDefault MAX_HP = 999");
+            Assert(System.Math.Abs(result.Program.ExportTable.GetVarDefault("SPEED", Number.Zero).ToFloat() - 3.5f) < 0.01f,
+                   "EC01: GetVarDefault SPEED ≈ 3.5");
+
+            // Runtime: const folding still works (Report(MAX_HP) should use folded value)
+            var values = new List<int>();
+            var world = new VMWorld();
+            world.Modules.Load(0, result.Program);
+            world.Syscalls.Register(0, "Report", (ref VMInstanceState s) =>
+            {
+                values.Add(s.Registers.Get(0).ToInt());
+            });
+            world.SpawnInstance(0, 0);
+            world.Tick();
+            Assert(values.Count == 1, $"EC01: 1 report, got {values.Count}");
+            Assert(values.Count > 0 && values[0] == 999, $"EC01: Report(MAX_HP)=999, got {(values.Count > 0 ? values[0].ToString() : "none")}");
+        }
+
+        // ===== Test EC02: @export const assignment rejected at compile time =====
+        {
+            // Same-module assignment to @export const → compile error
+            string source = @"
+@export const LIMIT: int = 10
+func main() {
+    LIMIT = 20
+}";
+            var result = compiler.Compile(source, "main", new Dictionary<string, int>());
+            Assert(!result.Success, "EC02: compile error for assignment to @export const");
+            Assert(result.Errors != null && result.Errors.Count > 0 &&
+                   result.Errors[0].Contains("const"),
+                   $"EC02: error mentions 'const', got: {(result.Errors != null && result.Errors.Count > 0 ? result.Errors[0] : "none")}");
+        }
+
+        // ===== Test EC03: cross-module svc.constVar write rejected + svc.constVar read works =====
+        {
+            // Compile service with @export const
+            string svcSource = @"
+@export const ROM_VALUE: int = 42
+@export var rw_value: int = 7
+func main() {
+}";
+            var svcResult = compiler.Compile(svcSource, "main", new Dictionary<string, int>());
+            Assert(svcResult.Success, $"EC03 svc compile success: {(svcResult.Errors != null && svcResult.Errors.Count > 0 ? svcResult.Errors[0] : "ok")}");
+
+            // Caller: read @export const via svc.ROM_VALUE → should work
+            string callerReadSource = @"
+var svc: int = 0
+func main() {
+    var x: int = svc.ROM_VALUE
+    Report(x)
+}";
+            var svcBindings = new ServiceBinding[] { new ServiceBinding("svc", svcResult.Program.ExportTable) };
+            var callerSyscalls = new Dictionary<string, int> { { "Report", 0 } };
+            var callerReadResult = compiler.Compile(callerReadSource, "main", callerSyscalls, null, null, null, svcBindings);
+            Assert(callerReadResult.Success, $"EC03 caller read compile success: {(callerReadResult.Errors != null && callerReadResult.Errors.Count > 0 ? callerReadResult.Errors[0] : "ok")}");
+
+            // Caller: write @export const via svc.ROM_VALUE = expr → compile error
+            string callerWriteSource = @"
+var svc: int = 0
+func main() {
+    svc.ROM_VALUE = 99
+}";
+            var callerWriteResult = compiler.Compile(callerWriteSource, "main",
+                new Dictionary<string, int>(), null, null, null, svcBindings);
+            Assert(!callerWriteResult.Success, "EC03: compile error for cross-module write to @export const");
+            Assert(callerWriteResult.Errors != null && callerWriteResult.Errors.Count > 0 &&
+                   callerWriteResult.Errors[0].Contains("read-only"),
+                   $"EC03: error mentions 'read-only', got: {(callerWriteResult.Errors != null && callerWriteResult.Errors.Count > 0 ? callerWriteResult.Errors[0] : "none")}");
+
+            // End-to-end: read @export const via XLOAD_MVAR at runtime
+            var values = new List<int>();
+            var world = new VMWorld();
+            world.Modules.Load(0, svcResult.Program);
+            world.Modules.Load(1, callerReadResult.Program);
+            world.Syscalls.Register(0, "Report", (ref VMInstanceState s) =>
+            {
+                values.Add(s.Registers.Get(0).ToInt());
+            });
+            int svcId = world.SpawnInstance(0, 0);
+            int callerId = world.SpawnInstance(1, 0);
+            // Set the svc module var to the service instance id
+            world.Pool.Instances[callerId].Registers.Set(VMConstants.ModuleVarRegBase, Number.FromInt(svcId));
+            world.Tick();
+            Assert(values.Count == 1, $"EC03: 1 report, got {values.Count}");
+            Assert(values.Count > 0 && values[0] == 42, $"EC03: svc.ROM_VALUE=42, got {(values.Count > 0 ? values[0].ToString() : "none")}");
         }
 
         // ===== Summary =====
