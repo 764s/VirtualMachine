@@ -68,8 +68,22 @@ namespace FFVM
         /// <summary>Base register index for the caller's register window.</summary>
         public int RegisterBase;
 
-        /// <summary>Caller's CleanupDepth at time of CALL (scopes function-level cleanup walk).</summary>
+        /// <summary>
+        /// Caller's CleanupDepth at time of CALL (scopes function-level cleanup walk).
+        /// High bit (0x80000000) stores WasInCleanup flag: set if InCleanup was active
+        /// when this CALL executed. Used to restore InCleanup state after the callee's
+        /// cleanup completes (DC: defer-call Level 3 support).
+        /// </summary>
         public int CleanupBase;
+
+        /// <summary>
+        /// Saved return value (r0) before function-scoped cleanup execution.
+        /// Stored per-frame to support nested cleanup: a cleanup block may CALL
+        /// a function that itself has defer, creating nested savedR0 contexts.
+        /// Only written by RET_FUNC when pending cleanups exist; read by RETURN
+        /// when all function-scoped cleanups complete and the frame is popped.
+        /// </summary>
+        public long SavedR0;
     }
 
     /// <summary>
