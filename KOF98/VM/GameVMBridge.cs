@@ -137,58 +137,41 @@ namespace KOF98
             return slot;
         }
 
-        // ── Skill Metadata Extraction ────────────────────────────
+        // ── Skill Configuration Extraction ───────────────────────
 
         /// <summary>
-        /// Extract a SkillDef from a compiled FFS skill script.
-        /// The script declares its configuration via SetSkillMeta() calls in main().
-        /// This method spawns a temporary VM instance, ticks it once to capture
-        /// the metadata, then destroys the instance and builds a SkillDef.
+        /// Extract a SkillDef from a compiled FFS skill script's export table.
+        /// The script declares its configuration via @export var declarations at
+        /// module level. The compiler stores default values in the ExportTable,
+        /// so no temporary VM instance is needed — the host reads compile-time
+        /// defaults directly.
         ///
-        /// During extraction, no game scene context is set — syscalls like
-        /// IsInputHeld/IsGrounded safely return 0, causing condition checks to
-        /// fail and the script to return. The metadata is captured before that.
-        ///
-        /// Additionally reads META_REQUIRE_* keys to auto-generate CanActivate.
+        /// Additionally reads require* exported variables to auto-generate CanActivate.
         /// </summary>
         public SkillDef ExtractSkillDef(int moduleSlot, int skillId, string name)
         {
-            // Save and clear context so syscalls return safe defaults
-            var savedVMBridge = GameSyscalls.VMBridge;
-            GameSyscalls.VMBridge = null;
-            GameSyscalls.SetContext(null);
-
-            var meta = GameSyscalls.BeginMetaCapture();
-
-            int vmId = World.SpawnInstance(moduleSlot, 0);
-            if (vmId < 0)
+            VMProgram program = World.Modules.Get(moduleSlot);
+            if (program == null)
             {
-                GameSyscalls.EndMetaCapture();
-                GameSyscalls.VMBridge = savedVMBridge;
-                Console.Error.WriteLine($"[VMBridge] ExtractSkillDef: VM pool exhausted for {name}");
+                Console.Error.WriteLine($"[VMBridge] ExtractSkillDef: Module not loaded for {name} (slot {moduleSlot})");
                 return null;
             }
 
-            // Tick once — executes SetSkillMeta calls, then script returns/yields
-            World.TickInstance(vmId);
+            var exports = program.ExportTable;
+            if (exports == null)
+            {
+                Console.Error.WriteLine($"[VMBridge] ExtractSkillDef: No export table for {name} (slot {moduleSlot})");
+                return null;
+            }
 
-            // Destroy the extraction instance
-            ref var inst = ref World.Pool.Instances[vmId];
-            if (inst.IsAlive && (inst.StateFlags & VMStateFlags.Completed) == 0)
-                inst.StateFlags |= VMStateFlags.Killed;
-            World.DestroyInstance(vmId);
-
-            GameSyscalls.EndMetaCapture();
-            GameSyscalls.VMBridge = savedVMBridge;
-
-            // Build SkillDef from captured metadata
-            int totalFrames = meta.GetValueOrDefault(GameConstants.META_TOTAL_FRAMES, -1);
-            int priority = meta.GetValueOrDefault(GameConstants.META_PRIORITY, 0);
-            int tags = meta.GetValueOrDefault(GameConstants.META_TAGS, 0);
-            bool isLooping = meta.GetValueOrDefault(GameConstants.META_IS_LOOPING, 0) != 0;
-            int actPriority = meta.GetValueOrDefault(GameConstants.META_ACTIVATION_PRIORITY, 100);
-            int intPriority = meta.GetValueOrDefault(GameConstants.META_INTERRUPT_PRIORITY, 100);
-            int stanceBits = meta.GetValueOrDefault(GameConstants.META_ALLOWED_STANCES, 0);
+            // Read skill configuration from export table defaults
+            int totalFrames = exports.GetVarDefault("totalFrames", -1).ToInt();
+            int priority = exports.GetVarDefault("priority", 0).ToInt();
+            int tags = exports.GetVarDefault("tags", 0).ToInt();
+            bool isLooping = exports.GetVarDefault("isLooping", 0).ToInt() != 0;
+            int actPriority = exports.GetVarDefault("activationPriority", 100).ToInt();
+            int intPriority = exports.GetVarDefault("interruptPriority", 100).ToInt();
+            int stanceBits = exports.GetVarDefault("allowedStances", 0).ToInt();
 
             var def = new SkillDef(skillId, name, totalFrames, priority, tags, isLooping);
             def.ActivationPriority = actPriority;
@@ -205,11 +188,11 @@ namespace KOF98
             if ((stanceBits & GameConstants.STANCE_BIT_DEAD) != 0) stances.Add(Stance.Dead);
             if (stances.Count > 0) def.AllowedStances = stances.ToArray();
 
-            // Auto-generate CanActivate from META_REQUIRE_* metadata
-            bool reqGrounded = meta.GetValueOrDefault(GameConstants.META_REQUIRE_GROUNDED, 0) != 0;
-            int reqPressed = meta.GetValueOrDefault(GameConstants.META_REQUIRE_INPUT_PRESSED, 0);
-            int reqHeld = meta.GetValueOrDefault(GameConstants.META_REQUIRE_INPUT_HELD, 0);
-            int reqNotHeld = meta.GetValueOrDefault(GameConstants.META_REQUIRE_NOT_INPUT_HELD, 0);
+            // Auto-generate CanActivate from require* exported variables
+            bool reqGrounded = exports.GetVarDefault("requireGrounded", 0).ToInt() != 0;
+            int reqPressed = exports.GetVarDefault("requireInputPressed", 0).ToInt();
+            int reqHeld = exports.GetVarDefault("requireInputHeld", 0).ToInt();
+            int reqNotHeld = exports.GetVarDefault("requireNotInputHeld", 0).ToInt();
 
             if (reqGrounded || reqPressed != 0 || reqHeld != 0 || reqNotHeld != 0)
             {

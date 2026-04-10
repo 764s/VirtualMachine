@@ -138,21 +138,7 @@ namespace KOF98
         public const int SYS_MIN = 203;
         public const int SYS_MAX = 204;
 
-        // 220-239: Skill metadata (host reads at load time)
-        public const int SYS_SET_SKILL_META = 220;
-
-        // ── Skill Metadata Keys (mirror common/skill_base.ffs) ───
-        public const int META_TOTAL_FRAMES = 1;
-        public const int META_PRIORITY = 2;
-        public const int META_TAGS = 3;
-        public const int META_IS_LOOPING = 4;
-        public const int META_ACTIVATION_PRIORITY = 5;
-        public const int META_INTERRUPT_PRIORITY = 6;
-        public const int META_ALLOWED_STANCES = 7;
-        public const int META_REQUIRE_GROUNDED = 10;
-        public const int META_REQUIRE_INPUT_PRESSED = 11;
-        public const int META_REQUIRE_INPUT_HELD = 12;
-        public const int META_REQUIRE_NOT_INPUT_HELD = 13;
+        // 220-239: (reserved — formerly skill metadata, now using @export var)
 
         // ── Stance Bits (mirror common/skill_base.ffs) ───────────
         public const int STANCE_BIT_GROUNDED = 1;

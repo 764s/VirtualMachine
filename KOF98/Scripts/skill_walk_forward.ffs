@@ -8,19 +8,19 @@
 
 include "common/skill_base.ffs"
 
-func main() {
-    // ── Skill Configuration ─────────────────────────────────
-    SetSkillMeta(META_TOTAL_FRAMES, -1)
-    SetSkillMeta(META_PRIORITY, 1)
-    SetSkillMeta(META_TAGS, TAG_BIT_WALK)
-    SetSkillMeta(META_IS_LOOPING, 1)
-    SetSkillMeta(META_ACTIVATION_PRIORITY, 500)
-    SetSkillMeta(META_INTERRUPT_PRIORITY, 500)
-    SetSkillMeta(META_ALLOWED_STANCES, STANCE_GROUNDED)
-    SetSkillMeta(META_REQUIRE_GROUNDED, 1)
-    SetSkillMeta(META_REQUIRE_INPUT_HELD, INPUT_BIT_ANY_DIR_H)
-    SetSkillMeta(META_REQUIRE_NOT_INPUT_HELD, INPUT_BIT_UP)
+// ── Skill Configuration ─────────────────────────────────────
+@export var totalFrames: int = -1
+@export var priority: int = 1
+@export var tags: int = TAG_BIT_WALK
+@export var isLooping: int = 1
+@export var activationPriority: int = 500
+@export var interruptPriority: int = 500
+@export var allowedStances: int = STANCE_GROUNDED
+@export var requireGrounded: int = 1
+@export var requireInputHeld: int = INPUT_BIT_ANY_DIR_H
+@export var requireNotInputHeld: int = INPUT_BIT_UP
 
+func main() {
     // ── Execution ───────────────────────────────────────────
     defer {
         SetVelocity(0.0, 0.0)

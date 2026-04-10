@@ -4,32 +4,31 @@
 // Common base include for all skill scripts.
 // Provides:
 //   - Full constant/input chain (via input.ffs → constants.ffs)
-//   - Skill metadata key constants (META_*)
 //   - Stance bit constants (STANCE_*)
-//   - Input bit constants (INPUT_BIT_*) for metadata-driven conditions
+//   - Input bit constants (INPUT_BIT_*) for @export var conditions
+//   - Tag bit constants (TAG_BIT_*)
 //
 // Usage:  include "common/skill_base.ffs"
 //
 // Every skill script MUST include this file and declare its
-// configuration via SetSkillMeta() calls at the start of main().
+// configuration via @export var declarations at module level.
+// The host reads default values from the export table at load
+// time — no temporary instance spawn needed.
+//
+// Example:
+//   @export var totalFrames: int = -1
+//   @export var priority: int = 0
+//   @export var tags: int = TAG_BIT_IDLE
+//   @export var isLooping: int = 1
+//   @export var activationPriority: int = 900
+//   @export var interruptPriority: int = 900
+//   @export var allowedStances: int = STANCE_GROUNDED
 // ============================================================
 
 include "common/input.ffs"
 
-// ── Skill Metadata Keys ─────────────────────────────────────
-// Used with SetSkillMeta(key, value) to declare skill configuration.
-// The host extracts these at load time to build SkillDef.
-
-const META_TOTAL_FRAMES: int = 1
-const META_PRIORITY: int = 2
-const META_TAGS: int = 3
-const META_IS_LOOPING: int = 4
-const META_ACTIVATION_PRIORITY: int = 5
-const META_INTERRUPT_PRIORITY: int = 6
-const META_ALLOWED_STANCES: int = 7
-
-// ── Stance Bits (for META_ALLOWED_STANCES) ──────────────────
-// Bitfield values — combine with bitwise OR for multi-stance skills.
+// ── Stance Bits (for allowedStances @export var) ────────────
+// Bitfield values — combine with + for multi-stance skills.
 // Must match Stance enum order in Types.cs.
 
 const STANCE_GROUNDED: int = 1
@@ -39,7 +38,7 @@ const STANCE_KNOCKDOWN: int = 8
 const STANCE_HITSTUN: int = 16
 const STANCE_DEAD: int = 32
 
-// ── Input Bit Constants (for META_REQUIRE_* metadata) ───────
+// ── Input Bit Constants (for require* @export vars) ─────────
 // Bit values matching InputButton flags in PlayerInput.cs.
 
 const INPUT_BIT_UP: int = 1
@@ -53,7 +52,7 @@ const INPUT_BIT_HK: int = 128
 const INPUT_BIT_ANY_DIR_H: int = 12
 
 // ── Tag Bit Constants (pre-computed 1 << TAG_*) ─────────────
-// Used with META_TAGS to declare skill tags without bit-shift.
+// Used with tags @export var to declare skill tags without bit-shift.
 
 const TAG_BIT_IDLE: int = 1
 const TAG_BIT_WALK: int = 2
@@ -62,12 +61,3 @@ const TAG_BIT_ATTACK: int = 32
 const TAG_BIT_HIT: int = 64
 const TAG_BIT_KNOCKDOWN: int = 512
 const TAG_BIT_AIR_STATE: int = 2048
-
-// ── Activation Condition Metadata Keys ──────────────────────
-// Additional metadata keys for declaring activation conditions.
-// The host auto-generates efficient CanActivate from these.
-
-const META_REQUIRE_GROUNDED: int = 10
-const META_REQUIRE_INPUT_PRESSED: int = 11
-const META_REQUIRE_INPUT_HELD: int = 12
-const META_REQUIRE_NOT_INPUT_HELD: int = 13

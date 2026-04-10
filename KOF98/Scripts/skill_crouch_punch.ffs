@@ -8,19 +8,19 @@
 
 include "common/skill_base.ffs"
 
-func main() {
-    // ── Skill Configuration ─────────────────────────────────
-    SetSkillMeta(META_TOTAL_FRAMES, 18)
-    SetSkillMeta(META_PRIORITY, 3)
-    SetSkillMeta(META_TAGS, TAG_BIT_ATTACK)
-    SetSkillMeta(META_IS_LOOPING, 0)
-    SetSkillMeta(META_ACTIVATION_PRIORITY, 200)
-    SetSkillMeta(META_INTERRUPT_PRIORITY, 200)
-    SetSkillMeta(META_ALLOWED_STANCES, STANCE_GROUNDED + STANCE_CROUCHING)
-    SetSkillMeta(META_REQUIRE_GROUNDED, 1)
-    SetSkillMeta(META_REQUIRE_INPUT_PRESSED, INPUT_BIT_LP)
-    SetSkillMeta(META_REQUIRE_INPUT_HELD, INPUT_BIT_DOWN)
+// ── Skill Configuration ─────────────────────────────────────
+@export var totalFrames: int = 18
+@export var priority: int = 3
+@export var tags: int = TAG_BIT_ATTACK
+@export var isLooping: int = 0
+@export var activationPriority: int = 200
+@export var interruptPriority: int = 200
+@export var allowedStances: int = STANCE_GROUNDED + STANCE_CROUCHING
+@export var requireGrounded: int = 1
+@export var requireInputPressed: int = INPUT_BIT_LP
+@export var requireInputHeld: int = INPUT_BIT_DOWN
 
+func main() {
     // ── Execution ───────────────────────────────────────────
     BeginAction(20, 18)
     defer {

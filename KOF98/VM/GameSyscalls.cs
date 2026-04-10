@@ -32,26 +32,6 @@ namespace KOF98
         /// <summary>Pending energy coefficient for the next ApplyDamage call.</summary>
         private static float _energyCoeff = 1f;
 
-        // ── Skill Metadata Capture ──────────────────────────────
-        /// <summary>
-        /// When non-null, SetSkillMeta syscall captures key→value here.
-        /// Used during ExtractSkillDef to read skill configuration from scripts.
-        /// </summary>
-        private static Dictionary<int, int> _skillMetaCapture;
-
-        /// <summary>Begin capturing SetSkillMeta calls. Returns the capture dictionary.</summary>
-        public static Dictionary<int, int> BeginMetaCapture()
-        {
-            _skillMetaCapture = new Dictionary<int, int>();
-            return _skillMetaCapture;
-        }
-
-        /// <summary>End metadata capture and clear the capture dictionary.</summary>
-        public static void EndMetaCapture()
-        {
-            _skillMetaCapture = null;
-        }
-
         /// <summary>Resolve the owner character ID for the given VM instance state.</summary>
         private static int ResolveOwnerId(ref VMInstanceState s)
         {
@@ -132,15 +112,12 @@ namespace KOF98
                 { "abs", GameConstants.SYS_ABS },
                 { "min", GameConstants.SYS_MIN },
                 { "max", GameConstants.SYS_MAX },
-
-                // Skill metadata
-                { "SetSkillMeta", GameConstants.SYS_SET_SKILL_META },
             };
         }
 
         /// <summary>
         /// Set scene context. Call once per frame before VMWorld.Tick().
-        /// Pass null to clear context (e.g., during metadata extraction).
+        /// Pass null to clear context (e.g., during testing).
         /// </summary>
         public static void SetContext(GameScene scene)
         {
@@ -525,17 +502,6 @@ namespace KOF98
             // SpawnScript and KillInstance are registered by GameVMBridge
             // since they need direct access to VMWorld.
 
-            // ── Skill Metadata ──────────────────────────────────────
-            table.Register(GameConstants.SYS_SET_SKILL_META, "SetSkillMeta", (ref VMInstanceState s) =>
-            {
-                var args = new SyscallArgs(ref s);
-                int key = args.GetInt(0);
-                int value = args.GetInt(1);
-                // Capture metadata during ExtractSkillDef; no-op during normal execution.
-                _skillMetaCapture?.TryAdd(key, 0);
-                if (_skillMetaCapture != null)
-                    _skillMetaCapture[key] = value;
-            });
         }
 
         private static Character GetOwner(ref VMInstanceState s)
