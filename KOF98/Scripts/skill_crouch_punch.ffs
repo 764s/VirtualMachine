@@ -20,17 +20,23 @@ include "common/skill_base.ffs"
 @export var requireInputPressed: int = INPUT_BIT_LP
 @export var requireInputHeld: int = INPUT_BIT_DOWN
 
-// ── Collision Configuration (module constants) ──────────────
-const hitPhase: HitPhaseDef = HitPhaseDef {
-    startFrame: 4,
-    endFrame: 9,
-    groupId: 1002,
-    box: Box4 { ox: 0.25, oy: 0.3, hw: 0.3, hh: 0.12 }
-}
-
-const hurtBox: Box4 = Box4 { ox: 0.0, oy: 0.35, hw: 0.2, hh: 0.35 }
-
 func main() {
+    // ── Collision Configuration ─────────────────────────────
+    var hitPhase: HitPhaseDef
+    hitPhase.startFrame = 4
+    hitPhase.endFrame = 9
+    hitPhase.groupId = 1002
+    hitPhase.box.ox = 0.25
+    hitPhase.box.oy = 0.3
+    hitPhase.box.hw = 0.3
+    hitPhase.box.hh = 0.12
+
+    var hurtBox: Box4
+    hurtBox.ox = 0.0
+    hurtBox.oy = 0.35
+    hurtBox.hw = 0.2
+    hurtBox.hh = 0.35
+
     // ── Execution ───────────────────────────────────────────
     BeginAction(20, 18)
     defer {
