@@ -13,7 +13,7 @@ func main() {
     // ── Skill Configuration ─────────────────────────────────
     SetSkillMeta(META_TOTAL_FRAMES, 20)
     SetSkillMeta(META_PRIORITY, 3)
-    SetSkillMeta(META_TAGS, 32)
+    SetSkillMeta(META_TAGS, TAG_BIT_ATTACK)
     SetSkillMeta(META_IS_LOOPING, 0)
     SetSkillMeta(META_ACTIVATION_PRIORITY, 200)
     SetSkillMeta(META_INTERRUPT_PRIORITY, 200)

@@ -216,6 +216,9 @@ namespace KOF98
                 def.CanActivate = (ch, input) =>
                 {
                     if (reqGrounded && !ch.IsGrounded) return false;
+                    // Hitstun guard: always reject during hitstun for safety.
+                    // Skills that need hitstun activation (e.g., hit reactions) are
+                    // force-activated by host and bypass CanActivate entirely.
                     if (ch.HitstunFrames > 0) return false;
                     if (reqPressed != 0 && ((int)input.Pressed & reqPressed) == 0) return false;
                     if (reqHeld != 0 && ((int)input.Held & reqHeld) == 0) return false;

@@ -52,6 +52,17 @@ const INPUT_BIT_LK: int = 64
 const INPUT_BIT_HK: int = 128
 const INPUT_BIT_ANY_DIR_H: int = 12
 
+// ── Tag Bit Constants (pre-computed 1 << TAG_*) ─────────────
+// Used with META_TAGS to declare skill tags without bit-shift.
+
+const TAG_BIT_IDLE: int = 1
+const TAG_BIT_WALK: int = 2
+const TAG_BIT_JUMP: int = 16
+const TAG_BIT_ATTACK: int = 32
+const TAG_BIT_HIT: int = 64
+const TAG_BIT_KNOCKDOWN: int = 512
+const TAG_BIT_AIR_STATE: int = 2048
+
 // ── Activation Condition Metadata Keys ──────────────────────
 // Additional metadata keys for declaring activation conditions.
 // The host auto-generates efficient CanActivate from these.

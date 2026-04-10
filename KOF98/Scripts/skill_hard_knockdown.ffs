@@ -12,11 +12,11 @@ func main() {
     // ── Skill Configuration ─────────────────────────────────
     SetSkillMeta(META_TOTAL_FRAMES, 60)
     SetSkillMeta(META_PRIORITY, 2)
-    SetSkillMeta(META_TAGS, 512)
+    SetSkillMeta(META_TAGS, TAG_BIT_KNOCKDOWN)
     SetSkillMeta(META_IS_LOOPING, 0)
     SetSkillMeta(META_ACTIVATION_PRIORITY, 50)
     SetSkillMeta(META_INTERRUPT_PRIORITY, 50)
-    SetSkillMeta(META_ALLOWED_STANCES, 9)
+    SetSkillMeta(META_ALLOWED_STANCES, STANCE_GROUNDED + STANCE_KNOCKDOWN)
 
     // ── Execution ───────────────────────────────────────────
     BeginAction(30, 60)
