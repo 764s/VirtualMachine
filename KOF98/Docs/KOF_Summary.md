@@ -61,12 +61,13 @@
 | 场景调度 | ✅ | GameScene (13步帧执行), SceneInput, SceneCommand |
 | 控制台视图 | ✅ | ConsoleGameView (ASCII, 72×16) |
 | **Raylib 视图** | ✅ | **RaylibGameView (图形化, 碰撞框颜色可视化)** |
-| FFVM 集成 | ✅ | GameSyscalls (~42 含 IsInputHeld/IsInputPressed), GameVMBridge (含 IsSkillVMCompleted) |
+| FFVM 集成 | ✅ | GameSyscalls (~41 含 IsInputHeld/IsInputPressed), GameVMBridge (含 IsSkillVMCompleted, @export var 配置提取) |
 | **基础移动** | ✅ | **Walk/Jump/Crouch 技能 (Walk/Jump = VM-driven, Crouch = host-driven)** |
 | 轻拳攻击 | ✅ | LightPunch (VM-driven, 含碰撞框数据) |
 | **界面设计** | ✅ | **GameSettings + 控制界面 (Tab 开关, AI/自动复活/重新开始)** |
 | **技能脚本化基础设施** | ✅ | **Stance 枚举 + SkillDef 扩展 (AllowedStances/ActivationPriority/InterruptPriority) + 分层候选池裁决 + ProbeSkillCondition 条件入口 + VMWorld.TickInstance** |
 | **首批 FFS 脚本** | ✅ | **skill_idle/walk_forward/jump/light_punch.ffs — VM 脚本替代 host OnFrame; SkillManager 自动 spawn/kill VM 实例** |
+| **@export var 声明式配置** | ✅ | **SK15: 8 个脚本从 SetSkillMeta() 迁移为 @export var; ExtractSkillDef 直接读导出表（无临时实例）** |
 | 架构文档 | ✅ | D_GameArchitecture.md |
 
 ### 已完成子任务（已归档）
