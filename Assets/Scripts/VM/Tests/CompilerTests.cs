@@ -8425,6 +8425,100 @@ func main() {
             Assert(values[3] == 100, $"MSV15: MAX = {values[3]} (expected 100)");
         }
 
+        // ===== Test EC01: @export const — host reads via GetVarDefault =====
+        {
+            string source = @"
+@export const maxHp: int = 1000
+@export const speed: float = 3.5
+@export var hp: int = 500
+func main() {
+    Report(maxHp)
+    Report(hp)
+}";
+            var syscalls = new Dictionary<string, int> { { "Report", 0 } };
+            var result = compiler.Compile(source, "main", syscalls);
+            Assert(result.Success, "EC01 compile success");
+
+            var exports = result.Program.ExportTable;
+            Assert(exports != null, "EC01: ExportTable not null");
+            Assert(exports.Variables.Length == 3, "EC01: 3 exported vars");
+
+            // @export const — Writable = false
+            Assert(exports.Variables[0].Name == "maxHp", "EC01: var[0].Name=maxHp");
+            Assert(exports.Variables[0].DefaultValue.ToInt() == 1000, "EC01: maxHp default=1000");
+            Assert(!exports.Variables[0].Writable, "EC01: maxHp not writable");
+
+            // @export const float
+            Assert(exports.Variables[1].Name == "speed", "EC01: var[1].Name=speed");
+            Assert(!exports.Variables[1].Writable, "EC01: speed not writable");
+
+            // @export var — Writable = true
+            Assert(exports.Variables[2].Name == "hp", "EC01: var[2].Name=hp");
+            Assert(exports.Variables[2].DefaultValue.ToInt() == 500, "EC01: hp default=500");
+            Assert(exports.Variables[2].Writable, "EC01: hp writable");
+
+            // GetVarDefault works for both const and var
+            Assert(exports.GetVarDefault("maxHp", 0).ToInt() == 1000, "EC01: GetVarDefault maxHp=1000");
+            Assert(exports.GetVarDefault("hp", 0).ToInt() == 500, "EC01: GetVarDefault hp=500");
+
+            // Runtime: const value is folded at compile-time
+            var values = new List<int>();
+            var world = new VMWorld();
+            world.Modules.Load(0, result.Program);
+            world.Syscalls.Register(0, "Report", (ref VMInstanceState s) =>
+            {
+                values.Add(s.Registers.Get(0).ToInt());
+            });
+            world.SpawnInstance(0, 0);
+            world.Tick();
+            Assert(values.Count == 2, "EC01: 2 reports");
+            Assert(values[0] == 1000, $"EC01: maxHp runtime = {values[0]} (expected 1000)");
+            Assert(values[1] == 500, $"EC01: hp runtime = {values[1]} (expected 500)");
+        }
+
+        // ===== Test EC02: @export const — assignment prevention =====
+        {
+            string source = @"
+@export const maxHp: int = 1000
+func main() {
+    maxHp = 2000
+}";
+            var syscalls = new Dictionary<string, int>();
+            var result = compiler.Compile(source, "main", syscalls);
+            Assert(!result.Success, "EC02: assignment to @export const should fail");
+            Assert(result.Errors[0].Contains("const"),
+                $"EC02: error mentions const, got: {result.Errors[0]}");
+        }
+
+        // ===== Test EC03: @export const — const expression folding works =====
+        {
+            string source = @"
+@export const BASE: int = 100
+@export const DOUBLED: int = BASE * 2
+func main() {
+    Report(DOUBLED)
+}";
+            var syscalls = new Dictionary<string, int> { { "Report", 0 } };
+            var result = compiler.Compile(source, "main", syscalls);
+            Assert(result.Success, "EC03 compile success");
+
+            var exports = result.Program.ExportTable;
+            Assert(exports.GetVarDefault("BASE", 0).ToInt() == 100, "EC03: BASE=100");
+            Assert(exports.GetVarDefault("DOUBLED", 0).ToInt() == 200, "EC03: DOUBLED=200");
+
+            var values = new List<int>();
+            var world = new VMWorld();
+            world.Modules.Load(0, result.Program);
+            world.Syscalls.Register(0, "Report", (ref VMInstanceState s) =>
+            {
+                values.Add(s.Registers.Get(0).ToInt());
+            });
+            world.SpawnInstance(0, 0);
+            world.Tick();
+            Assert(values.Count == 1, "EC03: 1 report");
+            Assert(values[0] == 200, $"EC03: DOUBLED runtime = {values[0]} (expected 200)");
+        }
+
         // ===== Summary =====
         Debug.Log($"========================================");
         Debug.Log($"Compiler Tests: {passed} passed, {failed} failed");

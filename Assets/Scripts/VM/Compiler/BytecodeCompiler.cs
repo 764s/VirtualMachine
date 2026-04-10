@@ -539,7 +539,22 @@ namespace FFVM.Compiler
                     {
                         _moduleConstValues[decl.Name] = constVal;
                         _constValues[decl.Name] = constVal; // make available for subsequent folding
-                        continue; // no register needed
+
+                        // @export const: also allocate a module var register so BuildExportTable
+                        // can create an ExportVarEntry (host reads via GetVarDefault / XLOAD_MVAR).
+                        // The value is still folded at compile-time for internal use.
+                        if (decl.IsExported)
+                        {
+                            int exportReg;
+                            if (nextModuleReg < VMConstants.MaxRegisters)
+                                exportReg = nextModuleReg++;
+                            else
+                                exportReg = VMConstants.MaxRegisters + _nextExtendedReg++;
+                            _moduleVarRegisters[decl.Name] = exportReg;
+                            _moduleVarInitValues[exportReg] = constVal;
+                            _symbolEntries.Add(new SymbolEntry(decl.Name, exportReg, 0, null, "<module>"));
+                        }
+                        continue;
                     }
 
                     _errors.Add($"Module 'const' initializer must be a compile-time constant (line {decl.Line})");
@@ -3799,30 +3814,15 @@ namespace FFVM.Compiler
 
                 if (decl.IsConst)
                 {
-                    // @export const — need a register slot even though internally it may be folded
-                    // For ExportTable, we need an mvarSlot so the caller can XLOAD_MVAR.
-                    // Folded consts don't have registers — they need to be assigned one.
-                    if (_moduleConstValues.ContainsKey(decl.Name))
+                    // @export const — register was allocated in ProcessModuleVariables,
+                    // value is also in _moduleConstValues for compile-time folding.
+                    if (_moduleConstValues.ContainsKey(decl.Name) &&
+                        _moduleVarRegisters.ContainsKey(decl.Name))
                     {
-                        // Const was folded — assign an mvarSlot by counting from module vars
-                        // We need to allocate a real register for exported consts so cross-instance reads work
-                        int mvarSlot;
-                        if (_moduleVarRegisters.ContainsKey(decl.Name))
-                        {
-                            // Already has a register (shouldn't happen for folded consts, but handle it)
-                            int reg = _moduleVarRegisters[decl.Name];
-                            mvarSlot = reg >= VMConstants.MaxRegisters
-                                ? (reg - VMConstants.MaxRegisters) + VMConstants.ModuleVarSlots
-                                : reg - VMConstants.ModuleVarRegBase;
-                        }
-                        else
-                        {
-                            // Need to retroactively allocate a register for this exported const
-                            // Use a virtual mvarSlot referencing the const value
-                            // We store exported consts in module var registers
-                            _errors.Add($"@export const '{decl.Name}' is not supported in C-1 phase (compile-time constant folding removes register allocation). Export as 'var' for cross-instance access: '@export var {decl.Name}'. (line {decl.Line})");
-                            continue;
-                        }
+                        int reg = _moduleVarRegisters[decl.Name];
+                        int mvarSlot = reg >= VMConstants.MaxRegisters
+                            ? (reg - VMConstants.MaxRegisters) + VMConstants.ModuleVarSlots
+                            : reg - VMConstants.ModuleVarRegBase;
                         exportVars.Add(new ExportVarEntry(decl.Name, mvarSlot, false,
                             _moduleConstValues[decl.Name]));
                     }
