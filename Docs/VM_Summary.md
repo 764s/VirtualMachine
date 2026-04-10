@@ -346,7 +346,7 @@ Docs/
 | 解释器 | `TreeWalker`（Phase 2 原型，含 defer + Kill） | ✅ 完成 |
 | 词法分析 | `Lexer`（手写，16 关键字 + 运算符 + 字面量 + 注释，含 `struct` 关键字 + `.` 分隔符） | ✅ 完成 |
 | 语法分析 | `Parser`（手写递归下降，source → `ModuleNode` AST，含 using/wait_for/struct 声明/字段访问/错误恢复） | ✅ 完成 |
-| 编译器 | `BytecodeCompiler`（AST → `VMProgram`，寄存器分配由 VMConstants 派生：scratch / locals / temps / module vars，支持 using 配对 Syscall，支持多函数编译 + CALL emit，支持 struct 编译期拍平 → 连续寄存器槽位映射，F4 寄存器生命周期分析 + 复用，O4 dest-reg hint，O5 常量折叠，O7 Syscall 结果直达，FO5 返回值直达，FO7 调用栈深度静态分析，R7 >50 函数回填 Dictionary 切换，R8 Cleanup 块禁止函数调用，Lang-1 模块变量支持，Lang-1.1a 常量配置化） | ✅ 完成 |
+| 编译器 | `BytecodeCompiler`（AST → `VMProgram`，寄存器分配由 VMConstants 派生：scratch / locals / temps / module vars，支持 using 配对 Syscall，支持多函数编译 + CALL emit，支持 struct 编译期拍平 → 连续寄存器槽位映射，F4 寄存器生命周期分析 + 复用，O4 dest-reg hint，O5 常量折叠，O7 Syscall 结果直达，FO5 返回值直达，FO7 调用栈深度静态分析，R7 >50 函数回填 Dictionary 切换，DC Cleanup 块允许函数调用（Level 3），Lang-1 模块变量支持，Lang-1.1a 常量配置化） | ✅ 完成 |
 | 调试信息 | `VMProgram.SourceMap`（DBG1：IP→行号平行数组）+ `VMProgram.SymbolTable`（DBG2：变量名→寄存器+struct字段信息） | ✅ 完成 |
 | 运行时调试 | `ScriptDebugger`（DBG3 断点桥接 + DBG5 变量查看适配器 + DBG6 调用栈查看，Gate 0 命令行调试能力，HaltOnBreakpoint + SkipNextCheck DAP 暂停支持，DBG4 单步映射：临时断点 + FindNextLineIP/FindStepIntoIP/FindStepOutIP） | ✅ 完成 |
 | DAP 适配器 | `DapServer`（DBG7-A：12 消息 DAP 最小协议 + DBG7-B：next/stepIn/stepOut handler，stdin/stdout JSON-RPC + ContentLengthStream 分帧 + JsonHelper 手写 JSON），`StandaloneRunner --dap` 模式，Gate 1 + Gate 2 自动化验证通过 | ✅ Phase 3B 完成 |
@@ -627,7 +627,7 @@ B 阶段 20 个步骤（B-R1 → B-δ5）全部完成，已归入上方 A 区表
 >
 > **Lang-6 设计来源（Q4 收敛）**：Q4 讨论历经 9 轮（R18~R26），14 项设计决策全部锁定。核心方案：方式 C（语言级引用），服务脚本为 FFS 运行时实体。统一基线设计 XIMA（Cross-Instance Member Access）：`svc.member` 点号语法，编译器根据导出表自动路由 XCALL/XLOAD_MVAR/XSTORE_MVAR。Y1-Plus 编译期保证服务函数不可 yield（无运行时负担）。嵌套深度运行时配置（MaxXCallDepth 默认 4，Warn/Unlimited 两种策略）。性能影响可忽略（< 0.02% 帧预算）。
 
-**Lang-10 ✅ 完成（DV01-DV10 全通过，B01-B06 benchmark 无回归，1310 测试全通过）。SK15 ✅ 全部完成（Phase 2 宿主侧 ExtractSkillDef 重构 + Phase 3 脚本侧 @export var 迁移：8 个脚本迁移完成，SetSkillMeta Syscall 移除，meta capture 机制移除）。Lang-8 ✅ 完成（US01-US15 全通过，B01-B06 benchmark 无回归，1259 测试全通过）。Lang-7 ✅ 完成（AD01-AD12 全通过，B01-B06 benchmark 无回归，1206 测试全通过）。Lang-6 ✅ 完成（XC01-XC16 全通过，B01-B06 benchmark 无回归确认，1164 测试全通过）。Lang-3 ✅ 完成（BB01-BB10 全通过，1111 测试全通过）。Lang-1 ✅ 完成。Lang-1.1a ✅ 完成（MR01-MR08 全通过）。Lang-1.1b ✅ 完成（XR01-XR06 全通过）。Lang-2 ✅ 完成（INC01-INC16 全通过）。P0 语言需求 Phase 1 完毕。Phase 2（Q4 服务脚本 XCALL 路径 Lang-6~Lang-8）全部完成。Lang-11 ✅ 完成（模块级 struct var/const 直接初始化，MSV01-MSV15 全通过，1365 测试总计，B01-B06 无回归）。Lang-12 ✅ 完成（@export const 基础类型，EC01-EC03 全通过，1388 测试总计）。Lang-9 P1 ✅ 完成（模块内 trivial inline：CanInline 判定 + EstimateInstructionCount AST 估算 + TryInlineCall 内联展开 + @inline 诊断，IN01-IN08 全通过，1411 测试总计）。Lang-9 P2 ✅ 完成（模块内一般内联：多语句/分支/循环/多 return exit label/用户函数嵌套内联/struct 参数/void 内联/cleanup 块守护/FO6 窗口修正/tempBaseline，IN09-IN23 全通过，1449 测试总计，B01-B06 无回归）。Lang-9 P3 ✅ 完成（跨模块内联：ModuleInlineInfo + ServiceBinding 扩展 + TryInlineMemberCall + _xInlineVars 导出变量重定向 XLOAD_MVAR/XSTORE_MVAR + CanInlineCrossModule 安全检查，XIN01-XIN10 全通过，1492 测试总计）。Lang-9 P4 ✅ 完成（深度链式内联：BuildModuleInlineInfo 包含全部函数 AST + CanInlineCrossModule visited 集合递归安全检查 + TryInlineCalleeFunc 跨模块内联体内递归展开 callee 函数 + CompileExprStmt/CompileExpr _xInlineInfo 拦截，XIN08 升级 + DIN01-DIN05 全通过，1517 测试总计，B01-B06 无回归）。当前位置 → Lang-9 P4 ✅ 完成。Lang-9 全部完成。**
+**Lang-10 ✅ 完成（DV01-DV10 全通过，B01-B06 benchmark 无回归，1310 测试全通过）。SK15 ✅ 全部完成（Phase 2 宿主侧 ExtractSkillDef 重构 + Phase 3 脚本侧 @export var 迁移：8 个脚本迁移完成，SetSkillMeta Syscall 移除，meta capture 机制移除）。Lang-8 ✅ 完成（US01-US15 全通过，B01-B06 benchmark 无回归，1259 测试全通过）。Lang-7 ✅ 完成（AD01-AD12 全通过，B01-B06 benchmark 无回归，1206 测试全通过）。Lang-6 ✅ 完成（XC01-XC16 全通过，B01-B06 benchmark 无回归确认，1164 测试全通过）。Lang-3 ✅ 完成（BB01-BB10 全通过，1111 测试全通过）。Lang-1 ✅ 完成。Lang-1.1a ✅ 完成（MR01-MR08 全通过）。Lang-1.1b ✅ 完成（XR01-XR06 全通过）。Lang-2 ✅ 完成（INC01-INC16 全通过）。P0 语言需求 Phase 1 完毕。Phase 2（Q4 服务脚本 XCALL 路径 Lang-6~Lang-8）全部完成。Lang-11 ✅ 完成（模块级 struct var/const 直接初始化，MSV01-MSV15 全通过，1365 测试总计，B01-B06 无回归）。Lang-12 ✅ 完成（@export const 基础类型，EC01-EC03 全通过，1388 测试总计）。Lang-9 P1 ✅ 完成（模块内 trivial inline：CanInline 判定 + EstimateInstructionCount AST 估算 + TryInlineCall 内联展开 + @inline 诊断，IN01-IN08 全通过，1411 测试总计）。Lang-9 P2 ✅ 完成（模块内一般内联：多语句/分支/循环/多 return exit label/用户函数嵌套内联/struct 参数/void 内联/cleanup 块守护/FO6 窗口修正/tempBaseline，IN09-IN23 全通过，1449 测试总计，B01-B06 无回归）。Lang-9 P3 ✅ 完成（跨模块内联：ModuleInlineInfo + ServiceBinding 扩展 + TryInlineMemberCall + _xInlineVars 导出变量重定向 XLOAD_MVAR/XSTORE_MVAR + CanInlineCrossModule 安全检查，XIN01-XIN10 全通过，1492 测试总计）。Lang-9 P4 ✅ 完成（深度链式内联：BuildModuleInlineInfo 包含全部函数 AST + CanInlineCrossModule visited 集合递归安全检查 + TryInlineCalleeFunc 跨模块内联体内递归展开 callee 函数 + CompileExprStmt/CompileExpr _xInlineInfo 拦截，XIN08 升级 + DIN01-DIN05 全通过，1517 测试总计，B01-B06 无回归）。DC ✅ 完成（Level 3 defer 函数调用：R8 禁令移除 + CallFrame.SavedR0 逐帧保存 + CleanupBase 高位 WasInCleanup 标志 + WAIT/WAIT_FOR InCleanup 运行时守护 + 内联 cleanup 守护移除，R8-01 更新 + DC-01~DC-08 全通过，1557 测试总计）。当前位置 → DC ✅ 完成。**
 
 ---
 
@@ -965,7 +965,7 @@ bash benchmarks/update-history.sh bench-raw.txt
 | 分组 | 条目 | 数量 | 降级后等级 |
 |------|------|------|-----------|
 | 步骤 8 — 已缓解 | R1-R4 | 4 | 极低 |
-| 步骤 8 — 前瞻 | R5-R8 | 4 | 低 |
+| 步骤 8 — 前瞻 | R5-R7 (R8 已解决) | 3 | 低 |
 | 步骤 9 | SR1-SR4 | 4 | 低~极低 |
 | 全局 | GR1-GR3 | 3 | 低~极低 |
 | 外部工具对接 | DR1-DR5 | 5 | 低~极低 |
