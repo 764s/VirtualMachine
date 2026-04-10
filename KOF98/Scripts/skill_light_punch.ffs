@@ -9,14 +9,14 @@
 include "common/skill_base.ffs"
 
 // ── Skill Configuration (overrides only) ────────────────────
-@export var totalFrames: int = 20
-@export var priority: int = 3
-@export var tags: int = TAG_BIT_ATTACK
-@export var isLooping: int = 0
-@export var activationPriority: int = 200
-@export var interruptPriority: int = 200
-@export var requireGrounded: int = 1
-@export var requireInputPressed: int = INPUT_BIT_LP
+@export const totalFrames: int = 20
+@export const priority: int = 3
+@export const tags: int = TAG_BIT_ATTACK
+@export const isLooping: int = 0
+@export const activationPriority: int = 200
+@export const interruptPriority: int = 200
+@export const requireGrounded: int = 1
+@export const requireInputPressed: int = INPUT_BIT_LP
 
 func main() {
     // ── Collision Configuration ─────────────────────────────

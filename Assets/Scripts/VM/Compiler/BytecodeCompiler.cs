@@ -539,7 +539,27 @@ namespace FFVM.Compiler
                     {
                         _moduleConstValues[decl.Name] = constVal;
                         _constValues[decl.Name] = constVal; // make available for subsequent folding
-                        continue; // no register needed
+
+                        // Lang-12: @export const needs a register for ExportTable mvarSlot
+                        // so cross-instance reads (XLOAD_MVAR / GetVarDefault) work
+                        if (decl.IsExported)
+                        {
+                            int ecReg;
+                            if (nextModuleReg < VMConstants.MaxRegisters)
+                            {
+                                ecReg = nextModuleReg++;
+                            }
+                            else
+                            {
+                                ecReg = VMConstants.MaxRegisters + _nextExtendedReg++;
+                            }
+                            _moduleVarRegisters[decl.Name] = ecReg;
+                            _moduleVarInitValues[ecReg] = constVal;
+
+                            _symbolEntries.Add(new SymbolEntry(decl.Name, ecReg, 0, null, "<module>"));
+                        }
+
+                        continue;
                     }
 
                     _errors.Add($"Module 'const' initializer must be a compile-time constant (line {decl.Line})");
@@ -3799,32 +3819,14 @@ namespace FFVM.Compiler
 
                 if (decl.IsConst)
                 {
-                    // @export const — need a register slot even though internally it may be folded
-                    // For ExportTable, we need an mvarSlot so the caller can XLOAD_MVAR.
-                    // Folded consts don't have registers — they need to be assigned one.
-                    if (_moduleConstValues.ContainsKey(decl.Name))
+                    // Lang-12: @export const — register was allocated in ProcessModuleVariables
+                    if (_moduleVarRegisters.TryGetValue(decl.Name, out int reg) &&
+                        _moduleConstValues.TryGetValue(decl.Name, out Number constVal))
                     {
-                        // Const was folded — assign an mvarSlot by counting from module vars
-                        // We need to allocate a real register for exported consts so cross-instance reads work
-                        int mvarSlot;
-                        if (_moduleVarRegisters.ContainsKey(decl.Name))
-                        {
-                            // Already has a register (shouldn't happen for folded consts, but handle it)
-                            int reg = _moduleVarRegisters[decl.Name];
-                            mvarSlot = reg >= VMConstants.MaxRegisters
-                                ? (reg - VMConstants.MaxRegisters) + VMConstants.ModuleVarSlots
-                                : reg - VMConstants.ModuleVarRegBase;
-                        }
-                        else
-                        {
-                            // Need to retroactively allocate a register for this exported const
-                            // Use a virtual mvarSlot referencing the const value
-                            // We store exported consts in module var registers
-                            _errors.Add($"@export const '{decl.Name}' is not supported in C-1 phase (compile-time constant folding removes register allocation). Export as 'var' for cross-instance access: '@export var {decl.Name}'. (line {decl.Line})");
-                            continue;
-                        }
-                        exportVars.Add(new ExportVarEntry(decl.Name, mvarSlot, false,
-                            _moduleConstValues[decl.Name]));
+                        int mvarSlot = reg >= VMConstants.MaxRegisters
+                            ? (reg - VMConstants.MaxRegisters) + VMConstants.ModuleVarSlots
+                            : reg - VMConstants.ModuleVarRegBase;
+                        exportVars.Add(new ExportVarEntry(decl.Name, mvarSlot, false, constVal));
                     }
                 }
                 else

@@ -1013,7 +1013,15 @@ namespace FFVM
                                 return;
                             }
 
-                            int mvarSlot = targetProgram.ExportTable.Variables[varIdx].MvarSlot;
+                            // Lang-12: reject writes to read-only exported consts
+                            ref var exportVar = ref targetProgram.ExportTable.Variables[varIdx];
+                            if (!exportVar.Writable)
+                            {
+                                inst.ErrorFlag = VMError.PanicIllegalInstruction;
+                                return;
+                            }
+
+                            int mvarSlot = exportVar.MvarSlot;
 
                             if (mvarSlot < VMConstants.ModuleVarSlots)
                             {
