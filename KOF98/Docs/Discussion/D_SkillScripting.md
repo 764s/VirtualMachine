@@ -75,7 +75,7 @@
 | Q2 | 硬直+yield 语句级控制 | ✅ | 方案 A — while+GetFrame()+yield，帧区间循环行业标准模式（7/10 语言同构） |
 | Q3 | 跨脚本 VM 使用模式 | ✅ | 6 方向渐进路径：阶段1（方向1+2+3）✅ 完成；阶段3（方向5 服务脚本 = Q4）✅ C-1~C-2 已实现 |
 | Q4 | FFS 封装 — 服务脚本 | ✅ | 方式 C ✅；Y1-Plus ✅；统一语法 ✅；@export ✅；@inline ✅；嵌套 Warn/Unlimited ✅；14 项决策锁定。C-1~C-2 已实现（Lang-6/7/8 ✅ 1259 tests）。`@force_inline` 已取消，A5 深度内联远期 |
-| SK15 | 技能属性声明式提取 | 💬 | 用 `@export var` 模块变量替代 `SetSkillMeta()` Syscall，宿主按名查找导出变量直接提取配置。需 VM 支持按名查找导出变量（→ Lang-10） |
+| SK15 | 技能属性声明式提取 | 💬 | `@export var` 替代 `SetSkillMeta()`；`[names]→[indices]→[values]` 批量提取模式。需 Lang-10（→ VM_Summary）；语言方完成后由需求方提示下一步 |
 
 ---
 
@@ -5420,7 +5420,7 @@ Q2 基本收敛。
 
 ## SK15: 技能属性声明式提取 💬
 
-**结论**：用 `@export var` 模块变量 + 默认值替代 `SetSkillMeta()` Syscall 调用。宿主按名查找导出变量直接提取配置，免去双方常量同步、临时实例假执行。需 VM 层支持按名查找模块变量（→ Lang-10）。
+**结论**：用 `@export var` 模块变量 + 默认值替代 `SetSkillMeta()` Syscall 调用。宿主通过 `[names]→[indices]` 一次性解析名字列表固化索引，后续 `[indices]→[values]` 批量读取默认值（也可包装为 `GetVarDefault` 便捷 API）。免去双方常量同步、临时实例假执行。需 VM 层支持（→ Lang-10）。排期：语言方完成 Lang-10 后由需求方提示下一步。
 
 <details>
 <summary>📋 详细设计</summary>
@@ -5471,18 +5471,35 @@ func main() {
 }
 ```
 
-宿主侧提取：
+宿主侧提取（两阶段模式）：
 
 ```csharp
-// GameVMBridge.cs — 建议方式
+// ── Phase A: 一次性解析名字 → 索引（程序启动时 / 模块加载时）──
 var program = World.Modules.Get(moduleSlot);
 var exports = program.ExportTable;
 
-// 按名查找导出变量，直接读取默认值（编译期常量）
+// 名字列表由宿主定义，与脚本 @export var 名对应
+string[] names = { "totalFrames", "priority", "tags", "isLooping",
+                   "activationPriority", "interruptPriority",
+                   "allowedStances", "requireGrounded",
+                   "requireInputHeld", "requireNotInputHeld" };
+
+int[] indices = exports.ResolveVarIndices(names);
+// indices 可缓存复用 — 同模块所有实例共享
+
+// ── Phase B: 批量读取默认值（按索引，O(1) 数组访问）──
+Number[] values = exports.ReadVarDefaults(indices);
+// values[0] = totalFrames (-1), values[1] = priority (1), ...
+
+// 或使用便捷包装：
 int totalFrames = exports.GetVarDefault("totalFrames", -1);
-int priority = exports.GetVarDefault("priority", 0);
-// ... 无需 spawn/tick/destroy
+int priority    = exports.GetVarDefault("priority", 0);
+// GetVarDefault 内部 = 线性查找 + 读默认值（适合低频 / 少量调用）
 ```
+
+**两种 API 互补**：
+- `ResolveVarIndices` + `ReadVarDefaults`：**批量高频**场景（如加载全部技能配置），名字→索引一次性解析后缓存
+- `GetVarDefault`：**单次便捷**场景（如调试 / 少量查询），无需预缓存
 
 **好处**：
 - 免去双方常量定义（宿主直接按名查找，脚本用变量名即属性名）
@@ -5494,21 +5511,23 @@ int priority = exports.GetVarDefault("priority", 0);
 
 | 需求 | 说明 | 现状 |
 |------|------|------|
-| 导出变量按名查找 | `ExportTable.FindVarByName(string)` 或 `TryGetVar` | ❌ 不支持（`ExportVarEntry` 已有 `Name` 字段，但无查找方法） |
-| 导出变量默认值 | 编译期求值 `@export var x: int = <const_expr>` 并存入导出表 | ❌ 不支持（当前仅记录 slot，不记录默认值） |
-| 宿主侧 API | `ExportTable.GetVarDefault(name, fallback)` | ❌ 不存在 |
+| 名字→索引批量解析 | `ExportTable.ResolveVarIndices(string[] names) → int[]`（一次性，结果可缓存） | ❌ 不支持（`ExportVarEntry` 已有 `Name` 字段，但无查找方法） |
+| 索引→默认值批量读取 | `ExportTable.ReadVarDefaults(int[] indices) → Number[]`（O(1) 数组访问） | ❌ 不支持（当前仅记录 slot，不记录默认值） |
+| 导出变量默认值存储 | 编译期求值 `@export var x: int = <const_expr>` 并存入 `ExportVarEntry.DefaultValue` | ❌ 不支持 |
+| 便捷单次 API | `ExportTable.GetVarDefault(name, fallback)`（内部 = 线性查找 + 读默认值） | ❌ 不存在 |
 
 > 现有 `ExportVarEntry` 已包含 `Name` 和 `MvarSlot` 字段（Lang-6 引入），但缺少：
-> 1. 按名查找方法（当前仅按 index 访问）
+> 1. 名字→索引解析方法（当前仅按 export index 顺序访问）
 > 2. 默认值存储（编译期常量求值结果）
+> 3. 批量 / 便捷读取 API
 
 **分阶段路径**：
 
-| 阶段 | 内容 | 依赖 |
-|------|------|------|
-| Phase 1 | Lang-10：ExportTable 按名查找 + 默认值存储 | VM 编译器改动 |
-| Phase 2 | 宿主侧 `ExtractSkillDef` 重构为直接读取导出表 | Phase 1 |
-| Phase 3 | 脚本侧迁移：`SetSkillMeta()` → `@export var` 声明 | Phase 2 |
+| 阶段 | 内容 | 依赖 | 触发 |
+|------|------|------|------|
+| Phase 1 | Lang-10：ExportTable 默认值存储 + `ResolveVarIndices` / `ReadVarDefaults` / `GetVarDefault` API | VM 编译器改动 | 已提交串行计划 |
+| Phase 2 | 宿主侧 `ExtractSkillDef` 重构为直接读取导出表 | Phase 1 | **需求方在 Lang-10 完成后提示** |
+| Phase 3 | 脚本侧迁移：`SetSkillMeta()` → `@export var` 声明 | Phase 2 | 需求方驱动 |
 
 **向后兼容**：
 - `SetSkillMeta()` 路径保留，新旧并存
@@ -5518,6 +5537,19 @@ int priority = exports.GetVarDefault("priority", 0);
 
 <details>
 <summary>📋 讨论历史</summary>
+
+**2026-04-10 第 2 轮**
+
+用户反馈（第 1 轮方案细化）：
+1. 提取方式改为 `[names]→[values]` 加速模式 — 通过名字列表一次性固化索引列表（`ResolveVarIndices`），后续批量读取值（`ReadVarDefaults`）
+2. 也可包装成 `GetVarDefault` 便捷方式（单次查询场景）
+3. 排期调整：语言方完成 Lang-10 后，需求方（KOF）会主动提示下一步（Phase 2 宿主侧重构），无需语言方追踪 KOF 进度
+
+分析：
+- `[names]→[indices]` 缓存模式 = 名字解析成本一次摊平，后续全部 O(1) 数组访问。对多技能批量加载（8+ 脚本）更高效
+- `GetVarDefault` 作为便捷包装保留（内部线性查找，适合低频场景）
+- 两种 API 互补：批量高频 vs 单次便捷
+- Phase 2/3 排期由需求方驱动，语言方只需完成 Lang-10 即可
 
 **2026-04-10 第 1 轮**
 
