@@ -51,6 +51,9 @@ namespace FFVM.Debug
         // --- Buffered breakpoints (set before program is compiled) ---
         private readonly List<int> _bufferedBreakpointLines = new List<int>();
 
+        // --- Multi-module script path registry (moduleSlot → file path) ---
+        private readonly Dictionary<int, string> _moduleScriptPaths = new Dictionary<int, string>();
+
         // --- Stop on entry ---
         private volatile bool _stopOnEntry;
 
@@ -63,6 +66,21 @@ namespace FFVM.Debug
         public EmbeddableDapServer(int port = 4711)
         {
             _port = port;
+        }
+
+        // ============================================================
+        // Multi-module support
+        // ============================================================
+
+        /// <summary>
+        /// Register a script file path for a module slot.
+        /// When a breakpoint hits in an instance from this module, the DAP server
+        /// automatically resolves the correct program and source file for inspection.
+        /// Call after loading each script module.
+        /// </summary>
+        public void RegisterModuleScriptPath(int moduleSlot, string scriptPath)
+        {
+            _moduleScriptPaths[moduleSlot] = scriptPath;
         }
 
         // ============================================================
@@ -248,7 +266,21 @@ namespace FFVM.Debug
 
         protected override void OnBreakpointHitCallback(int instanceId, int ip, int line)
         {
-            Console.WriteLine($"[DAP] Breakpoint hit: ip={ip} line={line}");
+            // Auto-track: update instanceId so variable/stack inspection targets the correct instance
+            _instanceId = instanceId;
+
+            // Auto-resolve: update program and script path from the hitting instance's module
+            if (_world != null && instanceId >= 0 && instanceId < _world.Pool.Instances.Length)
+            {
+                ref var inst = ref _world.Pool.Instances[instanceId];
+                var program = _world.Modules.Get(inst.ModuleSlot);
+                if (program != null)
+                    _program = program;
+                if (_moduleScriptPaths.TryGetValue(inst.ModuleSlot, out string path))
+                    _scriptPath = path;
+            }
+
+            Console.WriteLine($"[DAP] Breakpoint hit: instance={instanceId} ip={ip} line={line}");
             base.OnBreakpointHitCallback(instanceId, ip, line);
         }
 

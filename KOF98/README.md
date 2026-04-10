@@ -29,7 +29,20 @@ dotnet run --project KOF98.csproj
 
 # 5. 无头模式（仅模拟）
 dotnet run --project KOF98.csproj -- --headless --frames 600
+
+# 6. 调试模式（Raylib + DAP 调试器，端口 4711）
+dotnet run --project KOF98.csproj -- --raylib --debug
 ```
+
+### VS Code 调试（C# + FFScript 同时断点）
+
+> 前提：已安装 [C# Dev Kit](https://marketplace.visualstudio.com/items?itemName=ms-dotnettools.csdevkit) 和 FFVM 扩展。
+
+1. 运行 `kof98-init.cmd`（自动生成 `.vscode/launch.json`）
+2. 用 VS Code 打开仓库根目录
+3. 在 `.cs` 和 `.ffs` 文件中设置断点
+4. 按 F5，选择 **"KOF98: C# + FFVM Debug"**
+5. 游戏窗口打开后，C# 和 FFScript 断点均可触发
 
 ### 键位（P1）
 

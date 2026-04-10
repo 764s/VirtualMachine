@@ -132,8 +132,26 @@ dotnet run --project Sandbox/Sandbox.csproj -- --debug
 cp KOF98/KOF98.csproj.template KOF98/KOF98.csproj
 dotnet run --project KOF98/KOF98.csproj
 
+# Raylib 图形化窗口模式
+dotnet run --project KOF98/KOF98.csproj -- --raylib
+
 # 无头模式（仅模拟）
 dotnet run --project KOF98/KOF98.csproj -- --headless --frames 600
+
+# 调试模式（Raylib + DAP 调试器，端口 4711）
+dotnet run --project KOF98/KOF98.csproj -- --raylib --debug
+```
+
+#### VS Code 调试（C# + FFScript 同时断点）
+
+> `kof98-init.cmd` 自动生成 `.vscode/launch.json`，支持 C# + FFVM 双调试器。
+
+```
+1. 运行  KOF98\kof98-init.cmd          ← 初始化 + 生成调试配置
+2. 在 VS Code 打开仓库根目录
+3. 在 .cs 和 .ffs 文件中设置断点
+4. F5 → 选择 "KOF98: C# + FFVM Debug"  ← 同时启动 C# 和 FFVM 调试器
+5. 游戏窗口打开，C# 和 FFScript 断点均可触发
 ```
 
 ### 场景 E：运行 VM 单元测试

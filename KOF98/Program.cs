@@ -1,5 +1,6 @@
 using System;
 using System.Threading;
+using FFVM.Debug;
 
 namespace KOF98
 {
@@ -18,12 +19,14 @@ namespace KOF98
         {
             bool headless = false;
             bool useRaylib = false;
+            bool debugMode = false;
             int maxFrames = -1;
 
             for (int i = 0; i < args.Length; i++)
             {
                 if (args[i] == "--headless") headless = true;
                 if (args[i] == "--raylib") useRaylib = true;
+                if (args[i] == "--debug") debugMode = true;
                 if (args[i] == "--frames" && i + 1 < args.Length)
                     int.TryParse(args[i + 1], out maxFrames);
             }
@@ -62,6 +65,39 @@ namespace KOF98
 
             var vmSlots = LoadSkillScripts(vmBridge, scriptsDir);
 
+            // ── Debug setup (must be before any VM execution) ────
+            EmbeddableDapServer dapServer = null;
+            if (debugMode)
+            {
+                dapServer = new EmbeddableDapServer(4711);
+                dapServer.StartListening();
+                Console.WriteLine("[DEBUG] DAP server listening on port 4711");
+                Console.WriteLine("[DEBUG] In VS Code: F5 → \"KOF98: C# + FFVM Debug\" to connect.");
+
+                // Register all loaded module script paths for multi-module tracking
+                RegisterDebugScriptPaths(dapServer, vmSlots, scriptsDir);
+
+                // Attach debugger to VMWorld — use the idle program for initial breakpoint verification
+                // Idle is always the first script to execute (fallback skill activated on character creation)
+                if (vmSlots.Idle >= 0)
+                {
+                    var idleProgram = vmBridge.World.Modules.Get(vmSlots.Idle);
+                    string idleScriptPath = System.IO.Path.GetFullPath(
+                        System.IO.Path.Combine(scriptsDir, "skill_idle.ffs"));
+                    dapServer.AttachToWorld(vmBridge.World, idleProgram, -1, idleScriptPath);
+                }
+                else
+                {
+                    // No idle script loaded — attach to world without a specific program
+                    // Breakpoints will be buffered and applied when a module is loaded
+                    dapServer.AttachToWorld(vmBridge.World, null, -1, null);
+                }
+
+                // Wait for VS Code to connect and complete configuration
+                dapServer.WaitForConnection();
+                dapServer.StopOnEntry();
+            }
+
             // ── Define characters ────────────────────────────────
             var p1Data = CreateDefaultCharacterData(1, "Kyo", vmSlots);
             var p2Data = CreateDefaultCharacterData(2, "Iori", vmSlots);
@@ -72,6 +108,9 @@ namespace KOF98
             initInput.AddCommand(new CreateCharacterCommand(1, p2Data, new FVec2(3f, 0f)));
             initInput.AddCommand(new SetAICommand(1, new SimpleAI(42)));
             scene.Step(initInput);
+
+            // Check if a breakpoint was hit during initial scene setup
+            dapServer?.CheckBreakpointAndWait();
 
             // ── Create view ──────────────────────────────────────
             IGameView view;
@@ -192,6 +231,9 @@ namespace KOF98
                 // ── Step simulation ──────────────────────────────
                 scene.Step(frameInput);
 
+                // ── Check for debugger breakpoint (blocks if hit) ──
+                dapServer?.CheckBreakpointAndWait();
+
                 // ── Render ───────────────────────────────────────
                 view?.Render(scene);
 
@@ -201,6 +243,7 @@ namespace KOF98
             }
 
             view?.Shutdown();
+            dapServer?.Dispose();
             Console.WriteLine("\nKOF98 Practice ended.");
         }
 
@@ -242,6 +285,23 @@ namespace KOF98
             Console.WriteLine($"[KOF98] Loaded {loaded}/4 skill scripts from {scriptsDir}");
 
             return slots;
+        }
+
+        /// <summary>Register module slot → script path mappings for the DAP debugger.</summary>
+        private static void RegisterDebugScriptPaths(EmbeddableDapServer dapServer, VMSlots slots, string scriptsDir)
+        {
+            if (slots.Idle >= 0)
+                dapServer.RegisterModuleScriptPath(slots.Idle,
+                    System.IO.Path.GetFullPath(System.IO.Path.Combine(scriptsDir, "skill_idle.ffs")));
+            if (slots.Walk >= 0)
+                dapServer.RegisterModuleScriptPath(slots.Walk,
+                    System.IO.Path.GetFullPath(System.IO.Path.Combine(scriptsDir, "skill_walk_forward.ffs")));
+            if (slots.Jump >= 0)
+                dapServer.RegisterModuleScriptPath(slots.Jump,
+                    System.IO.Path.GetFullPath(System.IO.Path.Combine(scriptsDir, "skill_jump.ffs")));
+            if (slots.LightPunch >= 0)
+                dapServer.RegisterModuleScriptPath(slots.LightPunch,
+                    System.IO.Path.GetFullPath(System.IO.Path.Combine(scriptsDir, "skill_light_punch.ffs")));
         }
 
         private static CharacterData CreateDefaultCharacterData(int id, string name, VMSlots vmSlots)
