@@ -1,6 +1,6 @@
 # KOF98 技能 FFS 脚本化讨论
 
-> **状态**：✅ 收敛（SK3 💬 待性能验证外，其余 SK1~SK14-3 + Q1~Q4 全部 ✅。14 项 Q4 设计决策锁定。C-1 Lang-6 ✅ / C-1.5 Lang-7 ✅ / C-2 Lang-8 ✅ 已实现。`@force_inline` 关键字已取消 — A5 深度内联为远期计划，内联失败严格程度改由编译器配置控制）
+> **状态**：SK15 💬 新增（技能属性声明式提取）。SK3 💬 待性能验证外，其余 SK1~SK14-3 + Q1~Q4 全部 ✅。14 项 Q4 设计决策锁定。C-1 Lang-6 ✅ / C-1.5 Lang-7 ✅ / C-2 Lang-8 ✅ 已实现。`@force_inline` 关键字已取消 — A5 深度内联为远期计划，内联失败严格程度改由编译器配置控制）
 > **来源**：需求讨论 — 将 host-side 技能迁移为 FFS 脚本驱动
 > **日期**：2026-04-09（实现状态同步更新）
 
@@ -75,6 +75,7 @@
 | Q2 | 硬直+yield 语句级控制 | ✅ | 方案 A — while+GetFrame()+yield，帧区间循环行业标准模式（7/10 语言同构） |
 | Q3 | 跨脚本 VM 使用模式 | ✅ | 6 方向渐进路径：阶段1（方向1+2+3）✅ 完成；阶段3（方向5 服务脚本 = Q4）✅ C-1~C-2 已实现 |
 | Q4 | FFS 封装 — 服务脚本 | ✅ | 方式 C ✅；Y1-Plus ✅；统一语法 ✅；@export ✅；@inline ✅；嵌套 Warn/Unlimited ✅；14 项决策锁定。C-1~C-2 已实现（Lang-6/7/8 ✅ 1259 tests）。`@force_inline` 已取消，A5 深度内联远期 |
+| SK15 | 技能属性声明式提取 | 💬 | `@export var` 替代 `SetSkillMeta()`；`[names]→[indices]→[values]` 批量提取模式。需 Lang-10（→ VM_Summary）；语言方完成后由需求方提示下一步 |
 
 ---
 
@@ -5414,6 +5415,155 @@ Q2 基本收敛。
 - L2（include）与 L3/L4（跨模块运行时共享）不应整合 — 编译期 vs 运行时，分层递进
 - 连招描述脚本推荐理想形 3（混合式）— L1+L2+现有黑板 Syscall，Phase 1 可覆盖
 - 语言演进路线 Lang-1~Lang-5 提出，待同步到 VM_Summary
+
+</details>
+
+## SK15: 技能属性声明式提取 💬
+
+**结论**：用 `@export var` 模块变量 + 默认值替代 `SetSkillMeta()` Syscall 调用。宿主通过 `[names]→[indices]` 一次性解析名字列表固化索引，后续 `[indices]→[values]` 批量读取默认值（也可包装为 `GetVarDefault` 便捷 API）。免去双方常量同步、临时实例假执行。需 VM 层支持（→ Lang-10）。排期：语言方完成 Lang-10 后由需求方提示下一步。
+
+<details>
+<summary>📋 详细设计</summary>
+
+**现状痛点**：
+
+当前技能配置通过 `SetSkillMeta(key, value)` Syscall 声明：
+
+```ffs
+// skill_walk_forward.ffs — 当前方式
+func main() {
+    SetSkillMeta(META_TOTAL_FRAMES, -1)
+    SetSkillMeta(META_PRIORITY, 1)
+    SetSkillMeta(META_TAGS, TAG_BIT_WALK)
+    SetSkillMeta(META_IS_LOOPING, 1)
+    // ... 10+ 行 Syscall
+    // ── Execution ──
+    while 1 { ... yield }
+}
+```
+
+宿主侧 `ExtractSkillDef()` 需要 spawn 临时实例、tick 一次、捕获 meta、destroy（`GameVMBridge.cs:154-231`）。
+
+三个痛点：
+1. **双方常量同步**：`META_TOTAL_FRAMES = 1` 在 `skill_base.ffs` 和 `GameConstants.cs` 都要定义且保持一致
+2. **假执行提取**：spawn 临时实例只为捕获配置，语义不直觉
+3. **属性 ≠ Syscall**：技能配置是静态数据声明，但用了运行时 Syscall 调用来表达
+
+**建议方案**：
+
+```ffs
+// skill_walk_forward.ffs — 建议方式
+@export var totalFrames: int = -1
+@export var priority: int = 1
+@export var tags: int = TAG_BIT_WALK
+@export var isLooping: int = 1
+@export var activationPriority: int = 500
+@export var interruptPriority: int = 500
+@export var allowedStances: int = STANCE_GROUNDED
+@export var requireGrounded: int = 1
+@export var requireInputHeld: int = INPUT_BIT_ANY_DIR_H
+@export var requireNotInputHeld: int = INPUT_BIT_UP
+
+func main() {
+    // 直接进入执行逻辑，无需 SetSkillMeta 调用
+    defer { SetVelocity(0.0, 0.0) }
+    while 1 { ... yield }
+}
+```
+
+宿主侧提取（两阶段模式）：
+
+```csharp
+// ── Phase A: 一次性解析名字 → 索引（程序启动时 / 模块加载时）──
+var program = World.Modules.Get(moduleSlot);
+var exports = program.ExportTable;
+
+// 名字列表由宿主定义，与脚本 @export var 名对应
+string[] names = { "totalFrames", "priority", "tags", "isLooping",
+                   "activationPriority", "interruptPriority",
+                   "allowedStances", "requireGrounded",
+                   "requireInputHeld", "requireNotInputHeld" };
+
+int[] indices = exports.ResolveVarIndices(names);
+// indices 可缓存复用 — 同模块所有实例共享
+
+// ── Phase B: 批量读取默认值（按索引，O(1) 数组访问）──
+Number[] values = exports.ReadVarDefaults(indices);
+// values[0] = totalFrames (-1), values[1] = priority (1), ...
+
+// 或使用便捷包装：
+int totalFrames = exports.GetVarDefault("totalFrames", -1);
+int priority    = exports.GetVarDefault("priority", 0);
+// GetVarDefault 内部 = 线性查找 + 读默认值（适合低频 / 少量调用）
+```
+
+**两种 API 互补**：
+- `ResolveVarIndices` + `ReadVarDefaults`：**批量高频**场景（如加载全部技能配置），名字→索引一次性解析后缓存
+- `GetVarDefault`：**单次便捷**场景（如调试 / 少量查询），无需预缓存
+
+**好处**：
+- 免去双方常量定义（宿主直接按名查找，脚本用变量名即属性名）
+- 免去不和谐的初次 tick（编译后的导出表已包含变量默认值）
+- 属性以字段的形式存在，符合 C# 直觉
+- 基类属性可通过 `include` 共享，子技能脚本只覆盖需要的字段
+
+**VM 需求（→ Lang-10）**：
+
+| 需求 | 说明 | 现状 |
+|------|------|------|
+| 名字→索引批量解析 | `ExportTable.ResolveVarIndices(string[] names) → int[]`（一次性，结果可缓存） | ❌ 不支持（`ExportVarEntry` 已有 `Name` 字段，但无查找方法） |
+| 索引→默认值批量读取 | `ExportTable.ReadVarDefaults(int[] indices) → Number[]`（O(1) 数组访问） | ❌ 不支持（当前仅记录 slot，不记录默认值） |
+| 导出变量默认值存储 | 编译期求值 `@export var x: int = <const_expr>` 并存入 `ExportVarEntry.DefaultValue` | ❌ 不支持 |
+| 便捷单次 API | `ExportTable.GetVarDefault(name, fallback)`（内部 = 线性查找 + 读默认值） | ❌ 不存在 |
+
+> 现有 `ExportVarEntry` 已包含 `Name` 和 `MvarSlot` 字段（Lang-6 引入），但缺少：
+> 1. 名字→索引解析方法（当前仅按 export index 顺序访问）
+> 2. 默认值存储（编译期常量求值结果）
+> 3. 批量 / 便捷读取 API
+
+**分阶段路径**：
+
+| 阶段 | 内容 | 依赖 | 触发 |
+|------|------|------|------|
+| Phase 1 | Lang-10：ExportTable 默认值存储 + `ResolveVarIndices` / `ReadVarDefaults` / `GetVarDefault` API | VM 编译器改动 | 已提交串行计划 |
+| Phase 2 | 宿主侧 `ExtractSkillDef` 重构为直接读取导出表 | Phase 1 | **需求方在 Lang-10 完成后提示** |
+| Phase 3 | 脚本侧迁移：`SetSkillMeta()` → `@export var` 声明 | Phase 2 | 需求方驱动 |
+
+**向后兼容**：
+- `SetSkillMeta()` 路径保留，新旧并存
+- 优先检查导出变量，回退到 `SetSkillMeta()` 捕获
+
+</details>
+
+<details>
+<summary>📋 讨论历史</summary>
+
+**2026-04-10 第 2 轮**
+
+用户反馈（第 1 轮方案细化）：
+1. 提取方式改为 `[names]→[values]` 加速模式 — 通过名字列表一次性固化索引列表（`ResolveVarIndices`），后续批量读取值（`ReadVarDefaults`）
+2. 也可包装成 `GetVarDefault` 便捷方式（单次查询场景）
+3. 排期调整：语言方完成 Lang-10 后，需求方（KOF）会主动提示下一步（Phase 2 宿主侧重构），无需语言方追踪 KOF 进度
+
+分析：
+- `[names]→[indices]` 缓存模式 = 名字解析成本一次摊平，后续全部 O(1) 数组访问。对多技能批量加载（8+ 脚本）更高效
+- `GetVarDefault` 作为便捷包装保留（内部线性查找，适合低频场景）
+- 两种 API 互补：批量高频 vs 单次便捷
+- Phase 2/3 排期由需求方驱动，语言方只需完成 Lang-10 即可
+
+**2026-04-10 第 1 轮**
+
+用户建议：通过 C# 属性/字段名数组提取技能配置。具体路径为：
+1. 脚本侧：技能属性以 `@export var` 字段形式存在，给予默认值
+2. 宿主侧：C# 属性/字段名数组 → 从 ExportTable 获取 index 并缓存 → 绑定以 field indices 为准
+3. 好处：免去双方常量定义、免去繁琐的技能内 SetSkillMeta 设置、免去不和谐的初次 tick
+
+分析：建议方向与已有的 `@export var` 基础设施（Lang-6/8 ExportTable）天然契合。`ExportVarEntry` 已有 `Name` + `MvarSlot` 字段，差距仅为：
+- 缺少按名查找 API
+- 缺少编译期默认值存储
+- 宿主侧缺少声明式提取 API
+
+判断为 Lang-10 级别改动（编译器 + ExportTable 扩展），复杂度 ⭐⭐。已提交至 VM_Summary 串行计划。
 
 </details>
 
