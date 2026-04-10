@@ -3309,9 +3309,9 @@ func main() { helper() }";
             Assert(pinged, "R7-02: helper() called Ping()");
         }
 
-        // ===== R8 Tests: Cleanup block function call prohibition =====
+        // ===== R8 Tests: Cleanup block function call — DC (Defer-Call) relaxation =====
 
-        // R8-01: defer { someFunc() } → compile error
+        // R8-01: defer { someFunc() } → now compiles OK (DC relaxation)
         {
             string source = @"
 func helper() { Ping() }
@@ -3320,13 +3320,7 @@ func main() {
 }";
             var syscalls = new Dictionary<string, int> { { "Ping", 0 } };
             var result = compiler.Compile(source, "main", syscalls);
-            Assert(!result.Success, "R8-01: function call in defer → compile error");
-            bool mentionsCleanup = false;
-            for (int i = 0; i < result.Errors.Count; i++)
-            {
-                if (result.Errors[i].Contains("cleanup block")) { mentionsCleanup = true; break; }
-            }
-            Assert(mentionsCleanup, "R8-01: error mentions 'cleanup block'");
+            Assert(result.Success, "R8-01: function call in defer → compile OK (DC relaxation)");
         }
 
         // R8-02: Normal function body call → compile success
@@ -3355,6 +3349,232 @@ func main() {
             table.Register(2, "Ping", (ref VMInstanceState s) => { });
             var result = compiler.Compile(source, "main", syscalls, table);
             Assert(result.Success, "R8-03: function call in using body compiles OK (body != cleanup block)");
+        }
+
+        // ===== DC Tests: Defer-Call Level 3 — function calls inside cleanup blocks =====
+
+        // DC-01: defer calls function without defer — basic execution + order
+        {
+            string source = @"
+func cleanup() { Report(10) }
+func main() {
+    defer { cleanup() }
+    Report(20)
+}";
+            var log = new System.Collections.Generic.List<string>();
+            var syscalls = new Dictionary<string, int> { { "Report", 0 } };
+            var result = compiler.Compile(source, "main", syscalls);
+            Assert(result.Success, "DC-01: compiles");
+            var world = new VMWorld();
+            world.Syscalls.Register(0, "Report", (ref VMInstanceState s) => { log.Add($"Report({s.Registers.Get(0).ToInt()})"); });
+            world.Modules.Load(0, result.Program);
+            int id = world.SpawnInstance(0, 0);
+            world.Tick();
+            Assert(log.Count == 2, $"DC-01: 2 reports, got {log.Count}");
+            Assert(log[0] == "Report(20)", $"DC-01: main body first, got '{log[0]}'");
+            Assert(log[1] == "Report(10)", $"DC-01: defer cleanup() second, got '{log[1]}'");
+        }
+
+        // DC-02: defer calls function WITH defer (Level 3 — nested cleanup)
+        {
+            string source = @"
+func inner() {
+    defer { Report(1) }
+    Report(2)
+}
+func main() {
+    defer { inner() }
+    Report(3)
+}";
+            var log = new System.Collections.Generic.List<string>();
+            var syscalls = new Dictionary<string, int> { { "Report", 0 } };
+            var result = compiler.Compile(source, "main", syscalls);
+            Assert(result.Success, "DC-02: compiles");
+            var world = new VMWorld();
+            world.Syscalls.Register(0, "Report", (ref VMInstanceState s) => { log.Add($"Report({s.Registers.Get(0).ToInt()})"); });
+            world.Modules.Load(0, result.Program);
+            int id = world.SpawnInstance(0, 0);
+            world.Tick();
+            // Expected: main body(3), then defer runs inner(): inner body(2), inner defer(1)
+            Assert(log.Count == 3, $"DC-02: 3 reports, got {log.Count}");
+            Assert(log[0] == "Report(3)", $"DC-02: main body, got '{log[0]}'");
+            Assert(log[1] == "Report(2)", $"DC-02: inner body, got '{log[1]}'");
+            Assert(log[2] == "Report(1)", $"DC-02: inner defer, got '{log[2]}'");
+        }
+
+        // DC-03: non-entry function with defer calling function with defer — return value preserved
+        {
+            string source = @"
+func innerCleanup() {
+    defer { Report(1) }
+    Report(2)
+}
+func outer(): int {
+    defer { innerCleanup() }
+    Report(3)
+    return 42
+}
+func main() {
+    var res: int = outer()
+    Report(res)
+}";
+            var log = new System.Collections.Generic.List<string>();
+            var syscalls = new Dictionary<string, int> { { "Report", 0 } };
+            var result = compiler.Compile(source, "main", syscalls);
+            Assert(result.Success, "DC-03: compiles");
+            var world = new VMWorld();
+            world.Syscalls.Register(0, "Report", (ref VMInstanceState s) => { log.Add($"Report({s.Registers.Get(0).ToInt()})"); });
+            world.Modules.Load(0, result.Program);
+            int id = world.SpawnInstance(0, 0);
+            world.Tick();
+            // Expected: outer body(3), outer defer→inner body(2), inner defer(1), main gets 42 → Report(42)
+            Assert(log.Count == 4, $"DC-03: 4 reports, got {log.Count}");
+            Assert(log[0] == "Report(3)", $"DC-03: outer body, got '{log[0]}'");
+            Assert(log[1] == "Report(2)", $"DC-03: inner body, got '{log[1]}'");
+            Assert(log[2] == "Report(1)", $"DC-03: inner defer, got '{log[2]}'");
+            Assert(log[3] == "Report(42)", $"DC-03: return value preserved, got '{log[3]}'");
+        }
+
+        // DC-04: multiple defers each calling functions (LIFO order with calls)
+        {
+            string source = @"
+func cleanA() { Report(10) }
+func cleanB() { Report(20) }
+func main() {
+    defer { cleanA() }
+    defer { cleanB() }
+    Report(30)
+}";
+            var log = new System.Collections.Generic.List<string>();
+            var syscalls = new Dictionary<string, int> { { "Report", 0 } };
+            var result = compiler.Compile(source, "main", syscalls);
+            Assert(result.Success, "DC-04: compiles");
+            var world = new VMWorld();
+            world.Syscalls.Register(0, "Report", (ref VMInstanceState s) => { log.Add($"Report({s.Registers.Get(0).ToInt()})"); });
+            world.Modules.Load(0, result.Program);
+            int id = world.SpawnInstance(0, 0);
+            world.Tick();
+            // LIFO: cleanB first (defer registered second), then cleanA
+            Assert(log.Count == 3, $"DC-04: 3 reports, got {log.Count}");
+            Assert(log[0] == "Report(30)", $"DC-04: main body, got '{log[0]}'");
+            Assert(log[1] == "Report(20)", $"DC-04: cleanB (LIFO first), got '{log[1]}'");
+            Assert(log[2] == "Report(10)", $"DC-04: cleanA (LIFO second), got '{log[2]}'");
+        }
+
+        // DC-05: defer calling chain — funcA calls funcB, funcB has defer
+        {
+            string source = @"
+func funcB() {
+    defer { Report(1) }
+    Report(2)
+}
+func funcA() {
+    funcB()
+    Report(3)
+}
+func main() {
+    defer { funcA() }
+    Report(4)
+}";
+            var log = new System.Collections.Generic.List<string>();
+            var syscalls = new Dictionary<string, int> { { "Report", 0 } };
+            var result = compiler.Compile(source, "main", syscalls);
+            Assert(result.Success, "DC-05: compiles");
+            var world = new VMWorld();
+            world.Syscalls.Register(0, "Report", (ref VMInstanceState s) => { log.Add($"Report({s.Registers.Get(0).ToInt()})"); });
+            world.Modules.Load(0, result.Program);
+            int id = world.SpawnInstance(0, 0);
+            world.Tick();
+            // main body(4), defer→funcA: funcA→funcB: funcB body(2), funcB defer(1), funcA body(3)
+            Assert(log.Count == 4, $"DC-05: 4 reports, got {log.Count}");
+            Assert(log[0] == "Report(4)", $"DC-05: main body, got '{log[0]}'");
+            Assert(log[1] == "Report(2)", $"DC-05: funcB body, got '{log[1]}'");
+            Assert(log[2] == "Report(1)", $"DC-05: funcB defer, got '{log[2]}'");
+            Assert(log[3] == "Report(3)", $"DC-05: funcA after funcB, got '{log[3]}'");
+        }
+
+        // DC-06: defer with function call + Kill path
+        {
+            string source = @"
+func cleanup() { Report(99) }
+func main() {
+    defer { cleanup() }
+    Report(1)
+    wait 100
+    Report(2)
+}";
+            var log = new System.Collections.Generic.List<string>();
+            var syscalls = new Dictionary<string, int> { { "Report", 0 } };
+            var result = compiler.Compile(source, "main", syscalls);
+            Assert(result.Success, "DC-06: compiles");
+            var world = new VMWorld();
+            world.Syscalls.Register(0, "Report", (ref VMInstanceState s) => { log.Add($"Report({s.Registers.Get(0).ToInt()})"); });
+            world.Modules.Load(0, result.Program);
+            int id = world.SpawnInstance(0, 0);
+            world.Tick(); // executes body up to wait
+            Assert(log.Count == 1, $"DC-06: 1 report before wait, got {log.Count}");
+            Assert(log[0] == "Report(1)", $"DC-06: body report, got '{log[0]}'");
+            world.Pool.Instances[id].StateFlags |= VMStateFlags.Killed;
+            world.Tick(); // kill triggers cleanup
+            Assert(log.Count == 2, $"DC-06: cleanup called, got {log.Count}");
+            Assert(log[1] == "Report(99)", $"DC-06: cleanup on kill, got '{log[1]}'");
+        }
+
+        // DC-07: defer calling function that returns a value (return value not used by defer)
+        {
+            string source = @"
+func compute(): int {
+    defer { Report(10) }
+    return 42
+}
+func main() {
+    var x: int = compute()
+    Report(x)
+}";
+            var log = new System.Collections.Generic.List<string>();
+            var syscalls = new Dictionary<string, int> { { "Report", 0 } };
+            var result = compiler.Compile(source, "main", syscalls);
+            Assert(result.Success, "DC-07: compiles");
+            var world = new VMWorld();
+            world.Syscalls.Register(0, "Report", (ref VMInstanceState s) => { log.Add($"Report({s.Registers.Get(0).ToInt()})"); });
+            world.Modules.Load(0, result.Program);
+            int id = world.SpawnInstance(0, 0);
+            world.Tick();
+            Assert(log.Count == 2, $"DC-07: 2 reports, got {log.Count}");
+            Assert(log[0] == "Report(10)", $"DC-07: compute's defer runs before return value used, got '{log[0]}'");
+            Assert(log[1] == "Report(42)", $"DC-07: return value 42 preserved, got '{log[1]}'");
+        }
+
+        // DC-08: deeply nested — defer calls func with defer that calls func with defer
+        {
+            string source = @"
+func level3() {
+    defer { Report(3) }
+    Report(30)
+}
+func level2() {
+    defer { level3() }
+    Report(20)
+}
+func main() {
+    defer { level2() }
+    Report(10)
+}";
+            var log = new System.Collections.Generic.List<string>();
+            var syscalls = new Dictionary<string, int> { { "Report", 0 } };
+            var result = compiler.Compile(source, "main", syscalls);
+            Assert(result.Success, "DC-08: compiles");
+            var world = new VMWorld();
+            world.Syscalls.Register(0, "Report", (ref VMInstanceState s) => { log.Add($"Report({s.Registers.Get(0).ToInt()})"); });
+            world.Modules.Load(0, result.Program);
+            int id = world.SpawnInstance(0, 0);
+            world.Tick();
+            // main(10), defer→level2: level2(20), level2 defer→level3: level3(30), level3 defer(3)
+            Assert(log.Count == 4, $"DC-08: 4 reports, got {log.Count}");
+            Assert(log[0] == "Report(10)", $"DC-08: main body, got '{log[0]}'");
+            Assert(log[1] == "Report(20)", $"DC-08: level2 body, got '{log[1]}'");
+            Assert(log[2] == "Report(30)", $"DC-08: level3 body, got '{log[2]}'");
+            Assert(log[3] == "Report(3)", $"DC-08: level3 defer, got '{log[3]}'");
         }
 
         // ===== FO5 Tests: Return value direct =====

@@ -242,10 +242,10 @@ namespace FFVM
             var dbg = Debugger;
             var srcMap = (dbg != null) ? program.SourceMap : null;
 
-            // FF5: saved r0 for preserving return value across non-entry function cleanup.
-            // Safe as a single local: cleanup blocks can't WAIT (R8/G6), so each
-            // RET_FUNC→cleanup→RETURN cycle completes before the next RET_FUNC.
-            Number savedR0 = default;
+            // DC: WasInCleanup flag packed into high bit of CallFrame.CleanupBase.
+            // Allows InCleanup state to be saved/restored across nested cleanup calls.
+            const int WAS_IN_CLEANUP = unchecked((int)0x80000000);
+            const int CLEANUP_BASE_MASK = 0x7FFFFFFF;
 
             // Lang-1.1b: Cache extended register array reference (null when not used).
             // Heap-allocated per-instance, accessed only via LOAD_XREG/STORE_XREG.
@@ -302,9 +302,10 @@ namespace FFVM
                         {
                             // Skip current cleanup block, advance to next
                             cleanupSteps = 0;
-                            int cleanupBase = 0;
+                            int cleanupBaseRaw = 0;
                             if (inst.CallStackDepth > 0)
-                                cleanupBase = inst.CallStack.Get(inst.CallStackDepth - 1).CleanupBase;
+                                cleanupBaseRaw = inst.CallStack.Get(inst.CallStackDepth - 1).CleanupBase;
+                            int cleanupBase = cleanupBaseRaw & CLEANUP_BASE_MASK;
 
                             if (inst.CleanupDepth > cleanupBase)
                             {
@@ -315,10 +316,14 @@ namespace FFVM
                             {
                                 inst.CallStackDepth--;
                                 var frame = inst.CallStack.Get(inst.CallStackDepth);
-                                inst.StateFlags &= ~VMStateFlags.InCleanup;
+                                // DC: restore InCleanup from WasInCleanup flag
+                                if ((frame.CleanupBase & WAS_IN_CLEANUP) != 0)
+                                    inst.StateFlags |= VMStateFlags.InCleanup;
+                                else
+                                    inst.StateFlags &= ~VMStateFlags.InCleanup;
                                 inst.IP = frame.ReturnIP;
                                 inst.RegisterBase = frame.RegisterBase;
-                                regs[0] = savedR0;
+                                regs[0] = *(Number*)&frame.SavedR0;
                                 if ((inst.StateFlags & VMStateFlags.Killed) != 0)
                                     return;
                             }
@@ -350,11 +355,25 @@ namespace FFVM
                             break;
 
                         case OpCode.WAIT:
+                            // DC: runtime guard — skip wait during cleanup execution.
+                            // Functions called from cleanup blocks may contain WAIT but
+                            // cleanup must complete synchronously within one Tick burst.
+                            if ((inst.StateFlags & VMStateFlags.InCleanup) != 0)
+                            {
+                                inst.IP++;
+                                break; // treat as NOP
+                            }
                             inst.WaitCounter = op.A;
                             inst.IP++;
                             return; // Yield to next tick
 
                         case OpCode.WAIT_FOR:
+                            // DC: runtime guard — skip wait_for during cleanup execution.
+                            if ((inst.StateFlags & VMStateFlags.InCleanup) != 0)
+                            {
+                                inst.IP++;
+                                break; // treat as NOP
+                            }
                             inst.WaitTargetInstanceId = regs[Reg(op.A, rb)].ToInt();
                             inst.IP++;
                             return; // Yield to next tick — Tick() checks WaitTargetInstanceId
@@ -380,12 +399,13 @@ namespace FFVM
                             if ((inst.StateFlags & VMStateFlags.InCleanup) != 0)
                             {
                                 // FF5: determine cleanup boundary for current scope
-                                int cleanupBase = 0;
+                                int cleanupBaseRaw2 = 0;
                                 if (inst.CallStackDepth > 0)
-                                    cleanupBase = inst.CallStack.Get(inst.CallStackDepth - 1).CleanupBase;
+                                    cleanupBaseRaw2 = inst.CallStack.Get(inst.CallStackDepth - 1).CleanupBase;
+                                int cleanupBase2 = cleanupBaseRaw2 & CLEANUP_BASE_MASK;
 
                                 // Finished one cleanup block
-                                if (inst.CleanupDepth > cleanupBase)
+                                if (inst.CleanupDepth > cleanupBase2)
                                 {
                                     // More cleanup blocks to run in this scope (LIFO)
                                     inst.CleanupDepth--;
@@ -397,11 +417,15 @@ namespace FFVM
                                     // FF5: all function-scoped cleanups done — return to caller
                                     inst.CallStackDepth--;
                                     var frame = inst.CallStack.Get(inst.CallStackDepth);
-                                    inst.StateFlags &= ~VMStateFlags.InCleanup;
+                                    // DC: restore InCleanup from WasInCleanup flag
+                                    if ((frame.CleanupBase & WAS_IN_CLEANUP) != 0)
+                                        inst.StateFlags |= VMStateFlags.InCleanup;
+                                    else
+                                        inst.StateFlags &= ~VMStateFlags.InCleanup;
                                     inst.IP = frame.ReturnIP;
                                     inst.RegisterBase = frame.RegisterBase;
                                     // Restore return value that cleanup may have clobbered
-                                    regs[0] = savedR0;
+                                    regs[0] = *(Number*)&frame.SavedR0;
                                     cleanupSteps = 0; // C5: reset for potential parent-scope cleanup
                                     // If Killed, stop — let next Tick handle parent-scope cleanup
                                     if ((inst.StateFlags & VMStateFlags.Killed) != 0)
@@ -569,12 +593,16 @@ namespace FFVM
                                 inst.ErrorFlag = VMError.PanicStackOverflow;
                                 return;
                             }
+                            // DC: pack WasInCleanup flag into high bit of CleanupBase
+                            int cbValue = inst.CleanupDepth;
+                            if ((inst.StateFlags & VMStateFlags.InCleanup) != 0)
+                                cbValue |= WAS_IN_CLEANUP;
                             var frame = new CallFrame
                             {
                                 ReturnIP = inst.IP + 1,
                                 ReturnModuleSlot = inst.ModuleSlot,
                                 RegisterBase = inst.RegisterBase,
-                                CleanupBase = inst.CleanupDepth
+                                CleanupBase = cbValue
                             };
                             inst.CallStack.Set(inst.CallStackDepth, frame);
                             inst.CallStackDepth++;
@@ -588,12 +616,14 @@ namespace FFVM
                         {
                             // FF5: check for pending function-scoped cleanups before returning
                             var frame = inst.CallStack.Get(inst.CallStackDepth - 1);
-                            if (inst.CleanupDepth > frame.CleanupBase)
+                            if (inst.CleanupDepth > (frame.CleanupBase & CLEANUP_BASE_MASK))
                             {
                                 // Function has pending cleanups — execute them before returning.
                                 // Keep CallStackDepth unchanged so RETURN can pop frame when done.
-                                // Save r0 (return value) before cleanup blocks may clobber it.
-                                savedR0 = regs[0];
+                                // DC: save r0 per-frame (supports nested cleanup from defer-called functions).
+                                // CallFrame is a value type; Set() writes the modified copy back to the stack.
+                                frame.SavedR0 = ((long*)regs)[0];
+                                inst.CallStack.Set(inst.CallStackDepth - 1, frame);
                                 inst.StateFlags |= VMStateFlags.InCleanup;
                                 inst.CleanupDepth--;
                                 inst.IP = inst.CleanupStack.Get(inst.CleanupDepth).CleanupEntryIP;
@@ -621,12 +651,16 @@ namespace FFVM
                                     inst.ErrorFlag = VMError.PanicStackOverflow;
                                     return;
                                 }
+                                // DC: pack WasInCleanup flag (same as CALL)
+                                int cbValueLeaf = inst.CleanupDepth;
+                                if ((inst.StateFlags & VMStateFlags.InCleanup) != 0)
+                                    cbValueLeaf |= WAS_IN_CLEANUP;
                                 var frame = new CallFrame
                                 {
                                     ReturnIP = inst.IP + 1,
                                     ReturnModuleSlot = inst.ModuleSlot,
                                     RegisterBase = inst.RegisterBase,
-                                    CleanupBase = inst.CleanupDepth
+                                    CleanupBase = cbValueLeaf
                                 };
                                 inst.CallStack.Set(inst.CallStackDepth, frame);
                                 inst.CallStackDepth++;

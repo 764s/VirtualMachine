@@ -3065,12 +3065,9 @@ namespace FFVM.Compiler
         /// </summary>
         private void EmitUserCall(CallExpr call)
         {
-            // R8: prohibit function calls inside cleanup blocks (defer/using release)
-            if (_inCleanupBlock)
-            {
-                _errors.Add($"Cannot call functions inside a cleanup block (defer/using) (line {call.Line})");
-                return;
-            }
+            // DC: R8 blanket ban removed — user function calls are now allowed
+            // inside cleanup blocks (defer/using). Runtime handles nested cleanup
+            // via per-frame SavedR0 and WasInCleanup flag in CallFrame.CleanupBase.
 
             int entryIP = _functionTable[call.FunctionName];
 
@@ -4373,8 +4370,8 @@ namespace FFVM.Compiler
         {
             resultReg = destReg >= 0 ? destReg : -1;
 
-            // R8: don't inline inside cleanup blocks — let EmitUserCall report the error
-            if (_inCleanupBlock) return false;
+            // DC: R8 inlining guard removed — inlining is now allowed inside cleanup blocks.
+            // Functions containing defer/using still can't be inlined (CanInline rejects DeferStmt).
 
             if (!CanInline(call.FunctionName))
             {
@@ -4551,8 +4548,7 @@ namespace FFVM.Compiler
             if (inlineInfo == null) return false;
             int chainDepth = visited != null ? visited.Count : 0;
             if (_inlineDepth + chainDepth >= InlineDepthMax) return false;
-            // R8: don't inline inside cleanup blocks
-            if (_inCleanupBlock) return false;
+            // DC: R8 inlining guard removed — cross-module inlining allowed in cleanup blocks.
             // Recursion guard (compile-time stack)
             if (_inlineStack != null && _inlineStack.Contains(func.Name)) return false;
             // P4: visited set prevents mutual recursion during chain check

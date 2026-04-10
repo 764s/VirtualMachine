@@ -504,7 +504,21 @@ func main() {
 ```
 
 - 多个 defer 按 LIFO 顺序执行
-- 清理块内不可使用 `wait` / `yield` / `wait_for`
+- 清理块内**可以调用函数**（包括自身含 defer 的函数，支持嵌套清理）
+- 清理块内不可直接使用 `wait` / `yield` / `wait_for`（运行时自动跳过）
+- 被调用函数的返回值在清理完成后正确恢复
+
+```ffs
+func cleanupResources() {
+    defer { Report(1) }
+    Report(2)
+}
+func main() {
+    defer { cleanupResources() }  // 允许：清理函数可以有自己的 defer
+    DoWork()
+}
+// 执行顺序: DoWork() → Report(2) → Report(1)
+```
 
 ### 5.9 using
 
@@ -881,6 +895,7 @@ func main() {
 | 无泛型 | 所有声明为单态 |
 | 无动态内存分配 | 零 GC，运行期无托管堆分配 |
 | 无块注释 | 仅支持 `//` 行注释和 `///` 文档注释 |
-| `wait` / `yield` / `wait_for` 不可在 `defer` / `using` 块内使用 | 清理块必须同步执行 |
+| `wait` / `yield` / `wait_for` 不可在 `defer` / `using` 块内使用 | 清理块必须同步执行（运行时跳过） |
 | `return` 不可在 `defer` / `using` 块内使用 | 防止破坏清理链 |
+| `defer` / `using` 清理块内可调用函数 | 支持嵌套清理（Level 3，类似 Go） |
 | 字符串无运行时操作 | 字符串字面量编译为常量池索引 |
