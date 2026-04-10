@@ -9,13 +9,13 @@
 include "common/skill_base.ffs"
 
 // ── Skill Configuration (overrides only) ────────────────────
-@export const priority: int = 1
-@export const tags: int = TAG_BIT_WALK
-@export const activationPriority: int = 500
-@export const interruptPriority: int = 500
-@export const requireGrounded: int = 1
-@export const requireInputHeld: int = INPUT_BIT_ANY_DIR_H
-@export const requireNotInputHeld: int = INPUT_BIT_UP
+@export var priority: int = 1
+@export var tags: int = TAG_BIT_WALK
+@export var activationPriority: int = 500
+@export var interruptPriority: int = 500
+@export var requireGrounded: int = 1
+@export var requireInputHeld: int = INPUT_BIT_ANY_DIR_H
+@export var requireNotInputHeld: int = INPUT_BIT_UP
 
 func main() {
     // ── Execution ───────────────────────────────────────────

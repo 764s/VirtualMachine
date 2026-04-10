@@ -5,32 +5,32 @@
 // Provides:
 //   - Full constant/input chain (via input.ffs → constants.ffs)
 //   - Stance bit constants (STANCE_*)
-//   - Input bit constants (INPUT_BIT_*) for @export const conditions
+//   - Input bit constants (INPUT_BIT_*) for @export var conditions
 //   - Tag bit constants (TAG_BIT_*)
-//   - Default @export const declarations (inherited by including scripts)
+//   - Default @export var declarations (inherited by including scripts)
 //
 // Usage:  include "common/skill_base.ffs"
 //
 // Every skill script MUST include this file. The base provides
-// sensible defaults for all configuration constants. Scripts only
+// sensible defaults for all configuration variables. Scripts only
 // need to override values that differ from these defaults.
 // The Preprocessor supports cross-file override — the including
 // script's declaration replaces the base declaration.
 //
 // Base defaults:
-//   @export const totalFrames: int = -1
-//   @export const priority: int = 0
-//   @export const tags: int = TAG_BIT_IDLE
-//   @export const isLooping: int = 1
-//   @export const activationPriority: int = 900
-//   @export const interruptPriority: int = 900
-//   @export const allowedStances: int = STANCE_GROUNDED
+//   @export var totalFrames: int = -1
+//   @export var priority: int = 0
+//   @export var tags: int = TAG_BIT_IDLE
+//   @export var isLooping: int = 1
+//   @export var activationPriority: int = 900
+//   @export var interruptPriority: int = 900
+//   @export var allowedStances: int = STANCE_GROUNDED
 // ============================================================
 
 include "common/input.ffs"
 include "common/skill_collision.ffs"
 
-// ── Stance Bits (for allowedStances @export const) ──────────
+// ── Stance Bits (for allowedStances @export var) ────────────
 // Bitfield values — combine with + for multi-stance skills.
 // Must match Stance enum order in Types.cs.
 
@@ -41,7 +41,7 @@ const STANCE_KNOCKDOWN: int = 8
 const STANCE_HITSTUN: int = 16
 const STANCE_DEAD: int = 32
 
-// ── Input Bit Constants (for require* @export consts) ────────
+// ── Input Bit Constants (for require* @export vars) ─────────
 // Bit values matching InputButton flags in PlayerInput.cs.
 
 const INPUT_BIT_UP: int = 1
@@ -55,7 +55,7 @@ const INPUT_BIT_HK: int = 128
 const INPUT_BIT_ANY_DIR_H: int = 12
 
 // ── Tag Bit Constants (pre-computed 1 << TAG_*) ─────────────
-// Used with tags @export const to declare skill tags without bit-shift.
+// Used with tags @export var to declare skill tags without bit-shift.
 
 const TAG_BIT_IDLE: int = 1
 const TAG_BIT_WALK: int = 2
@@ -66,13 +66,13 @@ const TAG_BIT_KNOCKDOWN: int = 512
 const TAG_BIT_AIR_STATE: int = 2048
 
 // ── Default Skill Configuration ─────────────────────────────
-// Base @export const defaults — including scripts override only what differs.
+// Base @export var defaults — including scripts override only what differs.
 // The Preprocessor merges cross-file declarations (last declaration wins).
 
-@export const totalFrames: int = -1
-@export const priority: int = 0
-@export const tags: int = TAG_BIT_IDLE
-@export const isLooping: int = 1
-@export const activationPriority: int = 900
-@export const interruptPriority: int = 900
-@export const allowedStances: int = STANCE_GROUNDED
+@export var totalFrames: int = -1
+@export var priority: int = 0
+@export var tags: int = TAG_BIT_IDLE
+@export var isLooping: int = 1
+@export var activationPriority: int = 900
+@export var interruptPriority: int = 900
+@export var allowedStances: int = STANCE_GROUNDED
