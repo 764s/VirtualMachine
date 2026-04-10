@@ -7,15 +7,17 @@
 //   - Stance bit constants (STANCE_*)
 //   - Input bit constants (INPUT_BIT_*) for @export var conditions
 //   - Tag bit constants (TAG_BIT_*)
+//   - Default @export var declarations (inherited by including scripts)
 //
 // Usage:  include "common/skill_base.ffs"
 //
-// Every skill script MUST include this file and declare its
-// configuration via @export var declarations at module level.
-// The host reads default values from the export table at load
-// time — no temporary instance spawn needed.
+// Every skill script MUST include this file. The base provides
+// sensible defaults for all configuration variables. Scripts only
+// need to override values that differ from these defaults.
+// The Preprocessor supports cross-file override — the including
+// script's declaration replaces the base declaration.
 //
-// Example:
+// Base defaults:
 //   @export var totalFrames: int = -1
 //   @export var priority: int = 0
 //   @export var tags: int = TAG_BIT_IDLE
@@ -61,3 +63,15 @@ const TAG_BIT_ATTACK: int = 32
 const TAG_BIT_HIT: int = 64
 const TAG_BIT_KNOCKDOWN: int = 512
 const TAG_BIT_AIR_STATE: int = 2048
+
+// ── Default Skill Configuration ─────────────────────────────
+// Base @export var defaults — including scripts override only what differs.
+// The Preprocessor merges cross-file declarations (last declaration wins).
+
+@export var totalFrames: int = -1
+@export var priority: int = 0
+@export var tags: int = TAG_BIT_IDLE
+@export var isLooping: int = 1
+@export var activationPriority: int = 900
+@export var interruptPriority: int = 900
+@export var allowedStances: int = STANCE_GROUNDED

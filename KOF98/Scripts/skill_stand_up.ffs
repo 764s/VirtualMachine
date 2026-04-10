@@ -8,7 +8,7 @@
 
 include "common/skill_base.ffs"
 
-// ── Skill Configuration ─────────────────────────────────────
+// ── Skill Configuration (overrides only) ────────────────────
 @export var totalFrames: int = 20
 @export var priority: int = 2
 @export var tags: int = TAG_BIT_KNOCKDOWN
