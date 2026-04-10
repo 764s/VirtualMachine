@@ -1,6 +1,6 @@
 # KOF98 技能 FFS 脚本化讨论
 
-> **状态**：SK15 ✅ 全部完成（Phase 1 Lang-10 ✅ + Phase 2 宿主侧重构 ✅ + Phase 3 脚本迁移 ✅）。SK3 💬 待性能验证外，其余 SK1~SK14-3 + Q1~Q4 全部 ✅。14 项 Q4 设计决策锁定。C-1 Lang-6 ✅ / C-1.5 Lang-7 ✅ / C-2 Lang-8 ✅ / Lang-10 ✅ 已实现。`@force_inline` 关键字已取消 — A5 深度内联为远期计划，内联失败严格程度改由编译器配置控制）
+> **状态**：SK15 ✅ 全部完成（Phase 1 Lang-10 ✅ + Phase 2 宿主侧重构 ✅ + Phase 3 脚本迁移 ✅）。SK3 💬 待性能验证外，其余 SK1~SK14-3 + Q1~Q4 全部 ✅。14 项 Q4 设计决策锁定。C-1 Lang-6 ✅ / C-1.5 Lang-7 ✅ / C-2 Lang-8 ✅ / Lang-10 ✅ 已实现。`@force_inline` 关键字已取消 — A5 深度内联可行性分析完成（[D_DeepInlining.md](../../Docs/Discussion/D_DeepInlining.md)），内联失败严格程度改由编译器配置控制）
 > **来源**：需求讨论 — 将 host-side 技能迁移为 FFS 脚本驱动
 > **日期**：2026-04-10（实现状态同步更新）
 
