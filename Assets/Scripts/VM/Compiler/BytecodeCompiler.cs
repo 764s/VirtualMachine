@@ -3662,7 +3662,8 @@ namespace FFVM.Compiler
                             _errors.Add($"@export const '{decl.Name}' is not supported in C-1 phase (compile-time constant folding removes register allocation). Export as 'var' for cross-instance access: '@export var {decl.Name}'. (line {decl.Line})");
                             continue;
                         }
-                        exportVars.Add(new ExportVarEntry(decl.Name, mvarSlot, false));
+                        exportVars.Add(new ExportVarEntry(decl.Name, mvarSlot, false,
+                            _moduleConstValues[decl.Name]));
                     }
                 }
                 else
@@ -3673,7 +3674,11 @@ namespace FFVM.Compiler
                         int mvarSlot = reg >= VMConstants.MaxRegisters
                             ? (reg - VMConstants.MaxRegisters) + VMConstants.ModuleVarSlots
                             : reg - VMConstants.ModuleVarRegBase;
-                        exportVars.Add(new ExportVarEntry(decl.Name, mvarSlot, true));
+                        // Lang-10: store compile-time default value
+                        Number defaultVal = Number.Zero;
+                        if (_moduleVarInitValues.TryGetValue(reg, out Number initVal))
+                            defaultVal = initVal;
+                        exportVars.Add(new ExportVarEntry(decl.Name, mvarSlot, true, defaultVal));
                     }
                 }
             }
