@@ -134,6 +134,8 @@ namespace FFVM.Compiler
         // Lang-9 P3: cross-module inline context
         private int _xInlineSvcReg;                // service instance register during cross-module inline (-1 = not active)
         private Dictionary<string, int> _xInlineVars;  // callee exported var name → export var index (for XLOAD/XSTORE_MVAR)
+        // Lang-9 P4: deep chain inline — callee function lookup during cross-module inline
+        private ModuleInlineInfo _xInlineInfo;     // active cross-module inline info (null = not in cross-module inline)
 
         // F4: Register lifecycle analysis
         private struct LiveRange
@@ -238,6 +240,7 @@ namespace FFVM.Compiler
             _inlineDestReg = -1;
             _xInlineSvcReg = -1;
             _xInlineVars = null;
+            _xInlineInfo = null;
             _inlinedCalleesPerFunc = new Dictionary<string, HashSet<string>>();
             _sourceLines = new List<int>();
             _currentLine = 0;
@@ -2567,6 +2570,12 @@ namespace FFVM.Compiler
                     CompileUserCallVoid(call);
                     return;
                 }
+                // P4: callee function call during cross-module inline — void call
+                if (_xInlineInfo != null && _xInlineInfo.FuncDecls.ContainsKey(call.FunctionName))
+                {
+                    TryInlineCalleeFunc(call, -1, out _);
+                    return;
+                }
                 // Syscall — void call
                 if (_syscalls.ContainsKey(call.FunctionName))
                 {
@@ -2927,6 +2936,13 @@ namespace FFVM.Compiler
                 // User function call (returns value in r0)
                 if (_functionTable != null && _functionTable.ContainsKey(call.FunctionName))
                     return CompileUserCallExpr(call, destReg);
+
+                // P4: callee function call during cross-module inline
+                if (_xInlineInfo != null && _xInlineInfo.FuncDecls.ContainsKey(call.FunctionName))
+                {
+                    if (TryInlineCalleeFunc(call, destReg, out int calleeReg))
+                        return calleeReg;
+                }
 
                 // Syscall call
                 return CompileSyscallExpr(call, destReg);
@@ -3961,20 +3977,20 @@ namespace FFVM.Compiler
         }
 
         /// <summary>
-        /// Lang-9 P3: Build ModuleInlineInfo containing exported function ASTs, variable
+        /// Lang-9 P3/P4: Build ModuleInlineInfo containing function ASTs, variable
         /// export indices, and module const values for cross-module inline support.
+        /// P4: includes ALL function ASTs (not just exported) to enable deep chain inline.
         /// </summary>
         private ModuleInlineInfo BuildModuleInlineInfo(ModuleNode module)
         {
-            // Collect exported function ASTs
+            // P4: Collect ALL function ASTs (exported + non-exported) for deep chain inline
             var funcDecls = new Dictionary<string, FuncDecl>();
             var allFuncNames = new HashSet<string>();
             for (int i = 0; i < module.Functions.Count; i++)
             {
                 var f = module.Functions[i];
                 allFuncNames.Add(f.Name);
-                if (f.IsExported)
-                    funcDecls[f.Name] = f;
+                funcDecls[f.Name] = f;
             }
 
             // Build exported variable name → export var index mapping
@@ -4011,8 +4027,12 @@ namespace FFVM.Compiler
                     constValues[kv.Key] = kv.Value;
             }
 
-            if (funcDecls.Count == 0)
-                return null; // No exported functions → no inline info needed
+            // Need at least one exported function for cross-module inline to be useful
+            bool hasExported = false;
+            for (int i = 0; i < module.Functions.Count; i++)
+                if (module.Functions[i].IsExported) { hasExported = true; break; }
+            if (!hasExported)
+                return null;
 
             return new ModuleInlineInfo(funcDecls, varExportIndices, constValues, allFuncNames);
         }
@@ -4517,78 +4537,102 @@ namespace FFVM.Compiler
         // ===== Lang-9 P3: Cross-module inline expansion =====
 
         /// <summary>
-        /// Lang-9 P3: Check if a cross-module function (from ServiceBinding) can be inlined.
-        /// Conservative constraints for P3:
-        /// - No yield/wait/defer/using/MemberCallExpr (same as module-internal)
-        /// - No callee user function calls (only syscalls and param/exported var arithmetic)
-        /// - All variable references must be resolvable (params, exported vars, consts)
-        /// - Size within InlineThreshold
+        /// Lang-9 P3/P4: Check if a cross-module function (from ServiceBinding) can be inlined.
+        /// P4: allows callee user function calls if the callee is itself cross-module inlinable
+        /// (deep chain inline). Uses visited set to prevent infinite recursion.
         /// </summary>
         private bool CanInlineCrossModule(FuncDecl func, ServiceBinding binding)
         {
-            if (binding.InlineInfo == null) return false;
-            if (_inlineDepth >= InlineDepthMax) return false;
+            return CanInlineCrossModule(func, binding.InlineInfo, null);
+        }
+
+        private bool CanInlineCrossModule(FuncDecl func, ModuleInlineInfo inlineInfo, HashSet<string> visited)
+        {
+            if (inlineInfo == null) return false;
+            int chainDepth = visited != null ? visited.Count : 0;
+            if (_inlineDepth + chainDepth >= InlineDepthMax) return false;
             // R8: don't inline inside cleanup blocks
             if (_inCleanupBlock) return false;
-            // Recursion guard
+            // Recursion guard (compile-time stack)
             if (_inlineStack != null && _inlineStack.Contains(func.Name)) return false;
+            // P4: visited set prevents mutual recursion during chain check
+            if (visited != null && visited.Contains(func.Name)) return false;
 
             var stmts = func.Body.Statements;
             if (stmts.Count == 0) return false;
 
-            // Check each statement for safety (no yield/wait/defer/using/MemberCallExpr/callee user func calls)
+            // P4: add current function to visited set for recursive callee checks
+            bool ownedVisited = false;
+            if (visited == null) { visited = new HashSet<string>(); ownedVisited = true; }
+            visited.Add(func.Name);
+
+            // Check each statement for safety (P4: allows inlinable callee function calls)
             for (int i = 0; i < stmts.Count; i++)
             {
-                if (!IsCrossModuleInlineSafeStmt(stmts[i], binding.InlineInfo)) return false;
+                if (!IsCrossModuleInlineSafeStmt(stmts[i], inlineInfo, visited))
+                {
+                    visited.Remove(func.Name);
+                    return false;
+                }
             }
 
             // Size check
             int estimate = EstimateBodySize(func.Body);
-            if (estimate > InlineThreshold) return false;
+            if (estimate > InlineThreshold)
+            {
+                visited.Remove(func.Name);
+                return false;
+            }
 
             // Verify all variable references can be resolved in cross-module context
             var paramNames = new HashSet<string>();
             for (int i = 0; i < func.Parameters.Count; i++)
                 paramNames.Add(func.Parameters[i].Name);
-            if (!AllVarRefsResolvable(func.Body, paramNames, binding.InlineInfo))
+            if (!AllVarRefsResolvable(func.Body, paramNames, inlineInfo))
+            {
+                visited.Remove(func.Name);
                 return false;
+            }
+
+            if (ownedVisited) visited.Clear();
+            else visited.Remove(func.Name);
 
             return true;
         }
 
         /// <summary>
-        /// Lang-9 P3: Check if a statement is safe for cross-module inline.
-        /// Same as IsInlineSafeStmt but also rejects callee user function calls.
+        /// Lang-9 P3/P4: Check if a statement is safe for cross-module inline.
+        /// P4: passes visited set for recursive callee function chain checking.
         /// </summary>
-        private bool IsCrossModuleInlineSafeStmt(Stmt stmt, ModuleInlineInfo inlineInfo)
+        private bool IsCrossModuleInlineSafeStmt(Stmt stmt, ModuleInlineInfo inlineInfo, HashSet<string> visited)
         {
             if (stmt is VarDeclStmt vd)
-                return vd.Initializer == null || IsCrossModuleInlineSafeExpr(vd.Initializer, inlineInfo);
-            if (stmt is ExprStmt es) return IsCrossModuleInlineSafeExpr(es.Expression, inlineInfo);
-            if (stmt is ReturnStmt rs) return rs.Value == null || IsCrossModuleInlineSafeExpr(rs.Value, inlineInfo);
+                return vd.Initializer == null || IsCrossModuleInlineSafeExpr(vd.Initializer, inlineInfo, visited);
+            if (stmt is ExprStmt es) return IsCrossModuleInlineSafeExpr(es.Expression, inlineInfo, visited);
+            if (stmt is ReturnStmt rs) return rs.Value == null || IsCrossModuleInlineSafeExpr(rs.Value, inlineInfo, visited);
             if (stmt is IfStmt ifS)
             {
-                if (!IsCrossModuleInlineSafeExpr(ifS.Condition, inlineInfo)) return false;
-                if (!IsCrossModuleInlineSafeStmt(ifS.ThenBranch, inlineInfo)) return false;
-                if (ifS.ElseBranch != null && !IsCrossModuleInlineSafeStmt(ifS.ElseBranch, inlineInfo)) return false;
+                if (!IsCrossModuleInlineSafeExpr(ifS.Condition, inlineInfo, visited)) return false;
+                if (!IsCrossModuleInlineSafeStmt(ifS.ThenBranch, inlineInfo, visited)) return false;
+                if (ifS.ElseBranch != null && !IsCrossModuleInlineSafeStmt(ifS.ElseBranch, inlineInfo, visited)) return false;
                 return true;
             }
             if (stmt is WhileStmt ws)
             {
-                if (!IsCrossModuleInlineSafeExpr(ws.Condition, inlineInfo)) return false;
-                return IsCrossModuleInlineSafeStmt(ws.Body, inlineInfo);
+                if (!IsCrossModuleInlineSafeExpr(ws.Condition, inlineInfo, visited)) return false;
+                return IsCrossModuleInlineSafeStmt(ws.Body, inlineInfo, visited);
             }
             if (stmt is ForStmt fs)
             {
-                if (fs.Initializer != null && !IsCrossModuleInlineSafeStmt(fs.Initializer, inlineInfo)) return false;
-                if (fs.Condition != null && !IsCrossModuleInlineSafeExpr(fs.Condition, inlineInfo)) return false;
-                if (fs.Increment != null && !IsCrossModuleInlineSafeExpr(fs.Increment, inlineInfo)) return false;
-                return IsCrossModuleInlineSafeStmt(fs.Body, inlineInfo);
+                if (fs.Initializer != null && !IsCrossModuleInlineSafeStmt(fs.Initializer, inlineInfo, visited)) return false;
+                if (fs.Condition != null && !IsCrossModuleInlineSafeExpr(fs.Condition, inlineInfo, visited)) return false;
+                if (fs.Increment != null && !IsCrossModuleInlineSafeExpr(fs.Increment, inlineInfo, visited)) return false;
+                return IsCrossModuleInlineSafeStmt(fs.Body, inlineInfo, visited);
             }
             if (stmt is BlockStmt blk)
             {
                 for (int i = 0; i < blk.Statements.Count; i++)
-                    if (!IsCrossModuleInlineSafeStmt(blk.Statements[i], inlineInfo)) return false;
+                    if (!IsCrossModuleInlineSafeStmt(blk.Statements[i], inlineInfo, visited)) return false;
                 return true;
             }
             // YieldStmt, WaitStmt, WaitForStmt, DeferStmt, UsingStmt → not safe
@@ -4596,37 +4640,47 @@ namespace FFVM.Compiler
         }
 
         /// <summary>
-        /// Lang-9 P3: Check if an expression is safe for cross-module inline.
-        /// Rejects: MemberCallExpr (XCALL), callee user function calls.
-        /// Allows: syscall calls (if name exists in caller's _syscalls and not in callee's functions).
+        /// Lang-9 P3/P4: Check if an expression is safe for cross-module inline.
+        /// P4: callee user function calls are allowed if the callee is itself cross-module inlinable.
+        /// Rejects: MemberCallExpr (XCALL), non-inlinable callee user function calls.
+        /// Allows: syscall calls, inlinable callee function calls (P4).
         /// </summary>
-        private bool IsCrossModuleInlineSafeExpr(Expr expr, ModuleInlineInfo inlineInfo)
+        private bool IsCrossModuleInlineSafeExpr(Expr expr, ModuleInlineInfo inlineInfo, HashSet<string> visited)
         {
             if (expr == null) return true;
             if (expr is CallExpr call)
             {
-                // Reject if this targets a callee user function
-                if (inlineInfo.AllFuncNames.Contains(call.FunctionName)) return false;
+                if (inlineInfo.AllFuncNames.Contains(call.FunctionName))
+                {
+                    // P4: callee user function — check if it's also cross-module inlinable
+                    if (!inlineInfo.FuncDecls.TryGetValue(call.FunctionName, out var calleeFunc))
+                        return false; // AST not available
+                    if (!CanInlineCrossModule(calleeFunc, inlineInfo, visited))
+                        return false;
+                    for (int i = 0; i < call.Arguments.Count; i++)
+                        if (!IsCrossModuleInlineSafeExpr(call.Arguments[i], inlineInfo, visited)) return false;
+                    return true;
+                }
                 // Only allow if it's a known syscall in the caller
                 if (!_syscalls.ContainsKey(call.FunctionName)) return false;
                 for (int i = 0; i < call.Arguments.Count; i++)
-                    if (!IsCrossModuleInlineSafeExpr(call.Arguments[i], inlineInfo)) return false;
+                    if (!IsCrossModuleInlineSafeExpr(call.Arguments[i], inlineInfo, visited)) return false;
                 return true;
             }
             if (expr is MemberCallExpr) return false; // XCALL disqualifies
             if (expr is BinaryExpr bin)
-                return IsCrossModuleInlineSafeExpr(bin.Left, inlineInfo) && IsCrossModuleInlineSafeExpr(bin.Right, inlineInfo);
+                return IsCrossModuleInlineSafeExpr(bin.Left, inlineInfo, visited) && IsCrossModuleInlineSafeExpr(bin.Right, inlineInfo, visited);
             if (expr is UnaryExpr un)
-                return IsCrossModuleInlineSafeExpr(un.Operand, inlineInfo);
+                return IsCrossModuleInlineSafeExpr(un.Operand, inlineInfo, visited);
             if (expr is AssignExpr assign)
-                return IsCrossModuleInlineSafeExpr(assign.Target, inlineInfo) && IsCrossModuleInlineSafeExpr(assign.Value, inlineInfo);
+                return IsCrossModuleInlineSafeExpr(assign.Target, inlineInfo, visited) && IsCrossModuleInlineSafeExpr(assign.Value, inlineInfo, visited);
             if (expr is SyscallExpr sc)
             {
                 for (int i = 0; i < sc.Arguments.Count; i++)
-                    if (!IsCrossModuleInlineSafeExpr(sc.Arguments[i], inlineInfo)) return false;
+                    if (!IsCrossModuleInlineSafeExpr(sc.Arguments[i], inlineInfo, visited)) return false;
                 return true;
             }
-            if (expr is FieldAccessExpr fa) return IsCrossModuleInlineSafeExpr(fa.Target, inlineInfo);
+            if (expr is FieldAccessExpr fa) return IsCrossModuleInlineSafeExpr(fa.Target, inlineInfo, visited);
             // Literals, identifiers — always safe
             return true;
         }
@@ -4785,6 +4839,7 @@ namespace FFVM.Compiler
             var savedInlineDestReg = _inlineDestReg;
             var savedXInlineSvcReg = _xInlineSvcReg;
             var savedXInlineVars = _xInlineVars;
+            var savedXInlineInfo = _xInlineInfo;
 
             _variables = new Dictionary<string, int>(savedVars);
             _constValues = new Dictionary<string, Number>(savedConsts);
@@ -4802,6 +4857,8 @@ namespace FFVM.Compiler
             // Set up cross-module variable redirect context
             _xInlineSvcReg = svcReg;
             _xInlineVars = binding.InlineInfo.VarExportIndices;
+            // P4: set cross-module inline info for callee function lookup
+            _xInlineInfo = binding.InlineInfo;
 
             // Bind parameters: map param names → arg registers
             for (int i = 0; i < func.Parameters.Count; i++)
@@ -4859,6 +4916,120 @@ namespace FFVM.Compiler
             _inlineDestReg = savedInlineDestReg;
             _xInlineSvcReg = savedXInlineSvcReg;
             _xInlineVars = savedXInlineVars;
+            _xInlineInfo = savedXInlineInfo;
+
+            resultReg = actualDest;
+            return true;
+        }
+
+        /// <summary>
+        /// Lang-9 P4: Inline a callee's own function during cross-module inline.
+        /// Called when the inlined cross-module body calls another function in the callee module.
+        /// Uses the existing _xInlineSvcReg/_xInlineVars/_xInlineInfo context from TryInlineMemberCall.
+        /// </summary>
+        private bool TryInlineCalleeFunc(CallExpr call, int destReg, out int resultReg)
+        {
+            resultReg = destReg >= 0 ? destReg : -1;
+
+            if (_xInlineInfo == null) return false;
+            if (!_xInlineInfo.FuncDecls.TryGetValue(call.FunctionName, out var func)) return false;
+            if (!CanInlineCrossModule(func, _xInlineInfo, null)) return false;
+
+            // Validate argument count
+            int requiredCount = 0;
+            for (int i = 0; i < func.Parameters.Count; i++)
+            {
+                if (func.Parameters[i].DefaultValue == null) requiredCount++;
+                else break;
+            }
+            if (call.Arguments.Count < requiredCount || call.Arguments.Count > func.Parameters.Count)
+                return false;
+
+            // Phase 1: Compile all arguments into temp registers
+            int[] argRegs = new int[func.Parameters.Count];
+            for (int i = 0; i < call.Arguments.Count; i++)
+                argRegs[i] = CompileExpr(call.Arguments[i]);
+            for (int i = call.Arguments.Count; i < func.Parameters.Count; i++)
+            {
+                var def = func.Parameters[i].DefaultValue;
+                argRegs[i] = def != null ? CompileExpr(def) : AllocTemp();
+            }
+
+            // Phase 2: Save inline scope (keep _xInlineSvcReg/_xInlineVars/_xInlineInfo — same module)
+            var savedVars = _variables;
+            var savedConsts = _constValues;
+            var savedStructVarTypes = _structVarTypes;
+            var savedLiveRanges = _liveRanges;
+            var savedStmtOrder = _stmtOrder;
+            var savedInlineExitJumps = _inlineExitJumps;
+            var savedInlineDestReg = _inlineDestReg;
+
+            _variables = new Dictionary<string, int>(savedVars);
+            _constValues = new Dictionary<string, Number>(savedConsts);
+            _structVarTypes = new Dictionary<string, string>(savedStructVarTypes);
+            _liveRanges = null;
+            _stmtOrder = 0;
+
+            // Populate cross-module const values (same module as parent)
+            if (_xInlineInfo.ConstValues != null)
+            {
+                foreach (var kv in _xInlineInfo.ConstValues)
+                    _constValues[kv.Key] = kv.Value;
+            }
+
+            // Bind parameters: map param names → arg registers
+            for (int i = 0; i < func.Parameters.Count; i++)
+            {
+                var param = func.Parameters[i];
+                int argReg = argRegs[i];
+                if (argReg < VarRegBase || argReg >= TempRegBase)
+                {
+                    int localReg = DeclareVar(param.Name);
+                    if (localReg != argReg)
+                        Emit(OpCode.MOVE, localReg, argReg);
+                }
+                else
+                {
+                    _variables[param.Name] = argReg;
+                }
+            }
+
+            // Phase 3: Push inline guard
+            if (_inlineStack == null) _inlineStack = new HashSet<string>();
+            _inlineStack.Add(func.Name);
+            _inlineDepth++;
+
+            // Phase 4: Compile inline body with multi-return exit label pattern
+            var stmts = func.Body.Statements;
+            int actualDest = destReg >= 0 ? destReg : AllocTemp();
+
+            _inlineExitJumps = new List<int>();
+            _inlineDestReg = actualDest;
+
+            int inlineTempBaseline = _tempTop;
+
+            for (int i = 0; i < stmts.Count; i++)
+            {
+                CompileStmt(stmts[i]);
+                _tempTop = inlineTempBaseline;
+            }
+
+            // Backpatch all exit jumps
+            int exitIP = CurrentIP();
+            for (int i = 0; i < _inlineExitJumps.Count; i++)
+                Backpatch(_inlineExitJumps[i], exitIP);
+
+            // Phase 5: Restore scope
+            _inlineDepth--;
+            _inlineStack.Remove(func.Name);
+
+            _variables = savedVars;
+            _constValues = savedConsts;
+            _structVarTypes = savedStructVarTypes;
+            _liveRanges = savedLiveRanges;
+            _stmtOrder = savedStmtOrder;
+            _inlineExitJumps = savedInlineExitJumps;
+            _inlineDestReg = savedInlineDestReg;
 
             resultReg = actualDest;
             return true;

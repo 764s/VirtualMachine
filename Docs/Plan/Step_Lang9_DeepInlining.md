@@ -1,6 +1,6 @@
 # Plan: Lang-9 A5 深度内联
 
-> **状态**：⏳ P1 ✅ P2 ✅ P3 ✅ 完成，P4 待开始
+> **状态**：✅ P1 ✅ P2 ✅ P3 ✅ P4 ✅ 全部完成
 > **来源**：[D_DeepInlining.md](../Discussion/D_DeepInlining.md) 可行性分析结论
 > **日期**：2026-04-10
 
@@ -21,7 +21,7 @@
 | **P1** | 模块内 trivial 内联（单 return，纯表达式，无分支/循环/yield/defer，无递归） | ⭐⭐ | ✅ |
 | **P2** | 模块内一般内联（多语句、分支、循环、多 return、用户函数调用、struct 参数、void） | ⭐⭐⭐ | ✅ |
 | **P3** | 跨模块内联（XLOAD_MVAR 替换 + ServiceBinding AST 传递） | ⭐⭐⭐ | ✅ |
-| P4 | 深度内联（A→B→C 链式展开） | ⭐⭐ | ⬚ |
+| P4 | 深度内联（A→B→C 链式展开） | ⭐⭐ | ✅ |
 
 ---
 
@@ -227,9 +227,45 @@ AST 层面简单估算（无需实际编译）：
 ### P3 约束/妥协
 
 - **仅标量导出变量**：struct 类型的导出变量跨模块读写暂不支持内联（需逐字段 XLOAD/XSTORE_MVAR）
-- **不支持 callee 调用自身模块函数**：P3 保守策略，callee 函数体内不能调用 callee 模块的其他用户函数（syscall 允许）
+- **不支持 callee 调用自身模块函数**：~~P3 保守策略~~ → P4 已解除此限制
 - **仅导出变量可内联访问**：callee 函数引用非导出模块变量时拒绝内联（XLOAD_MVAR/XSTORE_MVAR 需要 export var index）
-- 妥协消除：P4 或后续增强可放宽部分约束
+
+---
+
+## 三-D、P4 子步骤（深度链式内联）
+
+### P4-1: BuildModuleInlineInfo 包含全部函数 AST
+
+- 修改 `BuildModuleInlineInfo`：`FuncDecls` 包含所有函数 AST（不限于 @export），使 callee 非导出 helper 函数 AST 可用于递归内联检查和展开
+- AllFuncNames 无变化（本已包含全部函数名）
+
+### P4-2: CanInlineCrossModule 递归安全检查
+
+- 新增 `CanInlineCrossModule(func, inlineInfo, visited)` 重载，`visited: HashSet<string>` 防止互递归无限展开
+- 深度检查变为 `_inlineDepth + visited.Count >= InlineDepthMax`
+- `IsCrossModuleInlineSafeExpr` 对 callee 用户函数调用不再直接拒绝，改为递归调用 `CanInlineCrossModule` 验证
+
+### P4-3: _xInlineInfo 上下文
+
+- 新增编译器字段 `_xInlineInfo: ModuleInlineInfo`，在 `TryInlineMemberCall` 进入时设置、退出时恢复
+- 在 `CompileExprStmt` 和 `CompileExpr` 的 CallExpr 路径中，检测 `_xInlineInfo != null && _xInlineInfo.FuncDecls.ContainsKey(call.FunctionName)` 拦截 callee 函数调用
+
+### P4-4: TryInlineCalleeFunc
+
+- 新增方法 `TryInlineCalleeFunc(call, destReg, out resultReg)`：在跨模块内联体内递归展开 callee 自身函数
+- 复用已有 `_xInlineSvcReg` / `_xInlineVars` / `_xInlineInfo` 上下文（同一 callee 模块）
+- 参数绑定 + scope 保存/恢复 + multi-return exit label（与 TryInlineMemberCall 一致）
+
+### P4-5: 测试 DIN01-DIN05 + XIN08 升级
+
+| # | 测试 | 验证 |
+|---|------|------|
+| XIN08 | P4 升级：callee 调用 helper → 不再 XCALL，全链内联 | 无 XCALL + XLOAD_MVAR + runtime(counter+1=1) |
+| DIN01 | 2 级 callee 链：compute→add_bonus→exported var | 无 XCALL + XLOAD_MVAR + runtime((5+10)*2=30) |
+| DIN02 | callee helper 含 if-else 分支 | 无 XCALL + runtime(classify(60)=1, classify(30)=0) |
+| DIN03 | 非导出变量 → 不可内联 → XCALL 退化 | XCALL 存在 |
+| DIN04 | callee helper 写导出变量 | 无 XCALL + XSTORE_MVAR + runtime(double_bump()=3) |
+| DIN05 | 大 callee helper 超 InlineThreshold → XCALL 退化 | XCALL 存在 |
 
 ---
 
@@ -255,5 +291,6 @@ AST 层面简单估算（无需实际编译）：
 - [x] IN01-IN08 全通过（P1）
 - [x] IN09-IN23 全通过（P2）
 - [x] XIN01-XIN10 全通过（P3）
-- [x] 现有 1449 → 1492 测试无回归
+- [x] XIN08 升级 + DIN01-DIN05 全通过（P4）
+- [x] 现有 1492 → 1517 测试无回归
 - [x] B01-B06 benchmark 无回归
