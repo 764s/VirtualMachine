@@ -301,11 +301,15 @@ func main() {
 
         // ===== Test DBG5-03: Variables scoped to current function =====
         {
-            // Lang-9: add if-branch to prevent inlining (preserve call stack for debug test)
+            // Lang-9 P2: body must exceed InlineThreshold to preserve CALL frame for debug test
             string source = @"
 func helper(n: int): int {
     var local_h: int = n + 100
-    if local_h > 0 { Report(local_h) }
+    var t1: int = local_h + 1
+    var t2: int = t1 + 2
+    var t3: int = t2 + 3
+    var t4: int = t3 + 4
+    if local_h > 0 { Report(t4) }
     return local_h
 }
 
@@ -330,7 +334,7 @@ func main() {
             };
             world.Debugger = dbg;
 
-            dbg.AddBreakpoint(5); // Report(local_h) line — inside helper()
+            dbg.AddBreakpoint(7); // Report(t4) line — inside helper()
 
             world.SpawnInstance(0, 0);
             world.Tick();
@@ -397,9 +401,16 @@ func main() {
 
         // ===== Test DBG6-02: Two-level call — call stack has 2 frames =====
         {
+            // Lang-9 P2: body must exceed InlineThreshold to preserve CALL frame
             string source = @"
 func helper() {
-    Report(99)
+    var a: int = 1
+    var b: int = a + 2
+    var c: int = b + 3
+    var d: int = c + 4
+    var e: int = d + 5
+    var f: int = e + 6
+    Report(f)
 }
 
 func main() {
@@ -422,7 +433,7 @@ func main() {
             };
             world.Debugger = dbg;
 
-            dbg.AddBreakpoint(3); // Report(99) line — inside helper()
+            dbg.AddBreakpoint(8); // Report(f) line — inside helper()
 
             world.SpawnInstance(0, 0);
             world.Tick();
@@ -443,12 +454,25 @@ func main() {
 
         // ===== Test DBG6-03: Three-level call — a → b → c =====
         {
+            // Lang-9 P2: body must exceed InlineThreshold to preserve CALL frames
             string source = @"
 func c() {
-    Report(1)
+    var a: int = 1
+    var b: int = a + 2
+    var d: int = b + 3
+    var e: int = d + 4
+    var f: int = e + 5
+    var g: int = f + 6
+    Report(g)
 }
 
 func b() {
+    var a: int = 1
+    var b2: int = a + 2
+    var d: int = b2 + 3
+    var e: int = d + 4
+    var f: int = e + 5
+    var g: int = f + 6
     c()
 }
 
@@ -472,7 +496,7 @@ func main() {
             };
             world.Debugger = dbg;
 
-            dbg.AddBreakpoint(3); // Report(1) line — inside c()
+            dbg.AddBreakpoint(8); // Report(g) line — inside c()
 
             world.SpawnInstance(0, 0);
             world.Tick();

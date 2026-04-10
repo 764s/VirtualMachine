@@ -2087,6 +2087,7 @@ func main() {
 
         // ===== Test CS18: S4/R5 — error: too many scratch registers =====
         {
+            // Lang-9 P2: body must exceed InlineThreshold to prevent inline (which bypasses scratch check)
             string source = @"
 struct Big5 {
     a: int
@@ -2096,7 +2097,11 @@ struct Big5 {
     e: int
 }
 func bad(x: Big5, y: Big5, z: Big5, w: int, v: int) {
-    return w
+    var t1: int = x.a + y.a + z.a + w + v
+    var t2: int = x.b + y.b + z.b + t1
+    var t3: int = x.c + y.c + z.c + t2
+    var t4: int = x.d + y.d + z.d + t3
+    return t4
 }
 func main() {
     var s: Big5
@@ -3475,7 +3480,7 @@ func main() {
             Assert(!outerIsLeaf, "FO1-02: 'outer' is NOT leaf (calls inner)");
             Assert(innerIsLeaf, "FO1-02: 'inner' IS leaf (no calls)");
 
-            // Verify CALL (non-leaf) and CALL_LEAF (leaf) or inner inlined away (Lang-9)
+            // Verify CALL (non-leaf) and CALL_LEAF (leaf) or both inlined away (Lang-9 P2)
             bool hasCall = false;
             bool hasCallLeaf = false;
             for (int i = 0; i < result.Program.Instructions.Length; i++)
@@ -3483,9 +3488,10 @@ func main() {
                 if (result.Program.Instructions[i].Code == OpCode.CALL) hasCall = true;
                 if (result.Program.Instructions[i].Code == OpCode.CALL_LEAF) hasCallLeaf = true;
             }
-            Assert(hasCall, "FO1-02: CALL emitted for non-leaf 'outer'");
+            // Lang-9 P2: both inner and outer may be inlined — no CALL at all is valid
+            Assert(hasCall || (!hasCall && !hasCallLeaf), "FO1-02: CALL emitted for non-leaf 'outer' (or both inlined by P2)");
             // Lang-9: inner may be inlined within outer (better than CALL_LEAF)
-            Assert(hasCallLeaf || innerIsLeaf, "FO1-02: CALL_LEAF emitted for leaf 'inner' (or inlined)");
+            Assert(hasCallLeaf || innerIsLeaf || (!hasCall && !hasCallLeaf), "FO1-02: CALL_LEAF emitted for leaf 'inner' (or inlined)");
 
             // Verify execution
             int capturedFO2 = -1;
@@ -8651,7 +8657,7 @@ func main() {
             Assert(hasCall, "IN04: deferer() NOT inlined — CALL emitted (has defer)");
         }
 
-        // ===== Test IN05: Function calling another user function NOT inlined (P1) =====
+        // ===== Test IN05: P2 — function calling another user function IS inlined =====
         {
             string source = @"
 func helper(): int { return 10 }
@@ -8663,18 +8669,17 @@ func main() {
             var result = compiler.Compile(source, "main", new Dictionary<string, int> { { "Report", 0 } });
             Assert(result.Success, "IN05 compile success");
 
-            // caller() calls helper() → CanInline rejects caller() in P1 (user call in body)
-            // But helper() itself should be inlined within caller()
-            // main → caller() should use CALL (not inlined from main's perspective)
+            // P2: caller() calls helper() — both are inlinable, so both are inlined into main
+            // No CALL instruction should be emitted
             bool hasCall = false;
             for (int i = 0; i < result.Program.Instructions.Length; i++)
             {
                 var code = result.Program.Instructions[i].Code;
                 if (code == OpCode.CALL || code == OpCode.CALL_LEAF) hasCall = true;
             }
-            Assert(hasCall, "IN05: caller() NOT inlined from main (has user call in body)");
+            Assert(!hasCall, "IN05: P2 — caller() and helper() both inlined — no CALL");
 
-            // But execution should still be correct
+            // Execution correctness
             var values = new List<int>();
             var world = new VMWorld();
             world.Modules.Load(0, result.Program);
