@@ -621,6 +621,7 @@ namespace FFVM
                                 // Function has pending cleanups — execute them before returning.
                                 // Keep CallStackDepth unchanged so RETURN can pop frame when done.
                                 // DC: save r0 per-frame (supports nested cleanup from defer-called functions).
+                                // CallFrame is a value type; Set() writes the modified copy back to the stack.
                                 frame.SavedR0 = ((long*)regs)[0];
                                 inst.CallStack.Set(inst.CallStackDepth - 1, frame);
                                 inst.StateFlags |= VMStateFlags.InCleanup;
