@@ -28,6 +28,7 @@
 // ============================================================
 
 include "common/input.ffs"
+include "common/skill_collision.ffs"
 
 // ── Stance Bits (for allowedStances @export var) ────────────
 // Bitfield values — combine with + for multi-stance skills.

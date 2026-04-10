@@ -1,0 +1,96 @@
+// ============================================================
+// KOF98 Skill Collision Module — Concern Aggregation
+// ============================================================
+// Encapsulates collision-related data and methods for skill scripts.
+//
+// Design intent:
+//   - "关注点合并模块" — collision data + methods together
+//   - Structs organize collision parameters within VM (zero runtime cost,
+//     compile-time register flattening to consecutive slots)
+//   - When pushing to host, struct fields are passed as individual
+//     syscall arguments (single-value mode at the boundary)
+//
+// Supports:
+//   - Segmented collision boxes within a skill (different boxes per frame range)
+//   - Multiple sub-phases with distinct collision configs (future)
+//
+// Usage:  include "common/skill_collision.ffs"
+//         (automatically included via skill_base.ffs)
+//
+// Struct cost verification:
+//   FFVM structs are purely compile-time concepts. A Box4 (4 floats) occupies
+//   4 consecutive registers. Passing a Box4 as a function parameter expands
+//   to 4 MOVE instructions — identical to passing 4 individual floats.
+//   COPY_BLOCK is used for ≥3-field copies. No heap allocation, no boxing.
+// ============================================================
+
+include "common/constants.ffs"
+
+// ── Collision Box Types ─────────────────────────────────────
+const BOX_HURTBOX: int = 0
+const BOX_HITBOX: int = 1
+const BOX_BLOCKBOX: int = 2
+const BOX_PUSHBOX: int = 3
+
+// ── Collision Struct Types ──────────────────────────────────
+
+/// A box defined by offset (ox, oy) and half-extents (hw, hh).
+/// ox/oy = center offset from character origin; hw/hh = half width/height.
+struct Box4 {
+    ox: float
+    oy: float
+    hw: float
+    hh: float
+}
+
+/// Defines a hitbox active during a frame range.
+/// Groups collision data for one attack phase.
+struct HitPhaseDef {
+    startFrame: int
+    endFrame: int
+    groupId: int
+    box: Box4
+}
+
+// ── Methods — Push Collision to Host ────────────────────────
+// These operate on the module's collision structs (method semantics:
+// they read struct state and push to host via syscalls).
+// At the syscall boundary, struct fields are expanded to individual args.
+
+/// Push a hitbox to the host character.
+/// Adds to the character's hitbox list for this frame.
+func applyHitbox(groupId: int, b: Box4) {
+    SetHitbox(groupId, b.ox, b.oy, b.hw, b.hh)
+}
+
+/// Push a hurtbox to the host character.
+/// Adds to the character's hurtbox list for this frame.
+func applyHurtbox(b: Box4) {
+    SetHurtbox(b.ox, b.oy, b.hw, b.hh)
+}
+
+/// Push a pushbox to the host character.
+/// Replaces the character's current pushbox.
+func applyPushbox(b: Box4) {
+    SetPushBox(b.ox, b.oy, b.hw, b.hh)
+}
+
+/// Clear all hitboxes on the host character.
+/// Note: Use ClearHitbox() syscall directly in defer blocks
+/// (FFS does not allow user function calls in cleanup blocks).
+func clearHitbox() {
+    ClearHitbox()
+}
+
+/// Evaluate a hit phase: if current frame is within [startFrame, endFrame),
+/// push the hitbox.
+/// Returns 1 if hitbox is active this frame, 0 otherwise.
+/// Note: does NOT clear hitbox when inactive — caller manages clearing
+/// to support multiple phases in the same frame.
+func pushHitPhase(frame: int, phase: HitPhaseDef): int {
+    if frame >= phase.startFrame && frame < phase.endFrame {
+        SetHitbox(phase.groupId, phase.box.ox, phase.box.oy, phase.box.hw, phase.box.hh)
+        return 1
+    }
+    return 0
+}

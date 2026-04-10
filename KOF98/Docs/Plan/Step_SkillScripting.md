@@ -76,17 +76,21 @@
 ### KOF-T4: Syscall 扩展 + 碰撞框脚本化
 
 > **目标**：新增碰撞框/受击标记相关 Syscall，碰撞框由脚本设置
+> **状态**：⏳ T4-1~T4-4 ✅, T4-0 ✅ (skill_collision.ffs 碰撞关注点模块), T4-5/T4-6 待实施
 
-| # | 子步骤 | 说明 | 涉及文件 |
-|---|--------|------|---------|
-| T4-1 | 新增 `SetHitbox(groupId, x, y, w, h)` | 设置攻击框 | GameSyscalls.cs |
-| T4-2 | 新增 `SetHurtbox(x, y, w, h)` | 设置受击框 | GameSyscalls.cs |
-| T4-3 | 新增 `ClearHitbox()` | 清除攻击框 | GameSyscalls.cs |
-| T4-4 | 新增 `SetPushBox(x, y, w, h)` | 设置推挤框 | GameSyscalls.cs |
-| T4-5 | 拆分 `ApplyDamage` | → `ApplyDamage(targetId, coefficient)` + `ApplyHitReaction(targetId, reactionTag)` | GameSyscalls.cs |
-| T4-6 | 碰撞框迁移 | 脚本内通过 Syscall 设置碰撞框，替代 `SkillDef.CollisionFrames` 静态定义 | SkillManager.cs |
+| # | 子步骤 | 说明 | 涉及文件 | 状态 |
+|---|--------|------|---------|------|
+| T4-0 | `common/skill_collision.ffs` 碰撞关注点模块 | struct 类型 (Box4, HitPhaseDef) + method 函数 (applyHitbox, pushHitPhase 等); VM 内以结构体传递, 推送宿主时以单值模式 | skill_collision.ffs, skill_base.ffs | ✅ |
+| T4-1 | 新增 `SetHitbox(groupId, x, y, w, h)` | 设置攻击框 | GameSyscalls.cs, GameConstants.cs | ✅ |
+| T4-2 | 新增 `SetHurtbox(x, y, w, h)` | 设置受击框 | GameSyscalls.cs, GameConstants.cs | ✅ |
+| T4-3 | 新增 `ClearHitbox()` | 清除攻击框 | GameSyscalls.cs, GameConstants.cs | ✅ |
+| T4-4 | 新增 `SetPushBox(x, y, w, h)` | 设置推挤框 | GameSyscalls.cs, GameConstants.cs | ✅ |
+| T4-5 | 拆分 `ApplyDamage` | → `ApplyDamage(targetId, coefficient)` + `ApplyHitReaction(targetId, reactionTag)` | GameSyscalls.cs | ⬚ |
+| T4-6 | 碰撞框迁移 | 脚本内通过 Syscall 设置碰撞框，替代 `SkillDef.CollisionFrames` 静态定义 | SkillManager.cs | ⬚ |
 
 **完成条件**：碰撞框完全由脚本 Syscall 控制，`CollisionFrames` 不再使用。
+
+**已验证**：FFVM 结构体为纯编译期概念（递归拍平为连续寄存器），传参无运行时开销。
 
 ---
 
