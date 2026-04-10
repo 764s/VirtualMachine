@@ -122,6 +122,9 @@ namespace FFVM.Compiler
         private const int InlineDepthMax = 3;     // max nested inline depth
         private int _inlineDepth;                  // current inline nesting depth
         private HashSet<string> _inlineStack;      // recursion guard: functions currently being inlined
+        // Lang-9 P2: multi-return exit label support
+        private List<int> _inlineExitJumps;        // forward jump IPs to backpatch to inline exit point
+        private int _inlineDestReg;                // destination register for inline return values
 
         // F4: Register lifecycle analysis
         private struct LiveRange
@@ -137,6 +140,8 @@ namespace FFVM.Compiler
         private int _maxVarRegUsed;                         // track max register for precise LocalRegCount
         private int _maxTempUsed;                           // FO6: peak temp register used per function
         private int _stmtOrder;                             // current statement order counter for release tracking
+        // Lang-9 P2: track which callees were inlined per function (for FO6 window analysis)
+        private Dictionary<string, HashSet<string>> _inlinedCalleesPerFunc;
 
         /// <summary>
         /// Compile source text into a VMProgram.
@@ -220,6 +225,9 @@ namespace FFVM.Compiler
             _pendingCalls = new List<PendingCall>();
             _inlineDepth = 0;
             _inlineStack = null;
+            _inlineExitJumps = null;
+            _inlineDestReg = -1;
+            _inlinedCalleesPerFunc = new Dictionary<string, HashSet<string>>();
             _sourceLines = new List<int>();
             _currentLine = 0;
             _symbolEntries = new List<SymbolEntry>();
@@ -2416,6 +2424,21 @@ namespace FFVM.Compiler
 
         private void CompileReturn(ReturnStmt stmt)
         {
+            // Lang-9 P2: inside inline context, return compiles value to _inlineDestReg
+            // and jumps to the exit point (no RET instruction emitted)
+            if (_inlineExitJumps != null)
+            {
+                if (stmt.Value != null)
+                {
+                    int valueReg = CompileExpr(stmt.Value, _inlineDestReg);
+                    if (valueReg != _inlineDestReg)
+                        Emit(OpCode.MOVE, _inlineDestReg, valueReg);
+                }
+                // Emit forward jump to exit point (will be backpatched)
+                _inlineExitJumps.Add(EmitJump(OpCode.JUMP));
+                return;
+            }
+
             if (stmt.Value != null)
             {
                 int valueReg = CompileExpr(stmt.Value);
@@ -3217,9 +3240,14 @@ namespace FFVM.Compiler
                 }
 
                 int maxTotal = myWindow; // leaf case: just this function
+                // Lang-9 P2: get inlined callees for this function (their window is already in myWindow)
+                HashSet<string> inlined = null;
+                _inlinedCalleesPerFunc.TryGetValue(funcName, out inlined);
                 foreach (var callee in callees)
                 {
                     if (!callGraph.ContainsKey(callee)) continue;
+                    // P2: skip inlined callees — their registers are already part of this function's window
+                    if (inlined != null && inlined.Contains(callee)) continue;
                     int calleeWindow = ComputeMaxWindow(callee);
                     int total = myWindow + calleeWindow;
                     if (total > maxTotal) maxTotal = total;
@@ -4044,7 +4072,10 @@ namespace FFVM.Compiler
         /// <summary>
         /// Lang-9 P1: Check if a function can be inlined at the current call site.
         /// P1 constraints: single return as last statement, no branches/loops/yield/defer/using,
-        /// no user function calls, no XCALL (MemberCallExpr), body fits within InlineThreshold.
+        /// Lang-9 P2: Check if a function is eligible for inline expansion.
+        /// Rejects: yield/wait/defer/using, recursive calls, over threshold size, XCALL (MemberCallExpr).
+        /// Allows: branches (if/else), loops (while/for), multi-statement bodies, multi-return,
+        /// user function calls (non-recursive), struct parameters.
         /// </summary>
         private bool CanInline(string funcName)
         {
@@ -4055,23 +4086,14 @@ namespace FFVM.Compiler
             // Recursion guard
             if (_inlineStack != null && _inlineStack.Contains(funcName)) return false;
 
-            // P1: reject functions with struct-typed parameters
-            for (int i = 0; i < func.Parameters.Count; i++)
-            {
-                if (_structTypes.ContainsKey(func.Parameters[i].TypeName)) return false;
-            }
-
             var stmts = func.Body.Statements;
             if (stmts.Count == 0) return false;
 
-            // P1: check each statement for disqualifying nodes
+            // P2: check each statement for disqualifying nodes (yield/wait/defer/using/XCALL)
             for (int i = 0; i < stmts.Count; i++)
             {
                 if (!IsInlineSafeStmt(stmts[i])) return false;
             }
-
-            // P1: last statement must be a ReturnStmt (value-producing)
-            if (!(stmts[stmts.Count - 1] is ReturnStmt ret) || ret.Value == null) return false;
 
             // Size check
             int estimate = EstimateBodySize(func.Body);
@@ -4081,35 +4103,58 @@ namespace FFVM.Compiler
         }
 
         /// <summary>
-        /// Lang-9: Check if a statement is safe for P1 inline (no yield/wait/defer/using/branches/loops).
-        /// P1 only allows: VarDeclStmt, ExprStmt, ReturnStmt (at end).
+        /// Lang-9 P2: Check if a statement is safe for inline expansion.
+        /// Allows: VarDeclStmt, ExprStmt, ReturnStmt, IfStmt, WhileStmt, ForStmt, BlockStmt.
+        /// Rejects: YieldStmt, WaitStmt, WaitForStmt, DeferStmt, UsingStmt.
         /// </summary>
         private bool IsInlineSafeStmt(Stmt stmt)
         {
             if (stmt is VarDeclStmt vd)
             {
-                // struct var decls not supported in P1
-                if (_structTypes.ContainsKey(vd.TypeName)) return false;
                 return vd.Initializer == null || IsInlineSafeExpr(vd.Initializer);
             }
             if (stmt is ExprStmt es) return IsInlineSafeExpr(es.Expression);
             if (stmt is ReturnStmt rs) return rs.Value == null || IsInlineSafeExpr(rs.Value);
-            // Any other statement type (if/while/for/yield/wait/defer/using/block) → not P1 safe
+            if (stmt is IfStmt ifS)
+            {
+                if (!IsInlineSafeExpr(ifS.Condition)) return false;
+                if (!IsInlineSafeStmt(ifS.ThenBranch)) return false;
+                if (ifS.ElseBranch != null && !IsInlineSafeStmt(ifS.ElseBranch)) return false;
+                return true;
+            }
+            if (stmt is WhileStmt ws)
+            {
+                if (!IsInlineSafeExpr(ws.Condition)) return false;
+                return IsInlineSafeStmt(ws.Body);
+            }
+            if (stmt is ForStmt fs)
+            {
+                if (fs.Initializer != null && !IsInlineSafeStmt(fs.Initializer)) return false;
+                if (fs.Condition != null && !IsInlineSafeExpr(fs.Condition)) return false;
+                if (fs.Increment != null && !IsInlineSafeExpr(fs.Increment)) return false;
+                return IsInlineSafeStmt(fs.Body);
+            }
+            if (stmt is BlockStmt blk)
+            {
+                for (int i = 0; i < blk.Statements.Count; i++)
+                    if (!IsInlineSafeStmt(blk.Statements[i])) return false;
+                return true;
+            }
+            // YieldStmt, WaitStmt, WaitForStmt, DeferStmt, UsingStmt → not safe
             return false;
         }
 
         /// <summary>
-        /// Lang-9: Check if an expression is safe for P1 inline (no user function calls, no XCALL).
-        /// Syscalls are allowed.
+        /// Lang-9 P2: Check if an expression is safe for inline expansion.
+        /// Allows user function calls (recursion handled by _inlineStack guard).
+        /// Only MemberCallExpr (XCALL) is disqualified.
         /// </summary>
         private bool IsInlineSafeExpr(Expr expr)
         {
             if (expr == null) return true;
             if (expr is CallExpr call)
             {
-                // User function calls disqualify in P1
-                if (_funcDecls.ContainsKey(call.FunctionName)) return false;
-                // Syscall calls are OK — check args
+                // P2: user function calls are allowed (recursion guard in CanInline)
                 for (int i = 0; i < call.Arguments.Count; i++)
                     if (!IsInlineSafeExpr(call.Arguments[i])) return false;
                 return true;
@@ -4158,7 +4203,25 @@ namespace FFVM.Compiler
                 for (int i = 0; i < blk.Statements.Count; i++) s += EstimateStmtSize(blk.Statements[i]);
                 return s;
             }
-            // If/While/For/etc. — P1 won't inline these, but return a large number for safety
+            // P2: proper estimates for branches and loops
+            if (stmt is IfStmt ifS)
+            {
+                int s = 2 + EstimateExprSize(ifS.Condition) + EstimateStmtSize(ifS.ThenBranch);
+                if (ifS.ElseBranch != null) s += EstimateStmtSize(ifS.ElseBranch);
+                return s;
+            }
+            if (stmt is WhileStmt ws)
+                return 2 + EstimateExprSize(ws.Condition) + EstimateStmtSize(ws.Body);
+            if (stmt is ForStmt fs)
+            {
+                int s = 2;
+                if (fs.Initializer != null) s += EstimateStmtSize(fs.Initializer);
+                if (fs.Condition != null) s += EstimateExprSize(fs.Condition);
+                if (fs.Increment != null) s += EstimateExprSize(fs.Increment);
+                s += EstimateStmtSize(fs.Body);
+                return s;
+            }
+            // Yield/Wait/Defer/Using — should not appear in inlinable functions, return large number
             return InlineThreshold + 1;
         }
 
@@ -4188,13 +4251,18 @@ namespace FFVM.Compiler
         }
 
         /// <summary>
-        /// Lang-9: Try to inline a user function call. Returns true if inlined successfully,
+        /// Lang-9 P2: Try to inline a user function call. Returns true if inlined successfully,
         /// in which case destReg holds the result. Returns false if not inlinable (caller should
         /// fall through to normal CALL emission).
+        /// P2 supports: multi-statement bodies, branches, loops, multi-return (exit label pattern),
+        /// user function calls, struct parameters, void functions.
         /// </summary>
         private bool TryInlineCall(CallExpr call, int destReg, out int resultReg)
         {
             resultReg = destReg >= 0 ? destReg : -1;
+
+            // R8: don't inline inside cleanup blocks — let EmitUserCall report the error
+            if (_inCleanupBlock) return false;
 
             if (!CanInline(call.FunctionName))
             {
@@ -4235,6 +4303,8 @@ namespace FFVM.Compiler
             var savedStructVarTypes = _structVarTypes;
             var savedLiveRanges = _liveRanges;
             var savedStmtOrder = _stmtOrder;
+            var savedInlineExitJumps = _inlineExitJumps;
+            var savedInlineDestReg = _inlineDestReg;
 
             _variables = new Dictionary<string, int>(savedVars);      // copy parent scope
             _constValues = new Dictionary<string, Number>(savedConsts);
@@ -4242,25 +4312,49 @@ namespace FFVM.Compiler
             _liveRanges = null; // disable F4 register release inside inline body
             _stmtOrder = 0;
 
-            // Bind parameters: map param names → arg registers (zero-copy)
+            // Bind parameters: map param names → arg registers
             for (int i = 0; i < func.Parameters.Count; i++)
             {
                 var param = func.Parameters[i];
-                // For P1: scalar parameters only (struct params checked in CanInline)
-                // If arg is in a temp/scratch register, we need to copy to a local to avoid
-                // register conflicts within the inline body
                 int argReg = argRegs[i];
-                if (argReg < VarRegBase || argReg >= TempRegBase)
+
+                // P2: struct parameter support
+                if (_structTypes.ContainsKey(param.TypeName) &&
+                    _flatStructInfo.TryGetValue(param.TypeName, out var flatInfo))
                 {
-                    // Scratch zone or temp — copy to a local var register for safety
-                    int localReg = DeclareVar(param.Name);
-                    if (localReg != argReg)
-                        Emit(OpCode.MOVE, localReg, argReg);
+                    int flatCount = flatInfo.FlatFieldCount;
+                    int baseReg = DeclareStructVar(param.Name, flatCount);
+                    _structVarTypes[param.Name] = param.TypeName;
+                    // Copy struct fields from arg to local
+                    if (IsModuleVarReg(argReg))
+                    {
+                        for (int j = 0; j < flatCount; j++)
+                            EmitLoadModuleVar(baseReg + j, argReg + j);
+                    }
+                    else
+                    {
+                        for (int j = 0; j < flatCount; j++)
+                        {
+                            if (baseReg + j != argReg + j)
+                                Emit(OpCode.MOVE, baseReg + j, argReg + j);
+                        }
+                    }
                 }
                 else
                 {
-                    // Already in var zone — just bind the name
-                    _variables[param.Name] = argReg;
+                    // Scalar parameter
+                    if (argReg < VarRegBase || argReg >= TempRegBase)
+                    {
+                        // Scratch zone or temp — copy to a local var register for safety
+                        int localReg = DeclareVar(param.Name);
+                        if (localReg != argReg)
+                            Emit(OpCode.MOVE, localReg, argReg);
+                    }
+                    else
+                    {
+                        // Already in var zone — just bind the name
+                        _variables[param.Name] = argReg;
+                    }
                 }
             }
 
@@ -4269,23 +4363,29 @@ namespace FFVM.Compiler
             _inlineStack.Add(call.FunctionName);
             _inlineDepth++;
 
-            // Phase 4: Compile inline body
-            // For P1: all statements except the last ReturnStmt are compiled normally.
-            // The last ReturnStmt's value is compiled into destReg.
+            // Phase 4: Compile inline body with multi-return exit label pattern
             var stmts = func.Body.Statements;
             int actualDest = destReg >= 0 ? destReg : AllocTemp();
 
-            for (int i = 0; i < stmts.Count - 1; i++)
+            // Set up P2 exit label context: ReturnStmt inside inline body will
+            // compile value to _inlineDestReg and JUMP to the exit point
+            _inlineExitJumps = new List<int>();
+            _inlineDestReg = actualDest;
+
+            // P2: save temp baseline — inline body statement resets must not
+            // go below this point, to preserve actualDest and outer temps
+            int inlineTempBaseline = _tempTop;
+
+            for (int i = 0; i < stmts.Count; i++)
             {
                 CompileStmt(stmts[i]);
-                ResetTemps();
+                _tempTop = inlineTempBaseline; // reset only inline-local temps
             }
 
-            // Last statement is ReturnStmt (guaranteed by CanInline)
-            var retStmt = (ReturnStmt)stmts[stmts.Count - 1];
-            int retReg = CompileExpr(retStmt.Value, actualDest);
-            if (retReg != actualDest)
-                Emit(OpCode.MOVE, actualDest, retReg);
+            // Backpatch all exit jumps to current IP (the instruction after inline body)
+            int exitIP = CurrentIP();
+            for (int i = 0; i < _inlineExitJumps.Count; i++)
+                Backpatch(_inlineExitJumps[i], exitIP);
 
             // Phase 5: Restore scope
             _inlineDepth--;
@@ -4296,8 +4396,19 @@ namespace FFVM.Compiler
             _structVarTypes = savedStructVarTypes;
             _liveRanges = savedLiveRanges;
             _stmtOrder = savedStmtOrder;
+            _inlineExitJumps = savedInlineExitJumps;
+            _inlineDestReg = savedInlineDestReg;
 
             resultReg = actualDest;
+
+            // P2: record inlined callee for FO6 window analysis adjustment
+            if (!_inlinedCalleesPerFunc.TryGetValue(_currentFunctionName, out var inlinedSet))
+            {
+                inlinedSet = new HashSet<string>();
+                _inlinedCalleesPerFunc[_currentFunctionName] = inlinedSet;
+            }
+            inlinedSet.Add(call.FunctionName);
+
             return true;
         }
 
