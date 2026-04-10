@@ -137,6 +137,96 @@ namespace KOF98
             return slot;
         }
 
+        // ── Skill Metadata Extraction ────────────────────────────
+
+        /// <summary>
+        /// Extract a SkillDef from a compiled FFS skill script.
+        /// The script declares its configuration via SetSkillMeta() calls in main().
+        /// This method spawns a temporary VM instance, ticks it once to capture
+        /// the metadata, then destroys the instance and builds a SkillDef.
+        ///
+        /// During extraction, no game scene context is set — syscalls like
+        /// IsInputHeld/IsGrounded safely return 0, causing condition checks to
+        /// fail and the script to return. The metadata is captured before that.
+        ///
+        /// Additionally reads META_REQUIRE_* keys to auto-generate CanActivate.
+        /// </summary>
+        public SkillDef ExtractSkillDef(int moduleSlot, int skillId, string name)
+        {
+            // Save and clear context so syscalls return safe defaults
+            var savedVMBridge = GameSyscalls.VMBridge;
+            GameSyscalls.VMBridge = null;
+            GameSyscalls.SetContext(null);
+
+            var meta = GameSyscalls.BeginMetaCapture();
+
+            int vmId = World.SpawnInstance(moduleSlot, 0);
+            if (vmId < 0)
+            {
+                GameSyscalls.EndMetaCapture();
+                GameSyscalls.VMBridge = savedVMBridge;
+                Console.Error.WriteLine($"[VMBridge] ExtractSkillDef: VM pool exhausted for {name}");
+                return null;
+            }
+
+            // Tick once — executes SetSkillMeta calls, then script returns/yields
+            World.TickInstance(vmId);
+
+            // Destroy the extraction instance
+            ref var inst = ref World.Pool.Instances[vmId];
+            if (inst.IsAlive && (inst.StateFlags & VMStateFlags.Completed) == 0)
+                inst.StateFlags |= VMStateFlags.Killed;
+            World.DestroyInstance(vmId);
+
+            GameSyscalls.EndMetaCapture();
+            GameSyscalls.VMBridge = savedVMBridge;
+
+            // Build SkillDef from captured metadata
+            int totalFrames = meta.GetValueOrDefault(GameConstants.META_TOTAL_FRAMES, -1);
+            int priority = meta.GetValueOrDefault(GameConstants.META_PRIORITY, 0);
+            int tags = meta.GetValueOrDefault(GameConstants.META_TAGS, 0);
+            bool isLooping = meta.GetValueOrDefault(GameConstants.META_IS_LOOPING, 0) != 0;
+            int actPriority = meta.GetValueOrDefault(GameConstants.META_ACTIVATION_PRIORITY, 100);
+            int intPriority = meta.GetValueOrDefault(GameConstants.META_INTERRUPT_PRIORITY, 100);
+            int stanceBits = meta.GetValueOrDefault(GameConstants.META_ALLOWED_STANCES, 0);
+
+            var def = new SkillDef(skillId, name, totalFrames, priority, tags, isLooping);
+            def.ActivationPriority = actPriority;
+            def.InterruptPriority = intPriority;
+            def.VMModuleSlot = moduleSlot;
+
+            // Convert stance bits to Stance array
+            var stances = new List<Stance>();
+            if ((stanceBits & GameConstants.STANCE_BIT_GROUNDED) != 0) stances.Add(Stance.Grounded);
+            if ((stanceBits & GameConstants.STANCE_BIT_AIRBORNE) != 0) stances.Add(Stance.Airborne);
+            if ((stanceBits & GameConstants.STANCE_BIT_CROUCHING) != 0) stances.Add(Stance.Crouching);
+            if ((stanceBits & GameConstants.STANCE_BIT_KNOCKDOWN) != 0) stances.Add(Stance.Knockdown);
+            if ((stanceBits & GameConstants.STANCE_BIT_HITSTUN) != 0) stances.Add(Stance.Hitstun);
+            if ((stanceBits & GameConstants.STANCE_BIT_DEAD) != 0) stances.Add(Stance.Dead);
+            if (stances.Count > 0) def.AllowedStances = stances.ToArray();
+
+            // Auto-generate CanActivate from META_REQUIRE_* metadata
+            bool reqGrounded = meta.GetValueOrDefault(GameConstants.META_REQUIRE_GROUNDED, 0) != 0;
+            int reqPressed = meta.GetValueOrDefault(GameConstants.META_REQUIRE_INPUT_PRESSED, 0);
+            int reqHeld = meta.GetValueOrDefault(GameConstants.META_REQUIRE_INPUT_HELD, 0);
+            int reqNotHeld = meta.GetValueOrDefault(GameConstants.META_REQUIRE_NOT_INPUT_HELD, 0);
+
+            if (reqGrounded || reqPressed != 0 || reqHeld != 0 || reqNotHeld != 0)
+            {
+                def.CanActivate = (ch, input) =>
+                {
+                    if (reqGrounded && !ch.IsGrounded) return false;
+                    if (ch.HitstunFrames > 0) return false;
+                    if (reqPressed != 0 && ((int)input.Pressed & reqPressed) == 0) return false;
+                    if (reqHeld != 0 && ((int)input.Held & reqHeld) == 0) return false;
+                    if (reqNotHeld != 0 && ((int)input.Held & reqNotHeld) != 0) return false;
+                    return true;
+                };
+            }
+
+            return def;
+        }
+
         // ── Skill Activation / Deactivation ──────────────────────
 
         /// <summary>

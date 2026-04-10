@@ -1,26 +1,32 @@
 // ============================================================
 // Skill: Jump (skill_jump)
-// Type: Finite (physics)  |  Priority: 400 (movement)
 // ============================================================
 // First frame: sets launch velocity (horizontal from input, vertical fixed).
 // Then yields until the character lands (after a grace period).
 // Script return → VM instance completes → host deactivates skill.
-//
-// Activation condition handled by host (CanActivate: Up pressed + grounded).
-//
-// Syscalls used: IsInputHeld, SetVelocity, IsGrounded
+// Activation: Up pressed, grounded.
 
-include "common/input.ffs"
+include "common/skill_base.ffs"
 
 func main() {
-    // --- Launch (first frame) ---
+    // ── Skill Configuration ─────────────────────────────────
+    SetSkillMeta(META_TOTAL_FRAMES, 120)
+    SetSkillMeta(META_PRIORITY, 1)
+    SetSkillMeta(META_TAGS, 18)
+    SetSkillMeta(META_IS_LOOPING, 0)
+    SetSkillMeta(META_ACTIVATION_PRIORITY, 400)
+    SetSkillMeta(META_INTERRUPT_PRIORITY, 500)
+    SetSkillMeta(META_ALLOWED_STANCES, 5)
+    SetSkillMeta(META_REQUIRE_GROUNDED, 1)
+    SetSkillMeta(META_REQUIRE_INPUT_PRESSED, INPUT_BIT_UP)
+
+    // ── Execution ───────────────────────────────────────────
+    // Launch (first frame)
     var vx: float = getMoveDirX() * WALK_SPEED
     SetVelocity(vx, JUMP_VY)
     yield
 
-    // --- Airborne: wait for landing ---
-    // Skip first few frames to avoid false grounded detection
-    // (physics needs time to move character above ground)
+    // Airborne: wait for landing
     var f: int = 1
     while f < 120 {
         if f > 3 {

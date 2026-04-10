@@ -99,8 +99,8 @@ namespace KOF98
             }
 
             // ── Define characters ────────────────────────────────
-            var p1Data = CreateDefaultCharacterData(1, "Kyo", vmSlots);
-            var p2Data = CreateDefaultCharacterData(2, "Iori", vmSlots);
+            var p1Data = CreateDefaultCharacterData(1, "Kyo", vmBridge, vmSlots);
+            var p2Data = CreateDefaultCharacterData(2, "Iori", vmBridge, vmSlots);
 
             // ── Initial scene setup via commands ─────────────────
             var initInput = new SceneInput();
@@ -259,30 +259,55 @@ namespace KOF98
             public int Walk;
             public int Jump;
             public int LightPunch;
+            public int CrouchPunch;
+            public int HitHigh;
+            public int HardKnockdown;
+            public int StandUp;
         }
 
         /// <summary>Load FFS skill scripts and return their module slot indices.</summary>
         private static VMSlots LoadSkillScripts(GameVMBridge bridge, string scriptsDir)
         {
-            var slots = new VMSlots { Idle = -1, Walk = -1, Jump = -1, LightPunch = -1 };
+            var slots = new VMSlots
+            {
+                Idle = -1, Walk = -1, Jump = -1, LightPunch = -1,
+                CrouchPunch = -1, HitHigh = -1, HardKnockdown = -1, StandUp = -1
+            };
 
-            string idlePath = System.IO.Path.Combine(scriptsDir, "skill_idle.ffs");
-            string walkPath = System.IO.Path.Combine(scriptsDir, "skill_walk_forward.ffs");
-            string jumpPath = System.IO.Path.Combine(scriptsDir, "skill_jump.ffs");
-            string lpPath = System.IO.Path.Combine(scriptsDir, "skill_light_punch.ffs");
+            var scriptFiles = new (string field, string file)[]
+            {
+                ("Idle", "skill_idle.ffs"),
+                ("Walk", "skill_walk_forward.ffs"),
+                ("Jump", "skill_jump.ffs"),
+                ("LightPunch", "skill_light_punch.ffs"),
+                ("CrouchPunch", "skill_crouch_punch.ffs"),
+                ("HitHigh", "skill_hit_high.ffs"),
+                ("HardKnockdown", "skill_hard_knockdown.ffs"),
+                ("StandUp", "skill_stand_up.ffs"),
+            };
 
-            if (System.IO.File.Exists(idlePath))
-                slots.Idle = bridge.LoadScript(idlePath);
-            if (System.IO.File.Exists(walkPath))
-                slots.Walk = bridge.LoadScript(walkPath);
-            if (System.IO.File.Exists(jumpPath))
-                slots.Jump = bridge.LoadScript(jumpPath);
-            if (System.IO.File.Exists(lpPath))
-                slots.LightPunch = bridge.LoadScript(lpPath);
+            int loaded = 0;
+            foreach (var (field, file) in scriptFiles)
+            {
+                string path = System.IO.Path.Combine(scriptsDir, file);
+                if (!System.IO.File.Exists(path)) continue;
+                int slot = bridge.LoadScript(path);
+                if (slot < 0) continue;
 
-            int loaded = (slots.Idle >= 0 ? 1 : 0) + (slots.Walk >= 0 ? 1 : 0)
-                + (slots.Jump >= 0 ? 1 : 0) + (slots.LightPunch >= 0 ? 1 : 0);
-            Console.WriteLine($"[KOF98] Loaded {loaded}/4 skill scripts from {scriptsDir}");
+                switch (field)
+                {
+                    case "Idle": slots.Idle = slot; break;
+                    case "Walk": slots.Walk = slot; break;
+                    case "Jump": slots.Jump = slot; break;
+                    case "LightPunch": slots.LightPunch = slot; break;
+                    case "CrouchPunch": slots.CrouchPunch = slot; break;
+                    case "HitHigh": slots.HitHigh = slot; break;
+                    case "HardKnockdown": slots.HardKnockdown = slot; break;
+                    case "StandUp": slots.StandUp = slot; break;
+                }
+                loaded++;
+            }
+            Console.WriteLine($"[KOF98] Loaded {loaded}/8 skill scripts from {scriptsDir}");
 
             return slots;
         }
@@ -290,82 +315,59 @@ namespace KOF98
         /// <summary>Register module slot → script path mappings for the DAP debugger.</summary>
         private static void RegisterDebugScriptPaths(EmbeddableDapServer dapServer, VMSlots slots, string scriptsDir)
         {
-            if (slots.Idle >= 0)
-                dapServer.RegisterModuleScriptPath(slots.Idle,
-                    System.IO.Path.GetFullPath(System.IO.Path.Combine(scriptsDir, "skill_idle.ffs")));
-            if (slots.Walk >= 0)
-                dapServer.RegisterModuleScriptPath(slots.Walk,
-                    System.IO.Path.GetFullPath(System.IO.Path.Combine(scriptsDir, "skill_walk_forward.ffs")));
-            if (slots.Jump >= 0)
-                dapServer.RegisterModuleScriptPath(slots.Jump,
-                    System.IO.Path.GetFullPath(System.IO.Path.Combine(scriptsDir, "skill_jump.ffs")));
-            if (slots.LightPunch >= 0)
-                dapServer.RegisterModuleScriptPath(slots.LightPunch,
-                    System.IO.Path.GetFullPath(System.IO.Path.Combine(scriptsDir, "skill_light_punch.ffs")));
+            var mappings = new (int slot, string file)[]
+            {
+                (slots.Idle, "skill_idle.ffs"),
+                (slots.Walk, "skill_walk_forward.ffs"),
+                (slots.Jump, "skill_jump.ffs"),
+                (slots.LightPunch, "skill_light_punch.ffs"),
+                (slots.CrouchPunch, "skill_crouch_punch.ffs"),
+                (slots.HitHigh, "skill_hit_high.ffs"),
+                (slots.HardKnockdown, "skill_hard_knockdown.ffs"),
+                (slots.StandUp, "skill_stand_up.ffs"),
+            };
+
+            foreach (var (slot, file) in mappings)
+            {
+                if (slot >= 0)
+                    dapServer.RegisterModuleScriptPath(slot,
+                        System.IO.Path.GetFullPath(System.IO.Path.Combine(scriptsDir, file)));
+            }
         }
 
-        private static CharacterData CreateDefaultCharacterData(int id, string name, VMSlots vmSlots)
+        private static CharacterData CreateDefaultCharacterData(int id, string name, GameVMBridge vmBridge, VMSlots vmSlots)
         {
-            // Stance arrays (shared references, no per-skill allocation)
-            var groundOnly = new[] { Stance.Grounded };
-            var groundAndCrouch = new[] { Stance.Grounded, Stance.Crouching };
+            var skills = new System.Collections.Generic.List<SkillDef>();
+            int idleIndex = -1;
 
-            // ── Idle skill (VM-driven, looping) ──────────────────
-            var idleSkill = new SkillDef(
-                id: 0, name: "Idle", totalFrames: -1,
-                priority: GameConstants.PRIORITY_IDLE,
-                tags: (1 << GameConstants.TAG_IDLE),
-                looping: true);
-            idleSkill.AllowedStances = groundOnly;
-            idleSkill.ActivationPriority = 900;   // Lowest — fallback
-            idleSkill.InterruptPriority = 900;
-            idleSkill.VMModuleSlot = vmSlots.Idle;
+            // ── VM-driven skills — config extracted from ffs scripts ──
 
-            // ── Walk skill (VM-driven, looping, deactivates when direction released) ──
-            var walkSkill = new SkillDef(
-                id: 1, name: "Walk", totalFrames: -1,
-                priority: GameConstants.PRIORITY_MOVEMENT,
-                tags: (1 << GameConstants.TAG_WALK),
-                looping: true);
-            walkSkill.AllowedStances = groundOnly;
-            walkSkill.ActivationPriority = 500;   // Movement tier
-            walkSkill.InterruptPriority = 500;
-            walkSkill.VMModuleSlot = vmSlots.Walk;
-            walkSkill.CanActivate = (ch, input) =>
-                input.HasAny(InputButton.Left | InputButton.Right)
-                && !input.IsHeld(InputButton.Up)  // Don't walk when jumping
-                && ch.IsGrounded
-                && ch.HitstunFrames <= 0;
-            walkSkill.CanContinue = (ch, input) =>
-                input.HasAny(InputButton.Left | InputButton.Right)
-                && ch.IsGrounded
-                && ch.HitstunFrames <= 0;
-            // OnFrame replaced by VM script (skill_walk_forward.ffs)
+            if (vmSlots.Idle >= 0)
+            {
+                var def = vmBridge.ExtractSkillDef(vmSlots.Idle, 0, "Idle");
+                if (def != null) { idleIndex = skills.Count; skills.Add(def); }
+            }
 
-            // ── Jump skill (VM-driven, finite, ends on landing) ────
-            var jumpSkill = new SkillDef(
-                id: 2, name: "Jump", totalFrames: JumpTimeoutFrames,
-                priority: GameConstants.PRIORITY_MOVEMENT,
-                tags: (1 << GameConstants.TAG_JUMP) | (1 << GameConstants.TAG_AIR_STATE));
-            jumpSkill.AllowedStances = groundAndCrouch;
-            jumpSkill.ActivationPriority = 400;   // Jump > walk
-            jumpSkill.InterruptPriority = 500;
-            jumpSkill.VMModuleSlot = vmSlots.Jump;
-            jumpSkill.CanActivate = (ch, input) =>
-                input.IsPressed(InputButton.Up)
-                && ch.IsGrounded
-                && ch.HitstunFrames <= 0;
-            // CanContinue not needed — script returns when character lands
-            // OnFrame replaced by VM script (skill_jump.ffs)
+            if (vmSlots.Walk >= 0)
+            {
+                var def = vmBridge.ExtractSkillDef(vmSlots.Walk, 1, "Walk");
+                if (def != null) skills.Add(def);
+            }
 
-            // ── Crouch skill (looping, deactivates when Down released) ──
+            if (vmSlots.Jump >= 0)
+            {
+                var def = vmBridge.ExtractSkillDef(vmSlots.Jump, 2, "Jump");
+                if (def != null) skills.Add(def);
+            }
+
+            // ── Crouch skill (host-driven — no ffs yet, needs SetPushBox syscall) ──
             var crouchSkill = new SkillDef(
                 id: 3, name: "Crouch", totalFrames: -1,
                 priority: GameConstants.PRIORITY_MOVEMENT,
                 tags: (1 << GameConstants.TAG_CROUCH));
             crouchSkill.IsLooping = true;
-            crouchSkill.AllowedStances = groundOnly;
-            crouchSkill.ActivationPriority = 450;  // Crouch between walk and jump
+            crouchSkill.AllowedStances = new[] { Stance.Grounded };
+            crouchSkill.ActivationPriority = 450;
             crouchSkill.InterruptPriority = 500;
             crouchSkill.CanActivate = (ch, input) =>
                 input.IsHeld(InputButton.Down)
@@ -378,35 +380,56 @@ namespace KOF98
                 && ch.HitstunFrames <= 0;
             crouchSkill.OnFrame = (ch, input) =>
             {
-                // Zero horizontal velocity while crouching
                 ch.Body.Velocity = new FVec2(0, ch.Body.Velocity.Y);
-                // Use crouch pushbox
                 ch.PushBox = ch.Data.CrouchPushBox;
             };
+            skills.Add(crouchSkill);
 
-            // ── Light Punch (VM-driven, 20 frames) ────────────────
-            var lpSkill = new SkillDef(
-                id: 10, name: "LightPunch", totalFrames: 20,
-                priority: GameConstants.PRIORITY_ATTACK,
-                tags: (1 << GameConstants.TAG_ATTACK));
-            lpSkill.AllowedStances = groundOnly;
-            lpSkill.ActivationPriority = 200;     // Attack tier
-            lpSkill.InterruptPriority = 200;
-            lpSkill.VMModuleSlot = vmSlots.LightPunch;
-            lpSkill.CanActivate = (ch, input) =>
-                input.IsPressed(InputButton.LP) && ch.IsGrounded && ch.HitstunFrames <= 0;
-            lpSkill.CollisionFrames = new[]
+            if (vmSlots.LightPunch >= 0)
             {
-                new CollisionBoxFrame(5, 10, CollisionBoxType.Hitbox, 1001,
-                    new FRect(0.3f, 0.7f, 0.3f, 0.15f)),
-            };
+                var def = vmBridge.ExtractSkillDef(vmSlots.LightPunch, 10, "LightPunch");
+                if (def != null)
+                {
+                    // Collision frames still defined host-side (KOF-T4 will move to ffs)
+                    def.CollisionFrames = new[]
+                    {
+                        new CollisionBoxFrame(5, 10, CollisionBoxType.Hitbox, 1001,
+                            new FRect(0.3f, 0.7f, 0.3f, 0.15f)),
+                    };
+                    skills.Add(def);
+                }
+            }
+
+            if (vmSlots.CrouchPunch >= 0)
+            {
+                var def = vmBridge.ExtractSkillDef(vmSlots.CrouchPunch, 11, "CrouchPunch");
+                if (def != null) skills.Add(def);
+            }
+
+            if (vmSlots.HitHigh >= 0)
+            {
+                var def = vmBridge.ExtractSkillDef(vmSlots.HitHigh, 20, "HitHigh");
+                if (def != null) skills.Add(def);
+            }
+
+            if (vmSlots.HardKnockdown >= 0)
+            {
+                var def = vmBridge.ExtractSkillDef(vmSlots.HardKnockdown, 21, "HardKnockdown");
+                if (def != null) skills.Add(def);
+            }
+
+            if (vmSlots.StandUp >= 0)
+            {
+                var def = vmBridge.ExtractSkillDef(vmSlots.StandUp, 22, "StandUp");
+                if (def != null) skills.Add(def);
+            }
 
             return new CharacterData
             {
                 Id = id,
                 Name = name,
-                Skills = new[] { idleSkill, walkSkill, jumpSkill, crouchSkill, lpSkill },
-                IdleSkillIndex = 0,
+                Skills = skills.ToArray(),
+                IdleSkillIndex = idleIndex,
             };
         }
 

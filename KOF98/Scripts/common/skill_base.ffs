@@ -1,0 +1,62 @@
+// ============================================================
+// KOF98 Skill Base Include
+// ============================================================
+// Common base include for all skill scripts.
+// Provides:
+//   - Full constant/input chain (via input.ffs → constants.ffs)
+//   - Skill metadata key constants (META_*)
+//   - Stance bit constants (STANCE_*)
+//   - Input bit constants (INPUT_BIT_*) for metadata-driven conditions
+//
+// Usage:  include "common/skill_base.ffs"
+//
+// Every skill script MUST include this file and declare its
+// configuration via SetSkillMeta() calls at the start of main().
+// ============================================================
+
+include "common/input.ffs"
+
+// ── Skill Metadata Keys ─────────────────────────────────────
+// Used with SetSkillMeta(key, value) to declare skill configuration.
+// The host extracts these at load time to build SkillDef.
+
+const META_TOTAL_FRAMES: int = 1
+const META_PRIORITY: int = 2
+const META_TAGS: int = 3
+const META_IS_LOOPING: int = 4
+const META_ACTIVATION_PRIORITY: int = 5
+const META_INTERRUPT_PRIORITY: int = 6
+const META_ALLOWED_STANCES: int = 7
+
+// ── Stance Bits (for META_ALLOWED_STANCES) ──────────────────
+// Bitfield values — combine with bitwise OR for multi-stance skills.
+// Must match Stance enum order in Types.cs.
+
+const STANCE_GROUNDED: int = 1
+const STANCE_AIRBORNE: int = 2
+const STANCE_CROUCHING: int = 4
+const STANCE_KNOCKDOWN: int = 8
+const STANCE_HITSTUN: int = 16
+const STANCE_DEAD: int = 32
+
+// ── Input Bit Constants (for META_REQUIRE_* metadata) ───────
+// Bit values matching InputButton flags in PlayerInput.cs.
+
+const INPUT_BIT_UP: int = 1
+const INPUT_BIT_DOWN: int = 2
+const INPUT_BIT_LEFT: int = 4
+const INPUT_BIT_RIGHT: int = 8
+const INPUT_BIT_LP: int = 16
+const INPUT_BIT_HP: int = 32
+const INPUT_BIT_LK: int = 64
+const INPUT_BIT_HK: int = 128
+const INPUT_BIT_ANY_DIR_H: int = 12
+
+// ── Activation Condition Metadata Keys ──────────────────────
+// Additional metadata keys for declaring activation conditions.
+// The host auto-generates efficient CanActivate from these.
+
+const META_REQUIRE_GROUNDED: int = 10
+const META_REQUIRE_INPUT_PRESSED: int = 11
+const META_REQUIRE_INPUT_HELD: int = 12
+const META_REQUIRE_NOT_INPUT_HELD: int = 13

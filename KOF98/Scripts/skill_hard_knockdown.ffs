@@ -1,22 +1,24 @@
 // ============================================================
 // Skill: Hard Knockdown (skill_hard_knockdown)
-// Type: Finite (passive)  |  Frames: 60  |  Priority: 50 (knockdown)
 // ============================================================
 // 60-frame knockdown state. The character is on the ground.
-// During this period, the character may have invincibility frames
-// (configured on the host side via SkillDef.Tags).
-//
 // After the knockdown duration, the script returns and the host
 // transitions to the stand-up skill.
-//
-// Activation condition handled entirely by host SkillManager
-// (triggered by DMG_KNOCKDOWN hit reaction).
-//
-// Syscalls used: BeginAction, EndAction, SpawnEffectSelf
+// Activated by host (triggered by DMG_KNOCKDOWN hit reaction).
 
-include "common/constants.ffs"
+include "common/skill_base.ffs"
 
 func main() {
+    // ── Skill Configuration ─────────────────────────────────
+    SetSkillMeta(META_TOTAL_FRAMES, 60)
+    SetSkillMeta(META_PRIORITY, 2)
+    SetSkillMeta(META_TAGS, 512)
+    SetSkillMeta(META_IS_LOOPING, 0)
+    SetSkillMeta(META_ACTIVATION_PRIORITY, 50)
+    SetSkillMeta(META_INTERRUPT_PRIORITY, 50)
+    SetSkillMeta(META_ALLOWED_STANCES, 9)
+
+    // ── Execution ───────────────────────────────────────────
     BeginAction(30, 60)
     defer {
         EndAction()
