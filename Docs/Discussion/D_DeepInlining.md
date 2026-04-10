@@ -1,6 +1,6 @@
 # A5 深度内联展开可行性分析
 
-> **状态**：💬 讨论中
+> **状态**：✅ 已完成讨论 → [Step_Lang9_DeepInlining.md](../Plan/Step_Lang9_DeepInlining.md)
 > **来源**：Lang-9 — A5 深度内联（函数体展开优化）
 > **日期**：2026-04-10
 
