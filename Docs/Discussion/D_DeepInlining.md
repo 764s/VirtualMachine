@@ -10,7 +10,9 @@
 
 Lang-8 引入了 `@inline` hint 注解，目前仅作为元数据存储于 `ExportFuncEntry.IsInlineHint`，不执行实际函数体展开。编译器在 `@inline` 函数无法退化为 A1/A2（getter→XLOAD_MVAR / setter→XSTORE_MVAR）时发出警告，但仍生成 XCALL。
 
-A5 深度内联的目标是：在编译期将 `@inline` 标注的函数体直接展开到调用点，替换 XCALL 为等价的内联指令序列，消除跨实例调用开销。
+A5 深度内联的目标是：**编译器对所有满足内联条件的函数主动执行函数体展开**，将 CALL/XCALL 替换为等价的内联指令序列，消除调用开销。
+
+> **核心结论：`@inline` 不改变内联行为。** 编译器总是对所有可内联函数主动内联（无论是否标注 `@inline`）。`@inline` 的唯一作用是：当标注了 `@inline` 的函数无法内联时，根据编译器配置（`InlineFailurePolicy`）打印警告或报编译错误。未标注 `@inline` 的函数若无法内联，则静默退化到 CALL/XCALL，无任何诊断输出。
 
 **已有基础设施**：
 
@@ -71,6 +73,8 @@ ADD r0, r_tmp1, r_tmp3                       // base_modifier + ...
 
 ## 三、内联决策逻辑
 
+> **注意**：CanInline 判定**不检查 `@inline` 标记** — 编译器对所有函数一视同仁地尝试内联。`@inline` 仅影响内联失败时的诊断行为（见§六）。
+
 ```
 CanInline(func, depth):
   if depth > InlineDepthMax → false
@@ -80,6 +84,14 @@ CanInline(func, depth):
   if EstimateInstructionCount(func) > InlineThreshold → false
   if func accesses module variables AND is cross-module → false (P1/P2 限制)
   → true
+
+// 内联失败后的诊断（与 CanInline 独立）:
+OnInlineFailure(func):
+  if func.IsInlineHint:
+    if InlineFailurePolicy == Warn → emit warning
+    if InlineFailurePolicy == Error → emit compile error
+  else:
+    // 静默退化，无诊断输出
 ```
 
 **退化条件**（D_SkillScripting.md 已定义）：
@@ -143,13 +155,13 @@ PatchLabel(exitLabel, CurrentIP())
 
 ## 六、配置
 
-`@force_inline` 关键字已取消（D_SkillScripting.md 决策）。内联失败严格程度改由编译器配置控制：
+`@force_inline` 关键字已取消（D_SkillScripting.md 决策）。`@inline` 不改变内联行为（编译器总是主动内联所有可内联函数）。`@inline` 的唯一作用是：当标注函数无法内联时，触发诊断。诊断严格程度由编译器配置控制：
 
 | 配置项 | 默认值 | 说明 |
 |--------|--------|------|
-| `InlineThreshold` | 16 | 最大可内联指令数 |
-| `InlineDepthMax` | 3 | 最大链式展开深度 |
-| `InlineFailurePolicy` | Warn | Warn: 不可内联→警告+退化 / Error: 不可内联→编译错误 |
+| `InlineThreshold` | 16 | 最大可内联指令数（适用于所有函数） |
+| `InlineDepthMax` | 3 | 最大链式展开深度（适用于所有函数） |
+| `InlineFailurePolicy` | Warn | **仅作用于 `@inline` 标记的函数**。Warn: 不可内联→警告+退化 / Error: 不可内联→编译错误。未标记 `@inline` 的函数不受此配置影响（静默退化） |
 
 遵循 VMConfig 模式（同 `MaxXCallDepth` / `XCallDepthPolicy`）。
 
@@ -196,6 +208,12 @@ PatchLabel(exitLabel, CurrentIP())
 ## 十、结论
 
 **可行性：✅ 可行**
+
+**核心设计决策：编译器总是主动内联，`@inline` 仅控制诊断。**
+- 编译器对所有满足 CanInline 条件的函数执行内联展开，无论是否标注 `@inline`
+- `@inline` 不改变内联行为 — 有无 `@inline`，内联决策完全相同
+- `@inline` 的唯一作用：当标注函数无法内联时，根据 `InlineFailurePolicy` 打印警告或报错
+- 未标注 `@inline` 的函数若无法内联 → 静默退化到 CALL/XCALL，无诊断输出
 
 1. 基础设施就绪度高 — `@inline` 解析、ExportTable 传播、A1/A2 退化框架、VMConfig 配置模式均已就位
 2. 退化路径完全安全 — 不可内联时退化到 CALL/XCALL，零风险
