@@ -1,6 +1,6 @@
 # KOF98 技能 FFS 脚本化讨论
 
-> **状态**：SK15 💬 新增（技能属性声明式提取）。SK3 💬 待性能验证外，其余 SK1~SK14-3 + Q1~Q4 全部 ✅。14 项 Q4 设计决策锁定。C-1 Lang-6 ✅ / C-1.5 Lang-7 ✅ / C-2 Lang-8 ✅ 已实现。`@force_inline` 关键字已取消 — A5 深度内联为远期计划，内联失败严格程度改由编译器配置控制）
+> **状态**：SK15 💬 Lang-10 ✅ 完成（Phase 2 宿主侧重构可启动）。SK3 💬 待性能验证外，其余 SK1~SK14-3 + Q1~Q4 全部 ✅。14 项 Q4 设计决策锁定。C-1 Lang-6 ✅ / C-1.5 Lang-7 ✅ / C-2 Lang-8 ✅ / Lang-10 ✅ 已实现。`@force_inline` 关键字已取消 — A5 深度内联为远期计划，内联失败严格程度改由编译器配置控制）
 > **来源**：需求讨论 — 将 host-side 技能迁移为 FFS 脚本驱动
 > **日期**：2026-04-09（实现状态同步更新）
 
@@ -75,7 +75,7 @@
 | Q2 | 硬直+yield 语句级控制 | ✅ | 方案 A — while+GetFrame()+yield，帧区间循环行业标准模式（7/10 语言同构） |
 | Q3 | 跨脚本 VM 使用模式 | ✅ | 6 方向渐进路径：阶段1（方向1+2+3）✅ 完成；阶段3（方向5 服务脚本 = Q4）✅ C-1~C-2 已实现 |
 | Q4 | FFS 封装 — 服务脚本 | ✅ | 方式 C ✅；Y1-Plus ✅；统一语法 ✅；@export ✅；@inline ✅；嵌套 Warn/Unlimited ✅；14 项决策锁定。C-1~C-2 已实现（Lang-6/7/8 ✅ 1259 tests）。`@force_inline` 已取消，A5 深度内联远期 |
-| SK15 | 技能属性声明式提取 | 💬 | `@export var` 替代 `SetSkillMeta()`；`[names]→[indices]→[values]` 批量提取模式。需 Lang-10（→ VM_Summary）；语言方完成后由需求方提示下一步 |
+| SK15 | 技能属性声明式提取 | 💬 | `@export var` 替代 `SetSkillMeta()`；`[names]→[indices]→[values]` 批量提取模式。**Lang-10 ✅ 完成**（ExportVarEntry.DefaultValue + ResolveVarIndices + ReadVarDefaults + GetVarDefault）；下一步 → Phase 2 宿主侧 ExtractSkillDef 重构 |
 
 ---
 
@@ -5420,7 +5420,7 @@ Q2 基本收敛。
 
 ## SK15: 技能属性声明式提取 💬
 
-**结论**：用 `@export var` 模块变量 + 默认值替代 `SetSkillMeta()` Syscall 调用。宿主通过 `[names]→[indices]` 一次性解析名字列表固化索引，后续 `[indices]→[values]` 批量读取默认值（也可包装为 `GetVarDefault` 便捷 API）。免去双方常量同步、临时实例假执行。需 VM 层支持（→ Lang-10）。排期：语言方完成 Lang-10 后由需求方提示下一步。
+**结论**：用 `@export var` 模块变量 + 默认值替代 `SetSkillMeta()` Syscall 调用。宿主通过 `[names]→[indices]` 一次性解析名字列表固化索引，后续 `[indices]→[values]` 批量读取默认值（也可包装为 `GetVarDefault` 便捷 API）。免去双方常量同步、临时实例假执行。**Lang-10 ✅ 已完成**（DV01-DV10 全通过）。下一步 → Phase 2 宿主侧 ExtractSkillDef 重构。
 
 <details>
 <summary>📋 详细设计</summary>
@@ -5525,8 +5525,8 @@ int priority    = exports.GetVarDefault("priority", 0);
 
 | 阶段 | 内容 | 依赖 | 触发 |
 |------|------|------|------|
-| Phase 1 | Lang-10：ExportTable 默认值存储 + `ResolveVarIndices` / `ReadVarDefaults` / `GetVarDefault` API | VM 编译器改动 | 已提交串行计划 |
-| Phase 2 | 宿主侧 `ExtractSkillDef` 重构为直接读取导出表 | Phase 1 | **需求方在 Lang-10 完成后提示** |
+| Phase 1 | Lang-10：ExportTable 默认值存储 + `ResolveVarIndices` / `ReadVarDefaults` / `GetVarDefault` API | VM 编译器改动 | ✅ 已完成（DV01-DV10） |
+| Phase 2 | 宿主侧 `ExtractSkillDef` 重构为直接读取导出表 | Phase 1 ✅ | **需求方可启动** |
 | Phase 3 | 脚本侧迁移：`SetSkillMeta()` → `@export var` 声明 | Phase 2 | 需求方驱动 |
 
 **向后兼容**：

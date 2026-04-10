@@ -24,7 +24,7 @@ FFVM 是一个寄存器式字节码虚拟机，配套胶水 DSL **FFScript**（`
 **VM 侧已基本成熟**，正在等待宿主接入（C 阶段）。
 
 - ✅ 完整编译器流水线：FFScript 源码 → Lexer → Parser → AST → BytecodeCompiler → 字节码执行
-- ✅ 1259 项自动化测试全部通过（编译器 758 + TreeWalker 112 + 性能 44 + FFScript 18 + 调试 51 + DAP 97 + LSP 179）
+- ✅ 1310 项自动化测试全部通过（编译器 809 + TreeWalker 112 + 性能 44 + FFScript 18 + 调试 51 + DAP 97 + LSP 179）
 - ✅ 曳光弹全部验证门禁通过（零 GC、回滚 bit-exact、单实例 3.8x vs C#、128 实例 < 0.4ms）
 - ✅ DAP 调试器 + VS Code 扩展（断点、单步、变量查看）
 - ✅ LSP 语言服务（实时诊断、符号分析、代码补全、参数提示、Syscall 声明、编译器警告）

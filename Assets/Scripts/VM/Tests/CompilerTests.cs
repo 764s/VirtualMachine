@@ -7781,6 +7781,189 @@ func main() {
                    $"US15: error mentions arg count, got: {(callerResult.Errors != null && callerResult.Errors.Count > 0 ? callerResult.Errors[0] : "none")}");
         }
 
+        // ===== Test DV01: DefaultValue stored for @export var with initializer =====
+        {
+            string source = @"
+@export var hp: int = 100
+@export var mp: int = 50
+func main() {
+}";
+            var result = compiler.Compile(source, "main", new Dictionary<string, int>());
+            Assert(result.Success, "DV01 compile success");
+            Assert(result.Program.ExportTable != null, "DV01: ExportTable not null");
+            Assert(result.Program.ExportTable.Variables.Length == 2, "DV01: 2 exported vars");
+            Assert(result.Program.ExportTable.Variables[0].Name == "hp", "DV01: var[0].Name=hp");
+            Assert(result.Program.ExportTable.Variables[0].DefaultValue.ToInt() == 100, "DV01: hp default=100");
+            Assert(result.Program.ExportTable.Variables[1].Name == "mp", "DV01: var[1].Name=mp");
+            Assert(result.Program.ExportTable.Variables[1].DefaultValue.ToInt() == 50, "DV01: mp default=50");
+        }
+
+        // ===== Test DV02: DefaultValue = 0 for @export var without initializer =====
+        {
+            string source = @"
+@export var hp: int
+func main() {
+}";
+            var result = compiler.Compile(source, "main", new Dictionary<string, int>());
+            Assert(result.Success, "DV02 compile success");
+            Assert(result.Program.ExportTable != null, "DV02: ExportTable not null");
+            Assert(result.Program.ExportTable.Variables[0].DefaultValue.ToInt() == 0, "DV02: no-init default=0");
+        }
+
+        // ===== Test DV03: DefaultValue with negative values and expressions =====
+        {
+            string source = @"
+@export var totalFrames: int = -1
+@export var speed: int = 3 + 4
+@export var flag: int = 1 * 100 + 50
+func main() {
+}";
+            var result = compiler.Compile(source, "main", new Dictionary<string, int>());
+            Assert(result.Success, "DV03 compile success");
+            Assert(result.Program.ExportTable.Variables[0].DefaultValue.ToInt() == -1, "DV03: totalFrames=-1");
+            Assert(result.Program.ExportTable.Variables[1].DefaultValue.ToInt() == 7, "DV03: speed=7");
+            Assert(result.Program.ExportTable.Variables[2].DefaultValue.ToInt() == 150, "DV03: flag=150");
+        }
+
+        // ===== Test DV04: GetVarDefault convenience API =====
+        {
+            string source = @"
+@export var hp: int = 100
+@export var mp: int = 50
+var internal_state: int = 999
+func main() {
+}";
+            var result = compiler.Compile(source, "main", new Dictionary<string, int>());
+            Assert(result.Success, "DV04 compile success");
+            var exports = result.Program.ExportTable;
+            Assert(exports.GetVarDefault("hp", Number.Zero).ToInt() == 100, "DV04: GetVarDefault(hp)=100");
+            Assert(exports.GetVarDefault("mp", Number.Zero).ToInt() == 50, "DV04: GetVarDefault(mp)=50");
+            Assert(exports.GetVarDefault("nonexistent", Number.FromInt(-1)).ToInt() == -1, "DV04: GetVarDefault fallback=-1");
+            Assert(exports.GetVarDefault("internal_state", Number.FromInt(-1)).ToInt() == -1, "DV04: non-exported var returns fallback");
+        }
+
+        // ===== Test DV05: ResolveVarIndices batch name→index resolution =====
+        {
+            string source = @"
+@export var hp: int = 100
+@export var mp: int = 50
+@export var atk: int = 25
+func main() {
+}";
+            var result = compiler.Compile(source, "main", new Dictionary<string, int>());
+            Assert(result.Success, "DV05 compile success");
+            var exports = result.Program.ExportTable;
+            var indices = exports.ResolveVarIndices(new string[] { "mp", "hp", "atk", "nonexistent" });
+            Assert(indices.Length == 4, "DV05: indices length=4");
+            Assert(indices[0] == 1, "DV05: mp→index 1");
+            Assert(indices[1] == 0, "DV05: hp→index 0");
+            Assert(indices[2] == 2, "DV05: atk→index 2");
+            Assert(indices[3] == -1, "DV05: nonexistent→-1");
+        }
+
+        // ===== Test DV06: ReadVarDefaults batch index→value reading =====
+        {
+            string source = @"
+@export var hp: int = 100
+@export var mp: int = 50
+@export var atk: int = 25
+func main() {
+}";
+            var result = compiler.Compile(source, "main", new Dictionary<string, int>());
+            Assert(result.Success, "DV06 compile success");
+            var exports = result.Program.ExportTable;
+            var indices = exports.ResolveVarIndices(new string[] { "atk", "hp", "mp" });
+            var values = exports.ReadVarDefaults(indices);
+            Assert(values.Length == 3, "DV06: values length=3");
+            Assert(values[0].ToInt() == 25, "DV06: atk default=25");
+            Assert(values[1].ToInt() == 100, "DV06: hp default=100");
+            Assert(values[2].ToInt() == 50, "DV06: mp default=50");
+        }
+
+        // ===== Test DV07: ReadVarDefaults with invalid index → Number.Zero =====
+        {
+            string source = @"
+@export var hp: int = 100
+func main() {
+}";
+            var result = compiler.Compile(source, "main", new Dictionary<string, int>());
+            Assert(result.Success, "DV07 compile success");
+            var exports = result.Program.ExportTable;
+            var values = exports.ReadVarDefaults(new int[] { 0, -1, 999 });
+            Assert(values[0].ToInt() == 100, "DV07: valid index=100");
+            Assert(values[1].ToInt() == 0, "DV07: negative index→0");
+            Assert(values[2].ToInt() == 0, "DV07: out-of-range index→0");
+        }
+
+        // ===== Test DV08: DefaultValue with const-folded references (include-like) =====
+        {
+            string source = @"
+const BASE_HP: int = 100
+const BONUS: int = 50
+@export var hp: int = BASE_HP + BONUS
+@export var mp: int = BASE_HP * 2
+func main() {
+}";
+            var result = compiler.Compile(source, "main", new Dictionary<string, int>());
+            Assert(result.Success, "DV08 compile success");
+            Assert(result.Program.ExportTable.Variables[0].DefaultValue.ToInt() == 150, "DV08: hp=BASE_HP+BONUS=150");
+            Assert(result.Program.ExportTable.Variables[1].DefaultValue.ToInt() == 200, "DV08: mp=BASE_HP*2=200");
+        }
+
+        // ===== Test DV09: Mixed exported and non-exported vars — only exported have defaults =====
+        {
+            string source = @"
+var internal1: int = 1
+@export var exported1: int = 10
+var internal2: int = 2
+@export var exported2: int = 20
+var internal3: int = 3
+func main() {
+}";
+            var result = compiler.Compile(source, "main", new Dictionary<string, int>());
+            Assert(result.Success, "DV09 compile success");
+            var exports = result.Program.ExportTable;
+            Assert(exports.Variables.Length == 2, "DV09: 2 exported vars");
+            Assert(exports.Variables[0].Name == "exported1", "DV09: var[0]=exported1");
+            Assert(exports.Variables[0].DefaultValue.ToInt() == 10, "DV09: exported1 default=10");
+            Assert(exports.Variables[1].Name == "exported2", "DV09: var[1]=exported2");
+            Assert(exports.Variables[1].DefaultValue.ToInt() == 20, "DV09: exported2 default=20");
+        }
+
+        // ===== Test DV10: End-to-end — ResolveVarIndices cacheable + ReadVarDefaults reusable =====
+        {
+            string source = @"
+@export var totalFrames: int = -1
+@export var priority: int = 1
+@export var tags: int = 7
+@export var isLooping: int = 1
+@export var activationPriority: int = 500
+func main() {
+}";
+            var result = compiler.Compile(source, "main", new Dictionary<string, int>());
+            Assert(result.Success, "DV10 compile success");
+            var exports = result.Program.ExportTable;
+
+            // Phase A: resolve names → indices (cacheable)
+            var names = new string[] { "totalFrames", "priority", "tags", "isLooping", "activationPriority" };
+            var indices = exports.ResolveVarIndices(names);
+            Assert(indices[0] == 0 && indices[1] == 1 && indices[2] == 2 && indices[3] == 3 && indices[4] == 4,
+                "DV10: all 5 names resolved to sequential indices");
+
+            // Phase B: batch read defaults (reusable with cached indices)
+            var values = exports.ReadVarDefaults(indices);
+            Assert(values[0].ToInt() == -1, "DV10: totalFrames=-1");
+            Assert(values[1].ToInt() == 1, "DV10: priority=1");
+            Assert(values[2].ToInt() == 7, "DV10: tags=7");
+            Assert(values[3].ToInt() == 1, "DV10: isLooping=1");
+            Assert(values[4].ToInt() == 500, "DV10: activationPriority=500");
+
+            // Verify same indices work again (cacheability)
+            var values2 = exports.ReadVarDefaults(indices);
+            Assert(values2[0].ToInt() == -1 && values2[4].ToInt() == 500,
+                "DV10: cached indices produce same results");
+        }
+
         // ===== Summary =====
         Debug.Log($"========================================");
         Debug.Log($"Compiler Tests: {passed} passed, {failed} failed");

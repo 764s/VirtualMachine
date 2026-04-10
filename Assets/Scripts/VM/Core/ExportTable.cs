@@ -33,6 +33,61 @@ namespace FFVM
             Variables = variables ?? System.Array.Empty<ExportVarEntry>();
             Functions = functions ?? System.Array.Empty<ExportFuncEntry>();
         }
+
+        /// <summary>
+        /// Lang-10: Resolve variable names to export indices (0-based).
+        /// One-time name→index mapping; result can be cached and reused across instances.
+        /// Returns -1 for names not found in the export table.
+        /// </summary>
+        public int[] ResolveVarIndices(string[] names)
+        {
+            if (names == null) return System.Array.Empty<int>();
+            var indices = new int[names.Length];
+            for (int i = 0; i < names.Length; i++)
+            {
+                indices[i] = -1; // not found sentinel
+                for (int j = 0; j < Variables.Length; j++)
+                {
+                    if (Variables[j].Name == names[i])
+                    {
+                        indices[i] = j;
+                        break;
+                    }
+                }
+            }
+            return indices;
+        }
+
+        /// <summary>
+        /// Lang-10: Batch read default values by pre-resolved indices.
+        /// O(1) per index (direct array access). Invalid indices (negative) yield Number.Zero.
+        /// </summary>
+        public Number[] ReadVarDefaults(int[] indices)
+        {
+            if (indices == null) return System.Array.Empty<Number>();
+            var values = new Number[indices.Length];
+            for (int i = 0; i < indices.Length; i++)
+            {
+                int idx = indices[i];
+                values[i] = (idx >= 0 && idx < Variables.Length) ? Variables[idx].DefaultValue : Number.Zero;
+            }
+            return values;
+        }
+
+        /// <summary>
+        /// Lang-10: Convenience single-variable default value lookup.
+        /// Linear search by name; returns fallback if not found.
+        /// For batch / high-frequency use, prefer ResolveVarIndices + ReadVarDefaults.
+        /// </summary>
+        public Number GetVarDefault(string name, Number fallback)
+        {
+            for (int i = 0; i < Variables.Length; i++)
+            {
+                if (Variables[i].Name == name)
+                    return Variables[i].DefaultValue;
+            }
+            return fallback;
+        }
     }
 
     /// <summary>Exported variable: maps export index → module variable slot + metadata.</summary>
@@ -51,11 +106,28 @@ namespace FFVM
         /// <summary>True if declared as @export var (read-write). False if @export const (read-only).</summary>
         public readonly bool Writable;
 
+        /// <summary>
+        /// Lang-10: Compile-time default value of the exported variable.
+        /// Stores the constant-folded initializer value (e.g. @export var hp: int = 100 → DefaultValue = 100).
+        /// Variables without an initializer default to Number.Zero.
+        /// </summary>
+        public readonly Number DefaultValue;
+
         public ExportVarEntry(string name, int mvarSlot, bool writable)
         {
             Name = name;
             MvarSlot = mvarSlot;
             Writable = writable;
+            DefaultValue = Number.Zero;
+        }
+
+        /// <summary>Lang-10: Constructor with compile-time default value.</summary>
+        public ExportVarEntry(string name, int mvarSlot, bool writable, Number defaultValue)
+        {
+            Name = name;
+            MvarSlot = mvarSlot;
+            Writable = writable;
+            DefaultValue = defaultValue;
         }
     }
 
