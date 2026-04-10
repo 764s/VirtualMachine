@@ -3492,10 +3492,10 @@ namespace FFVM.Compiler
                 }
 
                 // None → standard XCALL
-                // Lang-8: warn if @inline hint but no degradation possible and not inlined
+                // Lang-8: warn if @inline hint but neither inlined nor degraded to direct variable access
                 if (funcEntry.IsInlineHint)
                 {
-                    _warnings.Add($"@inline function '{mc.MemberName}' could not be inlined or degraded to direct variable access. XCALL will be used. (line {mc.Line})");
+                    _warnings.Add($"@inline function '{mc.MemberName}' was neither inlined nor degraded to direct variable access. XCALL will be used. (line {mc.Line})");
                 }
 
                 // Validate argument count

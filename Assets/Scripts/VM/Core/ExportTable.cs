@@ -211,7 +211,7 @@ namespace FFVM
         public readonly System.Collections.Generic.Dictionary<string, FFVM.AST.FuncDecl> FuncDecls;
 
         /// <summary>
-        /// ALL module variable names → export var index (0-based into ExportTable.Variables).
+        /// Exported module variable names → export var index (0-based into ExportTable.Variables).
         /// Only exported variables are included (XLOAD_MVAR/XSTORE_MVAR requires export var index).
         /// </summary>
         public readonly System.Collections.Generic.Dictionary<string, int> VarExportIndices;
