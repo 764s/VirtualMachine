@@ -83,13 +83,14 @@ func clearHitbox() {
 }
 
 /// Evaluate a hit phase: if current frame is within [startFrame, endFrame),
-/// push the hitbox; otherwise clear it.
+/// push the hitbox.
 /// Returns 1 if hitbox is active this frame, 0 otherwise.
+/// Note: does NOT clear hitbox when inactive — caller manages clearing
+/// to support multiple phases in the same frame.
 func pushHitPhase(frame: int, phase: HitPhaseDef): int {
     if frame >= phase.startFrame && frame < phase.endFrame {
         SetHitbox(phase.groupId, phase.box.ox, phase.box.oy, phase.box.hw, phase.box.hh)
         return 1
     }
-    ClearHitbox()
     return 0
 }

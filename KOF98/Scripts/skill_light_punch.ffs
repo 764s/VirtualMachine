@@ -47,6 +47,7 @@ func main() {
     while f < 20 {
         // Push collision for this frame
         applyHurtbox(hurtBox)
+        clearHitbox()
         pushHitPhase(f, hitPhase)
 
         // Hit detection during active window

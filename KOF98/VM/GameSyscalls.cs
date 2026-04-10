@@ -531,7 +531,7 @@ namespace KOF98
 
             table.Register(GameConstants.SYS_SET_HURTBOX, "SetHurtbox", (ref VMInstanceState s) =>
             {
-                // SetHurtbox(ox, oy, hw, hh)
+                // SetHurtbox(ox, oy, hw, hh) — appends to hurtbox list
                 var args = new SyscallArgs(ref s);
                 float ox = args.GetFloat(0);
                 float oy = args.GetFloat(1);
@@ -540,7 +540,7 @@ namespace KOF98
                 var owner = GetOwner(ref s);
                 if (owner != null)
                 {
-                    // Replace hurtboxes: first call clears existing, subsequent calls append
+                    // Append to hurtbox list (caller should manage clearing via EndAction or manual reset)
                     if (owner.HurtBoxCount < owner.HurtBoxes.Length)
                     {
                         owner.HurtBoxes[owner.HurtBoxCount++] = new FRect(ox, oy, hw, hh);
