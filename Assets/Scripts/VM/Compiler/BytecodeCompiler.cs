@@ -111,6 +111,8 @@ namespace FFVM.Compiler
         private HashSet<string> _moduleConstVarNames;            // module const names that required a register (non-foldable)
         private Dictionary<int, Number> _moduleVarInitValues;    // module var register → init value (for EmitModuleVarInit)
         private int _nextExtendedReg;                            // Lang-1.1b: next extended register index (0-based)
+        // Lang-11: Module-level struct variable support
+        private Dictionary<string, string> _moduleStructVarTypes; // module struct var/const name → struct type name
 
         // Lang-8: Service bindings for unified svc.member syntax
         private Dictionary<string, ServiceBinding> _serviceBindings;  // varName → binding
@@ -426,6 +428,12 @@ namespace FFVM.Compiler
                 foreach (var kv in _moduleConstValues)
                     _constValues[kv.Key] = kv.Value;
             }
+            // Lang-11: Pre-populate struct type info for module struct vars
+            if (_moduleStructVarTypes != null)
+            {
+                foreach (var kv in _moduleStructVarTypes)
+                    _structVarTypes[kv.Key] = kv.Value;
+            }
             // Module consts with registers (non-foldable) are already in _moduleVarRegisters
             // and marked in _moduleConstVarNames for assignment prevention
 
@@ -491,6 +499,7 @@ namespace FFVM.Compiler
             _moduleConstValues = new Dictionary<string, Number>();
             _moduleConstVarNames = new HashSet<string>();
             _moduleVarInitValues = new Dictionary<int, Number>();
+            _moduleStructVarTypes = new Dictionary<string, string>();
             _nextExtendedReg = 0;
 
             if (module.ModuleVariables.Count == 0) return;
@@ -507,6 +516,13 @@ namespace FFVM.Compiler
                 if (_moduleVarRegisters.ContainsKey(decl.Name) || _moduleConstValues.ContainsKey(decl.Name))
                 {
                     _errors.Add($"Duplicate module variable '{decl.Name}' (line {decl.Line})");
+                    continue;
+                }
+
+                // Lang-11: Check if this is a struct-typed module variable
+                if (decl.TypeName != null && _structTypes.ContainsKey(decl.TypeName))
+                {
+                    ProcessModuleStructVar(decl, ref nextModuleReg);
                     continue;
                 }
 
@@ -564,6 +580,119 @@ namespace FFVM.Compiler
 
             // Clean up temporary _constValues used during folding
             _constValues = null;
+        }
+
+        /// <summary>
+        /// Lang-11: Process a struct-typed module variable or const.
+        /// Allocates N consecutive module var registers for the flattened struct fields.
+        /// Struct literal initializer: all scalar fields must be compile-time constants.
+        /// </summary>
+        private void ProcessModuleStructVar(VarDeclStmt decl, ref int nextModuleReg)
+        {
+            var flatInfo = _flatStructInfo[decl.TypeName];
+            int flatCount = flatInfo.FlatFieldCount;
+
+            // Validate initializer
+            if (decl.IsConst && decl.Initializer == null)
+            {
+                _errors.Add($"Module 'const' struct requires an initializer (line {decl.Line})");
+                return;
+            }
+            if (decl.Initializer != null && !(decl.Initializer is StructLiteralExpr))
+            {
+                _errors.Add($"Module struct variable '{decl.Name}' initializer must be a struct literal (line {decl.Line})");
+                return;
+            }
+
+            // @export is not supported for struct module vars (single-slot ExportVarEntry limitation)
+            if (decl.IsExported)
+            {
+                _errors.Add($"@export is not supported for struct module variables ('{decl.Name}'). Export individual scalar fields instead. (line {decl.Line})");
+                return;
+            }
+
+            // Allocate N consecutive module var registers
+            int baseReg;
+            if (nextModuleReg + flatCount <= VMConstants.MaxRegisters)
+            {
+                baseReg = nextModuleReg;
+                nextModuleReg += flatCount;
+            }
+            else
+            {
+                // Overflow to extended registers
+                baseReg = VMConstants.MaxRegisters + _nextExtendedReg;
+                _nextExtendedReg += flatCount;
+            }
+
+            _moduleVarRegisters[decl.Name] = baseReg;
+            _moduleStructVarTypes[decl.Name] = decl.TypeName;
+
+            if (decl.IsConst)
+                _moduleConstVarNames.Add(decl.Name);
+
+            // Fold struct literal field values into _moduleVarInitValues
+            if (decl.Initializer is StructLiteralExpr structLit)
+            {
+                if (!TryFoldStructLiteral(structLit, decl.TypeName, baseReg))
+                {
+                    _errors.Add($"Module struct '{decl.Name}' initializer: all field values must be compile-time constants (line {decl.Line})");
+                }
+            }
+            // else: var without initializer → default zero (registers are zero-initialized on spawn)
+
+            // DBG2: record symbol entry for struct module variable with flattened field names
+            var fieldNames = new string[flatCount];
+            for (int fi = 0; fi < flatCount; fi++)
+                fieldNames[fi] = flatInfo.FlatFields[fi].DotPath;
+            _symbolEntries.Add(new SymbolEntry(decl.Name, baseReg, flatCount, fieldNames, "<module>"));
+        }
+
+        /// <summary>
+        /// Lang-11: Recursively fold a struct literal's fields into _moduleVarInitValues.
+        /// All scalar field values must be compile-time constants.
+        /// Returns true if all fields were successfully folded.
+        /// </summary>
+        private bool TryFoldStructLiteral(StructLiteralExpr literal, string typeName, int baseReg)
+        {
+            if (!_structTypes.TryGetValue(typeName, out var structDecl))
+                return false;
+
+            if (literal.TypeName != typeName)
+                return false;
+
+            if (literal.Fields.Count != structDecl.Fields.Count)
+                return false;
+
+            int offset = 0;
+            for (int i = 0; i < literal.Fields.Count; i++)
+            {
+                var (fieldName, valueExpr) = literal.Fields[i];
+                var expectedField = structDecl.Fields[i];
+
+                if (fieldName != expectedField.Name)
+                    return false;
+
+                if (_structTypes.ContainsKey(expectedField.TypeName))
+                {
+                    // Nested struct field — must be a struct literal
+                    if (!(valueExpr is StructLiteralExpr nestedLit))
+                        return false;
+                    int nestedFlatCount = _flatStructInfo[expectedField.TypeName].FlatFieldCount;
+                    if (!TryFoldStructLiteral(nestedLit, expectedField.TypeName, baseReg + offset))
+                        return false;
+                    offset += nestedFlatCount;
+                }
+                else
+                {
+                    // Scalar field — must fold to compile-time constant
+                    if (!TryFoldConstant(valueExpr, out Number fieldVal))
+                        return false;
+                    _moduleVarInitValues[baseReg + offset] = fieldVal;
+                    offset++;
+                }
+            }
+            return true;
         }
 
         /// <summary>
@@ -2496,6 +2625,12 @@ namespace FFVM.Compiler
                     return EmitLoadConst(AddConst(constVal), destReg);
                 }
                 int reg = ResolveVar(ident.Name);
+                // Lang-11: module struct var → return base register directly (no single-field materialization)
+                // Struct operations (field access, struct copy, function args) handle module var per-field
+                if (IsModuleVarReg(reg) && _structVarTypes.ContainsKey(ident.Name))
+                {
+                    return reg;
+                }
                 // Lang-1: module var → emit LOAD_MVAR/LOAD_XREG to materialize value
                 if (IsModuleVarReg(reg))
                 {
@@ -2566,6 +2701,12 @@ namespace FFVM.Compiler
                 if (assign.Target is IdentifierExpr targetIdent &&
                     _structVarTypes.TryGetValue(targetIdent.Name, out var targetStructType))
                 {
+                    // Lang-11: prevent assignment to const struct module variables
+                    if (_moduleConstVarNames != null && _moduleConstVarNames.Contains(targetIdent.Name))
+                    {
+                        _errors.Add($"Cannot assign to 'const' struct '{targetIdent.Name}' (line {assign.Line})");
+                        return destReg >= 0 ? destReg : AllocTemp();
+                    }
                     if (assign.Value is IdentifierExpr srcIdent &&
                         _structVarTypes.TryGetValue(srcIdent.Name, out var srcStructType) &&
                         srcStructType == targetStructType)
@@ -2595,6 +2736,17 @@ namespace FFVM.Compiler
                         _serviceBindings != null && _serviceBindings.TryGetValue(svcWriteIdent.Name, out var svcWriteBinding))
                     {
                         return CompileServiceVarWrite(svcWriteIdent.Name, fieldTarget.FieldName, svcWriteBinding, assign.Value, fieldTarget.Line);
+                    }
+
+                    // Lang-11: prevent field assignment on const struct module variables
+                    {
+                        string rootVar, rootDotPath;
+                        CollectFieldChain(fieldTarget, out rootVar, out rootDotPath);
+                        if (rootVar != null && _moduleConstVarNames != null && _moduleConstVarNames.Contains(rootVar))
+                        {
+                            _errors.Add($"Cannot assign to field of 'const' struct '{rootVar}' (line {assign.Line})");
+                            return destReg >= 0 ? destReg : AllocTemp();
+                        }
                     }
 
                     // SN1: check if target field is a sub-struct → whole sub-struct copy
@@ -2867,10 +3019,19 @@ namespace FFVM.Compiler
                     {
                         isStructArg = true;
                         int srcBase = argRegs[i]; // base register of the struct
-                        for (int j = 0; j < argFlatInfo.FlatFieldCount; j++)
+                        // Lang-11: module struct var → use EmitLoadModuleVar per field
+                        if (IsModuleVarReg(srcBase))
                         {
-                            if (srcBase + j != scratchReg + j)
-                                Emit(OpCode.MOVE, scratchReg + j, srcBase + j);
+                            for (int j = 0; j < argFlatInfo.FlatFieldCount; j++)
+                                EmitLoadModuleVar(scratchReg + j, srcBase + j);
+                        }
+                        else
+                        {
+                            for (int j = 0; j < argFlatInfo.FlatFieldCount; j++)
+                            {
+                                if (srcBase + j != scratchReg + j)
+                                    Emit(OpCode.MOVE, scratchReg + j, srcBase + j);
+                            }
                         }
                         scratchReg += argFlatInfo.FlatFieldCount;
                     }
