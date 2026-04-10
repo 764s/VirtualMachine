@@ -64,6 +64,8 @@
 | **SN2-F1** | 字段乱序支持（按名称匹配） | 当字段数常规超过 5 时 | 低 |
 | **SN2-F2** | 部分字段省略（省略→零值） | 有业务需求时 | 低 |
 | **SN2-F3** | LSP 字面量内字段名补全 | LSP 增强需求时 | 低 |
+| **MSV-F1** | const struct 字段编译期折叠（省略 LOAD_MVAR → LOAD_CONST） | Lang-9 深度内联基础设施就绪后 | 低 |
+| **MSV-F2** | @export struct 多槽位导出（ExportVarEntry 扩展） | 跨实例 struct 变量访问需求出现时 | 中 |
 
 ### 2.4 全局 / 跨步骤展望
 
