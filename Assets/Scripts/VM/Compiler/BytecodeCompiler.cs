@@ -117,6 +117,12 @@ namespace FFVM.Compiler
         // Lang-8: Service bindings for unified svc.member syntax
         private Dictionary<string, ServiceBinding> _serviceBindings;  // varName → binding
 
+        // Lang-9: Inline expansion configuration and state
+        private const int InlineThreshold = 16;   // max estimated instruction count for inlinable function
+        private const int InlineDepthMax = 3;     // max nested inline depth
+        private int _inlineDepth;                  // current inline nesting depth
+        private HashSet<string> _inlineStack;      // recursion guard: functions currently being inlined
+
         // F4: Register lifecycle analysis
         private struct LiveRange
         {
@@ -212,6 +218,8 @@ namespace FFVM.Compiler
             _errors = new List<string>();
             _warnings = new List<string>();
             _pendingCalls = new List<PendingCall>();
+            _inlineDepth = 0;
+            _inlineStack = null;
             _sourceLines = new List<int>();
             _currentLine = 0;
             _symbolEntries = new List<SymbolEntry>();
@@ -2952,9 +2960,14 @@ namespace FFVM.Compiler
         /// <summary>
         /// Emit arguments to scratch zone, then CALL user function.
         /// Returns temp register holding the return value (from r0).
+        /// Lang-9: tries inline expansion first; falls back to CALL if not inlinable.
         /// </summary>
         private int CompileUserCallExpr(CallExpr call, int destReg = -1)
         {
+            // Lang-9: try inline expansion
+            if (TryInlineCall(call, destReg, out int inlinedReg))
+                return inlinedReg;
+
             EmitUserCall(call);
 
             // FO5: save result from r0 directly to destReg if available
@@ -2966,9 +2979,14 @@ namespace FFVM.Compiler
 
         /// <summary>
         /// Void user function call (no result save).
+        /// Lang-9: tries inline expansion first; falls back to CALL if not inlinable.
         /// </summary>
         private void CompileUserCallVoid(CallExpr call)
         {
+            // Lang-9: try inline expansion (result discarded for void calls)
+            if (TryInlineCall(call, -1, out _))
+                return;
+
             EmitUserCall(call);
         }
 
@@ -4021,7 +4039,277 @@ namespace FFVM.Compiler
             return false;
         }
 
-        // ===== OpCode mapping =====
+        // ===== Lang-9: Inline expansion (P1: module-internal trivial inline) =====
+
+        /// <summary>
+        /// Lang-9 P1: Check if a function can be inlined at the current call site.
+        /// P1 constraints: single return as last statement, no branches/loops/yield/defer/using,
+        /// no user function calls, no XCALL (MemberCallExpr), body fits within InlineThreshold.
+        /// </summary>
+        private bool CanInline(string funcName)
+        {
+            if (_inlineDepth >= InlineDepthMax) return false;
+            if (!_funcDecls.TryGetValue(funcName, out var func)) return false;
+            // Never inline entry function
+            if (_isEntryFunction && func.Name == _currentFunctionName) return false;
+            // Recursion guard
+            if (_inlineStack != null && _inlineStack.Contains(funcName)) return false;
+
+            // P1: reject functions with struct-typed parameters
+            for (int i = 0; i < func.Parameters.Count; i++)
+            {
+                if (_structTypes.ContainsKey(func.Parameters[i].TypeName)) return false;
+            }
+
+            var stmts = func.Body.Statements;
+            if (stmts.Count == 0) return false;
+
+            // P1: check each statement for disqualifying nodes
+            for (int i = 0; i < stmts.Count; i++)
+            {
+                if (!IsInlineSafeStmt(stmts[i])) return false;
+            }
+
+            // P1: last statement must be a ReturnStmt (value-producing)
+            if (!(stmts[stmts.Count - 1] is ReturnStmt ret) || ret.Value == null) return false;
+
+            // Size check
+            int estimate = EstimateBodySize(func.Body);
+            if (estimate > InlineThreshold) return false;
+
+            return true;
+        }
+
+        /// <summary>
+        /// Lang-9: Check if a statement is safe for P1 inline (no yield/wait/defer/using/branches/loops).
+        /// P1 only allows: VarDeclStmt, ExprStmt, ReturnStmt (at end).
+        /// </summary>
+        private bool IsInlineSafeStmt(Stmt stmt)
+        {
+            if (stmt is VarDeclStmt vd)
+            {
+                // struct var decls not supported in P1
+                if (_structTypes.ContainsKey(vd.TypeName)) return false;
+                return vd.Initializer == null || IsInlineSafeExpr(vd.Initializer);
+            }
+            if (stmt is ExprStmt es) return IsInlineSafeExpr(es.Expression);
+            if (stmt is ReturnStmt rs) return rs.Value == null || IsInlineSafeExpr(rs.Value);
+            // Any other statement type (if/while/for/yield/wait/defer/using/block) → not P1 safe
+            return false;
+        }
+
+        /// <summary>
+        /// Lang-9: Check if an expression is safe for P1 inline (no user function calls, no XCALL).
+        /// Syscalls are allowed.
+        /// </summary>
+        private bool IsInlineSafeExpr(Expr expr)
+        {
+            if (expr == null) return true;
+            if (expr is CallExpr call)
+            {
+                // User function calls disqualify in P1
+                if (_funcDecls.ContainsKey(call.FunctionName)) return false;
+                // Syscall calls are OK — check args
+                for (int i = 0; i < call.Arguments.Count; i++)
+                    if (!IsInlineSafeExpr(call.Arguments[i])) return false;
+                return true;
+            }
+            if (expr is MemberCallExpr) return false; // XCALL disqualifies
+            if (expr is BinaryExpr bin)
+                return IsInlineSafeExpr(bin.Left) && IsInlineSafeExpr(bin.Right);
+            if (expr is UnaryExpr un)
+                return IsInlineSafeExpr(un.Operand);
+            if (expr is AssignExpr assign)
+                return IsInlineSafeExpr(assign.Target) && IsInlineSafeExpr(assign.Value);
+            if (expr is SyscallExpr sc)
+            {
+                for (int i = 0; i < sc.Arguments.Count; i++)
+                    if (!IsInlineSafeExpr(sc.Arguments[i])) return false;
+                return true;
+            }
+            if (expr is FieldAccessExpr fa) return IsInlineSafeExpr(fa.Target);
+            // Literals, identifiers — always safe
+            return true;
+        }
+
+        /// <summary>
+        /// Lang-9: Estimate instruction count for a function body (AST-level heuristic).
+        /// Used to decide if a function fits within InlineThreshold.
+        /// </summary>
+        private int EstimateBodySize(BlockStmt body)
+        {
+            int total = 0;
+            for (int i = 0; i < body.Statements.Count; i++)
+                total += EstimateStmtSize(body.Statements[i]);
+            return total;
+        }
+
+        private int EstimateStmtSize(Stmt stmt)
+        {
+            if (stmt is VarDeclStmt vd)
+                return 1 + (vd.Initializer != null ? EstimateExprSize(vd.Initializer) : 0);
+            if (stmt is ReturnStmt rs)
+                return 1 + (rs.Value != null ? EstimateExprSize(rs.Value) : 0);
+            if (stmt is ExprStmt es)
+                return EstimateExprSize(es.Expression);
+            if (stmt is BlockStmt blk)
+            {
+                int s = 0;
+                for (int i = 0; i < blk.Statements.Count; i++) s += EstimateStmtSize(blk.Statements[i]);
+                return s;
+            }
+            // If/While/For/etc. — P1 won't inline these, but return a large number for safety
+            return InlineThreshold + 1;
+        }
+
+        private int EstimateExprSize(Expr expr)
+        {
+            if (expr == null) return 0;
+            if (expr is IntLiteralExpr || expr is NumberLiteralExpr || expr is BoolLiteralExpr) return 1;
+            if (expr is StringLiteralExpr) return 1;
+            if (expr is IdentifierExpr) return 0; // just a register reference
+            if (expr is BinaryExpr bin) return 1 + EstimateExprSize(bin.Left) + EstimateExprSize(bin.Right);
+            if (expr is UnaryExpr un) return 1 + EstimateExprSize(un.Operand);
+            if (expr is CallExpr call)
+            {
+                int s = 2; // SYSCALL + potential MOVE
+                for (int i = 0; i < call.Arguments.Count; i++) s += EstimateExprSize(call.Arguments[i]);
+                return s;
+            }
+            if (expr is SyscallExpr sc)
+            {
+                int s = 2;
+                for (int i = 0; i < sc.Arguments.Count; i++) s += EstimateExprSize(sc.Arguments[i]);
+                return s;
+            }
+            if (expr is AssignExpr assign) return 1 + EstimateExprSize(assign.Value);
+            if (expr is FieldAccessExpr) return 0; // register offset
+            return 1; // conservative
+        }
+
+        /// <summary>
+        /// Lang-9: Try to inline a user function call. Returns true if inlined successfully,
+        /// in which case destReg holds the result. Returns false if not inlinable (caller should
+        /// fall through to normal CALL emission).
+        /// </summary>
+        private bool TryInlineCall(CallExpr call, int destReg, out int resultReg)
+        {
+            resultReg = destReg >= 0 ? destReg : -1;
+
+            if (!CanInline(call.FunctionName))
+            {
+                // Lang-9: @inline diagnostics
+                EmitInlineFailureDiagnostic(call.FunctionName, call.Line);
+                return false;
+            }
+
+            var func = _funcDecls[call.FunctionName];
+
+            // Validate argument count (same logic as EmitUserCall)
+            int requiredCount = 0;
+            for (int i = 0; i < func.Parameters.Count; i++)
+            {
+                if (func.Parameters[i].DefaultValue == null) requiredCount++;
+                else break;
+            }
+            if (call.Arguments.Count < requiredCount || call.Arguments.Count > func.Parameters.Count)
+            {
+                // Argument mismatch — don't inline, let normal path report the error
+                return false;
+            }
+
+            // Phase 1: Compile all arguments into temp registers (before scope changes)
+            int[] argRegs = new int[func.Parameters.Count];
+            for (int i = 0; i < call.Arguments.Count; i++)
+                argRegs[i] = CompileExpr(call.Arguments[i]);
+            // Fill defaults for omitted optional params
+            for (int i = call.Arguments.Count; i < func.Parameters.Count; i++)
+            {
+                var def = func.Parameters[i].DefaultValue;
+                argRegs[i] = def != null ? CompileExpr(def) : AllocTemp();
+            }
+
+            // Phase 2: Save and set up inline scope
+            var savedVars = _variables;
+            var savedConsts = _constValues;
+            var savedStructVarTypes = _structVarTypes;
+            var savedLiveRanges = _liveRanges;
+            var savedStmtOrder = _stmtOrder;
+
+            _variables = new Dictionary<string, int>(savedVars);      // copy parent scope
+            _constValues = new Dictionary<string, Number>(savedConsts);
+            _structVarTypes = new Dictionary<string, string>(savedStructVarTypes);
+            _liveRanges = null; // disable F4 register release inside inline body
+            _stmtOrder = 0;
+
+            // Bind parameters: map param names → arg registers (zero-copy)
+            for (int i = 0; i < func.Parameters.Count; i++)
+            {
+                var param = func.Parameters[i];
+                // For P1: scalar parameters only (struct params checked in CanInline)
+                // If arg is in a temp/scratch register, we need to copy to a local to avoid
+                // register conflicts within the inline body
+                int argReg = argRegs[i];
+                if (argReg < VarRegBase || argReg >= TempRegBase)
+                {
+                    // Scratch zone or temp — copy to a local var register for safety
+                    int localReg = DeclareVar(param.Name);
+                    if (localReg != argReg)
+                        Emit(OpCode.MOVE, localReg, argReg);
+                }
+                else
+                {
+                    // Already in var zone — just bind the name
+                    _variables[param.Name] = argReg;
+                }
+            }
+
+            // Phase 3: Push inline guard
+            if (_inlineStack == null) _inlineStack = new HashSet<string>();
+            _inlineStack.Add(call.FunctionName);
+            _inlineDepth++;
+
+            // Phase 4: Compile inline body
+            // For P1: all statements except the last ReturnStmt are compiled normally.
+            // The last ReturnStmt's value is compiled into destReg.
+            var stmts = func.Body.Statements;
+            int actualDest = destReg >= 0 ? destReg : AllocTemp();
+
+            for (int i = 0; i < stmts.Count - 1; i++)
+            {
+                CompileStmt(stmts[i]);
+                ResetTemps();
+            }
+
+            // Last statement is ReturnStmt (guaranteed by CanInline)
+            var retStmt = (ReturnStmt)stmts[stmts.Count - 1];
+            int retReg = CompileExpr(retStmt.Value, actualDest);
+            if (retReg != actualDest)
+                Emit(OpCode.MOVE, actualDest, retReg);
+
+            // Phase 5: Restore scope
+            _inlineDepth--;
+            _inlineStack.Remove(call.FunctionName);
+
+            _variables = savedVars;
+            _constValues = savedConsts;
+            _structVarTypes = savedStructVarTypes;
+            _liveRanges = savedLiveRanges;
+            _stmtOrder = savedStmtOrder;
+
+            resultReg = actualDest;
+            return true;
+        }
+
+        /// <summary>
+        /// Lang-9: Emit diagnostic when a function cannot be inlined and is marked @inline.
+        /// </summary>
+        private void EmitInlineFailureDiagnostic(string funcName, int line)
+        {
+            if (!_funcDecls.TryGetValue(funcName, out var func)) return;
+            if (!func.IsInline) return; // unmarked → silent fallback
+            _warnings.Add($"@inline function '{funcName}' could not be inlined. CALL will be used. (line {line})");
+        }
 
         private OpCode BinOpCode(NodeKind kind)
         {

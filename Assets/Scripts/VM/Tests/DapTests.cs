@@ -295,9 +295,11 @@ func main() {
         // ===== Test DAP-D02: Breakpoint in function — 2-frame call stack =====
         {
             string scriptPath = Path.Combine(Path.GetTempPath(), "dap_test_d02.ffs");
+            // Lang-9: add if-branch to prevent inlining (preserve call stack for DAP test)
             File.WriteAllText(scriptPath, @"
 func helper(): int {
     var val: int = 100
+    if val > 0 { val = val + 1 }
     return val
 }
 
@@ -597,7 +599,8 @@ func main() {
 
         // ===== Test DAP-S02: FindStepIntoIP enters CALL =====
         {
-            string source = "func helper(): int {\n    return 42\n}\n\nfunc main() {\n    var x: int = helper()\n}\n";
+            // Lang-9: add if-branch to prevent inlining (preserve CALL for step-into test)
+            string source = "func helper(): int {\n    var x: int = 42\n    if x > 0 { x = x + 1 }\n    return x\n}\n\nfunc main() {\n    var x: int = helper()\n}\n";
             var compiler = new BytecodeCompiler();
             var result = compiler.Compile(source, "main", new Dictionary<string, int>());
             Assert(result.Success, "DAP-S02: compile success");
@@ -732,9 +735,11 @@ func main() {
         // ===== Test DAP-S07: Full DAP session — stepIn enters function =====
         {
             string scriptPath = Path.Combine(Path.GetTempPath(), "dap_test_s07.ffs");
+            // Lang-9: add if-branch to prevent inlining (preserve CALL for step-into test)
             File.WriteAllText(scriptPath, @"
 func helper(): int {
     var val: int = 42
+    if val > 0 { val = val + 1 }
     return val
 }
 
@@ -748,11 +753,11 @@ func main() {
                 var session = new DapBatchSession();
                 session.AddRequest("initialize", new JsonObject());
                 session.AddLaunch(scriptPath);
-                // Set breakpoint at line 8 (var x: int = helper())
-                session.AddRequest("setBreakpoints", MakeSetBreakpointsArgs(scriptPath, 8));
+                // Set breakpoint at line 9 (var x: int = helper())
+                session.AddRequest("setBreakpoints", MakeSetBreakpointsArgs(scriptPath, 9));
                 session.AddRequest("configurationDone", new JsonObject());
-                session.AddContinue();              // run to breakpoint at line 8
-                session.AddStackTrace();             // verify at line 8
+                session.AddContinue();              // run to breakpoint at line 9
+                session.AddStackTrace();             // verify at line 9
                 session.AddStepIn();                 // step into helper()
                 session.AddStackTrace();             // should be inside helper
                 session.AddRequest("disconnect", new JsonObject());
@@ -794,9 +799,11 @@ func main() {
         // ===== Test DAP-S08: Full DAP session — stepOut returns to caller =====
         {
             string scriptPath = Path.Combine(Path.GetTempPath(), "dap_test_s08.ffs");
+            // Lang-9: add if-branch to prevent inlining (preserve call stack for step-out test)
             File.WriteAllText(scriptPath, @"
 func helper(): int {
     var val: int = 42
+    if val > 0 { val = val + 1 }
     return val
 }
 

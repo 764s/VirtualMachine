@@ -301,10 +301,11 @@ func main() {
 
         // ===== Test DBG5-03: Variables scoped to current function =====
         {
+            // Lang-9: add if-branch to prevent inlining (preserve call stack for debug test)
             string source = @"
 func helper(n: int): int {
     var local_h: int = n + 100
-    Report(local_h)
+    if local_h > 0 { Report(local_h) }
     return local_h
 }
 
@@ -329,7 +330,7 @@ func main() {
             };
             world.Debugger = dbg;
 
-            dbg.AddBreakpoint(4); // Report(local_h) line — inside helper()
+            dbg.AddBreakpoint(5); // Report(local_h) line — inside helper()
 
             world.SpawnInstance(0, 0);
             world.Tick();
