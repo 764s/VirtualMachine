@@ -1,25 +1,46 @@
 // ============================================================
 // Skill: Walk (skill_walk_forward)
-// Type: Looping  |  Priority: 500 (movement)
 // ============================================================
 // Sets horizontal velocity each frame based on directional input.
-// Activation/deactivation conditions handled by host (CanActivate/CanContinue).
-// This script replaces the host OnFrame callback.
-//
-// Syscalls used: IsInputHeld, GetInputDir, GetFacing, SetVelocity
+// Activation: Left or Right held, Up not held, grounded.
+// Continuation: script checks each frame — returns when input released.
+// Deactivation: script return → VM instance completes → host deactivates.
 
-include "common/input.ffs"
+include "common/skill_base.ffs"
 
 func main() {
+    // ── Skill Configuration ─────────────────────────────────
+    SetSkillMeta(META_TOTAL_FRAMES, -1)
+    SetSkillMeta(META_PRIORITY, 1)
+    SetSkillMeta(META_TAGS, TAG_BIT_WALK)
+    SetSkillMeta(META_IS_LOOPING, 1)
+    SetSkillMeta(META_ACTIVATION_PRIORITY, 500)
+    SetSkillMeta(META_INTERRUPT_PRIORITY, 500)
+    SetSkillMeta(META_ALLOWED_STANCES, STANCE_GROUNDED)
+    SetSkillMeta(META_REQUIRE_GROUNDED, 1)
+    SetSkillMeta(META_REQUIRE_INPUT_HELD, INPUT_BIT_ANY_DIR_H)
+    SetSkillMeta(META_REQUIRE_NOT_INPUT_HELD, INPUT_BIT_UP)
+
+    // ── Execution ───────────────────────────────────────────
+    defer {
+        SetVelocity(0.0, 0.0)
+    }
+
     while 1 {
+        // Continuation check — return when direction released or not grounded
+        var leftHeld: int = IsInputHeld(INPUT_LEFT)
+        var rightHeld: int = IsInputHeld(INPUT_RIGHT)
+        var grounded: int = IsGrounded()
+        if leftHeld == 0 && rightHeld == 0 { return }
+        if grounded == 0 { return }
+
+        // Walk logic
         var rawDir: float = getMoveDirX()
         var inputDir: int = GetInputDir()
 
         if rawDir == 0.0 {
-            // Both directions held or none — zero velocity
             SetVelocity(0.0, 0.0)
         } else {
-            // Forward vs backward speed
             var speed: float = WALK_SPEED
             if inputDir < 0 { speed = BACK_WALK_SPEED }
             var vx: float = speed * rawDir

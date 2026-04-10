@@ -1,19 +1,27 @@
 // ============================================================
 // Skill: Light Punch (skill_light_punch)
-// Type: Finite (attack)  |  Frames: 20  |  Priority: 200
 // ============================================================
 // 20-frame attack. Hitbox active during frames [5, 10).
 // Collision frames are defined on the SkillDef (host-side) and
 // applied via SkillManager.UpdateCollisionBoxes each frame.
 // This script checks for hit within the active window and applies damage.
-//
-// Activation condition handled by host (CanActivate: LP pressed + grounded).
-//
-// Syscalls used: BeginAction, EndAction, CheckAttackHit, ApplyDamage
+// Activation: LP pressed, grounded.
 
-include "common/constants.ffs"
+include "common/skill_base.ffs"
 
 func main() {
+    // ── Skill Configuration ─────────────────────────────────
+    SetSkillMeta(META_TOTAL_FRAMES, 20)
+    SetSkillMeta(META_PRIORITY, 3)
+    SetSkillMeta(META_TAGS, TAG_BIT_ATTACK)
+    SetSkillMeta(META_IS_LOOPING, 0)
+    SetSkillMeta(META_ACTIVATION_PRIORITY, 200)
+    SetSkillMeta(META_INTERRUPT_PRIORITY, 200)
+    SetSkillMeta(META_ALLOWED_STANCES, STANCE_GROUNDED)
+    SetSkillMeta(META_REQUIRE_GROUNDED, 1)
+    SetSkillMeta(META_REQUIRE_INPUT_PRESSED, INPUT_BIT_LP)
+
+    // ── Execution ───────────────────────────────────────────
     BeginAction(10, 20)
     defer {
         EndAction()

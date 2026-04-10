@@ -1,12 +1,23 @@
 // ============================================================
 // Skill: Idle (skill_idle)
-// Type: Looping  |  Priority: 900 (fallback)
 // ============================================================
 // Simplest looping script. Yields every frame.
 // Activated as fallback when no other skill is active.
 // Deactivated when any higher-priority skill activates.
 
+include "common/skill_base.ffs"
+
 func main() {
+    // ── Skill Configuration ─────────────────────────────────
+    SetSkillMeta(META_TOTAL_FRAMES, -1)
+    SetSkillMeta(META_PRIORITY, 0)
+    SetSkillMeta(META_TAGS, TAG_BIT_IDLE)
+    SetSkillMeta(META_IS_LOOPING, 1)
+    SetSkillMeta(META_ACTIVATION_PRIORITY, 900)
+    SetSkillMeta(META_INTERRUPT_PRIORITY, 900)
+    SetSkillMeta(META_ALLOWED_STANCES, STANCE_GROUNDED)
+
+    // ── Execution ───────────────────────────────────────────
     while 1 {
         yield
     }
