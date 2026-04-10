@@ -197,6 +197,51 @@ namespace FFVM
     }
 
     /// <summary>
+    /// Lang-9 P3: Compilation artifacts needed for cross-module inline.
+    /// Stored in CompileResult and optionally passed through ServiceBinding.
+    /// Contains function ASTs, module variable export indices, and const values
+    /// so the caller compiler can inline the callee's function bodies.
+    /// </summary>
+    public class ModuleInlineInfo
+    {
+        /// <summary>
+        /// Function ASTs of exported functions (name → FuncDecl).
+        /// Only exported functions are included (caller can only call exported functions).
+        /// </summary>
+        public readonly System.Collections.Generic.Dictionary<string, FFVM.AST.FuncDecl> FuncDecls;
+
+        /// <summary>
+        /// ALL module variable names → export var index (0-based into ExportTable.Variables).
+        /// Only exported variables are included (XLOAD_MVAR/XSTORE_MVAR requires export var index).
+        /// </summary>
+        public readonly System.Collections.Generic.Dictionary<string, int> VarExportIndices;
+
+        /// <summary>
+        /// Module const name → folded compile-time value.
+        /// Used for cross-module const propagation during inline.
+        /// </summary>
+        public readonly System.Collections.Generic.Dictionary<string, Number> ConstValues;
+
+        /// <summary>
+        /// All function names in the callee module (exported and non-exported).
+        /// Used to distinguish callee user function calls from syscalls during inline safety checks.
+        /// </summary>
+        public readonly System.Collections.Generic.HashSet<string> AllFuncNames;
+
+        public ModuleInlineInfo(
+            System.Collections.Generic.Dictionary<string, FFVM.AST.FuncDecl> funcDecls,
+            System.Collections.Generic.Dictionary<string, int> varExportIndices,
+            System.Collections.Generic.Dictionary<string, Number> constValues,
+            System.Collections.Generic.HashSet<string> allFuncNames)
+        {
+            FuncDecls = funcDecls;
+            VarExportIndices = varExportIndices;
+            ConstValues = constValues;
+            AllFuncNames = allFuncNames;
+        }
+    }
+
+    /// <summary>
     /// Lang-8: Service binding — maps a local variable name to a target module's ExportTable.
     /// Passed to the compiler so it can resolve svc.member unified syntax.
     /// </summary>
@@ -208,10 +253,25 @@ namespace FFVM
         /// <summary>Target module's export table (pre-compiled).</summary>
         public readonly ExportTable Exports;
 
+        /// <summary>
+        /// Lang-9 P3: Optional inline info for cross-module inline.
+        /// When present, enables inlining of the callee's exported functions.
+        /// </summary>
+        public readonly ModuleInlineInfo InlineInfo;
+
         public ServiceBinding(string varName, ExportTable exports)
         {
             VarName = varName;
             Exports = exports;
+            InlineInfo = null;
+        }
+
+        /// <summary>Lang-9 P3: Constructor with inline info for cross-module inline support.</summary>
+        public ServiceBinding(string varName, ExportTable exports, ModuleInlineInfo inlineInfo)
+        {
+            VarName = varName;
+            Exports = exports;
+            InlineInfo = inlineInfo;
         }
     }
 

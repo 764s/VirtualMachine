@@ -9215,6 +9215,438 @@ func main() {
             Assert(values.Count == 1 && values[0] == 17, $"IN23: bigger results = {(values.Count > 0 ? values[0].ToString() : "?")} (expected 17)");
         }
 
+        // ===== Lang-9 P3: Cross-Module Inline Tests (XIN01-XIN10) =====
+
+        // ===== Test XIN01: Basic cross-module getter inline (pure exported var read) =====
+        {
+            
+            string svcSource = @"
+@export var hp: int = 100
+@export func get_hp(): int {
+    return hp
+}
+func main() {}";
+            var svcResult = compiler.Compile(svcSource, "main", new Dictionary<string, int>());
+            Assert(svcResult.Success, "XIN01 svc compile success");
+
+            string callerSource = @"
+var svc: int = 0
+func main() {
+    var val: int = svc.get_hp()
+    Report(val)
+}";
+            var svcBindings = new ServiceBinding[] { new ServiceBinding("svc", svcResult.Program.ExportTable, svcResult.InlineInfo) };
+            var callerSyscalls = new Dictionary<string, int> { { "Report", 0 } };
+            var callerResult = compiler.Compile(callerSource, "main", callerSyscalls, null, null, null, svcBindings);
+            Assert(callerResult.Success, $"XIN01 caller compile: {(callerResult.Errors?.Count > 0 ? callerResult.Errors[0] : "ok")}");
+
+            // Verify no XCALL emitted (inlined)
+            bool hasXcall = false;
+            for (int i = 0; i < callerResult.Program.Instructions.Length; i++)
+                if (callerResult.Program.Instructions[i].Code == OpCode.XCALL) hasXcall = true;
+            Assert(!hasXcall, "XIN01: get_hp() inlined — no XCALL");
+
+            // Verify XLOAD_MVAR emitted (inline reads exported var)
+            bool hasXload = false;
+            for (int i = 0; i < callerResult.Program.Instructions.Length; i++)
+                if (callerResult.Program.Instructions[i].Code == OpCode.XLOAD_MVAR) hasXload = true;
+            Assert(hasXload, "XIN01: XLOAD_MVAR emitted for inlined hp read");
+
+            // Run and verify value
+            var values = new List<int>();
+            var world = new VMWorld();
+            world.Modules.Load(0, svcResult.Program);
+            world.Modules.Load(1, callerResult.Program);
+            world.Syscalls.Register(0, "Report", (ref VMInstanceState s) => { values.Add(s.Registers.Get(0).ToInt()); });
+            int svcId = world.SpawnInstance(0, 0);
+            int callerId = world.SpawnInstance(1, 0);
+            world.Pool.Instances[callerId].Registers.Set(VMConstants.ModuleVarRegBase, Number.FromInt(svcId));
+            world.Tick();
+            Assert(values.Count == 1 && values[0] == 100, $"XIN01: get_hp()=100, got {(values.Count > 0 ? values[0].ToString() : "none")}");
+        }
+
+        // ===== Test XIN02: Cross-module function with arithmetic on exported vars =====
+        {
+            
+            string svcSource = @"
+@export var base_mod: int = 10
+@export var combo: int = 3
+@export func get_modifier(): int {
+    return base_mod + combo * 2
+}
+func main() {}";
+            var svcResult = compiler.Compile(svcSource, "main", new Dictionary<string, int>());
+            Assert(svcResult.Success, "XIN02 svc compile success");
+
+            string callerSource = @"
+var svc: int = 0
+func main() {
+    var val: int = svc.get_modifier()
+    Report(val)
+}";
+            var svcBindings = new ServiceBinding[] { new ServiceBinding("svc", svcResult.Program.ExportTable, svcResult.InlineInfo) };
+            var callerSyscalls = new Dictionary<string, int> { { "Report", 0 } };
+            var callerResult = compiler.Compile(callerSource, "main", callerSyscalls, null, null, null, svcBindings);
+            Assert(callerResult.Success, $"XIN02 caller compile: {(callerResult.Errors?.Count > 0 ? callerResult.Errors[0] : "ok")}");
+
+            bool hasXcall = false;
+            for (int i = 0; i < callerResult.Program.Instructions.Length; i++)
+                if (callerResult.Program.Instructions[i].Code == OpCode.XCALL) hasXcall = true;
+            Assert(!hasXcall, "XIN02: get_modifier() inlined — no XCALL");
+
+            var values = new List<int>();
+            var world = new VMWorld();
+            world.Modules.Load(0, svcResult.Program);
+            world.Modules.Load(1, callerResult.Program);
+            world.Syscalls.Register(0, "Report", (ref VMInstanceState s) => { values.Add(s.Registers.Get(0).ToInt()); });
+            int svcId = world.SpawnInstance(0, 0);
+            int callerId = world.SpawnInstance(1, 0);
+            world.Pool.Instances[callerId].Registers.Set(VMConstants.ModuleVarRegBase, Number.FromInt(svcId));
+            world.Tick();
+            // base_mod(10) + combo(3) * 2 = 16
+            Assert(values.Count == 1 && values[0] == 16, $"XIN02: get_modifier()=16, got {(values.Count > 0 ? values[0].ToString() : "none")}");
+        }
+
+        // ===== Test XIN03: Cross-module function with module const reference =====
+        {
+            
+            string svcSource = @"
+const MULTIPLIER: int = 5
+@export var base_val: int = 10
+@export func scaled(): int {
+    return base_val * MULTIPLIER
+}
+func main() {}";
+            var svcResult = compiler.Compile(svcSource, "main", new Dictionary<string, int>());
+            Assert(svcResult.Success, "XIN03 svc compile success");
+
+            string callerSource = @"
+var svc: int = 0
+func main() {
+    var val: int = svc.scaled()
+    Report(val)
+}";
+            var svcBindings = new ServiceBinding[] { new ServiceBinding("svc", svcResult.Program.ExportTable, svcResult.InlineInfo) };
+            var callerSyscalls = new Dictionary<string, int> { { "Report", 0 } };
+            var callerResult = compiler.Compile(callerSource, "main", callerSyscalls, null, null, null, svcBindings);
+            Assert(callerResult.Success, $"XIN03 caller compile: {(callerResult.Errors?.Count > 0 ? callerResult.Errors[0] : "ok")}");
+
+            bool hasXcall = false;
+            for (int i = 0; i < callerResult.Program.Instructions.Length; i++)
+                if (callerResult.Program.Instructions[i].Code == OpCode.XCALL) hasXcall = true;
+            Assert(!hasXcall, "XIN03: scaled() inlined — no XCALL");
+
+            var values = new List<int>();
+            var world = new VMWorld();
+            world.Modules.Load(0, svcResult.Program);
+            world.Modules.Load(1, callerResult.Program);
+            world.Syscalls.Register(0, "Report", (ref VMInstanceState s) => { values.Add(s.Registers.Get(0).ToInt()); });
+            int svcId = world.SpawnInstance(0, 0);
+            int callerId = world.SpawnInstance(1, 0);
+            world.Pool.Instances[callerId].Registers.Set(VMConstants.ModuleVarRegBase, Number.FromInt(svcId));
+            world.Tick();
+            // base_val(10) * MULTIPLIER(5) = 50
+            Assert(values.Count == 1 && values[0] == 50, $"XIN03: scaled()=50, got {(values.Count > 0 ? values[0].ToString() : "none")}");
+        }
+
+        // ===== Test XIN04: Cross-module inline with parameter + exported var =====
+        {
+            
+            string svcSource = @"
+@export var bonus: int = 7
+@export func add_bonus(x: int): int {
+    return x + bonus
+}
+func main() {}";
+            var svcResult = compiler.Compile(svcSource, "main", new Dictionary<string, int>());
+            Assert(svcResult.Success, "XIN04 svc compile success");
+
+            string callerSource = @"
+var svc: int = 0
+func main() {
+    var val: int = svc.add_bonus(100)
+    Report(val)
+}";
+            var svcBindings = new ServiceBinding[] { new ServiceBinding("svc", svcResult.Program.ExportTable, svcResult.InlineInfo) };
+            var callerSyscalls = new Dictionary<string, int> { { "Report", 0 } };
+            var callerResult = compiler.Compile(callerSource, "main", callerSyscalls, null, null, null, svcBindings);
+            Assert(callerResult.Success, $"XIN04 caller compile: {(callerResult.Errors?.Count > 0 ? callerResult.Errors[0] : "ok")}");
+
+            bool hasXcall = false;
+            for (int i = 0; i < callerResult.Program.Instructions.Length; i++)
+                if (callerResult.Program.Instructions[i].Code == OpCode.XCALL) hasXcall = true;
+            Assert(!hasXcall, "XIN04: add_bonus() inlined — no XCALL");
+
+            var values = new List<int>();
+            var world = new VMWorld();
+            world.Modules.Load(0, svcResult.Program);
+            world.Modules.Load(1, callerResult.Program);
+            world.Syscalls.Register(0, "Report", (ref VMInstanceState s) => { values.Add(s.Registers.Get(0).ToInt()); });
+            int svcId = world.SpawnInstance(0, 0);
+            int callerId = world.SpawnInstance(1, 0);
+            world.Pool.Instances[callerId].Registers.Set(VMConstants.ModuleVarRegBase, Number.FromInt(svcId));
+            world.Tick();
+            // 100 + bonus(7) = 107
+            Assert(values.Count == 1 && values[0] == 107, $"XIN04: add_bonus(100)=107, got {(values.Count > 0 ? values[0].ToString() : "none")}");
+        }
+
+        // ===== Test XIN05: Cross-module inline with if-else branch =====
+        {
+            
+            string svcSource = @"
+@export var threshold: int = 50
+@export func classify(x: int): int {
+    if (x > threshold) {
+        return 1
+    } else {
+        return 0
+    }
+}
+func main() {}";
+            var svcResult = compiler.Compile(svcSource, "main", new Dictionary<string, int>());
+            Assert(svcResult.Success, "XIN05 svc compile success");
+
+            string callerSource = @"
+var svc: int = 0
+func main() {
+    var a: int = svc.classify(100)
+    var b: int = svc.classify(10)
+    Report(a * 10 + b)
+}";
+            var svcBindings = new ServiceBinding[] { new ServiceBinding("svc", svcResult.Program.ExportTable, svcResult.InlineInfo) };
+            var callerSyscalls = new Dictionary<string, int> { { "Report", 0 } };
+            var callerResult = compiler.Compile(callerSource, "main", callerSyscalls, null, null, null, svcBindings);
+            Assert(callerResult.Success, $"XIN05 caller compile: {(callerResult.Errors?.Count > 0 ? callerResult.Errors[0] : "ok")}");
+
+            bool hasXcall = false;
+            for (int i = 0; i < callerResult.Program.Instructions.Length; i++)
+                if (callerResult.Program.Instructions[i].Code == OpCode.XCALL) hasXcall = true;
+            Assert(!hasXcall, "XIN05: classify() inlined — no XCALL");
+
+            var values = new List<int>();
+            var world = new VMWorld();
+            world.Modules.Load(0, svcResult.Program);
+            world.Modules.Load(1, callerResult.Program);
+            world.Syscalls.Register(0, "Report", (ref VMInstanceState s) => { values.Add(s.Registers.Get(0).ToInt()); });
+            int svcId = world.SpawnInstance(0, 0);
+            int callerId = world.SpawnInstance(1, 0);
+            world.Pool.Instances[callerId].Registers.Set(VMConstants.ModuleVarRegBase, Number.FromInt(svcId));
+            world.Tick();
+            // classify(100)=1, classify(10)=0 → 1*10+0=10
+            Assert(values.Count == 1 && values[0] == 10, $"XIN05: classify results=10, got {(values.Count > 0 ? values[0].ToString() : "none")}");
+        }
+
+        // ===== Test XIN06: Cross-module inline + module-internal inline combo =====
+        {
+            
+            string svcSource = @"
+@export var base_val: int = 20
+@export func get_val(): int {
+    return base_val
+}
+func main() {}";
+            var svcResult = compiler.Compile(svcSource, "main", new Dictionary<string, int>());
+            Assert(svcResult.Success, "XIN06 svc compile success");
+
+            // Caller has its own inlineable function + cross-module call
+            string callerSource = @"
+var svc: int = 0
+func double_it(x: int): int {
+    return x * 2
+}
+func main() {
+    var val: int = double_it(svc.get_val())
+    Report(val)
+}";
+            var svcBindings = new ServiceBinding[] { new ServiceBinding("svc", svcResult.Program.ExportTable, svcResult.InlineInfo) };
+            var callerSyscalls = new Dictionary<string, int> { { "Report", 0 } };
+            var callerResult = compiler.Compile(callerSource, "main", callerSyscalls, null, null, null, svcBindings);
+            Assert(callerResult.Success, $"XIN06 caller compile: {(callerResult.Errors?.Count > 0 ? callerResult.Errors[0] : "ok")}");
+
+            // Both should be inlined (no XCALL, no CALL)
+            bool hasXcall = false;
+            bool hasCall = false;
+            for (int i = 0; i < callerResult.Program.Instructions.Length; i++)
+            {
+                if (callerResult.Program.Instructions[i].Code == OpCode.XCALL) hasXcall = true;
+                if (callerResult.Program.Instructions[i].Code == OpCode.CALL || callerResult.Program.Instructions[i].Code == OpCode.CALL_LEAF) hasCall = true;
+            }
+            Assert(!hasXcall, "XIN06: cross-module get_val() inlined — no XCALL");
+            Assert(!hasCall, "XIN06: module-internal double_it() inlined — no CALL");
+
+            var values = new List<int>();
+            var world = new VMWorld();
+            world.Modules.Load(0, svcResult.Program);
+            world.Modules.Load(1, callerResult.Program);
+            world.Syscalls.Register(0, "Report", (ref VMInstanceState s) => { values.Add(s.Registers.Get(0).ToInt()); });
+            int svcId = world.SpawnInstance(0, 0);
+            int callerId = world.SpawnInstance(1, 0);
+            world.Pool.Instances[callerId].Registers.Set(VMConstants.ModuleVarRegBase, Number.FromInt(svcId));
+            world.Tick();
+            // double_it(get_val()) = double_it(20) = 40
+            Assert(values.Count == 1 && values[0] == 40, $"XIN06: double_it(get_val())=40, got {(values.Count > 0 ? values[0].ToString() : "none")}");
+        }
+
+        // ===== Test XIN07: Cross-module function too large → XCALL fallback =====
+        {
+            
+            // Build a function body that exceeds InlineThreshold=16
+            string svcSource = @"
+@export var x: int = 1
+@export func big_func(a: int): int {
+    var t1: int = a + x
+    var t2: int = t1 * a
+    var t3: int = t2 + t1
+    var t4: int = t3 * t2
+    var t5: int = t4 + t3
+    var t6: int = t5 * t4
+    var t7: int = t6 + t5
+    var t8: int = t7 * t6
+    var t9: int = t8 + t7
+    return t9
+}
+func main() {}";
+            var svcResult = compiler.Compile(svcSource, "main", new Dictionary<string, int>());
+            Assert(svcResult.Success, "XIN07 svc compile success");
+
+            string callerSource = @"
+var svc: int = 0
+func main() {
+    var val: int = svc.big_func(5)
+    Report(val)
+}";
+            var svcBindings = new ServiceBinding[] { new ServiceBinding("svc", svcResult.Program.ExportTable, svcResult.InlineInfo) };
+            var callerSyscalls = new Dictionary<string, int> { { "Report", 0 } };
+            var callerResult = compiler.Compile(callerSource, "main", callerSyscalls, null, null, null, svcBindings);
+            Assert(callerResult.Success, $"XIN07 caller compile: {(callerResult.Errors?.Count > 0 ? callerResult.Errors[0] : "ok")}");
+
+            // Should have XCALL (function too large to inline)
+            bool hasXcall = false;
+            for (int i = 0; i < callerResult.Program.Instructions.Length; i++)
+                if (callerResult.Program.Instructions[i].Code == OpCode.XCALL) hasXcall = true;
+            Assert(hasXcall, "XIN07: big_func() too large — XCALL fallback");
+        }
+
+        // ===== Test XIN08: Cross-module function calls callee's own function → XCALL fallback =====
+        {
+            
+            string svcSource = @"
+@export var counter: int = 0
+func helper(): int {
+    return counter + 1
+}
+@export func get_via_helper(): int {
+    return helper()
+}
+func main() {}";
+            var svcResult = compiler.Compile(svcSource, "main", new Dictionary<string, int>());
+            Assert(svcResult.Success, "XIN08 svc compile success");
+
+            string callerSource = @"
+var svc: int = 0
+func main() {
+    var val: int = svc.get_via_helper()
+    Report(val)
+}";
+            var svcBindings = new ServiceBinding[] { new ServiceBinding("svc", svcResult.Program.ExportTable, svcResult.InlineInfo) };
+            var callerSyscalls = new Dictionary<string, int> { { "Report", 0 } };
+            var callerResult = compiler.Compile(callerSource, "main", callerSyscalls, null, null, null, svcBindings);
+            Assert(callerResult.Success, $"XIN08 caller compile: {(callerResult.Errors?.Count > 0 ? callerResult.Errors[0] : "ok")}");
+
+            // Should have XCALL (callee user function call disqualifies cross-module inline)
+            bool hasXcall = false;
+            for (int i = 0; i < callerResult.Program.Instructions.Length; i++)
+                if (callerResult.Program.Instructions[i].Code == OpCode.XCALL) hasXcall = true;
+            Assert(hasXcall, "XIN08: get_via_helper() calls callee's helper — XCALL fallback");
+        }
+
+        // ===== Test XIN09: @inline cross-module function can't inline → warning =====
+        {
+            
+            // Function references non-exported module var → can't cross-module inline
+            string svcSource = @"
+var internal_state: int = 42
+@export @inline func get_internal(): int {
+    return internal_state + 1
+}
+func main() {}";
+            var svcResult = compiler.Compile(svcSource, "main", new Dictionary<string, int>());
+            Assert(svcResult.Success, "XIN09 svc compile success");
+
+            string callerSource = @"
+var svc: int = 0
+func main() {
+    var val: int = svc.get_internal()
+    Report(val)
+}";
+            var svcBindings = new ServiceBinding[] { new ServiceBinding("svc", svcResult.Program.ExportTable, svcResult.InlineInfo) };
+            var callerSyscalls = new Dictionary<string, int> { { "Report", 0 } };
+            var callerResult = compiler.Compile(callerSource, "main", callerSyscalls, null, null, null, svcBindings);
+            Assert(callerResult.Success, $"XIN09 caller compile: {(callerResult.Errors?.Count > 0 ? callerResult.Errors[0] : "ok")}");
+
+            // Should have XCALL (non-exported var reference blocks inline)
+            bool hasXcall = false;
+            for (int i = 0; i < callerResult.Program.Instructions.Length; i++)
+                if (callerResult.Program.Instructions[i].Code == OpCode.XCALL) hasXcall = true;
+            Assert(hasXcall, "XIN09: get_internal() has non-exported var → XCALL fallback");
+
+            // Should have warning (function is @inline but can't be inlined)
+            Assert(callerResult.Warnings != null && callerResult.Warnings.Count > 0, "XIN09: @inline warning emitted");
+        }
+
+        // ===== Test XIN10: Cross-module exported var write in inline body =====
+        {
+            
+            string svcSource = @"
+@export var counter: int = 0
+@export func increment(): int {
+    counter = counter + 1
+    return counter
+}
+func main() {}";
+            var svcResult = compiler.Compile(svcSource, "main", new Dictionary<string, int>());
+            Assert(svcResult.Success, "XIN10 svc compile success");
+
+            string callerSource = @"
+var svc: int = 0
+func main() {
+    var a: int = svc.increment()
+    var b: int = svc.increment()
+    Report(a)
+    Report(b)
+}";
+            var svcBindings = new ServiceBinding[] { new ServiceBinding("svc", svcResult.Program.ExportTable, svcResult.InlineInfo) };
+            var callerSyscalls = new Dictionary<string, int> { { "Report", 0 } };
+            var callerResult = compiler.Compile(callerSource, "main", callerSyscalls, null, null, null, svcBindings);
+            Assert(callerResult.Success, $"XIN10 caller compile: {(callerResult.Errors?.Count > 0 ? callerResult.Errors[0] : "ok")}");
+
+            // Verify no XCALL (inlined)
+            bool hasXcall = false;
+            for (int i = 0; i < callerResult.Program.Instructions.Length; i++)
+                if (callerResult.Program.Instructions[i].Code == OpCode.XCALL) hasXcall = true;
+            Assert(!hasXcall, "XIN10: increment() inlined — no XCALL");
+
+            // Verify XSTORE_MVAR emitted (inline writes exported var)
+            bool hasXstore = false;
+            for (int i = 0; i < callerResult.Program.Instructions.Length; i++)
+                if (callerResult.Program.Instructions[i].Code == OpCode.XSTORE_MVAR) hasXstore = true;
+            Assert(hasXstore, "XIN10: XSTORE_MVAR emitted for inlined counter write");
+
+            var values = new List<int>();
+            var world = new VMWorld();
+            world.Modules.Load(0, svcResult.Program);
+            world.Modules.Load(1, callerResult.Program);
+            world.Syscalls.Register(0, "Report", (ref VMInstanceState s) => { values.Add(s.Registers.Get(0).ToInt()); });
+            int svcId = world.SpawnInstance(0, 0);
+            int callerId = world.SpawnInstance(1, 0);
+            world.Pool.Instances[callerId].Registers.Set(VMConstants.ModuleVarRegBase, Number.FromInt(svcId));
+            world.Tick();
+            // First increment: 0→1, second: 1→2
+            Assert(values.Count == 2, $"XIN10: 2 reports, got {values.Count}");
+            Assert(values.Count >= 1 && values[0] == 1, $"XIN10: first increment=1, got {(values.Count >= 1 ? values[0].ToString() : "none")}");
+            Assert(values.Count >= 2 && values[1] == 2, $"XIN10: second increment=2, got {(values.Count >= 2 ? values[1].ToString() : "none")}");
+        }
+
         // ===== Summary =====
         Debug.Log($"========================================");
         Debug.Log($"Compiler Tests: {passed} passed, {failed} failed");
