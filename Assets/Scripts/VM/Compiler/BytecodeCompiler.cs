@@ -607,7 +607,7 @@ namespace FFVM.Compiler
             // @export is not supported for struct module vars (single-slot ExportVarEntry limitation)
             if (decl.IsExported)
             {
-                _errors.Add($"@export is not supported for struct module variables ('{decl.Name}'). Export individual scalar fields instead. (line {decl.Line})");
+                _errors.Add($"@export is not supported for struct module variables ('{decl.Name}'). Use separate @export scalar variables for each field. (line {decl.Line})");
                 return;
             }
 
