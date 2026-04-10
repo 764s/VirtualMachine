@@ -8,14 +8,13 @@
 
 include "common/skill_base.ffs"
 
-// ── Skill Configuration ─────────────────────────────────────
+// ── Skill Configuration (overrides only) ────────────────────
 @export var totalFrames: int = 30
 @export var priority: int = 2
 @export var tags: int = TAG_BIT_HIT
 @export var isLooping: int = 0
 @export var activationPriority: int = 100
 @export var interruptPriority: int = 100
-@export var allowedStances: int = STANCE_GROUNDED
 
 func main() {
     // ── Execution ───────────────────────────────────────────

@@ -7,11 +7,9 @@
 
 include "common/skill_base.ffs"
 
-// ── Skill Configuration ─────────────────────────────────────
+// ── Skill Configuration (overrides only) ────────────────────
+// All values match skill_base defaults — kept for documentation.
 @export var totalFrames: int = -1
-@export var priority: int = 0
-@export var tags: int = TAG_BIT_IDLE
-@export var isLooping: int = 1
 @export var activationPriority: int = 900
 @export var interruptPriority: int = 900
 @export var allowedStances: int = STANCE_GROUNDED
