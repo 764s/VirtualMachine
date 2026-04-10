@@ -1,6 +1,6 @@
 # Plan: Lang-9 A5 深度内联
 
-> **状态**：⏳ P1 ✅ P2 ✅ 完成，P3 待开始
+> **状态**：⏳ P1 ✅ P2 ✅ P3 ✅ 完成，P4 待开始
 > **来源**：[D_DeepInlining.md](../Discussion/D_DeepInlining.md) 可行性分析结论
 > **日期**：2026-04-10
 
@@ -20,7 +20,7 @@
 |------|------|--------|------|
 | **P1** | 模块内 trivial 内联（单 return，纯表达式，无分支/循环/yield/defer，无递归） | ⭐⭐ | ✅ |
 | **P2** | 模块内一般内联（多语句、分支、循环、多 return、用户函数调用、struct 参数、void） | ⭐⭐⭐ | ✅ |
-| P3 | 跨模块内联（XLOAD_MVAR 替换 + ServiceBinding AST 传递） | ⭐⭐⭐ | ⬚ |
+| **P3** | 跨模块内联（XLOAD_MVAR 替换 + ServiceBinding AST 传递） | ⭐⭐⭐ | ✅ |
 | P4 | 深度内联（A→B→C 链式展开） | ⭐⭐ | ⬚ |
 
 ---
@@ -166,12 +166,79 @@ AST 层面简单估算（无需实际编译）：
 
 ---
 
+## 三-C、P3 子步骤（跨模块内联）
+
+### P3-1: 数据结构
+
+- 新增 `ModuleInlineInfo` 类（ExportTable.cs）：包含 FuncDecls, VarExportIndices, ConstValues, AllFuncNames
+- 扩展 `CompileResult` 添加 `InlineInfo` 字段
+- 扩展 `ServiceBinding` 添加 `InlineInfo` 字段和新构造器
+
+### P3-2: 编译产物填充
+
+- `BuildModuleInlineInfo`：在 CompileModule 末尾构建 ModuleInlineInfo
+- 导出函数 AST → FuncDecls
+- 导出变量 name → export var index → VarExportIndices
+- 模块常量 → ConstValues
+- 全部函数名 → AllFuncNames（用于区分 callee 用户函数和 syscall）
+
+### P3-3: 编译器字段
+
+- `_xInlineSvcReg: int`（跨模块内联时 service instance 寄存器，-1=非活跃）
+- `_xInlineVars: Dictionary<string, int>`（callee 导出变量 name → export var index）
+
+### P3-4: CanInlineCrossModule
+
+- 深度限制 + 递归守护 + R8 清理块守护
+- IsCrossModuleInlineSafeStmt/Expr：与 P2 相同安全检查，额外拒绝 callee 用户函数调用
+- AllVarRefsResolvable：预检查所有变量引用可解析（参数/导出变量/常量/局部声明）
+- EstimateBodySize ≤ InlineThreshold
+
+### P3-5: TryInlineMemberCall
+
+- 集成到 CompileMemberCallExpr，在 DegradationType.None 分支、XCALL 发射前尝试
+- 参数编译 + 内联作用域设置（保存/恢复 _variables, _constValues, _structVarTypes, _liveRanges 等）
+- 填充 callee 常量到 _constValues
+- 设置 _xInlineSvcReg 和 _xInlineVars 上下文
+- 参数绑定（同 P2 TryInlineCall）
+- 编译内联体（支持多 return exit label 模式）
+- 恢复所有编译器状态
+
+### P3-6: 变量读写重定向
+
+- CompileIdentifierExpr 中：_xInlineVars 检查 → XLOAD_MVAR 发射
+- CompileAssignExpr 标量赋值中：_xInlineVars 检查 → XSTORE_MVAR 发射
+
+### P3-7: 测试 XIN01-XIN10
+
+| # | 测试 | 验证 |
+|---|------|------|
+| XIN01 | 基础跨模块 getter 内联 | `svc.get_hp()` 内联为 XLOAD_MVAR，无 XCALL |
+| XIN02 | 导出变量算术 | `base_mod + combo * 2` → XLOAD_MVAR + 算术 |
+| XIN03 | 模块常量传播 | `base_val * MULTIPLIER` → 常量折叠 |
+| XIN04 | 参数 + 导出变量 | `x + bonus` → 参数 + XLOAD_MVAR |
+| XIN05 | if-else 分支 | `classify(x)` → 多 return exit label |
+| XIN06 | 跨模块 + 模块内组合内联 | `double_it(svc.get_val())` 两层内联 |
+| XIN07 | 超大函数 → XCALL 退化 | body 超 InlineThreshold |
+| XIN08 | callee 调用自身函数 → XCALL 退化 | `helper()` 在 callee 内 |
+| XIN09 | @inline + 非导出变量 → 警告 | `internal_state` 不可解析 |
+| XIN10 | 导出变量写入 | `counter = counter + 1` → XSTORE_MVAR |
+
+### P3 约束/妥协
+
+- **仅标量导出变量**：struct 类型的导出变量跨模块读写暂不支持内联（需逐字段 XLOAD/XSTORE_MVAR）
+- **不支持 callee 调用自身模块函数**：P3 保守策略，callee 函数体内不能调用 callee 模块的其他用户函数（syscall 允许）
+- **仅导出变量可内联访问**：callee 函数引用非导出模块变量时拒绝内联（XLOAD_MVAR/XSTORE_MVAR 需要 export var index）
+- 妥协消除：P4 或后续增强可放宽部分约束
+
+---
+
 ## 四、与现有优化的交互
 
 - **FO1 Leaf 分析**：内联分析在 leaf 分析之后。被内联的函数仍参与 leaf 分析（其他调用者可能不内联）
 - **FO6 窗口重映射**：内联展开的代码使用调用方寄存器空间，FO6 通过排除内联 callee 正确计算
 - **B-ε3 常量传播**：内联后常量折叠可进一步优化（内联参数为常量时）
-- **A1/A2 退化**：A5 内联是 A1/A2 的泛化。A1/A2 仍独立存在（跨模块场景，P3 之前无法 A5 内联）
+- **A1/A2 退化**：A5 内联是 A1/A2 的泛化。A1/A2 仍独立存在（纯 getter/setter 场景使用 DegradationType 退化，不经过 P3 内联路径）
 - **R8 清理块**：内联在清理块内被禁止，保持 R8 安全性
 
 ---
@@ -179,7 +246,7 @@ AST 层面简单估算（无需实际编译）：
 ## 五、依赖
 
 - 无外部依赖。P1/P2 纯编译器内部改动
-- P3 依赖 ServiceBinding 扩展（传递 FuncDecl AST）
+- P3 ✅ ServiceBinding 扩展完成（ModuleInlineInfo 传递 FuncDecl AST + VarExportIndices + ConstValues）
 
 ---
 
@@ -187,5 +254,6 @@ AST 层面简单估算（无需实际编译）：
 
 - [x] IN01-IN08 全通过（P1）
 - [x] IN09-IN23 全通过（P2）
-- [x] 现有 1411 → 1449 测试无回归
+- [x] XIN01-XIN10 全通过（P3）
+- [x] 现有 1449 → 1492 测试无回归
 - [x] B01-B06 benchmark 无回归
