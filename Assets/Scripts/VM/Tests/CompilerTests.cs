@@ -8780,6 +8780,441 @@ func main() {
             Assert(values.Count == 1 && values[0] == 60, $"IN08: double(double(5)+double(10)) = {(values.Count > 0 ? values[0].ToString() : "?")} (expected 60)");
         }
 
+        // ===== Lang-9 P2: Inline Expansion Tests (IN09-IN23) =====
+        // Tests for multi-statement, branches, loops, multi-return, user calls, struct params, void inline
+
+        // ===== Test IN09: Inline function with if-else branch (multi-return) =====
+        {
+            string source = @"
+func abs(x: int): int {
+    if x < 0 { return -x }
+    return x
+}
+func main() {
+    var a: int = abs(-5)
+    var b: int = abs(3)
+    Report(a + b)
+}";
+            var result = compiler.Compile(source, "main", new Dictionary<string, int> { { "Report", 0 } });
+            Assert(result.Success, "IN09 compile success");
+
+            // P2: abs() has if-branch with early return → inlined via exit label
+            bool hasCall = false;
+            for (int i = 0; i < result.Program.Instructions.Length; i++)
+            {
+                var code = result.Program.Instructions[i].Code;
+                if (code == OpCode.CALL || code == OpCode.CALL_LEAF) hasCall = true;
+            }
+            Assert(!hasCall, "IN09: abs() inlined — no CALL");
+
+            var values = new List<int>();
+            var world = new VMWorld();
+            world.Modules.Load(0, result.Program);
+            world.Syscalls.Register(0, "Report", (ref VMInstanceState s) => { values.Add(s.Registers.Get(0).ToInt()); });
+            world.SpawnInstance(0, 0);
+            world.Tick();
+            Assert(values.Count == 1 && values[0] == 8, $"IN09: abs(-5)+abs(3) = {(values.Count > 0 ? values[0].ToString() : "?")} (expected 8)");
+        }
+
+        // ===== Test IN10: Inline function with if-else returning different values =====
+        {
+            string source = @"
+func sign(x: int): int {
+    if x > 0 { return 1 }
+    if x < 0 { return -1 }
+    return 0
+}
+func main() {
+    var a: int = sign(5)
+    var b: int = sign(-3)
+    var c: int = sign(0)
+    Report(a * 100 + b * 10 + c)
+}";
+            var result = compiler.Compile(source, "main", new Dictionary<string, int> { { "Report", 0 } });
+            Assert(result.Success, "IN10 compile success");
+
+            var values = new List<int>();
+            var world = new VMWorld();
+            world.Modules.Load(0, result.Program);
+            world.Syscalls.Register(0, "Report", (ref VMInstanceState s) => { values.Add(s.Registers.Get(0).ToInt()); });
+            world.SpawnInstance(0, 0);
+            world.Tick();
+            // sign(5)=1, sign(-3)=-1, sign(0)=0 → 1*100 + (-1)*10 + 0 = 90
+            Assert(values.Count == 1 && values[0] == 90, $"IN10: sign results = {(values.Count > 0 ? values[0].ToString() : "?")} (expected 90)");
+        }
+
+        // ===== Test IN11: Inline function calling another user function (nested inline) =====
+        {
+            string source = @"
+func square(x: int): int { return x * x }
+func sumOfSquares(a: int, b: int): int { return square(a) + square(b) }
+func main() {
+    Report(sumOfSquares(3, 4))
+}";
+            var result = compiler.Compile(source, "main", new Dictionary<string, int> { { "Report", 0 } });
+            Assert(result.Success, "IN11 compile success");
+
+            bool hasCall = false;
+            for (int i = 0; i < result.Program.Instructions.Length; i++)
+            {
+                var code = result.Program.Instructions[i].Code;
+                if (code == OpCode.CALL || code == OpCode.CALL_LEAF) hasCall = true;
+            }
+            Assert(!hasCall, "IN11: nested inline (sumOfSquares→square) — no CALL");
+
+            var values = new List<int>();
+            var world = new VMWorld();
+            world.Modules.Load(0, result.Program);
+            world.Syscalls.Register(0, "Report", (ref VMInstanceState s) => { values.Add(s.Registers.Get(0).ToInt()); });
+            world.SpawnInstance(0, 0);
+            world.Tick();
+            Assert(values.Count == 1 && values[0] == 25, $"IN11: sumOfSquares(3,4) = {(values.Count > 0 ? values[0].ToString() : "?")} (expected 25)");
+        }
+
+        // ===== Test IN12: Inline void function (no return value) =====
+        {
+            string source = @"
+func greet(x: int) {
+    Report(x + 100)
+}
+func main() {
+    greet(5)
+    greet(10)
+}";
+            var result = compiler.Compile(source, "main", new Dictionary<string, int> { { "Report", 0 } });
+            Assert(result.Success, "IN12 compile success");
+
+            bool hasCall = false;
+            for (int i = 0; i < result.Program.Instructions.Length; i++)
+            {
+                var code = result.Program.Instructions[i].Code;
+                if (code == OpCode.CALL || code == OpCode.CALL_LEAF) hasCall = true;
+            }
+            Assert(!hasCall, "IN12: void greet() inlined — no CALL");
+
+            var values = new List<int>();
+            var world = new VMWorld();
+            world.Modules.Load(0, result.Program);
+            world.Syscalls.Register(0, "Report", (ref VMInstanceState s) => { values.Add(s.Registers.Get(0).ToInt()); });
+            world.SpawnInstance(0, 0);
+            world.Tick();
+            Assert(values.Count == 2 && values[0] == 105 && values[1] == 110,
+                $"IN12: greet(5)={((values.Count > 0) ? values[0].ToString() : "?")}, greet(10)={((values.Count > 1) ? values[1].ToString() : "?")} (expected 105, 110)");
+        }
+
+        // ===== Test IN13: Inline function with multi-statement body and early return =====
+        {
+            string source = @"
+func clamp(x: int, lo: int, hi: int): int {
+    if x < lo { return lo }
+    if x > hi { return hi }
+    return x
+}
+func main() {
+    var a: int = clamp(5, 0, 10)
+    var b: int = clamp(-3, 0, 10)
+    var c: int = clamp(15, 0, 10)
+    Report(a * 100 + b * 10 + c)
+}";
+            var result = compiler.Compile(source, "main", new Dictionary<string, int> { { "Report", 0 } });
+            Assert(result.Success, "IN13 compile success");
+
+            var values = new List<int>();
+            var world = new VMWorld();
+            world.Modules.Load(0, result.Program);
+            world.Syscalls.Register(0, "Report", (ref VMInstanceState s) => { values.Add(s.Registers.Get(0).ToInt()); });
+            world.SpawnInstance(0, 0);
+            world.Tick();
+            // clamp(5,0,10)=5, clamp(-3,0,10)=0, clamp(15,0,10)=10 → 500+0+10=510
+            Assert(values.Count == 1 && values[0] == 510, $"IN13: clamp results = {(values.Count > 0 ? values[0].ToString() : "?")} (expected 510)");
+        }
+
+        // ===== Test IN14: Inline function with local variables and branches =====
+        {
+            string source = @"
+func max(a: int, b: int): int {
+    var result: int = a
+    if b > a { result = b }
+    return result
+}
+func main() {
+    Report(max(3, 7))
+    Report(max(10, 2))
+}";
+            var result = compiler.Compile(source, "main", new Dictionary<string, int> { { "Report", 0 } });
+            Assert(result.Success, "IN14 compile success");
+
+            var values = new List<int>();
+            var world = new VMWorld();
+            world.Modules.Load(0, result.Program);
+            world.Syscalls.Register(0, "Report", (ref VMInstanceState s) => { values.Add(s.Registers.Get(0).ToInt()); });
+            world.SpawnInstance(0, 0);
+            world.Tick();
+            Assert(values.Count == 2 && values[0] == 7 && values[1] == 10,
+                $"IN14: max(3,7)={((values.Count > 0) ? values[0].ToString() : "?")}, max(10,2)={((values.Count > 1) ? values[1].ToString() : "?")} (expected 7, 10)");
+        }
+
+        // ===== Test IN15: 3-level nested inline (A→B→C) =====
+        {
+            string source = @"
+func add1(x: int): int { return x + 1 }
+func add2(x: int): int { return add1(add1(x)) }
+func add4(x: int): int { return add2(add2(x)) }
+func main() {
+    Report(add4(10))
+}";
+            var result = compiler.Compile(source, "main", new Dictionary<string, int> { { "Report", 0 } });
+            Assert(result.Success, "IN15 compile success");
+
+            bool hasCall = false;
+            for (int i = 0; i < result.Program.Instructions.Length; i++)
+            {
+                var code = result.Program.Instructions[i].Code;
+                if (code == OpCode.CALL || code == OpCode.CALL_LEAF) hasCall = true;
+            }
+            Assert(!hasCall, "IN15: 3-level nested inline — no CALL");
+
+            var values = new List<int>();
+            var world = new VMWorld();
+            world.Modules.Load(0, result.Program);
+            world.Syscalls.Register(0, "Report", (ref VMInstanceState s) => { values.Add(s.Registers.Get(0).ToInt()); });
+            world.SpawnInstance(0, 0);
+            world.Tick();
+            Assert(values.Count == 1 && values[0] == 14, $"IN15: add4(10) = {(values.Count > 0 ? values[0].ToString() : "?")} (expected 14)");
+        }
+
+        // ===== Test IN16: Inline with struct parameter (Box2) =====
+        {
+            string source = @"
+struct Box2 {
+    x: int
+    y: int
+}
+func area(b: Box2): int {
+    return b.x * b.y
+}
+func main() {
+    var r: Box2
+    r.x = 3
+    r.y = 5
+    Report(area(r))
+}";
+            var result = compiler.Compile(source, "main", new Dictionary<string, int> { { "Report", 0 } });
+            Assert(result.Success, "IN16 compile success");
+
+            bool hasCall = false;
+            for (int i = 0; i < result.Program.Instructions.Length; i++)
+            {
+                var code = result.Program.Instructions[i].Code;
+                if (code == OpCode.CALL || code == OpCode.CALL_LEAF) hasCall = true;
+            }
+            Assert(!hasCall, "IN16: struct param area(Box2) inlined — no CALL");
+
+            var values = new List<int>();
+            var world = new VMWorld();
+            world.Modules.Load(0, result.Program);
+            world.Syscalls.Register(0, "Report", (ref VMInstanceState s) => { values.Add(s.Registers.Get(0).ToInt()); });
+            world.SpawnInstance(0, 0);
+            world.Tick();
+            Assert(values.Count == 1 && values[0] == 15, $"IN16: area(3,5) = {(values.Count > 0 ? values[0].ToString() : "?")} (expected 15)");
+        }
+
+        // ===== Test IN17: Void inline with side-effect (syscall) =====
+        {
+            string source = @"
+func emitTwo(a: int, b: int) {
+    Report(a)
+    Report(b)
+}
+func main() {
+    emitTwo(10, 20)
+}";
+            var result = compiler.Compile(source, "main", new Dictionary<string, int> { { "Report", 0 } });
+            Assert(result.Success, "IN17 compile success");
+
+            var values = new List<int>();
+            var world = new VMWorld();
+            world.Modules.Load(0, result.Program);
+            world.Syscalls.Register(0, "Report", (ref VMInstanceState s) => { values.Add(s.Registers.Get(0).ToInt()); });
+            world.SpawnInstance(0, 0);
+            world.Tick();
+            Assert(values.Count == 2 && values[0] == 10 && values[1] == 20,
+                $"IN17: emitTwo(10,20) = {(values.Count > 0 ? values[0].ToString() : "?")},{(values.Count > 1 ? values[1].ToString() : "?")} (expected 10,20)");
+        }
+
+        // ===== Test IN18: Inline depth limit — 4-level chain exceeds InlineDepthMax =====
+        {
+            string source = @"
+func d(x: int): int { return x + 1 }
+func c(x: int): int { return d(x) + 1 }
+func b(x: int): int { return c(x) + 1 }
+func a(x: int): int { return b(x) + 1 }
+func main() {
+    Report(a(0))
+}";
+            var result = compiler.Compile(source, "main", new Dictionary<string, int> { { "Report", 0 } });
+            Assert(result.Success, "IN18 compile success");
+
+            // InlineDepthMax=3, so main→a(0)→b(1)→c(2)→d(3) — d hits depth 3, NOT inlined
+            bool hasCall = false;
+            for (int i = 0; i < result.Program.Instructions.Length; i++)
+            {
+                var code = result.Program.Instructions[i].Code;
+                if (code == OpCode.CALL || code == OpCode.CALL_LEAF) hasCall = true;
+            }
+            Assert(hasCall, "IN18: depth 4 chain — at least one CALL (depth limit reached)");
+
+            var values = new List<int>();
+            var world = new VMWorld();
+            world.Modules.Load(0, result.Program);
+            world.Syscalls.Register(0, "Report", (ref VMInstanceState s) => { values.Add(s.Registers.Get(0).ToInt()); });
+            world.SpawnInstance(0, 0);
+            world.Tick();
+            Assert(values.Count == 1 && values[0] == 4, $"IN18: a(0)=4, got {(values.Count > 0 ? values[0].ToString() : "?")}");
+        }
+
+        // ===== Test IN19: Function with yield NOT inlined =====
+        {
+            string source = @"
+func yielder(): int {
+    yield
+    return 42
+}
+func main() {
+    var r: int = yielder()
+    Report(r)
+}";
+            var result = compiler.Compile(source, "main", new Dictionary<string, int> { { "Report", 0 } });
+            Assert(result.Success, "IN19 compile success");
+
+            bool hasCall = false;
+            for (int i = 0; i < result.Program.Instructions.Length; i++)
+            {
+                var code = result.Program.Instructions[i].Code;
+                if (code == OpCode.CALL || code == OpCode.CALL_LEAF) hasCall = true;
+            }
+            Assert(hasCall, "IN19: yielder() NOT inlined — CALL emitted (has yield)");
+        }
+
+        // ===== Test IN20: Inline with if-else and variable mutation =====
+        {
+            string source = @"
+func classify(x: int): int {
+    var cat: int = 0
+    if x > 100 { cat = 3 }
+    if x > 50 { cat = cat + 2 }
+    if x > 0 { cat = cat + 1 }
+    return cat
+}
+func main() {
+    Report(classify(200))
+    Report(classify(75))
+    Report(classify(-5))
+}";
+            var result = compiler.Compile(source, "main", new Dictionary<string, int> { { "Report", 0 } });
+            Assert(result.Success, "IN20 compile success");
+
+            var values = new List<int>();
+            var world = new VMWorld();
+            world.Modules.Load(0, result.Program);
+            world.Syscalls.Register(0, "Report", (ref VMInstanceState s) => { values.Add(s.Registers.Get(0).ToInt()); });
+            world.SpawnInstance(0, 0);
+            world.Tick();
+            // classify(200): cat=0→3→5→6 = 6
+            // classify(75):  cat=0→0→2→3 = 3
+            // classify(-5):  cat=0→0→0→0 = 0
+            Assert(values.Count == 3 && values[0] == 6 && values[1] == 3 && values[2] == 0,
+                $"IN20: classify(200)={((values.Count > 0) ? values[0].ToString() : "?")}, classify(75)={((values.Count > 1) ? values[1].ToString() : "?")}, classify(-5)={((values.Count > 2) ? values[2].ToString() : "?")} (expected 6,3,0)");
+        }
+
+        // ===== Test IN21: @inline diagnostic — non-inlinable function with @inline annotation =====
+        {
+            string source = @"
+@inline
+func heavy(): int {
+    yield
+    return 42
+}
+func main() {
+    var r: int = heavy()
+    Report(r)
+}";
+            var result = compiler.Compile(source, "main", new Dictionary<string, int> { { "Report", 0 } });
+            Assert(result.Success, "IN21 compile success");
+            Assert(result.Warnings.Count > 0, "IN21: @inline function with yield → warning emitted");
+            bool hasInlineWarning = false;
+            for (int i = 0; i < result.Warnings.Count; i++)
+            {
+                if (result.Warnings[i].Contains("@inline") && result.Warnings[i].Contains("heavy"))
+                { hasInlineWarning = true; break; }
+            }
+            Assert(hasInlineWarning, "IN21: warning mentions @inline and function name");
+        }
+
+        // ===== Test IN22: Inline function returning void with early return =====
+        {
+            string source = @"
+func maybeReport(x: int) {
+    if x <= 0 { return }
+    Report(x)
+}
+func main() {
+    maybeReport(5)
+    maybeReport(-3)
+    maybeReport(10)
+}";
+            var result = compiler.Compile(source, "main", new Dictionary<string, int> { { "Report", 0 } });
+            Assert(result.Success, "IN22 compile success");
+
+            var values = new List<int>();
+            var world = new VMWorld();
+            world.Modules.Load(0, result.Program);
+            world.Syscalls.Register(0, "Report", (ref VMInstanceState s) => { values.Add(s.Registers.Get(0).ToInt()); });
+            world.SpawnInstance(0, 0);
+            world.Tick();
+            // maybeReport(5)→Report(5), maybeReport(-3)→skip, maybeReport(10)→Report(10)
+            Assert(values.Count == 2 && values[0] == 5 && values[1] == 10,
+                $"IN22: maybeReport results = {string.Join(",", values)} (expected 5,10)");
+        }
+
+        // ===== Test IN23: Inline with struct param and branch =====
+        {
+            string source = @"
+struct Vec2 { x: int; y: int }
+func bigger(v: Vec2): int {
+    if v.x > v.y { return v.x }
+    return v.y
+}
+func main() {
+    var a: Vec2
+    a.x = 3
+    a.y = 7
+    var b: Vec2
+    b.x = 10
+    b.y = 2
+    Report(bigger(a) + bigger(b))
+}";
+            var result = compiler.Compile(source, "main", new Dictionary<string, int> { { "Report", 0 } });
+            Assert(result.Success, "IN23 compile success");
+
+            bool hasCall = false;
+            for (int i = 0; i < result.Program.Instructions.Length; i++)
+            {
+                var code = result.Program.Instructions[i].Code;
+                if (code == OpCode.CALL || code == OpCode.CALL_LEAF) hasCall = true;
+            }
+            Assert(!hasCall, "IN23: struct param + branch inlined — no CALL");
+
+            var values = new List<int>();
+            var world = new VMWorld();
+            world.Modules.Load(0, result.Program);
+            world.Syscalls.Register(0, "Report", (ref VMInstanceState s) => { values.Add(s.Registers.Get(0).ToInt()); });
+            world.SpawnInstance(0, 0);
+            world.Tick();
+            // bigger({3,7})=7, bigger({10,2})=10 → 7+10=17
+            Assert(values.Count == 1 && values[0] == 17, $"IN23: bigger results = {(values.Count > 0 ? values[0].ToString() : "?")} (expected 17)");
+        }
+
         // ===== Summary =====
         Debug.Log($"========================================");
         Debug.Log($"Compiler Tests: {passed} passed, {failed} failed");
