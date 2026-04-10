@@ -476,7 +476,7 @@ Docs/
 | — | **B-δ4 SN2 结构体字面量构造语法** | **StructLiteralExpr AST + Parser `TypeName { field: expr }` + Compiler sugar 展开 + 嵌套字面量 + CS31-CS38 测试** | **990** | [B-δ4](Plan/Step_B_Delta4_SN2_StructLiteral.md) |
 | — | **B-δ5 C5 Cleanup 超时保护** | **MaxCleanupSteps 每块步数预算 + 超时跳过当前块继续剩余 cleanup + C5-01~C5-04 测试** | **1007** | [B-δ5](Plan/Step_B_Delta5_C5_CleanupTimeout.md) |
 
-**B 阶段全部完成。1007 项 Assert × 2 模式全通过。B-ε 性能优化串行计划全部完成（4/4）。B-ζ 分支场景优化串行计划全部完成（3/3）。B-η O8 指令压缩完成（O8-1~O8-3/O8-5 ✅，O8-4 ⏸）。D 阶段分发基础设施全部完成（DIST-1~DIST-10 ✅）。Lang-1 ✅ 完成。Lang-1.1a ✅ 完成。Lang-1.1b ✅ 完成。Lang-2 ✅ 完成。Lang-3 ✅ 完成。Lang-6 ✅ 完成（benchmark 无回归确认）。Lang-7 ✅ 完成（自动退化 + VMConfig）。Lang-8 ✅ 完成（统一语法 + @inline + LSP 警告诊断）。**
+**B 阶段全部完成。1007 项 Assert × 2 模式全通过。B-ε 性能优化串行计划全部完成（4/4）。B-ζ 分支场景优化串行计划全部完成（3/3）。B-η O8 指令压缩完成（O8-1~O8-3/O8-5 ✅，O8-4 ⏸）。D 阶段分发基础设施全部完成（DIST-1~DIST-10 ✅）。Lang-1 ✅ 完成。Lang-1.1a ✅ 完成。Lang-1.1b ✅ 完成。Lang-2 ✅ 完成。Lang-3 ✅ 完成。Lang-6 ✅ 完成（benchmark 无回归确认）。Lang-7 ✅ 完成（自动退化 + VMConfig）。Lang-8 ✅ 完成（统一语法 + @inline + LSP 警告诊断）。Lang-11 ✅ 完成（模块级 struct var/const 直接初始化，MSV01-MSV15）。**
 
 ---
 
@@ -563,9 +563,9 @@ B 阶段 20 个步骤（B-R1 → B-δ5）全部完成，已归入上方 A 区表
 | **Lang-8** | **统一语法 + @inline + LSP (C-2)** | **✅** | **`svc.member` 统一成员访问语法：`svc.func(args)` 编译为 XCALL（自动 A1/A2 退化为 XLOAD/XSTORE_MVAR），`svc.var` 编译为 XLOAD/XSTORE_MVAR。`@inline` hint 注解（@inline @export / @export @inline 均可）。ServiceBinding 类（编译器接受目标 ExportTable）。FO6 寄存器重映射修复（XCALL/XLOAD_MVAR/XSTORE_MVAR GetRegisterMask）。LSP 警告诊断（severity=2）+ @inline 未退化提示。US01-US15 全通过，B01-B06 无回归** | 易用性 + 开发体验 | 编译器 + LSP | ⭐⭐⭐ |
 | *Lang-9* | *A5 深度内联* | *⏳* | *编译器对所有满足条件的函数主动内联（无论是否标注 `@inline`）。`@inline` 不改变内联行为，仅在标注函数无法内联时触发诊断（Warn/Error，由 `InlineFailurePolicy` 配置控制）。未标注函数静默退化。O4 跨模块常量折叠。编译期完整语义保持。可行性分析 → [D_DeepInlining.md](Discussion/D_DeepInlining.md)* | *极致优化* | *编译器* | *⭐⭐⭐* |
 | **Lang-10** | **导出变量默认值 + 批量提取 API** | **✅** | **编译期常量默认值存储（`ExportVarEntry.DefaultValue`）+ 批量 API：`ResolveVarIndices(names)→indices`（一次性名字解析，可缓存）+ `ReadVarDefaults(indices)→values`（O(1) 批量读取）+ 便捷 `GetVarDefault(name, fallback)`。宿主无需 spawn/tick 临时实例即可提取脚本配置** | SK15: 技能属性声明式提取 | 编译器 + ExportTable | ⭐⭐ |
-| *Lang-11* | *模块级 struct const 直接初始化 (方案 A)* | *⏳* | *支持模块级 `var`/`const` 声明 struct 类型并以 struct literal 初始化（如 `const hitPhase: HitPhaseDef = HitPhaseDef { ... }`）。当前模块变量仅支持标量 Number 初始化；struct 配置只能在函数内逐字段赋值。方案 A：编译器在 `ProcessModuleVariables` 阶段识别 struct literal 初始化器，为每个字段分配连续模块变量寄存器，`EmitModuleVarInit` 展开为逐字段 LOAD_CONST+STORE_MVAR。纯编译期特性，无运行时改动* | KOF collision 配置提升至模块级 | 编译器 | ⭐⭐ |
+| *Lang-11* | *模块级 struct const 直接初始化 (方案 A)* | *✅* | *支持模块级 `var`/`const` 声明 struct 类型并以 struct literal 初始化（如 `const hitPhase: HitPhaseDef = HitPhaseDef { ... }`）。方案 A：编译器在 `ProcessModuleVariables` 阶段识别 struct literal 初始化器，为每个字段分配连续模块变量寄存器，`TryFoldStructLiteral` 递归折叠字段值，`EmitModuleVarInit` 展开为逐字段 LOAD_CONST+STORE_MVAR。const 防写 + 嵌套 struct + 函数参数传递。纯编译期特性，无运行时改动。MSV01-MSV15 (55 asserts) 全通过* | KOF collision 配置提升至模块级 | 编译器 | ⭐⭐ |
 
-> Phase 1（Lang-1~Lang-3）✅ 完成。Phase 2 = Lang-6~Lang-8（Q4 服务脚本 XCALL 路径），Lang-6 ✅ 完成，Lang-7 ✅ 完成，Lang-8 ✅ 完成。Phase 2 全部完成。Lang-4 按需触发（黑板瓶颈时）。Lang-9 A5 深度内联（编译器主动内联所有可内联函数，`@inline` 仅控制诊断，可行性分析 → [D_DeepInlining.md](Discussion/D_DeepInlining.md)）。**Lang-10 ✅ 完成（导出变量默认值 + 批量提取 API，SK15 需求驱动）。Lang-11 ⏳（模块级 struct const 直接初始化，方案 A）。需求方可启动 Phase 2 宿主侧重构。**
+> Phase 1（Lang-1~Lang-3）✅ 完成。Phase 2 = Lang-6~Lang-8（Q4 服务脚本 XCALL 路径），Lang-6 ✅ 完成，Lang-7 ✅ 完成，Lang-8 ✅ 完成。Phase 2 全部完成。Lang-4 按需触发（黑板瓶颈时）。Lang-9 A5 深度内联（编译器主动内联所有可内联函数，`@inline` 仅控制诊断，可行性分析 → [D_DeepInlining.md](Discussion/D_DeepInlining.md)）。**Lang-10 ✅ 完成（导出变量默认值 + 批量提取 API，SK15 需求驱动）。Lang-11 ✅ 完成（模块级 struct var/const 直接初始化，MSV01-MSV15 全通过，1365 测试总计）。需求方可启动 Phase 2 宿主侧重构。** → [Step_Lang11](Plan/Step_Lang11_ModuleStructInit.md)
 >
 > **Lang-6 子计划 checklist**（C-1 XCALL 基线）：
 > - [x] 输出 XCALL Spec 设计文档（OpCode 编码、导出表格式、跨实例寻址协议）→ [Step_Lang6_XCALL_Spec.md](Plan/Step_Lang6_XCALL_Spec.md)
@@ -626,7 +626,7 @@ B 阶段 20 个步骤（B-R1 → B-δ5）全部完成，已归入上方 A 区表
 >
 > **Lang-6 设计来源（Q4 收敛）**：Q4 讨论历经 9 轮（R18~R26），14 项设计决策全部锁定。核心方案：方式 C（语言级引用），服务脚本为 FFS 运行时实体。统一基线设计 XIMA（Cross-Instance Member Access）：`svc.member` 点号语法，编译器根据导出表自动路由 XCALL/XLOAD_MVAR/XSTORE_MVAR。Y1-Plus 编译期保证服务函数不可 yield（无运行时负担）。嵌套深度运行时配置（MaxXCallDepth 默认 4，Warn/Unlimited 两种策略）。性能影响可忽略（< 0.02% 帧预算）。
 
-**Lang-10 ✅ 完成（DV01-DV10 全通过，B01-B06 benchmark 无回归，1310 测试全通过）。SK15 ✅ 全部完成（Phase 2 宿主侧 ExtractSkillDef 重构 + Phase 3 脚本侧 @export var 迁移：8 个脚本迁移完成，SetSkillMeta Syscall 移除，meta capture 机制移除）。Lang-8 ✅ 完成（US01-US15 全通过，B01-B06 benchmark 无回归，1259 测试全通过）。Lang-7 ✅ 完成（AD01-AD12 全通过，B01-B06 benchmark 无回归，1206 测试全通过）。Lang-6 ✅ 完成（XC01-XC16 全通过，B01-B06 benchmark 无回归确认，1164 测试全通过）。Lang-3 ✅ 完成（BB01-BB10 全通过，1111 测试全通过）。Lang-1 ✅ 完成。Lang-1.1a ✅ 完成（MR01-MR08 全通过）。Lang-1.1b ✅ 完成（XR01-XR06 全通过）。Lang-2 ✅ 完成（INC01-INC16 全通过）。P0 语言需求 Phase 1 完毕。Phase 2（Q4 服务脚本 XCALL 路径 Lang-6~Lang-8）全部完成。当前位置 → Lang-10 ✅ + SK15 ✅ 完成。Lang-9（A5 深度内联）远期标记已取消，可行性分析完成（[D_DeepInlining.md](Discussion/D_DeepInlining.md)）。结论：编译器总是主动内联所有可内联函数，`@inline` 不改变内联行为、仅在标注函数无法内联时触发诊断（`InlineFailurePolicy`: Warn/Error）。Lang-11 ⏳（模块级 struct const 直接初始化，方案 A）。**
+**Lang-10 ✅ 完成（DV01-DV10 全通过，B01-B06 benchmark 无回归，1310 测试全通过）。SK15 ✅ 全部完成（Phase 2 宿主侧 ExtractSkillDef 重构 + Phase 3 脚本侧 @export var 迁移：8 个脚本迁移完成，SetSkillMeta Syscall 移除，meta capture 机制移除）。Lang-8 ✅ 完成（US01-US15 全通过，B01-B06 benchmark 无回归，1259 测试全通过）。Lang-7 ✅ 完成（AD01-AD12 全通过，B01-B06 benchmark 无回归，1206 测试全通过）。Lang-6 ✅ 完成（XC01-XC16 全通过，B01-B06 benchmark 无回归确认，1164 测试全通过）。Lang-3 ✅ 完成（BB01-BB10 全通过，1111 测试全通过）。Lang-1 ✅ 完成。Lang-1.1a ✅ 完成（MR01-MR08 全通过）。Lang-1.1b ✅ 完成（XR01-XR06 全通过）。Lang-2 ✅ 完成（INC01-INC16 全通过）。P0 语言需求 Phase 1 完毕。Phase 2（Q4 服务脚本 XCALL 路径 Lang-6~Lang-8）全部完成。Lang-11 ✅ 完成（模块级 struct var/const 直接初始化，MSV01-MSV15 全通过，1365 测试总计，B01-B06 无回归）。当前位置 → Lang-11 ✅ 完成。Lang-9（A5 深度内联）可行性分析完成（[D_DeepInlining.md](Discussion/D_DeepInlining.md)）。结论：编译器总是主动内联所有可内联函数，`@inline` 不改变内联行为、仅在标注函数无法内联时触发诊断（`InlineFailurePolicy`: Warn/Error）。**
 
 ---
 

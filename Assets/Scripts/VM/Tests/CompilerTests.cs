@@ -7964,6 +7964,467 @@ func main() {
                 "DV10: cached indices produce same results");
         }
 
+        // ===== Lang-11: Module-level struct var/const initialization =====
+
+        // ===== Test MSV01: Module var struct with literal init + field read =====
+        {
+            string source = @"
+struct Vec2 {
+    x: float
+    y: float
+}
+
+var pos: Vec2 = Vec2 { x: 10, y: 20 }
+
+func main() {
+    Report(pos.x)
+    Report(pos.y)
+    Report(pos.x + pos.y)
+}";
+            var syscalls = new Dictionary<string, int> { { "Report", 0 } };
+            var result = compiler.Compile(source, "main", syscalls);
+            Assert(result.Success, "MSV01 compile success");
+
+            var values = new List<int>();
+            var world = new VMWorld();
+            world.Modules.Load(0, result.Program);
+            world.Syscalls.Register(0, "Report", (ref VMInstanceState s) =>
+            {
+                values.Add(s.Registers.Get(0).ToInt());
+            });
+
+            world.SpawnInstance(0, 0);
+            world.Tick();
+            Assert(values.Count == 3, "MSV01: 3 reports");
+            Assert(values[0] == 10, $"MSV01: pos.x = {values[0]} (expected 10)");
+            Assert(values[1] == 20, $"MSV01: pos.y = {values[1]} (expected 20)");
+            Assert(values[2] == 30, $"MSV01: pos.x + pos.y = {values[2]} (expected 30)");
+        }
+
+        // ===== Test MSV02: Module const struct with literal init + field read =====
+        {
+            string source = @"
+struct Vec2 {
+    x: float
+    y: float
+}
+
+const origin: Vec2 = Vec2 { x: 100, y: 200 }
+
+func main() {
+    Report(origin.x)
+    Report(origin.y)
+}";
+            var syscalls = new Dictionary<string, int> { { "Report", 0 } };
+            var result = compiler.Compile(source, "main", syscalls);
+            Assert(result.Success, "MSV02 compile success");
+
+            var values = new List<int>();
+            var world = new VMWorld();
+            world.Modules.Load(0, result.Program);
+            world.Syscalls.Register(0, "Report", (ref VMInstanceState s) =>
+            {
+                values.Add(s.Registers.Get(0).ToInt());
+            });
+
+            world.SpawnInstance(0, 0);
+            world.Tick();
+            Assert(values.Count == 2, "MSV02: 2 reports");
+            Assert(values[0] == 100, $"MSV02: origin.x = {values[0]} (expected 100)");
+            Assert(values[1] == 200, $"MSV02: origin.y = {values[1]} (expected 200)");
+        }
+
+        // ===== Test MSV03: Const struct assignment prevention =====
+        {
+            string source = @"
+struct Vec2 {
+    x: float
+    y: float
+}
+
+const origin: Vec2 = Vec2 { x: 0, y: 0 }
+
+func main() {
+    origin = Vec2 { x: 1, y: 2 }
+}";
+            var syscalls = new Dictionary<string, int>();
+            var result = compiler.Compile(source, "main", syscalls);
+            Assert(!result.Success, "MSV03: const struct assignment should fail");
+            Assert(result.Errors[0].Contains("Cannot assign to 'const' struct"),
+                $"MSV03: error message, got: {result.Errors[0]}");
+        }
+
+        // ===== Test MSV04: Const struct field assignment prevention =====
+        {
+            string source = @"
+struct Vec2 {
+    x: float
+    y: float
+}
+
+const origin: Vec2 = Vec2 { x: 0, y: 0 }
+
+func main() {
+    origin.x = 5
+}";
+            var syscalls = new Dictionary<string, int>();
+            var result = compiler.Compile(source, "main", syscalls);
+            Assert(!result.Success, "MSV04: const struct field assignment should fail");
+            Assert(result.Errors[0].Contains("Cannot assign to field of 'const' struct"),
+                $"MSV04: error message, got: {result.Errors[0]}");
+        }
+
+        // ===== Test MSV05: Module var struct field write =====
+        {
+            string source = @"
+struct Vec2 {
+    x: float
+    y: float
+}
+
+var pos: Vec2 = Vec2 { x: 1, y: 2 }
+
+func main() {
+    pos.x = 99
+    Report(pos.x)
+    Report(pos.y)
+}";
+            var syscalls = new Dictionary<string, int> { { "Report", 0 } };
+            var result = compiler.Compile(source, "main", syscalls);
+            Assert(result.Success, "MSV05 compile success");
+
+            var values = new List<int>();
+            var world = new VMWorld();
+            world.Modules.Load(0, result.Program);
+            world.Syscalls.Register(0, "Report", (ref VMInstanceState s) =>
+            {
+                values.Add(s.Registers.Get(0).ToInt());
+            });
+
+            world.SpawnInstance(0, 0);
+            world.Tick();
+            Assert(values.Count == 2, "MSV05: 2 reports");
+            Assert(values[0] == 99, $"MSV05: pos.x after write = {values[0]} (expected 99)");
+            Assert(values[1] == 2, $"MSV05: pos.y unchanged = {values[1]} (expected 2)");
+        }
+
+        // ===== Test MSV06: Nested struct module var =====
+        {
+            string source = @"
+struct Vec2 {
+    x: float
+    y: float
+}
+
+struct Rect {
+    min: Vec2
+    max: Vec2
+}
+
+var bounds: Rect = Rect {
+    min: Vec2 { x: 10, y: 20 },
+    max: Vec2 { x: 30, y: 40 }
+}
+
+func main() {
+    Report(bounds.min.x)
+    Report(bounds.min.y)
+    Report(bounds.max.x)
+    Report(bounds.max.y)
+}";
+            var syscalls = new Dictionary<string, int> { { "Report", 0 } };
+            var result = compiler.Compile(source, "main", syscalls);
+            Assert(result.Success, "MSV06 compile success");
+
+            var values = new List<int>();
+            var world = new VMWorld();
+            world.Modules.Load(0, result.Program);
+            world.Syscalls.Register(0, "Report", (ref VMInstanceState s) =>
+            {
+                values.Add(s.Registers.Get(0).ToInt());
+            });
+
+            world.SpawnInstance(0, 0);
+            world.Tick();
+            Assert(values.Count == 4, "MSV06: 4 reports");
+            Assert(values[0] == 10, $"MSV06: bounds.min.x = {values[0]} (expected 10)");
+            Assert(values[1] == 20, $"MSV06: bounds.min.y = {values[1]} (expected 20)");
+            Assert(values[2] == 30, $"MSV06: bounds.max.x = {values[2]} (expected 30)");
+            Assert(values[3] == 40, $"MSV06: bounds.max.y = {values[3]} (expected 40)");
+        }
+
+        // ===== Test MSV07: Module struct var shared across functions =====
+        {
+            string source = @"
+struct Vec2 {
+    x: float
+    y: float
+}
+
+var pos: Vec2 = Vec2 { x: 5, y: 10 }
+
+func doubleX() {
+    pos.x = pos.x * 2
+}
+
+func main() {
+    Report(pos.x)
+    doubleX()
+    Report(pos.x)
+}";
+            var syscalls = new Dictionary<string, int> { { "Report", 0 } };
+            var result = compiler.Compile(source, "main", syscalls);
+            Assert(result.Success, "MSV07 compile success");
+
+            var values = new List<int>();
+            var world = new VMWorld();
+            world.Modules.Load(0, result.Program);
+            world.Syscalls.Register(0, "Report", (ref VMInstanceState s) =>
+            {
+                values.Add(s.Registers.Get(0).ToInt());
+            });
+
+            world.SpawnInstance(0, 0);
+            world.Tick();
+            Assert(values.Count == 2, "MSV07: 2 reports");
+            Assert(values[0] == 5, $"MSV07: pos.x before = {values[0]} (expected 5)");
+            Assert(values[1] == 10, $"MSV07: pos.x after doubleX = {values[1]} (expected 10)");
+        }
+
+        // ===== Test MSV08: Module var struct default zero init (no initializer) =====
+        {
+            string source = @"
+struct Vec2 {
+    x: float
+    y: float
+}
+
+var pos: Vec2
+
+func main() {
+    Report(pos.x)
+    Report(pos.y)
+}";
+            var syscalls = new Dictionary<string, int> { { "Report", 0 } };
+            var result = compiler.Compile(source, "main", syscalls);
+            Assert(result.Success, "MSV08 compile success");
+
+            var values = new List<int>();
+            var world = new VMWorld();
+            world.Modules.Load(0, result.Program);
+            world.Syscalls.Register(0, "Report", (ref VMInstanceState s) =>
+            {
+                values.Add(s.Registers.Get(0).ToInt());
+            });
+
+            world.SpawnInstance(0, 0);
+            world.Tick();
+            Assert(values.Count == 2, "MSV08: 2 reports");
+            Assert(values[0] == 0, $"MSV08: pos.x default = {values[0]} (expected 0)");
+            Assert(values[1] == 0, $"MSV08: pos.y default = {values[1]} (expected 0)");
+        }
+
+        // ===== Test MSV09: Error — const struct without initializer =====
+        {
+            string source = @"
+struct Vec2 {
+    x: float
+    y: float
+}
+
+const origin: Vec2
+
+func main() {
+}";
+            var syscalls = new Dictionary<string, int>();
+            var result = compiler.Compile(source, "main", syscalls);
+            Assert(!result.Success, "MSV09: const struct without initializer should fail");
+            Assert(result.Errors[0].Contains("requires an initializer"),
+                $"MSV09: error message, got: {result.Errors[0]}");
+        }
+
+        // ===== Test MSV10: Error — non-literal initializer =====
+        {
+            string source = @"
+struct Vec2 {
+    x: float
+    y: float
+}
+
+var pos: Vec2 = 42
+
+func main() {
+}";
+            var syscalls = new Dictionary<string, int>();
+            var result = compiler.Compile(source, "main", syscalls);
+            Assert(!result.Success, "MSV10: non-literal struct initializer should fail");
+            Assert(result.Errors[0].Contains("must be a struct literal"),
+                $"MSV10: error message, got: {result.Errors[0]}");
+        }
+
+        // ===== Test MSV11: Module struct var with const expression fields =====
+        {
+            string source = @"
+struct Vec2 {
+    x: float
+    y: float
+}
+
+const OFFSET: int = 5
+var pos: Vec2 = Vec2 { x: OFFSET * 2, y: OFFSET + 3 }
+
+func main() {
+    Report(pos.x)
+    Report(pos.y)
+}";
+            var syscalls = new Dictionary<string, int> { { "Report", 0 } };
+            var result = compiler.Compile(source, "main", syscalls);
+            Assert(result.Success, "MSV11 compile success");
+
+            var values = new List<int>();
+            var world = new VMWorld();
+            world.Modules.Load(0, result.Program);
+            world.Syscalls.Register(0, "Report", (ref VMInstanceState s) =>
+            {
+                values.Add(s.Registers.Get(0).ToInt());
+            });
+
+            world.SpawnInstance(0, 0);
+            world.Tick();
+            Assert(values.Count == 2, "MSV11: 2 reports");
+            Assert(values[0] == 10, $"MSV11: OFFSET*2 = {values[0]} (expected 10)");
+            Assert(values[1] == 8, $"MSV11: OFFSET+3 = {values[1]} (expected 8)");
+        }
+
+        // ===== Test MSV12: Module struct var whole assignment (var, not const) =====
+        {
+            string source = @"
+struct Vec2 {
+    x: float
+    y: float
+}
+
+var pos: Vec2 = Vec2 { x: 1, y: 2 }
+
+func main() {
+    Report(pos.x)
+    pos = Vec2 { x: 88, y: 99 }
+    Report(pos.x)
+    Report(pos.y)
+}";
+            var syscalls = new Dictionary<string, int> { { "Report", 0 } };
+            var result = compiler.Compile(source, "main", syscalls);
+            Assert(result.Success, "MSV12 compile success");
+
+            var values = new List<int>();
+            var world = new VMWorld();
+            world.Modules.Load(0, result.Program);
+            world.Syscalls.Register(0, "Report", (ref VMInstanceState s) =>
+            {
+                values.Add(s.Registers.Get(0).ToInt());
+            });
+
+            world.SpawnInstance(0, 0);
+            world.Tick();
+            Assert(values.Count == 3, "MSV12: 3 reports");
+            Assert(values[0] == 1, $"MSV12: pos.x before = {values[0]} (expected 1)");
+            Assert(values[1] == 88, $"MSV12: pos.x after = {values[1]} (expected 88)");
+            Assert(values[2] == 99, $"MSV12: pos.y after = {values[2]} (expected 99)");
+        }
+
+        // ===== Test MSV13: Error — @export struct module var =====
+        {
+            string source = @"
+struct Vec2 {
+    x: float
+    y: float
+}
+
+@export var pos: Vec2 = Vec2 { x: 1, y: 2 }
+
+func main() {
+}";
+            var syscalls = new Dictionary<string, int>();
+            var result = compiler.Compile(source, "main", syscalls);
+            Assert(!result.Success, "MSV13: @export struct should fail");
+            Assert(result.Errors[0].Contains("@export is not supported for struct"),
+                $"MSV13: error message, got: {result.Errors[0]}");
+        }
+
+        // ===== Test MSV14: Module struct var as function argument =====
+        {
+            string source = @"
+struct Vec2 {
+    x: float
+    y: float
+}
+
+var pos: Vec2 = Vec2 { x: 7, y: 8 }
+
+func sum(v: Vec2): int {
+    return v.x + v.y
+}
+
+func main() {
+    Report(sum(pos))
+}";
+            var syscalls = new Dictionary<string, int> { { "Report", 0 } };
+            var result = compiler.Compile(source, "main", syscalls);
+            Assert(result.Success, "MSV14 compile success");
+
+            var values = new List<int>();
+            var world = new VMWorld();
+            world.Modules.Load(0, result.Program);
+            world.Syscalls.Register(0, "Report", (ref VMInstanceState s) =>
+            {
+                values.Add(s.Registers.Get(0).ToInt());
+            });
+
+            world.SpawnInstance(0, 0);
+            world.Tick();
+            Assert(values.Count == 1, "MSV14: 1 report");
+            Assert(values[0] == 15, $"MSV14: sum(pos) = {values[0]} (expected 15)");
+        }
+
+        // ===== Test MSV15: Mixed scalar and struct module vars =====
+        {
+            string source = @"
+struct Vec2 {
+    x: float
+    y: float
+}
+
+var counter: int = 42
+var pos: Vec2 = Vec2 { x: 3, y: 4 }
+const MAX: int = 100
+
+func main() {
+    Report(counter)
+    Report(pos.x)
+    Report(pos.y)
+    Report(MAX)
+}";
+            var syscalls = new Dictionary<string, int> { { "Report", 0 } };
+            var result = compiler.Compile(source, "main", syscalls);
+            Assert(result.Success, "MSV15 compile success");
+
+            var values = new List<int>();
+            var world = new VMWorld();
+            world.Modules.Load(0, result.Program);
+            world.Syscalls.Register(0, "Report", (ref VMInstanceState s) =>
+            {
+                values.Add(s.Registers.Get(0).ToInt());
+            });
+
+            world.SpawnInstance(0, 0);
+            world.Tick();
+            Assert(values.Count == 4, "MSV15: 4 reports");
+            Assert(values[0] == 42, $"MSV15: counter = {values[0]} (expected 42)");
+            Assert(values[1] == 3, $"MSV15: pos.x = {values[1]} (expected 3)");
+            Assert(values[2] == 4, $"MSV15: pos.y = {values[2]} (expected 4)");
+            Assert(values[3] == 100, $"MSV15: MAX = {values[3]} (expected 100)");
+        }
+
         // ===== Summary =====
         Debug.Log($"========================================");
         Debug.Log($"Compiler Tests: {passed} passed, {failed} failed");
