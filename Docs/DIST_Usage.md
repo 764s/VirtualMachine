@@ -261,7 +261,7 @@ code --install-extension ffvm-debug.vsix
 # 3. 重启 VS Code
 ```
 
-**说明**：扩展会自动在 `src/FFVM.Cli/bin/Release/net8.0/` 下寻找构建好的 `ffvm-cli`。
+**说明**：扩展会自动在 `src/FFVM.Cli/bin/Release/` 和 `src/FFVM.Cli/bin/Debug/` 下寻找构建好的 `ffvm-cli`（自动检测 .NET 目标框架版本）。
 如需指定自定义路径，在 VS Code 设置中配置 `ffvm.executablePath`。
 
 ---

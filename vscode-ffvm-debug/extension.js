@@ -24,14 +24,23 @@ function resolveExecutablePath() {
     // Default: try common workspace-relative build output paths
     const ws = vscode.workspace.workspaceFolders?.[0]?.uri?.fsPath;
     if (ws) {
-        const candidates = [
-            path.join(ws, "src", "FFVM.Cli", "bin", "Release", "net8.0", "ffvm-cli"),
-            path.join(ws, "src", "FFVM.Cli", "bin", "Debug", "net8.0", "ffvm-cli"),
-        ];
-
-        for (const p of candidates) {
-            if (fs.existsSync(p)) return p;
-            if (fs.existsSync(p + ".exe")) return p + ".exe";
+        const cliDir = path.join(ws, "src", "FFVM.Cli", "bin");
+        const configs = ["Release", "Debug"];
+        for (const cfg of configs) {
+            const cfgDir = path.join(cliDir, cfg);
+            // Dynamically detect target framework (e.g., net8.0, net9.0)
+            try {
+                const entries = fs.readdirSync(cfgDir, { withFileTypes: true });
+                for (const entry of entries) {
+                    if (entry.isDirectory() && entry.name.startsWith("net")) {
+                        const p = path.join(cfgDir, entry.name, "ffvm-cli");
+                        if (fs.existsSync(p)) return p;
+                        if (fs.existsSync(p + ".exe")) return p + ".exe";
+                    }
+                }
+            } catch {
+                // Directory doesn't exist, continue
+            }
         }
     }
 
