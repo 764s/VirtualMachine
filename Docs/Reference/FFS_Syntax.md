@@ -700,15 +700,16 @@ a >> n      // 右移 n 位
 - 典型用途：技能 tag / stance 位域操作
 
 ```ffs
-// 位域 flag 组合
-const STANCE_GROUNDED: int = 1
-const STANCE_CROUCHING: int = 4
-const ALLOWED: int = STANCE_GROUNDED | STANCE_CROUCHING   // 5
+// 位域 flag 组合（枚举成员与 | 配合）
+enum Stance { GROUNDED = 1, CROUCHING = 4 }
+const ALLOWED: int = Stance.GROUNDED | Stance.CROUCHING    // 5
 
-// 位移生成 flag
-const TAG_BIT_JUMP: int = 1 << 4                          // 16
-const TAG_BIT_AIR: int = 1 << 11                           // 2048
-const TAGS: int = TAG_BIT_JUMP | TAG_BIT_AIR               // 2064
+// 位移生成 flag（枚举 + 常量表达式）
+enum TagBit {
+    JUMP      = 1 << 4,
+    AIR_STATE = 1 << 11
+}
+const TAGS: int = TagBit.JUMP | TagBit.AIR_STATE            // 2064
 ```
 
 ### 6.4 赋值
@@ -1006,7 +1007,7 @@ func main() {
         if f >= hitPhase.startFrame && f < hitPhase.endFrame && mutex == 0 {
             var target: int = CheckAttackHit(hitPhase.hitboxId)
             if target > 0 {
-                ApplyDamage(target, 5, 101)
+                ApplyDamage(target, 5, DamageType.NORMAL_LOWER)
                 mutex = 1
             }
         }
@@ -1074,14 +1075,12 @@ enum DamageType {
     KNOCKDOWN    = 201
 }
 
-// 位域 flag：用 1 << N 生成，用 | 组合
-const STANCE_GROUNDED: int = 1
-const STANCE_CROUCHING: int = 4
-const TAG_BIT_ATTACK: int = 1 << 5
-const TAG_BIT_AIR_STATE: int = 1 << 11
+// 位域 flag 枚举：用 1 << N 生成，用 | 组合
+enum Stance { GROUNDED = 1, CROUCHING = 4 }
+enum TagBit { ATTACK = 1 << 5, AIR_STATE = 1 << 11 }
 
-@export const tags: int = TAG_BIT_ATTACK
-@export const allowedStances: int = STANCE_GROUNDED | STANCE_CROUCHING
+@export const tags: int = TagBit.ATTACK
+@export const allowedStances: int = Stance.GROUNDED | Stance.CROUCHING
 
 func main() {
     BeginAction(10, 20)

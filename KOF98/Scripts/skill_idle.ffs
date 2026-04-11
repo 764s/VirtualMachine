@@ -12,7 +12,7 @@ include "common/skill_base.ffs"
 @export const totalFrames: int = -1
 @export const activationPriority: int = 900
 @export const interruptPriority: int = 900
-@export const allowedStances: int = STANCE_GROUNDED
+@export const allowedStances: int = Stance.GROUNDED
 
 func main() {
     // ── Execution ───────────────────────────────────────────

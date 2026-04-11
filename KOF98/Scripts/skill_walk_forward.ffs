@@ -10,12 +10,12 @@ include "common/skill_base.ffs"
 
 // ── Skill Configuration (overrides only) ────────────────────
 @export const priority: int = 1
-@export const tags: int = TAG_BIT_WALK
+@export const tags: int = TagBit.WALK
 @export const activationPriority: int = 500
 @export const interruptPriority: int = 500
 @export const requireGrounded: int = 1
-@export const requireInputHeld: int = INPUT_BIT_ANY_DIR_H
-@export const requireNotInputHeld: int = INPUT_BIT_UP
+@export const requireInputHeld: int = InputBit.ANY_DIR_H
+@export const requireNotInputHeld: int = InputBit.UP
 
 func main() {
     // ── Execution ───────────────────────────────────────────
@@ -25,8 +25,8 @@ func main() {
 
     while 1 {
         // Continuation check — return when direction released or not grounded
-        var leftHeld: int = IsInputHeld(INPUT_LEFT)
-        var rightHeld: int = IsInputHeld(INPUT_RIGHT)
+        var leftHeld: int = IsInputHeld(InputButton.LEFT)
+        var rightHeld: int = IsInputHeld(InputButton.RIGHT)
         var grounded: int = IsGrounded()
         if leftHeld == 0 && rightHeld == 0 { return }
         if grounded == 0 { return }

@@ -3,7 +3,7 @@
 // ============================================================
 // 18-frame crouching attack. Hitbox active during frames [4, 9).
 // Collision data organized as structs via skill_collision.ffs.
-// Crouching attacks hit low (DMG_NORMAL_LOWER).
+// Crouching attacks hit low (DamageType.NORMAL_LOWER).
 // Activation: Down held + LP pressed, grounded.
 
 include "common/skill_base.ffs"
@@ -11,32 +11,25 @@ include "common/skill_base.ffs"
 // ── Skill Configuration (overrides only) ────────────────────
 @export const totalFrames: int = 18
 @export const priority: int = 3
-@export const tags: int = TAG_BIT_ATTACK
+@export const tags: int = TagBit.ATTACK
 @export const isLooping: int = 0
 @export const activationPriority: int = 200
 @export const interruptPriority: int = 200
-@export const allowedStances: int = STANCE_GROUNDED | STANCE_CROUCHING
+@export const allowedStances: int = Stance.GROUNDED | Stance.CROUCHING
 @export const requireGrounded: int = 1
-@export const requireInputPressed: int = INPUT_BIT_LP
-@export const requireInputHeld: int = INPUT_BIT_DOWN
+@export const requireInputPressed: int = InputBit.LP
+@export const requireInputHeld: int = InputBit.DOWN
+
+// ── Collision Configuration (Lang-11 module-level struct const) ──
+const hitPhase: HitPhaseDef = HitPhaseDef {
+    startFrame: 4,
+    endFrame: 9,
+    groupId: 1002,
+    box: Box4 { ox: 0.25, oy: 0.3, hw: 0.3, hh: 0.12 }
+}
+const hurtBox: Box4 = Box4 { ox: 0.0, oy: 0.35, hw: 0.2, hh: 0.35 }
 
 func main() {
-    // ── Collision Configuration ─────────────────────────────
-    var hitPhase: HitPhaseDef
-    hitPhase.startFrame = 4
-    hitPhase.endFrame = 9
-    hitPhase.groupId = 1002
-    hitPhase.box.ox = 0.25
-    hitPhase.box.oy = 0.3
-    hitPhase.box.hw = 0.3
-    hitPhase.box.hh = 0.12
-
-    var hurtBox: Box4
-    hurtBox.ox = 0.0
-    hurtBox.oy = 0.35
-    hurtBox.hw = 0.2
-    hurtBox.hh = 0.35
-
     // ── Execution ───────────────────────────────────────────
     BeginAction(20, 18)
     defer {
@@ -58,7 +51,7 @@ func main() {
             if target > 0 {
                 ApplyDamage(target, 1.2, DamageType.NORMAL_LOWER)
                 ApplyHitstun(target, 0, 10, 0, 0)
-                SpawnEffectHit(FxId.LIGHT_HIT, FX_DUR_LIGHT_HIT)
+                SpawnEffectHit(FxId.LIGHT_HIT, FxDuration.LIGHT_HIT)
                 hitDone = 1
             }
         }

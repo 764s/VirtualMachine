@@ -8,9 +8,10 @@
 // Categories:
 //   - Damage types: enum DamageType (Lang-13)
 //   - Effect / SFX IDs: enum FxId (Lang-13)
+//   - Effect durations: enum FxDuration (Lang-13)
+//   - Input button indices: enum InputButton (Lang-13)
 //   - Tag IDs (TAG_*)
 //   - Movement parameters (WALK_SPEED, etc.)
-//   - Input button indices (INPUT_*)
 // ============================================================
 
 // ── Damage Types (Lang-13 enum) ──────────────────────────────
@@ -33,9 +34,24 @@ enum FxId {
     HURT_EFFECT    = 4001
 }
 
-// ── Effect Durations (frames) ───────────────────────────────
-const FX_DUR_LIGHT_HIT: int = 30
-const FX_DUR_HURT: int = 300
+// ── Effect Durations in frames (Lang-13 enum) ───────────────
+enum FxDuration {
+    LIGHT_HIT = 30,
+    HURT      = 300
+}
+
+// ── Input Button Indices (Lang-13 enum) ─────────────────────
+// Maps to InputButton enum values used by IsInputHeld/IsInputPressed.
+enum InputButton {
+    UP,
+    DOWN,
+    LEFT,
+    RIGHT,
+    LP,
+    HP,
+    LK,
+    HK
+}
 
 // ── Tag IDs (skill tag bitfield positions) ───────────────────
 const TAG_AIR_STATE: int = 11
@@ -44,14 +60,3 @@ const TAG_AIR_STATE: int = 11
 const WALK_SPEED: float = 0.06
 const BACK_WALK_SPEED: float = 0.04
 const JUMP_VY: float = 0.35
-
-// ── Input Button Indices ────────────────────────────────────
-// These map to InputButton enum values used by IsInputHeld/IsInputPressed.
-const INPUT_UP: int = 0
-const INPUT_DOWN: int = 1
-const INPUT_LEFT: int = 2
-const INPUT_RIGHT: int = 3
-const INPUT_LP: int = 4
-const INPUT_HP: int = 5
-const INPUT_LK: int = 6
-const INPUT_HK: int = 7

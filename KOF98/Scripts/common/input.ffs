@@ -5,7 +5,7 @@
 //
 // Usage:  include "common/input.ffs"
 //
-// Note: This file includes constants.ffs for INPUT_* constants.
+// Note: This file includes constants.ffs for InputButton enum.
 // ============================================================
 
 include "common/constants.ffs"
@@ -15,8 +15,8 @@ include "common/constants.ffs"
 /// Returns the horizontal movement direction as a float:
 ///   +1.0 = right only, -1.0 = left only, 0.0 = both or neither.
 func getMoveDirX(): float {
-    var rightHeld: int = IsInputHeld(INPUT_RIGHT)
-    var leftHeld: int = IsInputHeld(INPUT_LEFT)
+    var rightHeld: int = IsInputHeld(InputButton.RIGHT)
+    var leftHeld: int = IsInputHeld(InputButton.LEFT)
     if rightHeld != 0 && leftHeld == 0 { return 1.0 }
     if leftHeld != 0 && rightHeld == 0 { return -1.0 }
     return 0.0
