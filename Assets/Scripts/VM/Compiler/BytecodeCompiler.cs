@@ -130,6 +130,7 @@ namespace FFVM.Compiler
 
         // Lang-17: Aliased module support (include "path" as Alias)
         private Dictionary<string, ModuleNode> _aliasedModules;           // alias → resolved module
+        private Dictionary<string, Number> _aliasedConstValues;           // Lang-17: "Alias.constName" → folded value
 
         // Lang-8: Service bindings for unified svc.member syntax
         private Dictionary<string, ServiceBinding> _serviceBindings;  // varName → binding
@@ -451,14 +452,14 @@ namespace FFVM.Compiler
             if (_errors.Count > 0)
                 return new CompileResult { Errors = _errors };
 
-            // Lang-1: Process module-level var/const declarations
-            ProcessModuleVariables(module);
+            // Lang-17: Process aliased module enums, consts (before ProcessModuleVariables
+            // so aliased consts are available for module-level const folding)
+            ProcessAliasedModuleSymbols();
             if (_errors.Count > 0)
                 return new CompileResult { Errors = _errors };
 
-            // Lang-17: Process aliased module enums, consts, vars, and functions
-            // Must be called after ProcessEnums and ProcessModuleVariables (need initialized dictionaries)
-            ProcessAliasedModuleSymbols();
+            // Lang-1: Process module-level var/const declarations
+            ProcessModuleVariables(module);
             if (_errors.Count > 0)
                 return new CompileResult { Errors = _errors };
 
@@ -742,6 +743,12 @@ namespace FFVM.Compiler
                         _constValues[enumName + "." + memberKv.Key] = memberKv.Value;
                 }
             }
+            // Lang-17: inject aliased module consts into function-scope _constValues
+            if (_aliasedConstValues != null)
+            {
+                foreach (var kv in _aliasedConstValues)
+                    _constValues[kv.Key] = kv.Value;
+            }
             // Lang-11: Pre-populate struct type info for module struct vars
             // Lang-15: origin-aware filtering for struct var types
             if (_moduleStructVarTypes != null)
@@ -847,6 +854,7 @@ namespace FFVM.Compiler
         /// </summary>
         private void ProcessAliasedModuleSymbols()
         {
+            _aliasedConstValues = new Dictionary<string, Number>();
             if (_aliasedModules == null || _aliasedModules.Count == 0) return;
 
             foreach (var kv in _aliasedModules)
@@ -906,10 +914,8 @@ namespace FFVM.Compiler
 
                     if (TryFoldConstant(v.Initializer, out Number cv))
                     {
-                        // Store in _moduleConstValues for injection into each function scope
-                        if (_moduleConstValues == null)
-                            _moduleConstValues = new Dictionary<string, Number>();
-                        _moduleConstValues[qualKey] = cv;
+                        // Store in _aliasedConstValues for injection into _constValues
+                        _aliasedConstValues[qualKey] = cv;
                         aliasConsts[v.Name] = cv;
                     }
                     _constValues = savedConst;
@@ -1034,6 +1040,12 @@ namespace FFVM.Compiler
                     foreach (var memberKv in enumKv.Value)
                         _constValues[enumName + "." + memberKv.Key] = memberKv.Value;
                 }
+            }
+            // Lang-17: inject aliased module consts processed before ProcessModuleVariables
+            if (_aliasedConstValues != null)
+            {
+                foreach (var kv in _aliasedConstValues)
+                    _constValues[kv.Key] = kv.Value;
             }
 
             for (int i = 0; i < module.ModuleVariables.Count; i++)
@@ -3141,6 +3153,20 @@ namespace FFVM.Compiler
             // Lang-13: enum member constant folding (EnumName.Member → value)
             if (expr is FieldAccessExpr fa && fa.Target is IdentifierExpr faIdent &&
                 _constValues != null && _constValues.TryGetValue(faIdent.Name + "." + fa.FieldName, out value))
+            {
+                return true;
+            }
+            // Lang-17: aliased enum member constant folding (Alias.EnumName.Member → value)
+            if (expr is FieldAccessExpr fa2 && fa2.Target is FieldAccessExpr innerFa &&
+                innerFa.Target is IdentifierExpr innerAlias &&
+                _constValues != null && _constValues.TryGetValue(innerAlias.Name + "." + innerFa.FieldName + "." + fa2.FieldName, out value))
+            {
+                return true;
+            }
+            // Lang-17: aliased const folding (Alias.constName → value)
+            if (expr is FieldAccessExpr fa3 && fa3.Target is IdentifierExpr aliasId &&
+                _aliasedModules != null && _aliasedModules.ContainsKey(aliasId.Name) &&
+                _constValues != null && _constValues.TryGetValue(aliasId.Name + "." + fa3.FieldName, out value))
             {
                 return true;
             }

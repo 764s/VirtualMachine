@@ -547,6 +547,13 @@ namespace FFVM.Compiler
             string name = Expect(TokenType.Identifier, isConst ? "after 'const'" : "after 'var'").Text ?? "?";
             Expect(TokenType.Colon, "after variable name");
             string typeName = Expect(TokenType.Identifier, "for variable type").Text ?? "int";
+            // Lang-17: dotted type name for aliased struct types (Alias.StructName)
+            if (Check(TokenType.Dot))
+            {
+                Advance(); // consume '.'
+                string memberType = Expect(TokenType.Identifier, "for aliased type name").Text ?? "?";
+                typeName = typeName + "." + memberType;
+            }
 
             Expr initializer = null;
             if (Match(TokenType.Assign))
@@ -945,6 +952,27 @@ namespace FFVM.Compiler
                     fa.Line = expr.Line;
                     fa.Column = expr.Column;
                     expr = fa;
+                    // Lang-17: check if followed by '{' and 'identifier:' → aliased struct literal
+                    if (expr is FieldAccessExpr faExpr && faExpr.Target is IdentifierExpr aliasExpr &&
+                        Check(TokenType.LBrace) && IsStructLiteralLookahead())
+                    {
+                        string qualType = aliasExpr.Name + "." + faExpr.FieldName;
+                        Advance(); // consume '{'
+                        var fields = new List<(string FieldName, Expr Value)>();
+                        while (!Check(TokenType.RBrace) && !IsAtEnd())
+                        {
+                            string fn = Expect(TokenType.Identifier, "for field name in struct literal").Text ?? "?";
+                            Expect(TokenType.Colon, "after field name in struct literal");
+                            Expr val = ParseExpression();
+                            fields.Add((fn, val));
+                            Match(TokenType.Comma);
+                        }
+                        Expect(TokenType.RBrace, "to close struct literal");
+                        var sl = new StructLiteralExpr(qualType, fields);
+                        sl.Line = expr.Line;
+                        sl.Column = expr.Column;
+                        expr = sl;
+                    }
                 }
             }
             return expr;
@@ -1065,6 +1093,18 @@ namespace FFVM.Compiler
             expr.Line = typeToken.Line;
             expr.Column = typeToken.Column;
             return expr;
+        }
+
+        /// <summary>
+        /// Lang-17: Lookahead check: is the current position at '{' followed by 'identifier :'?
+        /// Used to disambiguate struct literal from block after dotted type name.
+        /// </summary>
+        private bool IsStructLiteralLookahead()
+        {
+            // current = '{', peek +1 = identifier?, peek +2 = ':'?
+            if (_pos + 2 >= _tokens.Length) return false;
+            return _tokens[_pos + 1].Type == TokenType.Identifier &&
+                   _tokens[_pos + 2].Type == TokenType.Colon;
         }
     }
 }

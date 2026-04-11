@@ -11887,6 +11887,108 @@ func main() {
             Assert(values.Count == 1 && values[0] == 99, $"IA09: expected 99, got {(values.Count > 0 ? values[0].ToString() : "none")}");
         }
 
+        // IA10: Aliased struct type reference + instantiation
+        {
+            var files = new Dictionary<string, string>
+            {
+                { "types", @"
+struct Pos {
+    x: int
+    y: int
+}
+" }
+            };
+            string source = @"
+include ""types"" as T
+
+func main() {
+    var p: T.Pos = T.Pos { x: 3, y: 7 }
+    Report(p.x + p.y)
+}";
+            var syscalls = new Dictionary<string, int> { { "Report", 0 } };
+            var resolver = new DictionaryFileResolver(files);
+            var result = compiler.Compile(source, "main", syscalls, null, resolver, "main.ffs");
+            Assert(result.Success, $"IA10: compile success, errors: {(result.Errors != null && result.Errors.Count > 0 ? result.Errors[0] : "none")}");
+
+            var values = new List<int>();
+            var world = new VMWorld();
+            world.Modules.Load(0, result.Program);
+            world.Syscalls.Register(0, "Report", (ref VMInstanceState s) =>
+            {
+                values.Add(s.Registers.Get(0).ToInt());
+            });
+            world.SpawnInstance(0, 0);
+            world.Tick();
+            Assert(values.Count == 1 && values[0] == 10, $"IA10: expected 10, got {(values.Count > 0 ? values[0].ToString() : "none")}");
+        }
+
+        // IA11: Aliased const in arithmetic expression (TryFoldConstant)
+        {
+            var files = new Dictionary<string, string>
+            {
+                { "cfg", @"
+const BASE: int = 10
+const MULT: int = 3
+" }
+            };
+            string source = @"
+include ""cfg"" as C
+
+const RESULT: int = C.BASE * C.MULT
+
+func main() {
+    Report(RESULT)
+}";
+            var syscalls = new Dictionary<string, int> { { "Report", 0 } };
+            var resolver = new DictionaryFileResolver(files);
+            var result = compiler.Compile(source, "main", syscalls, null, resolver, "main.ffs");
+            Assert(result.Success, $"IA11: compile success, errors: {(result.Errors != null && result.Errors.Count > 0 ? result.Errors[0] : "none")}");
+
+            var values = new List<int>();
+            var world = new VMWorld();
+            world.Modules.Load(0, result.Program);
+            world.Syscalls.Register(0, "Report", (ref VMInstanceState s) =>
+            {
+                values.Add(s.Registers.Get(0).ToInt());
+            });
+            world.SpawnInstance(0, 0);
+            world.Tick();
+            Assert(values.Count == 1 && values[0] == 30, $"IA11: expected 30, got {(values.Count > 0 ? values[0].ToString() : "none")}");
+        }
+
+        // IA12: Aliased enum in const expression (TryFoldConstant)
+        {
+            var files = new Dictionary<string, string>
+            {
+                { "types", @"
+enum Dir { UP, DOWN, LEFT, RIGHT }
+" }
+            };
+            string source = @"
+include ""types"" as T
+
+const MY_DIR: int = T.Dir.LEFT
+
+func main() {
+    Report(MY_DIR)
+}";
+            var syscalls = new Dictionary<string, int> { { "Report", 0 } };
+            var resolver = new DictionaryFileResolver(files);
+            var result = compiler.Compile(source, "main", syscalls, null, resolver, "main.ffs");
+            Assert(result.Success, $"IA12: compile success, errors: {(result.Errors != null && result.Errors.Count > 0 ? result.Errors[0] : "none")}");
+
+            var values = new List<int>();
+            var world = new VMWorld();
+            world.Modules.Load(0, result.Program);
+            world.Syscalls.Register(0, "Report", (ref VMInstanceState s) =>
+            {
+                values.Add(s.Registers.Get(0).ToInt());
+            });
+            world.SpawnInstance(0, 0);
+            world.Tick();
+            Assert(values.Count == 1 && values[0] == 2, $"IA12: expected 2 (LEFT), got {(values.Count > 0 ? values[0].ToString() : "none")}");
+        }
+
         // ===== Summary =====
         Debug.Log($"========================================");
         Debug.Log($"Compiler Tests: {passed} passed, {failed} failed");
