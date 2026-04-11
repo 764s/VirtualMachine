@@ -114,7 +114,7 @@
 |----|------|------|------|------|
 | **DX4-P0** | LSP workspace 快速改善：rootUri → 磁盘 FileResolver + .ffvm.d.json 自动发现 | ⏳ | — | 最小成本改善 LSP 多文件体验 |
 | **DX4-P1** | `.ffproj` 项目描述文件：JSON 格式 + LSP 加载 + includePaths + hostDeclarations | ⏳ | DX4-P0 | 对标 tsconfig.json，完整项目配置 |
-| **DX4-P2** | CLI 项目编译集成：`ffvm-cli compile --project x.ffproj` | ⏳ | DX4-P1 | LSP 和 CLI 共用项目配置 |
+| **DX4-P2** | CLI 项目编译集成：`ffvm-cli init` 脚手架 + `ffvm-cli compile --project x.ffproj` | ⏳ | DX4-P1 | LSP 和 CLI 共用项目配置；`init` 生成带注释的 `.ffproj` 模板（§6.5） |
 | **DX4-P3** | 跨文件符号查询：合并 AST + 跨文件 definition/references/hover | ⏳ | DX4-P1 | 完整跨文件导航 |
 
 ### 2.5 分发基础设施（DIST 系列）
@@ -859,7 +859,7 @@ Gate 3: Unity Editor 内嵌 DAP（可选）             ← DBG7 Phase C
 | **Lang-18** | Override Alias 声明 | ✅ 完成 | `override func/const/struct/enum Alias.Name` 替换别名模块声明。AST AliasTarget 属性 + Parser 点号名称支持 + Preprocessor 4 个 ApplyAliased*Override 方法 + BytecodeCompiler 零改动。OA01-OA10 全通过，1777 测试总计。[Step_Lang18](Step_Lang18_OverrideAlias.md) | Lang-17 ✅ |
 | **DX4-P0** | LSP workspace 快速改善 | ⏳ | rootUri → 磁盘 IFileResolver + 自动发现 .ffvm.d.json + entryFunc=null 跳过入口检查。讨论来源 → [D_Usability_ModuleScope.md](../Discussion/D_Usability_ModuleScope.md) | — |
 | **DX4-P1** | `.ffproj` 项目描述文件 | ⏳ | JSON 格式定义 + LSP 加载 + includePaths + hostDeclarations + entry + compileOptions。讨论来源 → [D_Usability_ModuleScope.md](../Discussion/D_Usability_ModuleScope.md) | DX4-P0 |
-| **DX4-P2** | CLI 项目编译集成 | ⏳ | `ffvm-cli compile --project x.ffproj` 读取项目配置。讨论来源 → [D_Usability_ModuleScope.md](../Discussion/D_Usability_ModuleScope.md) | DX4-P1 |
+| **DX4-P2** | CLI 项目编译集成 | ⏳ | `ffvm-cli init` 脚手架生成 `.ffproj` 模板 + `ffvm-cli compile --project x.ffproj` 读取项目配置。讨论来源 → [D_Usability_ModuleScope.md](../Discussion/D_Usability_ModuleScope.md) §6.5 | DX4-P1 |
 | **DX4-P3** | 跨文件符号查询 | ⏳ | 合并 AST 缓存 + 跨文件 definition/references/hover + OriginFile→URI 映射。讨论来源 → [D_Usability_ModuleScope.md](../Discussion/D_Usability_ModuleScope.md) | DX4-P1 |
 
 > Lang-18 ✅ 完成。当前位置 → DX4-P0 ⏳ LSP workspace 快速改善。

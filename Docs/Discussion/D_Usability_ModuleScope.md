@@ -289,6 +289,56 @@ func main() {
    b. 缓存合并后 AST → 跨文件符号查询
 ```
 
+### 6.5 `.ffproj` 自动创建途径
+
+用户不一定知道 `.ffproj` 的格式和配置项，因此需要自动创建途径。参考其他语言的做法：
+
+| 语言 | 项目文件 | 自动创建途径 |
+|------|---------|-------------|
+| TypeScript | `tsconfig.json` | `tsc --init` 生成带注释的模板 |
+| Rust | `Cargo.toml` | `cargo init` / `cargo new` 脚手架 |
+| Go | `go.mod` | `go mod init` |
+| Lua (LSP) | `.luarc.json` | 手写或 IDE 提示生成 |
+| Haxe | `build.hxml` | 手写（格式极简，一行一参数） |
+| Godot | `project.godot` | 编辑器 GUI 自动生成 |
+
+FFVM 推荐三层递进：
+
+**Layer 0：零配置（DX4-P0 即可）**
+- 大多数小项目**不需要** `.ffproj`
+- LSP 用 rootUri 作为搜索根 + 自动发现 workspace 内的 `.ffvm.d.json`
+- 单文件 / 单入口 + 少量 include 的场景完全够用
+
+**Layer 1：CLI 脚手架命令（DX4-P2 一起实现）**
+
+```bash
+ffvm-cli init                    # 在当前目录生成最小 .ffproj
+ffvm-cli init --host skill       # 生成 + 预填技能系统 host 声明路径
+```
+
+生成内容（带注释的模板）：
+
+```json
+{
+  // include 搜索路径（相对于 .ffproj 所在目录）
+  "includePaths": ["."],
+  // 宿主声明文件（syscall 签名 + service 定义）
+  "hostDeclarations": [],
+  // 入口脚本（可选，用于 compile 命令）
+  "entry": null,
+  // 编译选项（可选，覆盖默认值）
+  "compileOptions": {}
+}
+```
+
+**Layer 2：LSP 辅助创建**
+- LSP 启动时发现 workspace 内有 `.ffs` 文件但无 `.ffproj` → 通过 `window/showMessageRequest` 提示：
+  > "检测到 FFScript 文件但无项目配置。是否创建 .ffproj？"
+  > [创建] [忽略] [不再提示]
+- 点击"创建"后 LSP 用 `workspace/applyEdit` 生成模板文件
+
+> **决定**：Layer 1（CLI `init`）纳入 DX4-P2 一起实现。Layer 2（LSP 提示）视 DX4-P2 完成后再评估。
+
 ---
 
 ## 七、不推荐的方案与理由
@@ -310,7 +360,7 @@ func main() {
 |--------|------|------|--------|
 | **DX4-P0** | LSP workspace 快速改善：rootUri 磁盘 FileResolver + 自动发现 .ffvm.d.json | — | ⭐⭐ |
 | **DX4-P1** | `.ffproj` 项目描述文件：格式定义 + 解析 + LSP 加载 + includePaths + hostDeclarations | DX4-P0 | ⭐⭐⭐ |
-| **DX4-P2** | CLI 集成：`ffvm-cli compile --project x.ffproj` 读取项目配置编译 | DX4-P1 | ⭐⭐ |
+| **DX4-P2** | CLI 集成：`ffvm-cli init` 脚手架生成 `.ffproj` 模板 + `ffvm-cli compile --project x.ffproj` 读取项目配置编译 | DX4-P1 | ⭐⭐ |
 | **DX4-P3** | 跨文件符号查询：合并 AST 缓存 + 跨文件 definition/references/hover + OriginFile→URI 映射 | DX4-P1 | ⭐⭐⭐ |
 
 ---
@@ -321,6 +371,7 @@ func main() {
 2. **DX4-P0 是否足够**：小项目可能只需 rootUri + 自动发现，无需 .ffproj？
 3. **分块编译边界**：由 .ffproj 配置还是由 include/ServiceBinding 语法自然区分？
 4. **宿主声明生成**：.ffvm.d.json 是手写还是从宿主代码自动生成？
+5. ~~**`.ffproj` 自动创建**：用户不知道格式怎么办？~~ → ✅ 已确认：CLI `ffvm-cli init` 脚手架（§6.5），纳入 DX4-P2。
 
 ---
 
