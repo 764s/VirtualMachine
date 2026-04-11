@@ -95,6 +95,10 @@ namespace FFVM.Compiler
                 {
                     module.Structs.Add(ParseStructDecl());
                 }
+                else if (Check(TokenType.Enum))
+                {
+                    module.Enums.Add(ParseEnumDecl());
+                }
                 else if (Check(TokenType.Var))
                 {
                     module.ModuleVariables.Add(ParseVarDecl(false));
@@ -105,7 +109,7 @@ namespace FFVM.Compiler
                 }
                 else
                 {
-                    Error($"Expected 'func', 'struct', 'var', 'const', '@export', '@inline' or 'include', got '{Current().Text}'");
+                    Error($"Expected 'func', 'struct', 'enum', 'var', 'const', '@export', '@inline' or 'include', got '{Current().Text}'");
                     Advance();
                 }
             }
@@ -244,6 +248,44 @@ namespace FFVM.Compiler
             var docLines = CollectDocLines(line);
             if (docLines != null) decl.DocComment = string.Join("\n", docLines);
             _structNames.Add(name);
+            return decl;
+        }
+
+        /// <summary>
+        /// Lang-13: Parse enum declaration.
+        /// <code>enum Name { A, B = expr, C }</code>
+        /// </summary>
+        private EnumDecl ParseEnumDecl()
+        {
+            int line = Current().Line, col = Current().Column;
+            Advance(); // consume 'enum'
+            string name = Expect(TokenType.Identifier, "after 'enum'").Text ?? "?";
+            Expect(TokenType.LBrace, "after enum name");
+
+            var members = new List<EnumMember>();
+            while (!Check(TokenType.RBrace) && !IsAtEnd())
+            {
+                int mLine = Current().Line, mCol = Current().Column;
+                string memberName = Expect(TokenType.Identifier, "for enum member name").Text ?? "?";
+                Expr valueExpr = null;
+                if (Match(TokenType.Assign))
+                {
+                    valueExpr = ParseExpression();
+                }
+                var member = new EnumMember(memberName, valueExpr);
+                member.Line = mLine;
+                member.Column = mCol;
+                members.Add(member);
+                if (!Match(TokenType.Comma))
+                    break; // no comma means end of member list (or trailing comma handled by loop condition)
+            }
+            Expect(TokenType.RBrace, "to close enum");
+
+            var decl = new EnumDecl(name, members);
+            decl.Line = line;
+            decl.Column = col;
+            var enumDocLines = CollectDocLines(line);
+            if (enumDocLines != null) decl.DocComment = string.Join("\n", enumDocLines);
             return decl;
         }
 

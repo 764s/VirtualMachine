@@ -626,18 +626,7 @@ B 阶段 20 个步骤（B-R1 → B-δ5）全部完成，已归入上方 A 区表
 >
 > **Lang-2 实现总结**：新增 `Preprocessor` 类（`Preprocessor.cs`）+ `IFileResolver` / `DictionaryFileResolver` 接口。Lexer 新增 `Include` TokenType，Parser 解析 `include "path"` → `ImportDecl`（AST 基础设施已预置）。Preprocessor 递归深度优先展开 include，支持菱形依赖（diamond include）。重定义规则：跨文件覆盖允许（后者覆盖前者），同文件重定义禁止，var/const 交叉覆盖禁止。BytecodeCompiler 新增 `Compile(source, entry, syscalls, syscallTable, fileResolver, filePath)` 重载，原有 `Compile(source, entry, syscalls)` 向后兼容不变。INC01-INC16 共 16 个测试用例覆盖：基础 include、多 include、多级 include、循环检测、跨文件覆盖、同文件重定义错误、const/var 交叉覆盖错误、struct/func 覆盖、全集成、文件未找到、向后兼容。Reg() 热路径无改动，纯编译期特性。
 >
-> **Lang-13 子计划 checklist**（语法糖枚举）：
-> - [ ] Lexer: `enum` 关键字（TokenType.Enum + Keywords 表）
-> - [ ] AST: `EnumDecl` 节点（Name + Members list with optional value expr）+ `ModuleNode.Enums` 列表
-> - [ ] Parser: `enum Name { A, B = expr, C }` 解析 → EnumDecl（支持自动递增 / 显式赋值 / 尾逗号）
-> - [ ] Compiler: `ProcessEnums` 方法 — 在 `ProcessModuleVariables` 前遍历 `module.Enums`，为每个成员注入 `_moduleConstValues["Name.Variant"] = value`
-> - [ ] Compiler: `FieldAccessExpr` 编译路径拦截 — 当 `target` 为已知枚举名时，查 `_moduleConstValues["EnumName.Member"]` 并编译为常量
-> - [ ] LSP: TextMate `enum` 关键字染色（keyword.declaration）
-> - [ ] LSP: documentSymbol 新增 SymbolKind.Enum(10) 条目
-> - [ ] LSP: `EnumName.` 点号补全 → 列出枚举成员
-> - [ ] LSP: hover 显示枚举定义信息
-> - [ ] LSP: definition + references 支持枚举名和成员
-> - [ ] 测试套件：EN01-EN12（基础枚举、自动递增、显式赋值、混合、表达式赋值、重复成员检查、空枚举、跨函数使用、if/switch 分支中使用、include 跨文件枚举、LSP 补全/hover/symbol）
+> **Lang-13 ✅ 枚举（syntactic sugar）**：Lexer 新增 `enum` 关键字（TokenType.Enum + Keywords 表）。AST 新增 `EnumMember` + `EnumDecl` 节点 + `ModuleNode.Enums` 列表。Parser 解析 `enum Name { A, B = expr, C }` → `EnumDecl`（支持自动递增 / 显式赋值 / 常量表达式 / 尾逗号）。Compiler `ProcessEnums` 方法在 `ProcessModuleVariables` 前遍历 `module.Enums`，为每个成员注入 `_constValues["EnumName.Member"] = value`，支持编译期常量折叠。`FieldAccessExpr` 编译路径拦截：当 target 为已知枚举名时查找并编译为常量。`TryFoldConstant` 扩展支持 FieldAccessExpr 枚举成员折叠。赋值防护：拒绝 `EnumName.Member = xxx`。Preprocessor `MergeDeclarations` / `MergeMainDeclarations` 扩展枚举合并（include 跨文件）。TextMate `enum` 关键字染色。LSP: documentSymbol(Enum/10)、dot completion(EnumMember/20)、hover、definition、references、general completion(Enum/13)。EN01-EN12 编译器测试 + LSP-EN01~LSP-EN05 LSP 测试。1627 tests total (112 TW + 1107 Compiler + 44 Perf + 18 FFS + 51 Debug + 97 DAP + 198 LSP)。
 > - [ ] 全部 1574+ 现有测试无回归
 >
 > **Lang-6 设计来源（Q4 收敛）**：Q4 讨论历经 9 轮（R18~R26），14 项设计决策全部锁定。核心方案：方式 C（语言级引用），服务脚本为 FFS 运行时实体。统一基线设计 XIMA（Cross-Instance Member Access）：`svc.member` 点号语法，编译器根据导出表自动路由 XCALL/XLOAD_MVAR/XSTORE_MVAR。Y1-Plus 编译期保证服务函数不可 yield（无运行时负担）。嵌套深度运行时配置（MaxXCallDepth 默认 4，Warn/Unlimited 两种策略）。性能影响可忽略（< 0.02% 帧预算）。

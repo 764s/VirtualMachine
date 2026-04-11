@@ -124,6 +124,10 @@ namespace FFVM.Compiler
         // Lang-11: Module-level struct variable support
         private Dictionary<string, string> _moduleStructVarTypes; // module struct var/const name → struct type name
 
+        // Lang-13: Enum support (syntactic sugar for named integer constant groups)
+        private HashSet<string> _enumNames;                               // registered enum names
+        private Dictionary<string, Dictionary<string, Number>> _enumMemberMap; // EnumName → { MemberName → Value }
+
         // Lang-8: Service bindings for unified svc.member syntax
         private Dictionary<string, ServiceBinding> _serviceBindings;  // varName → binding
 
@@ -289,6 +293,11 @@ namespace FFVM.Compiler
 
             // SN1: Build flattened struct info (recursive expansion + cycle detection)
             BuildFlatStructInfo();
+            if (_errors.Count > 0)
+                return new CompileResult { Errors = _errors };
+
+            // Lang-13: Process enum declarations (before module variables so enum consts are available)
+            ProcessEnums(module);
             if (_errors.Count > 0)
                 return new CompileResult { Errors = _errors };
 
@@ -483,6 +492,13 @@ namespace FFVM.Compiler
                 foreach (var kv in _moduleConstValues)
                     _constValues[kv.Key] = kv.Value;
             }
+            // Lang-13: inject enum constants into function-scope _constValues
+            if (_enumMemberMap != null)
+            {
+                foreach (var enumKv in _enumMemberMap)
+                    foreach (var memberKv in enumKv.Value)
+                        _constValues[enumKv.Key + "." + memberKv.Key] = memberKv.Value;
+            }
             // Lang-11: Pre-populate struct type info for module struct vars
             if (_moduleStructVarTypes != null)
             {
@@ -543,6 +559,78 @@ namespace FFVM.Compiler
         }
 
         /// <summary>
+        /// Lang-13: Process enum declarations. Desugars each enum into a set of named integer
+        /// constants in _moduleConstValues (e.g. "Color.RED" = 0, "Color.GREEN" = 1).
+        /// Must be called before ProcessModuleVariables so enum values are available for const folding.
+        /// </summary>
+        private void ProcessEnums(ModuleNode module)
+        {
+            _enumNames = new HashSet<string>();
+            _enumMemberMap = new Dictionary<string, Dictionary<string, Number>>();
+
+            if (module.Enums.Count == 0) return;
+
+            // Temporary _constValues for cascading const folding within enum value expressions
+            var savedConst = _constValues;
+            _constValues = savedConst ?? new Dictionary<string, Number>();
+
+            foreach (var enumDecl in module.Enums)
+            {
+                // Check for name collisions with struct/func/var/const/enum
+                if (_structTypes.ContainsKey(enumDecl.Name))
+                {
+                    _errors.Add($"Enum name '{enumDecl.Name}' conflicts with struct '{enumDecl.Name}' (line {enumDecl.Line})");
+                    continue;
+                }
+                if (_enumNames.Contains(enumDecl.Name))
+                {
+                    _errors.Add($"Duplicate enum '{enumDecl.Name}' (line {enumDecl.Line})");
+                    continue;
+                }
+
+                _enumNames.Add(enumDecl.Name);
+                var memberValues = new Dictionary<string, Number>();
+                int nextValue = 0;
+                var memberNamesSeen = new HashSet<string>();
+
+                foreach (var member in enumDecl.Members)
+                {
+                    if (memberNamesSeen.Contains(member.Name))
+                    {
+                        _errors.Add($"Duplicate enum member '{member.Name}' in enum '{enumDecl.Name}' (line {member.Line})");
+                        continue;
+                    }
+                    memberNamesSeen.Add(member.Name);
+
+                    Number value;
+                    if (member.ValueExpr != null)
+                    {
+                        if (!TryFoldConstant(member.ValueExpr, out value))
+                        {
+                            _errors.Add($"Enum member '{enumDecl.Name}.{member.Name}' value must be a compile-time constant (line {member.Line})");
+                            value = Number.FromInt(nextValue);
+                        }
+                        nextValue = value.ToInt() + 1;
+                    }
+                    else
+                    {
+                        value = Number.FromInt(nextValue);
+                        nextValue++;
+                    }
+
+                    string qualifiedName = enumDecl.Name + "." + member.Name;
+                    memberValues[member.Name] = value;
+                    _constValues[qualifiedName] = value;
+                }
+
+                _enumMemberMap[enumDecl.Name] = memberValues;
+            }
+
+            // Restore saved const values (ProcessModuleVariables will reinitialize _constValues)
+            _constValues = savedConst;
+        }
+
+        /// <summary>
         /// Lang-1: Process module-level var/const declarations.
         /// Allocates absolute registers r56..r63 for module variables.
         /// Foldable consts go to _moduleConstValues (no register).
@@ -562,6 +650,13 @@ namespace FFVM.Compiler
             int nextModuleReg = VMConstants.ModuleVarRegBase;
             // Temporary _constValues used for cascading const folding during module variable processing
             _constValues = new Dictionary<string, Number>();
+            // Lang-13: inject enum constants so they are available during module variable const folding
+            if (_enumMemberMap != null)
+            {
+                foreach (var enumKv in _enumMemberMap)
+                    foreach (var memberKv in enumKv.Value)
+                        _constValues[enumKv.Key + "." + memberKv.Key] = memberKv.Value;
+            }
 
             for (int i = 0; i < module.ModuleVariables.Count; i++)
             {
@@ -2654,6 +2749,12 @@ namespace FFVM.Compiler
             {
                 return true;
             }
+            // Lang-13: enum member constant folding (EnumName.Member → value)
+            if (expr is FieldAccessExpr fa && fa.Target is IdentifierExpr faIdent &&
+                _constValues != null && _constValues.TryGetValue(faIdent.Name + "." + fa.FieldName, out value))
+            {
+                return true;
+            }
             if (expr is UnaryExpr un)
             {
                 if (!TryFoldConstant(un.Operand, out Number operand))
@@ -2762,6 +2863,24 @@ namespace FFVM.Compiler
 
             if (expr is FieldAccessExpr fieldAccess)
             {
+                // Lang-13: check if target is an enum name → compile as constant
+                if (fieldAccess.Target is IdentifierExpr enumIdent &&
+                    _enumNames != null && _enumNames.Contains(enumIdent.Name))
+                {
+                    string qualifiedName = enumIdent.Name + "." + fieldAccess.FieldName;
+                    if (_constValues != null && _constValues.TryGetValue(qualifiedName, out Number enumVal))
+                    {
+                        int dest = destReg >= 0 ? destReg : AllocTemp();
+                        EmitLoadConst(AddConst(enumVal), dest);
+                        return dest;
+                    }
+                    else
+                    {
+                        _errors.Add($"Enum '{enumIdent.Name}' has no member '{fieldAccess.FieldName}' (line {fieldAccess.Line})");
+                        return destReg >= 0 ? destReg : AllocTemp();
+                    }
+                }
+
                 // Lang-8: check if target is a service binding → XLOAD_MVAR
                 if (fieldAccess.Target is IdentifierExpr svcIdent &&
                     _serviceBindings != null && _serviceBindings.TryGetValue(svcIdent.Name, out var svcBinding))
@@ -2850,6 +2969,14 @@ namespace FFVM.Compiler
                 // Field assignment: d.field = expr  OR  d.inner = other.inner (sub-struct copy)
                 if (assign.Target is FieldAccessExpr fieldTarget)
                 {
+                    // Lang-13: prevent assignment to enum members
+                    if (fieldTarget.Target is IdentifierExpr enumAssignIdent &&
+                        _enumNames != null && _enumNames.Contains(enumAssignIdent.Name))
+                    {
+                        _errors.Add($"Cannot assign to enum member '{enumAssignIdent.Name}.{fieldTarget.FieldName}' (line {assign.Line})");
+                        return destReg >= 0 ? destReg : AllocTemp();
+                    }
+
                     // Lang-8: check if target is a service binding → XSTORE_MVAR
                     if (fieldTarget.Target is IdentifierExpr svcWriteIdent &&
                         _serviceBindings != null && _serviceBindings.TryGetValue(svcWriteIdent.Name, out var svcWriteBinding))
