@@ -45,7 +45,7 @@ namespace FFVM.Compiler
     ///   4. Return the merged ModuleNode (no Imports — all resolved).
     ///
     /// Override rules (Lang-16):
-    ///   - Cross-file: requires explicit 'override' keyword, otherwise error.
+    ///   - Cross-file: requires explicit 'override' keyword regardless of file position in include chain.
     ///   - Same-file: duplicate declaration is a compile error.
     ///   - var cannot override const; const cannot override var.
     /// </summary>
@@ -334,8 +334,8 @@ namespace FFVM.Compiler
             // Cross-file override or new declaration — replace
             if (varSrc.ContainsKey(name))
             {
-                // Lang-16: only require explicit override keyword when this is the file's own declaration
-                if (isMainFile && !v.IsOverride)
+                // Lang-16: require explicit override keyword for any cross-file replacement
+                if (!v.IsOverride)
                 {
                     string kind = v.IsConst ? "const" : "var";
                     string existingFrom = varSrc[name];
@@ -355,7 +355,9 @@ namespace FFVM.Compiler
             }
             else
             {
-                // Lang-16: override on a new declaration (nothing to override) → error (only for own declarations)
+                // Lang-16: override on a new declaration (nothing to override) → error
+                // Guard on isMainFile: resolved child modules propagate IsOverride through include chains,
+                // but the "no prior declaration" check only applies to the file's own declarations.
                 if (isMainFile && v.IsOverride)
                 {
                     string kind = v.IsConst ? "const" : "var";
@@ -413,8 +415,8 @@ namespace FFVM.Compiler
             {
                 string existingFrom = funcSources[name];
 
-                // Lang-16: only require explicit override keyword when this is the file's own declaration
-                if (isMainFile && !f.IsOverride)
+                // Lang-16: require explicit override keyword for any cross-file replacement
+                if (!f.IsOverride)
                 {
                     _errors.Add($"[{origin}] Function '{name}' conflicts with declaration from '{existingFrom}'. Use 'override func' to intentionally replace it, or 'private func' to keep both independently");
                     return;
@@ -431,7 +433,9 @@ namespace FFVM.Compiler
             }
             else
             {
-                // Lang-16: override on a new declaration (nothing to override) → error (only for own declarations)
+                // Lang-16: override on a new declaration (nothing to override) → error
+                // Guard on isMainFile: resolved child modules propagate IsOverride through include chains,
+                // but the "no prior declaration" check only applies to the file's own declarations.
                 if (isMainFile && f.IsOverride)
                 {
                     _errors.Add($"[{origin}] 'override' on function '{name}' but no prior declaration exists to override");
@@ -485,8 +489,8 @@ namespace FFVM.Compiler
             // Cross-file override or new declaration — replace (public only)
             if (structSources.ContainsKey(name))
             {
-                // Lang-16: only require explicit override keyword when this is the file's own declaration
-                if (isMainFile && !s.IsOverride)
+                // Lang-16: require explicit override keyword for any cross-file replacement
+                if (!s.IsOverride)
                 {
                     string existingFrom = structSources[name];
                     _errors.Add($"[{origin}] Struct '{name}' conflicts with declaration from '{existingFrom}'. Use 'override struct' to intentionally replace it, or 'private struct' to keep both independently");
@@ -504,7 +508,9 @@ namespace FFVM.Compiler
             }
             else
             {
-                // Lang-16: override on a new declaration (nothing to override) → error (only for own declarations)
+                // Lang-16: override on a new declaration (nothing to override) → error
+                // Guard on isMainFile: resolved child modules propagate IsOverride through include chains,
+                // but the "no prior declaration" check only applies to the file's own declarations.
                 if (isMainFile && s.IsOverride)
                 {
                     _errors.Add($"[{origin}] 'override' on struct '{name}' but no prior declaration exists to override");
@@ -558,8 +564,8 @@ namespace FFVM.Compiler
             // Cross-file override or new declaration — replace (public only)
             if (enumSources.ContainsKey(name))
             {
-                // Lang-16: only require explicit override keyword when this is the file's own declaration
-                if (isMainFile && !e.IsOverride)
+                // Lang-16: require explicit override keyword for any cross-file replacement
+                if (!e.IsOverride)
                 {
                     string existingFrom = enumSources[name];
                     _errors.Add($"[{origin}] Enum '{name}' conflicts with declaration from '{existingFrom}'. Use 'override enum' to intentionally replace it, or 'private enum' to keep both independently");
@@ -577,7 +583,9 @@ namespace FFVM.Compiler
             }
             else
             {
-                // Lang-16: override on a new declaration (nothing to override) → error (only for own declarations)
+                // Lang-16: override on a new declaration (nothing to override) → error
+                // Guard on isMainFile: resolved child modules propagate IsOverride through include chains,
+                // but the "no prior declaration" check only applies to the file's own declarations.
                 if (isMainFile && e.IsOverride)
                 {
                     _errors.Add($"[{origin}] 'override' on enum '{name}' but no prior declaration exists to override");

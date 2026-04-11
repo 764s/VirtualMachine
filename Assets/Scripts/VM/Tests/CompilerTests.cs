@@ -11505,6 +11505,122 @@ func main() { Report(counter) }";
             }
         }
 
+        // OV13: child file implicit override (no override keyword) → error
+        {
+            var files = new Dictionary<string, string>
+            {
+                { "defaults.ffs", @"const MAX_HP: int = 100" },
+                { "config.ffs", @"
+include ""defaults.ffs""
+const MAX_HP: int = 200
+" }
+            };
+            string source = @"
+include ""config.ffs""
+func main() { Report(MAX_HP) }";
+            var syscalls = new Dictionary<string, int> { { "Report", 0 } };
+            var resolver = new DictionaryFileResolver(files);
+            var result = compiler.Compile(source, "main", syscalls, null, resolver, "main.ffs");
+            Assert(!result.Success, "OV13: child file implicit override should fail");
+            if (result.Errors != null && result.Errors.Count > 0)
+            {
+                Assert(result.Errors[0].Contains("override"), $"OV13: error mentions override: {result.Errors[0]}");
+                Assert(result.Errors[0].Contains("private"), $"OV13: error mentions private: {result.Errors[0]}");
+            }
+        }
+
+        // OV14: child file with explicit override keyword → success
+        {
+            var files = new Dictionary<string, string>
+            {
+                { "defaults.ffs", @"
+const MAX_HP: int = 100
+func getHP(): int { return MAX_HP }
+struct Config { hp: int }
+enum Mode { A, B }
+" },
+                { "config.ffs", @"
+include ""defaults.ffs""
+override const MAX_HP: int = 200
+override func getHP(): int { return 999 }
+override struct Config { hp: int; mp: int }
+override enum Mode { X, Y, Z }
+" }
+            };
+            string source = @"
+include ""config.ffs""
+func main() {
+    Report(MAX_HP)
+    Report(getHP())
+}";
+            var syscalls = new Dictionary<string, int> { { "Report", 0 } };
+            var resolver = new DictionaryFileResolver(files);
+            var result = compiler.Compile(source, "main", syscalls, null, resolver, "main.ffs");
+            Assert(result.Success, $"OV14: child file explicit override should succeed: {(result.Errors != null && result.Errors.Count > 0 ? result.Errors[0] : "")}");
+            if (result.Success)
+            {
+                var vals = new List<int>();
+                var world = new VMWorld();
+                world.Modules.Load(0, result.Program);
+                world.Syscalls.Register(0, "Report", (ref VMInstanceState s) => { vals.Add(s.Registers.Get(0).ToInt()); });
+                world.SpawnInstance(0, 0);
+                world.Tick();
+                Assert(vals.Count == 2 && vals[0] == 200 && vals[1] == 999, $"OV14: expected 200,999 got {string.Join(",", vals)}");
+            }
+        }
+
+        // OV15: child file override on new decl (nothing to override) → error
+        {
+            var files = new Dictionary<string, string>
+            {
+                { "lib.ffs", @"override func phantom(): int { return 0 }" }
+            };
+            string source = @"
+include ""lib.ffs""
+func main() { Report(phantom()) }";
+            var syscalls = new Dictionary<string, int> { { "Report", 0 } };
+            var resolver = new DictionaryFileResolver(files);
+            var result = compiler.Compile(source, "main", syscalls, null, resolver, "main.ffs");
+            Assert(!result.Success, "OV15: child file override on new decl should fail");
+            if (result.Errors != null && result.Errors.Count > 0)
+            {
+                Assert(result.Errors[0].Contains("override"), $"OV15: error mentions override: {result.Errors[0]}");
+            }
+        }
+
+        // OV16: multi-level chain — grandchild override requires keyword
+        {
+            var files = new Dictionary<string, string>
+            {
+                { "base.ffs", @"func calc(): int { return 10 }" },
+                { "mid.ffs", @"
+include ""base.ffs""
+override func calc(): int { return 20 }
+" },
+                { "top.ffs", @"
+include ""mid.ffs""
+override func calc(): int { return 30 }
+" }
+            };
+            string source = @"
+include ""top.ffs""
+func main() { Report(calc()) }";
+            var syscalls = new Dictionary<string, int> { { "Report", 0 } };
+            var resolver = new DictionaryFileResolver(files);
+            var result = compiler.Compile(source, "main", syscalls, null, resolver, "main.ffs");
+            Assert(result.Success, $"OV16: multi-level chain should succeed: {(result.Errors != null && result.Errors.Count > 0 ? result.Errors[0] : "")}");
+            if (result.Success)
+            {
+                var vals = new List<int>();
+                var world = new VMWorld();
+                world.Modules.Load(0, result.Program);
+                world.Syscalls.Register(0, "Report", (ref VMInstanceState s) => { vals.Add(s.Registers.Get(0).ToInt()); });
+                world.SpawnInstance(0, 0);
+                world.Tick();
+                Assert(vals.Count == 1 && vals[0] == 30, $"OV16: expected 30, got {(vals.Count > 0 ? vals[0].ToString() : "none")}");
+            }
+        }
+
         // ===== Summary =====
         Debug.Log($"========================================");
         Debug.Log($"Compiler Tests: {passed} passed, {failed} failed");
