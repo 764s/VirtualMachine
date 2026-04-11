@@ -106,10 +106,10 @@ var adjusted: Vec2 = Vec2 { x: OFFSET * 2, y: OFFSET + 3 }
 
 ## 六、功能展望
 
-| ID | 内容 | 触发时机 |
-|----|------|----------|
-| MSV-F1 | const struct 字段编译期折叠 | Lang-9 深度内联基础设施就绪后，const struct 字段访问可内联为 LOAD_CONST |
-| MSV-F2 | @export struct 多槽位导出 | 跨实例 struct 变量访问需求出现时 |
+| ID | 内容 | 触发时机 | 暂缓理由 |
+|----|------|----------|----------|
+| MSV-F1 | const struct 字段编译期折叠 | Lang-9 深度内联基础设施就绪后，const struct 字段访问可内联为 LOAD_CONST | 暂缓 — 可行性高（数据已在 `_moduleVarInitValues` 中，~15 行改动），但收益低（LOAD_MVAR 与 LOAD_CONST 均为 1 条 O(1) 指令，无热路径瓶颈）。可做不急，保持展望 |
+| MSV-F2 | @export struct 多槽位导出 | 跨实例 struct 变量访问需求出现时 | 暂缓 — 可行性中（需改 ExportVarEntry + XLOAD_MVAR 运行时，~80-120 行），但无实际使用场景。多个标量 @export 可完全替代。不推荐主动实施 |
 
 ---
 

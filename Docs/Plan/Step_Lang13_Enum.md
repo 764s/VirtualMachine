@@ -80,17 +80,17 @@ const DamageType.MAGICAL: int = 6
 
 ### Phase A: 语言基础设施
 
-- [ ] **A1. Lexer: `enum` 关键字**
+- [x] **A1. Lexer: `enum` 关键字**
   - `TokenType` 新增 `Enum`
   - `Lexer.Keywords` 表新增 `{ "enum", TokenType.Enum }`
 
-- [ ] **A2. AST: `EnumDecl` 节点**
+- [x] **A2. AST: `EnumDecl` 节点**
   - 新增 `EnumMember` 类：`Name: string, ValueExpr: Expr (nullable), Line: int, Column: int`
   - 新增 `EnumDecl` 类：`Name: string, Members: List<EnumMember>, Line: int, Column: int, DocComment: string`
   - `ModuleNode` 新增 `Enums: List<EnumDecl>` 字段（构造函数初始化空列表）
   - `NodeKind` 新增 `EnumDecl`
 
-- [ ] **A3. Parser: 解析 enum 声明**
+- [x] **A3. Parser: 解析 enum 声明**
   - 顶层循环新增 `else if (Check(TokenType.Enum))` 分支 → `ParseEnumDecl()`
   - `ParseEnumDecl()`: consume `enum` → expect Identifier → expect `{` → 循环解析成员 → expect `}`
   - 成员解析：Identifier [= constExpr], 逗号分隔，尾逗号可选
@@ -98,7 +98,7 @@ const DamageType.MAGICAL: int = 6
 
 ### Phase B: 编译器集成
 
-- [ ] **B1. 编译器: `ProcessEnums` 方法**
+- [x] **B1. 编译器: `ProcessEnums` 方法**
   - 新增 `_enumNames: HashSet<string>` — 已注册枚举名集合
   - 新增 `_enumMemberMap: Dictionary<string, Dictionary<string, Number>>` — EnumName → { MemberName → Value }
   - 在 `Compile()` 方法的 `ProcessModuleVariables(module)` 调用前，插入 `ProcessEnums(module)`
@@ -111,7 +111,7 @@ const DamageType.MAGICAL: int = 6
     - `nextValue = value + 1`
     - 注册到 `_enumNames` 和 `_enumMemberMap`
 
-- [ ] **B2. 编译器: FieldAccessExpr 枚举拦截**
+- [x] **B2. 编译器: FieldAccessExpr 枚举拦截**
   - 在 `CompileFieldAccess` 或 `CompileExpr(FieldAccessExpr)` 中：
     - 当 `target` 为 `IdentifierExpr` 且 `target.Name ∈ _enumNames` 时
     - 查 `_moduleConstValues["EnumName.FieldName"]`
@@ -121,33 +121,33 @@ const DamageType.MAGICAL: int = 6
 
 ### Phase C: LSP 编辑器支持
 
-- [ ] **C1. TextMate 染色**
+- [x] **C1. TextMate 染色**
   - `vscode-ffvm-debug/syntaxes/ffvm.tmLanguage.json` 的 `keyword.declaration` 正则中加入 `enum`
 
-- [ ] **C2. LSP documentSymbol**
+- [x] **C2. LSP documentSymbol**
   - `HandleDocumentSymbol` 中遍历 `ast.Enums`，生成 SymbolKind=10 (Enum) 条目
 
-- [ ] **C3. LSP 补全 — EnumName. 点号补全**
+- [x] **C3. LSP 补全 — EnumName. 点号补全**
   - `HandleCompletion` 的 `isDotContext` 分支中：
     - 在 struct 字段补全之前，检查 `dotPrefix` 是否为已知枚举名
     - 匹配 → 列出该枚举全部成员（CompletionItemKind = 20 EnumMember）
 
-- [ ] **C4. LSP 补全 — 通用补全列出枚举名**
+- [x] **C4. LSP 补全 — 通用补全列出枚举名**
   - `HandleCompletion` 的通用补全路径中：
     - 遍历 `ast.Enums` → 添加枚举名补全项（CompletionItemKind = 13 Enum）
 
-- [ ] **C5. LSP hover**
+- [x] **C5. LSP hover**
   - `FindHoverText` 中新增枚举名 hover → 显示完整枚举定义
   - `FindHoverInExpr` 中对 `FieldAccessExpr` 的 `target ∈ enumNames` → 显示 `EnumName.Member = value`
 
-- [ ] **C6. LSP definition + references**
+- [x] **C6. LSP definition + references**
   - `FindSymbolAtPosition` 新增 SymbolKindTag.Enum
   - `FindDefinitionLocation` 枚举名 → 返回 enum 声明位置
   - `CollectReferences` 枚举成员引用收集
 
 ### Phase D: 测试
 
-- [ ] **D1. 编译器测试 EN01-EN12**
+- [x] **D1. 编译器测试 EN01-EN12**
 
 | ID | 描述 | 关键断言 |
 |----|------|---------|
@@ -164,7 +164,7 @@ const DamageType.MAGICAL: int = 6
 | EN11 | 枚举值参与常量折叠 | `const x: int = Color.R + 1` → 折叠为 1 |
 | EN12 | 尾逗号 | `enum E { A, B, }` 合法 |
 
-- [ ] **D2. LSP 测试**
+- [x] **D2. LSP 测试**
 
 | ID | 描述 |
 |----|------|
@@ -174,7 +174,7 @@ const DamageType.MAGICAL: int = 6
 | LSP-EN04 | 枚举成员 hover 显示值 |
 | LSP-EN05 | 通用补全列出枚举名 |
 
-- [ ] **D3. 回归验证**
+- [x] **D3. 回归验证**
   - 全部 1574+ 现有测试无回归
   - 纯编译期特性，无需 benchmark（零运行时改动）
 

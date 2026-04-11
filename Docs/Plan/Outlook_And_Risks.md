@@ -53,19 +53,38 @@
 
 > 详细设计见 [Step9_StructFlatten.md §六 功能展望](Step9_StructFlatten.md#六功能展望)
 
-| ID | 内容 | 触发时机 | 复杂度 |
-|----|------|----------|--------|
-| **S4** | ~~结构体作为函数参数 / 返回值的寄存器传递~~ | ✅ B-γ5 已完成（参数传递）；返回值展望 → S4-F1 | 中 |
-| **S4-F1** | 结构体作为函数返回值（多寄存器 r0..rN 返回） | 编辑器需要展示 struct 返回值节点时 | 中 |
-| **SN1** | ~~嵌套结构体（struct 字段为另一个 struct）~~ | ✅ B-γ7 已完成（递归拍平+循环检测+子struct赋值+LSP嵌套补全）| 中 |
-| **SN1-F1** | 嵌套 struct 作为函数返回值 | FF4 多返回值排期时 | 中 |
-| **SN1-F3** | 嵌套 struct COPY_BLOCK 优化（N×MOVE→单条指令） | ✅ SO1 已完成 | — |
-| **SN2** | ~~结构体字面量构造语法~~ | ✅ B-δ4 已完成（StructLiteralExpr + 嵌套字面量 + CS31-CS38） | 低 |
-| **SN2-F1** | 字段乱序支持（按名称匹配） | 当字段数常规超过 5 时 | 低 |
-| **SN2-F2** | 部分字段省略（省略→零值） | 有业务需求时 | 低 |
-| **SN2-F3** | LSP 字面量内字段名补全 | LSP 增强需求时 | 低 |
-| **MSV-F1** | const struct 字段编译期折叠（省略 LOAD_MVAR → LOAD_CONST） | Lang-9 深度内联基础设施就绪后 | 低 |
-| **MSV-F2** | @export struct 多槽位导出（ExportVarEntry 扩展） | 跨实例 struct 变量访问需求出现时 | 中 |
+| ID | 内容 | 触发时机 | 复杂度 | 状态 |
+|----|------|----------|--------|------|
+| **S4** | ~~结构体作为函数参数 / 返回值的寄存器传递~~ | ✅ B-γ5 已完成（参数传递）；返回值展望 → S4-F1 | 中 | ✅ |
+| **S4-F1** | 结构体作为函数返回值（多寄存器 r0..rN 返回） | 编辑器需要展示 struct 返回值节点时 | 中 | — |
+| **SN1** | ~~嵌套结构体（struct 字段为另一个 struct）~~ | ✅ B-γ7 已完成（递归拍平+循环检测+子struct赋值+LSP嵌套补全）| 中 | ✅ |
+| **SN1-F1** | 嵌套 struct 作为函数返回值 | FF4 多返回值排期时 | 中 | — |
+| **SN1-F3** | 嵌套 struct COPY_BLOCK 优化（N×MOVE→单条指令） | ✅ SO1 已完成 | — | ✅ |
+| **SN2** | ~~结构体字面量构造语法~~ | ✅ B-δ4 已完成（StructLiteralExpr + 嵌套字面量 + CS31-CS38） | 低 | ✅ |
+| **SN2-F1** | 字段乱序支持（按名称匹配） | 当字段数常规超过 5 时 | 低 | — |
+| **SN2-F2** | 部分字段省略（省略→零值） | 有业务需求时 | 低 | — |
+| **SN2-F3** | LSP 字面量内字段名补全 | LSP 增强需求时 | 低 | — |
+| **MSV-F1** | const struct 字段编译期折叠（省略 LOAD_MVAR → LOAD_CONST） | Lang-9 深度内联基础设施就绪后 | 低 | **暂缓** — 可行性高但收益低（无热路径瓶颈），可做不急 |
+| **MSV-F2** | @export struct 多槽位导出（ExportVarEntry 扩展） | 跨实例 struct 变量访问需求出现时 | 中 | **暂缓** — 无实际使用场景，多标量 @export 可替代 |
+
+### 2.3a Include As 别名相关（来源：Lang-17）
+
+> 详细设计见 [Step_Lang17_IncludeAs.md §7 未来扩展](Step_Lang17_IncludeAs.md#7-未来扩展非本期范围)
+
+| ID | 内容 | 触发时机 | 状态 |
+|----|------|----------|------|
+| **IA-F1** | LSP 支持：`Alias.` 补全、hover、definition、references | `include as` 使用量增长后 | **暂缓** — 收益中（DX 提升），待使用量增长 |
+| **IA-F2** | `override func Alias.Name()` 替换别名模块声明 | `include as` 可组合框架模式出现时 | **已纳入串行计划 → Lang-18** |
+| **IA-F3** | 别名模块非 const 变量读写（需寄存器分配设计） | 跨模块可变状态共享需求 | **暂缓（不推荐）** — 函数接口可替代，直接暴露可变变量违背命名空间隔离初衷 |
+
+### 2.3b Include 可见性相关（来源：Lang-15）
+
+> 详细设计见 [Step_Lang15_PublicPrivateVisibility.md §功能展望](Step_Lang15_PublicPrivateVisibility.md#功能展望)
+
+| ID | 内容 | 触发时机 | 状态 |
+|----|------|----------|------|
+| **VIS-1** | Phase B：默认切换为 private（breaking change + 迁移诊断） | 量化决策点：`include as` 占比 >50% 时评估 | **暂缓** — 当前默认 public 符合 mixin 心智模型，零 breaking change |
+| **VIS-2** | LSP 诊断：跨文件引用无修饰符符号时建议添加 `public` | 随 VIS-1 联动 | **暂缓** — Phase B 准备阶段 |
 
 ### 2.4 全局 / 跨步骤展望
 
@@ -820,6 +839,14 @@ Gate 3: Unity Editor 内嵌 DAP（可选）             ← DBG7 Phase C
 | **δ 按需补全** | 业务驱动激活 | B-δ1 ~ B-δ6 | O10 活跃快照 ✅ → SO1 COPY_BLOCK ✅ → FF3 可选参数 ✅ → SN2 struct 字面量 ✅ → C5 Cleanup 超时 ✅ → B1 Editor DAP |
 
 > 完整的步骤序号、完成条件、依赖关系见 [VM_Summary.md §七-B](../VM_Summary.md#b-待执行阶段脚本引擎侧--细化推进序列)。
+
+#### 语言扩展待执行（Lang 区间 — `#check-and-next` 串行推进）
+
+| 序号 | 步骤 | 状态 | 内容摘要 | 前置 |
+|------|------|------|----------|------|
+| **Lang-18** | Override Alias 声明 | ⚪ 待实施 | `override func Alias.Name()` 替换别名模块函数声明。Parser 支持 `func Alias.Name()` 点号函数名，Preprocessor 别名模块函数替换路径，编译器别名函数表替换。 | Lang-17 ✅ |
+
+> 下次执行 `#check-and-next` 时自动开始 Lang-18 实施流程。
 
 #### 宿主集成侧（C 区间 — 生产必经路径）
 

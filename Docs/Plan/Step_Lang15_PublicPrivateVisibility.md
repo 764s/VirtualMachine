@@ -110,8 +110,8 @@
 
 | ID | 内容 | 触发时机 |
 |----|------|----------|
-| VIS-1 | Phase B：默认切换为 private（breaking change + 迁移诊断） | 社区/团队评估后 |
-| VIS-2 | LSP 诊断：跨文件引用无修饰符符号时建议添加 `public` | Phase B 准备阶段 |
+| VIS-1 | Phase B：默认切换为 private（breaking change + 迁移诊断） | 暂缓 — 量化决策点：`include as` 占比 >50% 时评估。当前默认 public 符合 mixin 心智模型，零 breaking change |
+| VIS-2 | LSP 诊断：跨文件引用无修饰符符号时建议添加 `public` | 暂缓 — Phase B 准备阶段，随 VIS-1 联动 |
 
 ## 风险点
 
