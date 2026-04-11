@@ -36,11 +36,11 @@ FFScript 是为 FFVM 设计的自定义领域特定语言（DSL），语法风�
 
 不支持块注释（`/* ... */`）。
 
-### 2.2 关键字（17 个）与注解（2 个）
+### 2.2 关键字（18 个）与注解（2 个）
 
 | 类别 | 关键字 |
 |------|--------|
-| 声明 | `func`、`var`、`const`、`struct` |
+| 声明 | `func`、`var`、`const`、`struct`、`enum` |
 | 控制流 | `if`、`else`、`while`、`for`、`return` |
 | 执行控制 | `wait`、`wait_for`、`yield` |
 | 清理 | `defer`、`using` |
@@ -52,7 +52,7 @@ FFScript 是为 FFVM 设计的自定义领域特定语言（DSL），语法风�
 | 注解 | 说明 |
 |------|------|
 | `@export` | 导出模块变量或函数，供跨实例访问（Lang-6） |
-| `@inline` | 标记导出函数为内联建议（Lang-8，当前为提示，未来可能自动内联） |
+| `@inline` | 标记函数为内联建议；编译器自动判断可行性，标注后无法内联时触发编译警告（Lang-9） |
 
 ### 2.3 运算符与分隔符
 
@@ -150,6 +150,7 @@ FFScript 模块的顶层可包含以下声明：
 
 - `func` — 函数声明
 - `struct` — 结构体声明
+- `enum` — 枚举声明（Lang-13）
 - `var` — 模块变量（跨函数共享的可变状态）
 - `const` — 模块常量
 - `include` — 包含其他 `.ffs` 文件
@@ -440,6 +441,61 @@ struct DamageInfo {
 }
 ```
 
+### 4.5 枚举声明（Lang-13）
+
+`enum` 是编译期语法糖，声明一组命名整数常量。零运行时开销、零新 OpCode。
+
+```ffs
+enum 枚举名 {
+    成员名,                    // 自动递增（首个成员默认 0）
+    成员名 = 常量表达式,        // 显式赋值
+    成员名                     // 从上一个值 + 1 递增
+}
+```
+
+```ffs
+// 基础：自动递增 0, 1, 2
+enum Color { RED, GREEN, BLUE }
+
+// 显式 + 自动递增混合
+enum DamageType {
+    NONE         = 0,
+    NORMAL_LOWER = 101,
+    NORMAL_UPPER = 102,   // 自动递增 → 103？不，此处显式赋值
+    KNOCKDOWN    = 201,
+    THROW        = 301,
+    SUPER        = 401
+}
+
+// 位域 flag（Lang-14 配合使用）
+enum Flags { A = 1, B = 2, C = 4, D = 8 }
+```
+
+**引用**：使用 `EnumName.Member` 访问枚举成员：
+
+```ffs
+enum Color { RED, GREEN, BLUE }
+
+func main() {
+    var c: int = Color.RED         // 0
+    var g: int = Color.GREEN       // 1
+    if c == Color.RED {
+        print(1)
+    }
+}
+```
+
+**规则**：
+
+- 枚举展开为 `const EnumName.Member: int = value` 一组编译期常量
+- 成员值必须是编译期可求值的常量表达式（支持 `+`、`-`、`*`、`<<` 等）
+- 成员名在同一枚举内不可重复（编译错误）
+- 枚举名与结构体名不可冲突（编译错误）
+- 不可对枚举成员赋值（`Color.RED = 5` → 编译错误）
+- 尾逗号可选
+- 空枚举合法（`enum Empty {}`）
+- Include 跨文件合并：枚举参与 Preprocessor 合并（后 include 的同名枚举覆盖前者）
+
 ---
 
 ## 五、语句
@@ -628,6 +684,33 @@ a || b      // 逻辑或（短路求值）
 !a          // 逻辑非
 ```
 
+### 6.4 位运算（Lang-14）
+
+```ffs
+a & b       // 按位与
+a | b       // 按位或
+a ^ b       // 按位异或
+~a          // 按位取反
+a << n      // 左移 n 位
+a >> n      // 右移 n 位
+```
+
+- 操作数在整数域执行（Fix64 → int → 位运算 → Fix64）
+- 支持编译期常量折叠（`const FLAG: int = 1 << 3` → 编译期求值为 8）
+- 典型用途：技能 tag / stance 位域操作
+
+```ffs
+// 位域 flag 组合
+const STANCE_GROUNDED: int = 1
+const STANCE_CROUCHING: int = 4
+const ALLOWED: int = STANCE_GROUNDED | STANCE_CROUCHING   // 5
+
+// 位移生成 flag
+const TAG_BIT_JUMP: int = 1 << 4                          // 16
+const TAG_BIT_AIR: int = 1 << 11                           // 2048
+const TAGS: int = TAG_BIT_JUMP | TAG_BIT_AIR               // 2064
+```
+
 ### 6.4 赋值
 
 ```ffs
@@ -709,7 +792,7 @@ ApplyDamage(t, 5, 101)
 
 ```ebnf
 (* ===== 顶层 ===== *)
-Module          = { IncludeDecl | ExportDecl | FuncDecl | StructDecl | ModuleVarDecl | ModuleConstDecl } ;
+Module          = { IncludeDecl | ExportDecl | FuncDecl | StructDecl | EnumDecl | ModuleVarDecl | ModuleConstDecl } ;
 
 (* ===== Include ===== *)
 IncludeDecl     = 'include' StringLiteral ;
@@ -725,6 +808,9 @@ Param           = Identifier ':' TypeName [ '=' Expression ] ;
 
 StructDecl      = 'struct' Identifier '{' { StructField } '}' ;
 StructField     = Identifier ':' TypeName [ ';' ] ;
+
+EnumDecl        = 'enum' Identifier '{' [ EnumMember { ',' EnumMember } [ ',' ] ] '}' ;
+EnumMember      = Identifier [ '=' Expression ] ;
 
 ModuleVarDecl   = 'var' Identifier ':' TypeName [ '=' Expression ] ;
 ModuleConstDecl = 'const' Identifier ':' TypeName '=' Expression ;
@@ -768,12 +854,16 @@ Expression      = Assignment ;
 
 Assignment      = LogicalOr [ '=' Assignment ] ;
 LogicalOr       = LogicalAnd { '||' LogicalAnd } ;
-LogicalAnd      = Equality { '&&' Equality } ;
+LogicalAnd      = BitOr { '&&' BitOr } ;
+BitOr           = BitXor { '|' BitXor } ;
+BitXor          = BitAnd { '^' BitAnd } ;
+BitAnd          = Equality { '&' Equality } ;
 Equality        = Comparison { ( '==' | '!=' ) Comparison } ;
-Comparison      = Addition { ( '<' | '>' | '<=' | '>=' ) Addition } ;
+Comparison      = Shift { ( '<' | '>' | '<=' | '>=' ) Shift } ;
+Shift           = Addition { ( '<<' | '>>' ) Addition } ;
 Addition        = Multiplication { ( '+' | '-' ) Multiplication } ;
 Multiplication  = Unary { ( '*' | '/' | '%' ) Unary } ;
-Unary           = ( '-' | '!' ) Unary | Postfix ;
+Unary           = ( '-' | '!' | '~' ) Unary | Postfix ;
 Postfix         = Primary { '.' Identifier [ '(' [ ExprList ] ')' ] } ;
 
 Primary         = IntLiteral
@@ -970,6 +1060,44 @@ func main() {
     var hp2: int = svc.get_hp()
 
     Report(afterHP)
+}
+```
+
+### 9.7 枚举与位运算 — 技能配置（Lang-13 + Lang-14）
+
+```ffs
+// 伤害类型枚举
+enum DamageType {
+    NONE         = 0,
+    NORMAL_LOWER = 101,
+    NORMAL_UPPER = 102,
+    KNOCKDOWN    = 201
+}
+
+// 位域 flag：用 1 << N 生成，用 | 组合
+const STANCE_GROUNDED: int = 1
+const STANCE_CROUCHING: int = 4
+const TAG_BIT_ATTACK: int = 1 << 5
+const TAG_BIT_AIR_STATE: int = 1 << 11
+
+@export const tags: int = TAG_BIT_ATTACK
+@export const allowedStances: int = STANCE_GROUNDED | STANCE_CROUCHING
+
+func main() {
+    BeginAction(10, 20)
+    defer { EndAction() }
+
+    var f: int = 0
+    while f < 20 {
+        if f >= 5 && f < 10 {
+            var target: int = CheckAttackHit(1001)
+            if target > 0 {
+                ApplyDamage(target, 1.0, DamageType.NORMAL_UPPER)
+            }
+        }
+        f = f + 1
+        yield
+    }
 }
 ```
 
