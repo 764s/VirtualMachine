@@ -98,7 +98,7 @@ private struct InternalData { a: int }
 public enum Direction { Left, Right }
 ```
 
-**默认可见性**：Phase A 默认 public（向后兼容），未来 Phase B 可考虑切换默认为 private（breaking change，需迁移窗口）。
+**默认可见性**：Phase A 默认 public（向后兼容），未来 Phase B 可考虑切换默认为 private（breaking change，需迁移窗口）。**量化决策点**：当 `include "path" as Alias` 使用占比 >50% 时再评估切换。
 
 ---
 
@@ -143,7 +143,7 @@ public enum Direction { Left, Right }
 | 阶段 | 行为 | 目的 |
 |------|------|------|
 | **Phase A**（Lang-15 本期） | 新增 `private` 关键字 + `public` 关键字。未标注的符号仍按 public 处理（向后兼容零 breaking） | 引入语法，给用户迁移窗口 |
-| Phase B（未来可选） | 默认改为 private。未标注 = private | 正式生效新默认（需 breaking change 评估） |
+| Phase B（未来可选） | 默认改为 private。未标注 = private | 正式生效新默认（量化触发：`include as` 占比 >50% 时评估） |
 
 **Lang-15 Phase A 的核心价值**：用户可以立即使用 `private` 标记内部实现，减少 include 冲突，同时不影响任何现有代码。
 
@@ -163,8 +163,8 @@ public enum Direction { Left, Right }
 | 决策点 | 结论 |
 |--------|------|
 | public/private 与 @export 关系 | 完全隔离，两轴正交 |
-| 默认可见性 | Phase A = public（向后兼容） |
+| 默认可见性 | Phase A = public（向后兼容）。量化决策点：`include as` 占比 >50% 时评估 Phase B |
 | private 对 mixin 语义的影响 | 不影响运行，仅名称隔离 |
 | 实现方案 | origin-aware lookup（方案 B） |
 | 同名 private 处理 | 内部 qualified name `(OriginFile, Name)`，对用户透明 |
-| 迁移策略 | Phase A 零 breaking → Phase B 可选切换默认 |
+| 迁移策略 | Phase A 零 breaking → Phase B 可选切换默认（量化触发：`include as` 占比 >50%） |

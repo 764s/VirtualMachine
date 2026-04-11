@@ -72,6 +72,6 @@
 - [x] BB05-BB08 黑板测试回归已修复
 
 ### 7. 未来扩展（非本期范围）
-- [ ] LSP 支持：`Alias.` 补全、hover、definition、references
-- [ ] `override func Alias.Name()` 替换别名模块声明
-- [ ] 别名模块非 const 变量读写（需寄存器分配设计）
+- [ ] LSP 支持：`Alias.` 补全、hover、definition、references — **暂缓**：收益中（DX 提升），待 `include as` 使用量增长后排期
+- [ ] `override func Alias.Name()` 替换别名模块声明 — **已纳入串行计划 Lang-18**，下次 `#check-and-next` 时自动开始实施
+- [ ] 别名模块非 const 变量读写（需寄存器分配设计）— **暂缓（不推荐）**：可行性中低（~120-180 行，需跨模块寄存器分配），收益低。函数接口（`Alias.GetValue()`/`Alias.SetValue(x)`）已可完全替代，直接暴露可变变量违背 `include as` 命名空间隔离初衷
