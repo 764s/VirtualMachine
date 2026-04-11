@@ -74,7 +74,7 @@
 | ID | 内容 | 触发时机 | 状态 |
 |----|------|----------|------|
 | **IA-F1** | LSP 支持：`Alias.` 补全、hover、definition、references | `include as` 使用量增长后 | **暂缓** — 收益中（DX 提升），待使用量增长 |
-| **IA-F2** | `override func Alias.Name()` 替换别名模块声明 | `include as` 可组合框架模式出现时 | **已纳入串行计划 → Lang-18** |
+| **IA-F2** | `override func Alias.Name()` 替换别名模块声明 | `include as` 可组合框架模式出现时 | **Lang-18 ✅ 完成** |
 | **IA-F3** | 别名模块非 const 变量读写（需寄存器分配设计） | 跨模块可变状态共享需求 | **暂缓（不推荐）** — 函数接口可替代，直接暴露可变变量违背命名空间隔离初衷 |
 
 ### 2.3b Include 可见性相关（来源：Lang-15）
@@ -844,9 +844,9 @@ Gate 3: Unity Editor 内嵌 DAP（可选）             ← DBG7 Phase C
 
 | 序号 | 步骤 | 状态 | 内容摘要 | 前置 |
 |------|------|------|----------|------|
-| **Lang-18** | Override Alias 声明 | ⚪ 待实施 | `override func Alias.Name()` 替换别名模块函数声明。Parser 支持 `func Alias.Name()` 点号函数名，Preprocessor 别名模块函数替换路径，编译器别名函数表替换。 | Lang-17 ✅ |
+| **Lang-18** | Override Alias 声明 | ✅ 完成 | `override func/const/struct/enum Alias.Name` 替换别名模块声明。AST AliasTarget 属性 + Parser 点号名称支持 + Preprocessor 4 个 ApplyAliased*Override 方法 + BytecodeCompiler 零改动。OA01-OA10 全通过，1777 测试总计。[Step_Lang18](Step_Lang18_OverrideAlias.md) | Lang-17 ✅ |
 
-> 下次执行 `#check-and-next` 时自动开始 Lang-18 实施流程。
+> Lang-18 ✅ 完成。下一待实施步骤请参见 VM_Summary.md Lang 表。
 
 #### 宿主集成侧（C 区间 — 生产必经路径）
 

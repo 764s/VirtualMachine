@@ -251,6 +251,8 @@ namespace FFVM.AST
         public bool IsExported { get; }
         public bool IsPrivate { get; }
         public bool IsOverride { get; }
+        /// <summary>Lang-18: Target alias for override alias declarations (e.g. "Alias" in "override const Alias.X"). Null for normal declarations.</summary>
+        public string AliasTarget { get; set; }
         /// <summary>Lang-15: Source file this declaration originated from. Set by Preprocessor during merge.</summary>
         public string OriginFile { get; set; }
         public VarDeclStmt(string name, string typeName, Expr initializer, bool isConst = false, bool isExported = false, bool isPrivate = false, bool isOverride = false) : base(NodeKind.VarDecl)
@@ -395,6 +397,8 @@ namespace FFVM.AST
         public bool IsExported { get; }
         public bool IsInline { get; }
         public bool IsOverride { get; }
+        /// <summary>Lang-18: Target alias for override alias declarations (e.g. "Alias" in "override func Alias.Do()"). Null for normal declarations.</summary>
+        public string AliasTarget { get; set; }
         public string DocComment { get; set; }
         public string ReturnDoc { get; set; }
         /// <summary>Lang-15: Source file this declaration originated from. Set by Preprocessor during merge.</summary>
@@ -432,6 +436,8 @@ namespace FFVM.AST
         public string DocComment { get; set; }
         public bool IsPrivate { get; }
         public bool IsOverride { get; }
+        /// <summary>Lang-18: Target alias for override alias declarations (e.g. "Alias" in "override struct Alias.Config"). Null for normal declarations.</summary>
+        public string AliasTarget { get; set; }
         /// <summary>Lang-15: Source file this declaration originated from. Set by Preprocessor during merge.</summary>
         public string OriginFile { get; set; }
         public StructDecl(string name, List<StructField> fields, bool isPrivate = false, bool isOverride = false) : base(NodeKind.StructDecl)
@@ -467,6 +473,8 @@ namespace FFVM.AST
         public string DocComment { get; set; }
         public bool IsPrivate { get; }
         public bool IsOverride { get; }
+        /// <summary>Lang-18: Target alias for override alias declarations (e.g. "Alias" in "override enum Alias.Mode"). Null for normal declarations.</summary>
+        public string AliasTarget { get; set; }
         /// <summary>Lang-15: Source file this declaration originated from. Set by Preprocessor during merge.</summary>
         public string OriginFile { get; set; }
         public EnumDecl(string name, List<EnumMember> members, bool isPrivate = false, bool isOverride = false) : base(NodeKind.EnumDecl)
