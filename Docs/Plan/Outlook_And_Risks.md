@@ -105,6 +105,18 @@
 | **MI-4** | VMInspector 宿主数据读取辅助（ReadVar / ReadStruct） | 宿主需要从外部读取实例状态时 | [C0](../Discussion/Step_C0_DeploymentArchitecture.md) |
 | **MI-5** | 实例间事件总线（EmitEvent / PollEvent） | 多实例需要松耦合通信时 | [C0](../Discussion/Step_C0_DeploymentArchitecture.md) |
 
+### 2.4a 易用性补充（DX4 系列）
+
+> 来源：2026-04-11 讨论。目标：让多模块组合 + 宿主能力声明 + 编译方式选择在工具链（编译器 + LSP）层面更加顺畅。
+> 详细设计见 [D_Usability_ModuleScope.md](../Discussion/D_Usability_ModuleScope.md)。
+
+| ID | 内容 | 状态 | 前置 | 说明 |
+|----|------|------|------|------|
+| **DX4-P0** | LSP workspace 快速改善：rootUri → 磁盘 FileResolver + .ffvm.d.json 自动发现 | ⏳ | — | 最小成本改善 LSP 多文件体验 |
+| **DX4-P1** | `.ffproj` 项目描述文件：JSON 格式 + LSP 加载 + includePaths + hostDeclarations | ⏳ | DX4-P0 | 对标 tsconfig.json，完整项目配置 |
+| **DX4-P2** | CLI 项目编译集成：`ffvm-cli compile --project x.ffproj` | ⏳ | DX4-P1 | LSP 和 CLI 共用项目配置 |
+| **DX4-P3** | 跨文件符号查询：合并 AST + 跨文件 definition/references/hover | ⏳ | DX4-P1 | 完整跨文件导航 |
+
 ### 2.5 分发基础设施（DIST 系列）
 
 > 来源：2026-04-05 讨论。目标：让其他人在自己的项目中使用 FFVM 时，心智负担和操作负担最小化。
@@ -845,8 +857,12 @@ Gate 3: Unity Editor 内嵌 DAP（可选）             ← DBG7 Phase C
 | 序号 | 步骤 | 状态 | 内容摘要 | 前置 |
 |------|------|------|----------|------|
 | **Lang-18** | Override Alias 声明 | ✅ 完成 | `override func/const/struct/enum Alias.Name` 替换别名模块声明。AST AliasTarget 属性 + Parser 点号名称支持 + Preprocessor 4 个 ApplyAliased*Override 方法 + BytecodeCompiler 零改动。OA01-OA10 全通过，1777 测试总计。[Step_Lang18](Step_Lang18_OverrideAlias.md) | Lang-17 ✅ |
+| **DX4-P0** | LSP workspace 快速改善 | ⏳ | rootUri → 磁盘 IFileResolver + 自动发现 .ffvm.d.json + entryFunc=null 跳过入口检查。讨论来源 → [D_Usability_ModuleScope.md](../Discussion/D_Usability_ModuleScope.md) | — |
+| **DX4-P1** | `.ffproj` 项目描述文件 | ⏳ | JSON 格式定义 + LSP 加载 + includePaths + hostDeclarations + entry + compileOptions。讨论来源 → [D_Usability_ModuleScope.md](../Discussion/D_Usability_ModuleScope.md) | DX4-P0 |
+| **DX4-P2** | CLI 项目编译集成 | ⏳ | `ffvm-cli compile --project x.ffproj` 读取项目配置。讨论来源 → [D_Usability_ModuleScope.md](../Discussion/D_Usability_ModuleScope.md) | DX4-P1 |
+| **DX4-P3** | 跨文件符号查询 | ⏳ | 合并 AST 缓存 + 跨文件 definition/references/hover + OriginFile→URI 映射。讨论来源 → [D_Usability_ModuleScope.md](../Discussion/D_Usability_ModuleScope.md) | DX4-P1 |
 
-> Lang-18 ✅ 完成。下一待实施步骤请参见 VM_Summary.md Lang 表。
+> Lang-18 ✅ 完成。当前位置 → DX4-P0 ⏳ LSP workspace 快速改善。
 
 #### 宿主集成侧（C 区间 — 生产必经路径）
 
