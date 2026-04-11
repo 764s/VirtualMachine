@@ -161,6 +161,7 @@ namespace FFVM.Compiler
             for (int i = 0; i < module.Imports.Count; i++)
             {
                 string importPath = module.Imports[i].ModulePath;
+                string alias = module.Imports[i].Alias;  // Lang-17
                 string importSource = _fileResolver != null ? _fileResolver.ReadFile(importPath) : null;
                 if (importSource == null)
                 {
@@ -170,6 +171,18 @@ namespace FFVM.Compiler
 
                 var importModule = ResolveRecursive(importSource, importPath, stack);
                 if (_errors.Count > 0) continue;
+
+                // Lang-17: aliased include → store in AliasedModules, no flat merge
+                if (alias != null)
+                {
+                    if (merged.AliasedModules.ContainsKey(alias))
+                    {
+                        _errors.Add($"[{filePath}] Duplicate include alias '{alias}'");
+                        continue;
+                    }
+                    merged.AliasedModules[alias] = importModule;
+                    continue;
+                }
 
                 // Merge imported declarations
                 MergeDeclarations(merged, importModule, constSources, funcSources, structSources, varSources, enumSources, declKinds, filePath);

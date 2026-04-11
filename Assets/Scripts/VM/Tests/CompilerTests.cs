@@ -11621,6 +11621,272 @@ func main() { Report(calc()) }";
             }
         }
 
+        // ===== Lang-17: Include As Alias Tests (IA01-IA12) =====
+
+        // IA01: Basic include as — aliased module function call
+        {
+            var files = new Dictionary<string, string>
+            {
+                { "m1", @"
+func Do(): int {
+    return 10
+}
+" }
+            };
+            string source = @"
+include ""m1"" as M1
+
+func main() {
+    Report(M1.Do())
+}";
+            var syscalls = new Dictionary<string, int> { { "Report", 0 } };
+            var resolver = new DictionaryFileResolver(files);
+            var result = compiler.Compile(source, "main", syscalls, null, resolver, "main.ffs");
+            Assert(result.Success, $"IA01: compile success, errors: {(result.Errors != null && result.Errors.Count > 0 ? result.Errors[0] : "none")}");
+
+            var values = new List<int>();
+            var world = new VMWorld();
+            world.Modules.Load(0, result.Program);
+            world.Syscalls.Register(0, "Report", (ref VMInstanceState s) =>
+            {
+                values.Add(s.Registers.Get(0).ToInt());
+            });
+            world.SpawnInstance(0, 0);
+            world.Tick();
+            Assert(values.Count == 1 && values[0] == 10, $"IA01: expected 10, got {(values.Count > 0 ? values[0].ToString() : "none")}");
+        }
+
+        // IA02: Aliased module constant access
+        {
+            var files = new Dictionary<string, string>
+            {
+                { "cfg", @"
+const MAX_HP: int = 100
+" }
+            };
+            string source = @"
+include ""cfg"" as CFG
+
+func main() {
+    Report(CFG.MAX_HP)
+}";
+            var syscalls = new Dictionary<string, int> { { "Report", 0 } };
+            var resolver = new DictionaryFileResolver(files);
+            var result = compiler.Compile(source, "main", syscalls, null, resolver, "main.ffs");
+            Assert(result.Success, $"IA02: compile success, errors: {(result.Errors != null && result.Errors.Count > 0 ? result.Errors[0] : "none")}");
+
+            var values = new List<int>();
+            var world = new VMWorld();
+            world.Modules.Load(0, result.Program);
+            world.Syscalls.Register(0, "Report", (ref VMInstanceState s) =>
+            {
+                values.Add(s.Registers.Get(0).ToInt());
+            });
+            world.SpawnInstance(0, 0);
+            world.Tick();
+            Assert(values.Count == 1 && values[0] == 100, $"IA02: expected 100, got {(values.Count > 0 ? values[0].ToString() : "none")}");
+        }
+
+        // IA03: Aliased module enum access (Alias.Enum.Member)
+        {
+            var files = new Dictionary<string, string>
+            {
+                { "types", @"
+enum Color { RED, GREEN, BLUE }
+" }
+            };
+            string source = @"
+include ""types"" as T
+
+func main() {
+    Report(T.Color.GREEN)
+}";
+            var syscalls = new Dictionary<string, int> { { "Report", 0 } };
+            var resolver = new DictionaryFileResolver(files);
+            var result = compiler.Compile(source, "main", syscalls, null, resolver, "main.ffs");
+            Assert(result.Success, $"IA03: compile success, errors: {(result.Errors != null && result.Errors.Count > 0 ? result.Errors[0] : "none")}");
+
+            var values = new List<int>();
+            var world = new VMWorld();
+            world.Modules.Load(0, result.Program);
+            world.Syscalls.Register(0, "Report", (ref VMInstanceState s) =>
+            {
+                values.Add(s.Registers.Get(0).ToInt());
+            });
+            world.SpawnInstance(0, 0);
+            world.Tick();
+            Assert(values.Count == 1 && values[0] == 1, $"IA03: expected 1 (GREEN), got {(values.Count > 0 ? values[0].ToString() : "none")}");
+        }
+
+        // IA04: Two include-as with same-name functions coexist
+        {
+            var files = new Dictionary<string, string>
+            {
+                { "f1", @"
+func Do(): int { return 1 }
+" },
+                { "f2", @"
+func Do(): int { return 2 }
+" }
+            };
+            string source = @"
+include ""f1"" as M1
+include ""f2"" as M2
+
+func main() {
+    Report(M1.Do())
+    Report(M2.Do())
+}";
+            var syscalls = new Dictionary<string, int> { { "Report", 0 } };
+            var resolver = new DictionaryFileResolver(files);
+            var result = compiler.Compile(source, "main", syscalls, null, resolver, "main.ffs");
+            Assert(result.Success, $"IA04: compile success, errors: {(result.Errors != null && result.Errors.Count > 0 ? result.Errors[0] : "none")}");
+
+            var values = new List<int>();
+            var world = new VMWorld();
+            world.Modules.Load(0, result.Program);
+            world.Syscalls.Register(0, "Report", (ref VMInstanceState s) =>
+            {
+                values.Add(s.Registers.Get(0).ToInt());
+            });
+            world.SpawnInstance(0, 0);
+            world.Tick();
+            Assert(values.Count == 2 && values[0] == 1 && values[1] == 2,
+                $"IA04: expected [1,2], got [{string.Join(",", values)}]");
+        }
+
+        // IA05: Duplicate alias name → error
+        {
+            var files = new Dictionary<string, string>
+            {
+                { "f1", @"func A(): int { return 1 }" },
+                { "f2", @"func B(): int { return 2 }" }
+            };
+            string source = @"
+include ""f1"" as M
+include ""f2"" as M
+
+func main() { Report(1) }";
+            var syscalls = new Dictionary<string, int> { { "Report", 0 } };
+            var resolver = new DictionaryFileResolver(files);
+            var result = compiler.Compile(source, "main", syscalls, null, resolver, "main.ffs");
+            Assert(!result.Success, "IA05: duplicate alias should fail");
+            Assert(result.Errors != null && result.Errors.Count > 0 && result.Errors[0].Contains("Duplicate"),
+                $"IA05: error mentions duplicate: {(result.Errors != null && result.Errors.Count > 0 ? result.Errors[0] : "none")}");
+        }
+
+        // IA06: Traditional include + include-as mixed
+        {
+            var files = new Dictionary<string, string>
+            {
+                { "shared", @"const BASE: int = 5" },
+                { "mod", @"func Calc(): int { return 20 }" }
+            };
+            string source = @"
+include ""shared""
+include ""mod"" as MOD
+
+func main() {
+    Report(BASE + MOD.Calc())
+}";
+            var syscalls = new Dictionary<string, int> { { "Report", 0 } };
+            var resolver = new DictionaryFileResolver(files);
+            var result = compiler.Compile(source, "main", syscalls, null, resolver, "main.ffs");
+            Assert(result.Success, $"IA06: compile success, errors: {(result.Errors != null && result.Errors.Count > 0 ? result.Errors[0] : "none")}");
+
+            var values = new List<int>();
+            var world = new VMWorld();
+            world.Modules.Load(0, result.Program);
+            world.Syscalls.Register(0, "Report", (ref VMInstanceState s) =>
+            {
+                values.Add(s.Registers.Get(0).ToInt());
+            });
+            world.SpawnInstance(0, 0);
+            world.Tick();
+            Assert(values.Count == 1 && values[0] == 25, $"IA06: expected 25, got {(values.Count > 0 ? values[0].ToString() : "none")}");
+        }
+
+        // IA07: Aliased module private function not accessible → error
+        {
+            var files = new Dictionary<string, string>
+            {
+                { "lib", @"
+private func Secret(): int { return 42 }
+func Public(): int { return 1 }
+" }
+            };
+            string source = @"
+include ""lib"" as LIB
+
+func main() {
+    Report(LIB.Secret())
+}";
+            var syscalls = new Dictionary<string, int> { { "Report", 0 } };
+            var resolver = new DictionaryFileResolver(files);
+            var result = compiler.Compile(source, "main", syscalls, null, resolver, "main.ffs");
+            Assert(!result.Success, "IA07: private func through alias should fail");
+        }
+
+        // IA08: Aliased module function with arguments
+        {
+            var files = new Dictionary<string, string>
+            {
+                { "math", @"
+func Add(a: int, b: int): int { return a + b }
+" }
+            };
+            string source = @"
+include ""math"" as MATH
+
+func main() {
+    Report(MATH.Add(3, 7))
+}";
+            var syscalls = new Dictionary<string, int> { { "Report", 0 } };
+            var resolver = new DictionaryFileResolver(files);
+            var result = compiler.Compile(source, "main", syscalls, null, resolver, "main.ffs");
+            Assert(result.Success, $"IA08: compile success, errors: {(result.Errors != null && result.Errors.Count > 0 ? result.Errors[0] : "none")}");
+
+            var values = new List<int>();
+            var world = new VMWorld();
+            world.Modules.Load(0, result.Program);
+            world.Syscalls.Register(0, "Report", (ref VMInstanceState s) =>
+            {
+                values.Add(s.Registers.Get(0).ToInt());
+            });
+            world.SpawnInstance(0, 0);
+            world.Tick();
+            Assert(values.Count == 1 && values[0] == 10, $"IA08: expected 10, got {(values.Count > 0 ? values[0].ToString() : "none")}");
+        }
+
+        // IA09: include as backward compat — include without as still works
+        {
+            var files = new Dictionary<string, string>
+            {
+                { "lib", @"const VAL: int = 99" }
+            };
+            string source = @"
+include ""lib""
+
+func main() {
+    Report(VAL)
+}";
+            var syscalls = new Dictionary<string, int> { { "Report", 0 } };
+            var resolver = new DictionaryFileResolver(files);
+            var result = compiler.Compile(source, "main", syscalls, null, resolver, "main.ffs");
+            Assert(result.Success, $"IA09: backward compat compile success");
+
+            var values = new List<int>();
+            var world = new VMWorld();
+            world.Modules.Load(0, result.Program);
+            world.Syscalls.Register(0, "Report", (ref VMInstanceState s) =>
+            {
+                values.Add(s.Registers.Get(0).ToInt());
+            });
+            world.SpawnInstance(0, 0);
+            world.Tick();
+            Assert(values.Count == 1 && values[0] == 99, $"IA09: expected 99, got {(values.Count > 0 ? values[0].ToString() : "none")}");
+        }
+
         // ===== Summary =====
         Debug.Log($"========================================");
         Debug.Log($"Compiler Tests: {passed} passed, {failed} failed");

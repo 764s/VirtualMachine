@@ -314,7 +314,15 @@ namespace FFVM.Compiler
             Expect(TokenType.Include, "");
             var pathToken = Expect(TokenType.StringLiteral, "after 'include'");
             string path = pathToken.Text ?? "";
-            return new ImportDecl(path);
+            // Lang-17: optional `as Alias` suffix
+            string alias = null;
+            if (Current().Type == TokenType.Identifier && Current().Text == "as")
+            {
+                Advance(); // consume 'as'
+                var aliasToken = Expect(TokenType.Identifier, "after 'as'");
+                alias = aliasToken.Text;
+            }
+            return new ImportDecl(path, alias);
         }
 
         private FuncDecl ParseFuncDecl(bool isExported = false, bool isInline = false, bool isPrivate = false, bool isOverride = false)

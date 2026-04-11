@@ -481,7 +481,8 @@ namespace FFVM.AST
     public class ImportDecl : ASTNode
     {
         public string ModulePath { get; }
-        public ImportDecl(string modulePath) : base(NodeKind.Import) { ModulePath = modulePath; }
+        public string Alias { get; }  // Lang-17: null = mixin, non-null = namespace
+        public ImportDecl(string modulePath, string alias = null) : base(NodeKind.Import) { ModulePath = modulePath; Alias = alias; }
     }
 
     /// <summary>
@@ -495,6 +496,7 @@ namespace FFVM.AST
         public List<EnumDecl> Enums { get; }
         public List<FuncDecl> Functions { get; }
         public List<VarDeclStmt> ModuleVariables { get; }
+        public Dictionary<string, ModuleNode> AliasedModules { get; }  // Lang-17: alias → resolved module
 
         public ModuleNode(string filePath) : base(NodeKind.Module)
         {
@@ -504,6 +506,7 @@ namespace FFVM.AST
             Enums = new List<EnumDecl>();
             Functions = new List<FuncDecl>();
             ModuleVariables = new List<VarDeclStmt>();
+            AliasedModules = new Dictionary<string, ModuleNode>();
         }
     }
 }

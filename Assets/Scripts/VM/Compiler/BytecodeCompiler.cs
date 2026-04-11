@@ -128,6 +128,9 @@ namespace FFVM.Compiler
         private HashSet<string> _enumNames;                               // registered enum names
         private Dictionary<string, Dictionary<string, Number>> _enumMemberMap; // EnumName → { MemberName → Value }
 
+        // Lang-17: Aliased module support (include "path" as Alias)
+        private Dictionary<string, ModuleNode> _aliasedModules;           // alias → resolved module
+
         // Lang-8: Service bindings for unified svc.member syntax
         private Dictionary<string, ServiceBinding> _serviceBindings;  // varName → binding
 
@@ -434,6 +437,10 @@ namespace FFVM.Compiler
                     _structTypes[key] = s;
             }
 
+            // Lang-17: Initialize aliased modules and process their declarations
+            _aliasedModules = module.AliasedModules;
+            ProcessAliasedModules(module);
+
             // SN1: Build flattened struct info (recursive expansion + cycle detection)
             BuildFlatStructInfo();
             if (_errors.Count > 0)
@@ -446,6 +453,12 @@ namespace FFVM.Compiler
 
             // Lang-1: Process module-level var/const declarations
             ProcessModuleVariables(module);
+            if (_errors.Count > 0)
+                return new CompileResult { Errors = _errors };
+
+            // Lang-17: Process aliased module enums, consts, vars, and functions
+            // Must be called after ProcessEnums and ProcessModuleVariables (need initialized dictionaries)
+            ProcessAliasedModuleSymbols();
             if (_errors.Count > 0)
                 return new CompileResult { Errors = _errors };
 
@@ -463,6 +476,24 @@ namespace FFVM.Compiler
                 _funcDecls[key] = f;
                 if (f.Name == entryFunc)
                     entryDecl = f;
+            }
+
+            // Lang-17: Register aliased module functions in function table
+            if (_aliasedModules != null)
+            {
+                foreach (var kv in _aliasedModules)
+                {
+                    string alias = kv.Key;
+                    var aliasModule = kv.Value;
+                    for (int i = 0; i < aliasModule.Functions.Count; i++)
+                    {
+                        var f = aliasModule.Functions[i];
+                        if (f.IsPrivate) continue;
+                        string qualKey = alias + "." + f.Name;
+                        _functionTable[qualKey] = -1;
+                        _funcDecls[qualKey] = f;
+                    }
+                }
             }
 
             if (entryDecl == null)
@@ -496,6 +527,28 @@ namespace FFVM.Compiler
                 funcEndIP = CurrentIP();
                 int window = ComputeAndRemapFunctionWindow(funcStartIP, funcEndIP);
                 functionEntries.Add(new FunctionEntry(f.Name, funcStartIP, f.Parameters.Count, window, isLeaf));
+            }
+
+            // Lang-17: Compile aliased module functions
+            if (_aliasedModules != null)
+            {
+                foreach (var kv in _aliasedModules)
+                {
+                    string alias = kv.Key;
+                    var aliasModule = kv.Value;
+                    for (int i = 0; i < aliasModule.Functions.Count; i++)
+                    {
+                        var f = aliasModule.Functions[i];
+                        if (f.IsPrivate) continue;
+                        string qualKey = alias + "." + f.Name;
+                        funcStartIP = CurrentIP();
+                        _functionTable[qualKey] = funcStartIP;
+                        CompileFunction(f, isEntry: false);
+                        funcEndIP = CurrentIP();
+                        int window2 = ComputeAndRemapFunctionWindow(funcStartIP, funcEndIP);
+                        functionEntries.Add(new FunctionEntry(qualKey, funcStartIP, f.Parameters.Count, window2, false));
+                    }
+                }
             }
 
             // --- Backpatch forward references: CALL instructions whose target was -1 at emit time ---
@@ -760,6 +813,114 @@ namespace FFVM.Compiler
 
             // A.6: Record precise window size using max register actually allocated
             _callerWindowSize = (_maxVarRegUsed >= VarRegBase) ? (_maxVarRegUsed - VarRegBase + 1) : 0;
+        }
+
+        /// <summary>
+        /// Lang-17: Process aliased modules. For each alias, register the alias module's
+        /// public structs under "Alias.Name" keys in _structTypes.
+        /// Called early (before BuildFlatStructInfo) since struct types need to be available.
+        /// </summary>
+        private void ProcessAliasedModules(ModuleNode module)
+        {
+            if (_aliasedModules == null || _aliasedModules.Count == 0) return;
+
+            foreach (var kv in _aliasedModules)
+            {
+                string alias = kv.Key;
+                var aliasModule = kv.Value;
+
+                // Register aliased structs (public only)
+                for (int i = 0; i < aliasModule.Structs.Count; i++)
+                {
+                    var s = aliasModule.Structs[i];
+                    if (s.IsPrivate) continue;
+                    string key = alias + "." + s.Name;
+                    if (!_structTypes.ContainsKey(key))
+                        _structTypes[key] = s;
+                }
+            }
+        }
+
+        /// <summary>
+        /// Lang-17: Register aliased module enums, consts, vars, and functions.
+        /// Called after ProcessEnums/ProcessModuleVariables so dictionaries are initialized.
+        /// </summary>
+        private void ProcessAliasedModuleSymbols()
+        {
+            if (_aliasedModules == null || _aliasedModules.Count == 0) return;
+
+            foreach (var kv in _aliasedModules)
+            {
+                string alias = kv.Key;
+                var aliasModule = kv.Value;
+
+                // First pass: fold aliased module's own consts so enum expressions and
+                // subsequent const folding can reference them.
+                // Build a temporary local const map for the aliased module.
+                var aliasConsts = new Dictionary<string, Number>();
+
+                // Process aliased enums first (they produce const values)
+                for (int i = 0; i < aliasModule.Enums.Count; i++)
+                {
+                    var e = aliasModule.Enums[i];
+                    if (e.IsPrivate) continue;
+                    string qualEnumName = alias + "." + e.Name;
+                    if (_enumNames == null) _enumNames = new HashSet<string>();
+                    _enumNames.Add(qualEnumName);
+                    if (_enumMemberMap == null)
+                        _enumMemberMap = new Dictionary<string, Dictionary<string, Number>>();
+
+                    // Fold enum members from AST
+                    var members = new Dictionary<string, Number>();
+                    Number nextVal = Number.Zero;
+                    for (int j = 0; j < e.Members.Count; j++)
+                    {
+                        var member = e.Members[j];
+                        if (member.ValueExpr != null && TryFoldConstant(member.ValueExpr, out Number explicitVal))
+                            nextVal = explicitVal;
+                        members[member.Name] = nextVal;
+                        string qualMemberKey = qualEnumName + "." + member.Name;
+                        if (_constValues == null) _constValues = new Dictionary<string, Number>();
+                        _constValues[qualMemberKey] = nextVal;
+                        aliasConsts[e.Name + "." + member.Name] = nextVal;
+                        nextVal = nextVal + Number.One;
+                    }
+                    _enumMemberMap[qualEnumName] = members;
+                }
+
+                // Register aliased consts under "Alias.Name" by folding their initializer
+                for (int i = 0; i < aliasModule.ModuleVariables.Count; i++)
+                {
+                    var v = aliasModule.ModuleVariables[i];
+                    if (v.IsPrivate) continue;
+                    if (!v.IsConst) continue;
+                    if (v.Initializer == null) continue;
+                    string qualKey = alias + "." + v.Name;
+
+                    // Temporarily inject aliased module's own consts for cascading fold
+                    var savedConst = _constValues;
+                    if (_constValues == null) _constValues = new Dictionary<string, Number>();
+                    foreach (var ac in aliasConsts)
+                        if (!_constValues.ContainsKey(ac.Key))
+                            _constValues[ac.Key] = ac.Value;
+
+                    if (TryFoldConstant(v.Initializer, out Number cv))
+                    {
+                        // Store in _moduleConstValues for injection into each function scope
+                        if (_moduleConstValues == null)
+                            _moduleConstValues = new Dictionary<string, Number>();
+                        _moduleConstValues[qualKey] = cv;
+                        aliasConsts[v.Name] = cv;
+                    }
+                    _constValues = savedConst;
+                }
+
+                // Register aliased vars under "Alias.Name" in _moduleVarRegisters
+                // Note: aliased vars share registers with the main module if they were mixin-merged.
+                // For include-as, vars are NOT merged, so they need their own register allocation.
+                // For now, aliased non-const vars are not yet supported (requires register allocation).
+                // TODO: Phase 2 — aliased module variable read/write
+            }
         }
 
         /// <summary>
@@ -3097,13 +3258,36 @@ namespace FFVM.Compiler
 
             if (expr is FieldAccessExpr fieldAccess)
             {
+                // Lang-17: check if target is an aliased module → resolve Alias.Name
+                if (fieldAccess.Target is IdentifierExpr aliasIdent &&
+                    _aliasedModules != null && _aliasedModules.TryGetValue(aliasIdent.Name, out var aliasModule))
+                {
+                    return CompileAliasedAccess(aliasModule, aliasIdent.Name, fieldAccess.FieldName, destReg, fieldAccess.Line);
+                }
+
                 // Lang-13: check if target is an enum name → compile as constant
                 // Lang-15: origin-aware enum name resolution
+                // Lang-17: also handle Alias.EnumName (FieldAccessExpr target)
+                string resolvedEnumName = null;
                 if (fieldAccess.Target is IdentifierExpr enumIdent &&
                     _enumNames != null && (_enumNames.Contains(enumIdent.Name) ||
                         (_currentOriginFile != null && _enumNames.Contains(enumIdent.Name + "\0" + _currentOriginFile))))
                 {
-                    string qualifiedName = enumIdent.Name + "." + fieldAccess.FieldName;
+                    resolvedEnumName = enumIdent.Name;
+                }
+                else if (fieldAccess.Target is FieldAccessExpr innerFA &&
+                         innerFA.Target is IdentifierExpr innerAlias &&
+                         _aliasedModules != null && _aliasedModules.ContainsKey(innerAlias.Name))
+                {
+                    // Lang-17: Alias.EnumName.Member — check if Alias.EnumName is an enum
+                    string candidateEnum = innerAlias.Name + "." + innerFA.FieldName;
+                    if (_enumNames != null && _enumNames.Contains(candidateEnum))
+                        resolvedEnumName = candidateEnum;
+                }
+
+                if (resolvedEnumName != null)
+                {
+                    string qualifiedName = resolvedEnumName + "." + fieldAccess.FieldName;
                     if (_constValues != null && _constValues.TryGetValue(qualifiedName, out Number enumVal))
                     {
                         int dest = destReg >= 0 ? destReg : AllocTemp();
@@ -3112,7 +3296,7 @@ namespace FFVM.Compiler
                     }
                     else
                     {
-                        _errors.Add($"Enum '{enumIdent.Name}' has no member '{fieldAccess.FieldName}' (line {fieldAccess.Line})");
+                        _errors.Add($"Enum '{resolvedEnumName}' has no member '{fieldAccess.FieldName}' (line {fieldAccess.Line})");
                         return destReg >= 0 ? destReg : AllocTemp();
                     }
                 }
@@ -3919,6 +4103,22 @@ namespace FFVM.Compiler
         /// </summary>
         private int CompileMemberCallExpr(MemberCallExpr mc, int destReg)
         {
+            // Lang-17: Check if target is an aliased module → compile as local function call
+            if (_aliasedModules != null && _aliasedModules.ContainsKey(mc.TargetName))
+            {
+                string qualFuncName = mc.TargetName + "." + mc.MemberName;
+                if (_functionTable != null && ResolveFuncKey(qualFuncName) != null)
+                {
+                    // Compile as a normal user function call using the aliased name
+                    var aliasedCall = new CallExpr(qualFuncName, mc.Arguments);
+                    aliasedCall.Line = mc.Line;
+                    aliasedCall.Column = mc.Column;
+                    return CompileUserCallExpr(aliasedCall, destReg);
+                }
+                _errors.Add($"Function '{mc.MemberName}' not found in aliased module '{mc.TargetName}' (line {mc.Line})");
+                return destReg >= 0 ? destReg : AllocTemp();
+            }
+
             // Check service binding exists
             if (_serviceBindings == null || !_serviceBindings.TryGetValue(mc.TargetName, out var binding))
             {
@@ -4021,6 +4221,70 @@ namespace FFVM.Compiler
                 Emit(OpCode.XCALL, dest, svcReg, funcIdx);
                 return dest;
             }
+        }
+
+        /// <summary>
+        /// Lang-17: Compile Alias.Name access — resolve name in aliased module's declarations.
+        /// Handles constants (compile-time fold), variables (LOAD_MVAR), and enums.
+        /// </summary>
+        private int CompileAliasedAccess(ModuleNode aliasModule, string alias, string name, int destReg, int line)
+        {
+            // 1. Check constants (const name in aliased module)
+            for (int i = 0; i < aliasModule.ModuleVariables.Count; i++)
+            {
+                var v = aliasModule.ModuleVariables[i];
+                if (v.IsPrivate) continue;
+                if (v.Name == name && v.IsConst)
+                {
+                    // Try fold as constant
+                    string qualKey = alias + "." + name;
+                    if (_constValues != null && _constValues.TryGetValue(qualKey, out Number cv))
+                    {
+                        int dest = destReg >= 0 ? destReg : AllocTemp();
+                        EmitLoadConst(AddConst(cv), dest);
+                        return dest;
+                    }
+                    // Fall through to variable register lookup
+                }
+            }
+
+            // 2. Check module variables
+            string varKey = alias + "." + name;
+            if (_moduleVarRegisters != null && _moduleVarRegisters.TryGetValue(varKey, out int reg))
+            {
+                int dest = destReg >= 0 ? destReg : AllocTemp();
+                EmitLoadModuleVar(dest, reg);
+                return dest;
+            }
+
+            // 3. Check enums (Alias.EnumName resolves to enum access — will have .Member next)
+            // Alias.EnumName.Member is handled as FieldAccessExpr(FieldAccessExpr(Alias, EnumName), Member)
+            // When we reach here for the inner Alias.EnumName, we return a sentinel
+            for (int i = 0; i < aliasModule.Enums.Count; i++)
+            {
+                var e = aliasModule.Enums[i];
+                if (e.IsPrivate) continue;
+                if (e.Name == name)
+                {
+                    // This is Alias.EnumName — the outer FieldAccess will handle .Member
+                    // The enum constants are registered under "Alias.EnumName.Member" in _constValues
+                    // We cannot return a value here because enums aren't values, only their members are.
+                    _errors.Add($"Enum '{alias}.{name}' is not a value; use '{alias}.{name}.Member' to access members (line {line})");
+                    return destReg >= 0 ? destReg : AllocTemp();
+                }
+            }
+
+            // 4. Check enum member access (Alias.EnumName where EnumName.X is a const — enum dot member format)
+            // This handles the case where name = "EnumName" and we compile "Alias.EnumName" but we need .Member
+            // Actually, the three-level case Alias.Enum.Member is parsed as nested FieldAccessExpr:
+            //   FieldAccessExpr(target=FieldAccessExpr(target=Alias, field=Enum), field=Member)
+            // So when the outer FieldAccessExpr calls CompileExpr on the inner, we arrive here for Alias.Enum
+            // But enum-as-value doesn't make sense; only Alias.Enum.Member is valid.
+            // The outer FieldAccessExpr will be handled by the standard enum check path if we register
+            // aliased enums under "Alias.EnumName" in _enumNames.
+
+            _errors.Add($"'{alias}.{name}' not found in aliased module (line {line})");
+            return destReg >= 0 ? destReg : AllocTemp();
         }
 
         /// <summary>
