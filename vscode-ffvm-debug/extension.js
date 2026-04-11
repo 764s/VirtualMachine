@@ -1,23 +1,50 @@
 const vscode = require("vscode");
 const path = require("path");
+const fs = require("fs");
 
 let client;
 let outputChannel;
 
 /**
  * Resolve the ffvm-cli executable path from settings.
- * Falls back to looking in workspace StandaloneRunner for legacy compat.
+ * Tries workspace-relative build output paths before falling back to PATH.
  */
 function resolveExecutablePath() {
     const config = vscode.workspace.getConfiguration("ffvm");
     const configuredPath = config.get("executablePath", "ffvm-cli");
 
-    // If user set an absolute path or explicit name, use it directly
+    // If user set a custom path, resolve it (support workspace-relative paths)
     if (configuredPath && configuredPath !== "ffvm-cli") {
+        if (path.isAbsolute(configuredPath)) return configuredPath;
+        const ws = vscode.workspace.workspaceFolders?.[0]?.uri?.fsPath;
+        if (ws) return path.join(ws, configuredPath);
         return configuredPath;
     }
 
-    // Default: try "ffvm-cli" from PATH
+    // Default: try common workspace-relative build output paths
+    const ws = vscode.workspace.workspaceFolders?.[0]?.uri?.fsPath;
+    if (ws) {
+        const cliDir = path.join(ws, "src", "FFVM.Cli", "bin");
+        const configs = ["Release", "Debug"];
+        for (const cfg of configs) {
+            const cfgDir = path.join(cliDir, cfg);
+            // Dynamically detect target framework (e.g., net8.0, net9.0)
+            try {
+                const entries = fs.readdirSync(cfgDir, { withFileTypes: true });
+                for (const entry of entries) {
+                    if (entry.isDirectory() && entry.name.startsWith("net")) {
+                        const p = path.join(cfgDir, entry.name, "ffvm-cli");
+                        if (fs.existsSync(p)) return p;
+                        if (fs.existsSync(p + ".exe")) return p + ".exe";
+                    }
+                }
+            } catch {
+                // Directory doesn't exist, continue
+            }
+        }
+    }
+
+    // Fallback: try "ffvm-cli" from PATH
     return "ffvm-cli";
 }
 
@@ -159,6 +186,7 @@ function activate(context) {
         const { LanguageClient, TransportKind } = require("vscode-languageclient/node");
 
         const serverCommand = resolveExecutablePath();
+        outputChannel.appendLine(`[FFVM] LSP server command: ${serverCommand}`);
 
         const serverOptions = {
             command: serverCommand,
@@ -178,10 +206,19 @@ function activate(context) {
         );
 
         client.start().catch(err => {
-            console.warn("[FFVM] LSP server failed to start:", err.message);
+            outputChannel.appendLine(`[FFVM] LSP server failed to start: ${err.message}`);
+            const setupHint = "Run: dotnet build src/FFVM.Cli/FFVM.Cli.csproj -c Release";
+            vscode.window.showWarningMessage(
+                `FFVM Language Server failed to start. ${setupHint}, or set ffvm.executablePath in settings.`,
+                "Open Settings"
+            ).then(choice => {
+                if (choice === "Open Settings") {
+                    vscode.commands.executeCommand("workbench.action.openSettings", "ffvm.executablePath");
+                }
+            });
         });
     } catch (err) {
-        console.warn("[FFVM] LSP setup failed:", err.message);
+        outputChannel.appendLine(`[FFVM] LSP setup failed: ${err.message}`);
     }
 }
 

@@ -76,10 +76,22 @@ cp -f Sandbox/.vscode/tasks.json .vscode/tasks.json 2>/dev/null && \
     echo "[OK] Copied .vscode/tasks.json" || \
     echo "[WARN] Could not copy tasks.json"
 
-# ─── Step 6: Build StandaloneRunner (for DAP/LSP) ──────────
+# ─── Step 6: Build ffvm-cli (LSP / DAP server) ─────────────
 
 echo
-echo "[*] Setting up StandaloneRunner (DAP/LSP server)..."
+echo "[*] Building ffvm-cli (editor LSP & DAP support)..."
+
+if dotnet build src/FFVM.Cli/FFVM.Cli.csproj -c Release --nologo -v q; then
+    echo "[OK] ffvm-cli build succeeded."
+else
+    echo "[WARN] ffvm-cli build failed — editor LSP/DAP features will not work."
+    echo "       You can retry manually: dotnet build src/FFVM.Cli/FFVM.Cli.csproj -c Release"
+fi
+
+# ─── Step 7: Build StandaloneRunner (for tests) ────────────
+
+echo
+echo "[*] Setting up StandaloneRunner (test runner)..."
 
 if [ ! -f "StandaloneRunner/StandaloneRunner.csproj" ]; then
     # Generate .csproj inline (same as CI)
@@ -103,10 +115,10 @@ fi
 if dotnet build StandaloneRunner/StandaloneRunner.csproj -c Release --nologo -v q; then
     echo "[OK] StandaloneRunner build succeeded."
 else
-    echo "[WARN] StandaloneRunner build failed — DAP/LSP debugging may not work."
+    echo "[WARN] StandaloneRunner build failed — tests may not work."
 fi
 
-# ─── Step 7: Install VS Code extension (best-effort) ────────
+# ─── Step 8: Install VS Code extension (best-effort) ────────
 
 echo
 echo "[*] Attempting VS Code extension installation..."
