@@ -5950,7 +5950,7 @@ func main() { Report(X) }";
             };
             string source = @"
 include ""base_config""
-const PRIORITY: int = 200
+override const PRIORITY: int = 200
 
 func main() {
     Report(PRIORITY)
@@ -6013,7 +6013,7 @@ func checkEnter(): int {
             string source = @"
 include ""templates""
 
-func checkEnter(): int {
+override func checkEnter(): int {
     return 1
 }
 
@@ -6137,7 +6137,7 @@ var phase: int = 0
             string source = @"
 include ""base/math""
 include ""shared/config""
-const SPEED: int = 25
+override const SPEED: int = 25
 
 func main() {
     var p: Point
@@ -6217,7 +6217,7 @@ struct Pair {
             string source = @"
 include ""old_types""
 
-struct Pair {
+override struct Pair {
     a: int
     b: int
     c: int
@@ -11093,7 +11093,7 @@ func main() {
             }
         }
 
-        // PV10: public vs public cross-file override (existing behavior preserved)
+        // PV10: public vs public cross-file override (requires override keyword)
         {
             var files = new Dictionary<string, string>
             {
@@ -11101,7 +11101,7 @@ func main() {
             };
             string source = @"
 include ""base.ffs""
-func getValue(): int { return 2 }
+override func getValue(): int { return 2 }
 func main() { Report(getValue()) }";
             var syscalls = new Dictionary<string, int> { { "Report", 0 } };
             var resolver = new DictionaryFileResolver(files);
@@ -11261,6 +11261,732 @@ func main() { Report(hidden()) }";
             var resolver = new DictionaryFileResolver(files);
             var result = compiler.Compile(source, "main", syscalls, null, resolver, "main.ffs");
             Assert(!result.Success, "PV18: private func cross-file should fail");
+        }
+
+        // ===== Lang-16: Override Keyword Tests (OV01-OV16) =====
+
+        // OV01: cross-file func override without 'override' keyword → error
+        {
+            var files = new Dictionary<string, string>
+            {
+                { "base.ffs", @"func getValue(): int { return 1 }" }
+            };
+            string source = @"
+include ""base.ffs""
+func getValue(): int { return 2 }
+func main() { Report(getValue()) }";
+            var syscalls = new Dictionary<string, int> { { "Report", 0 } };
+            var resolver = new DictionaryFileResolver(files);
+            var result = compiler.Compile(source, "main", syscalls, null, resolver, "main.ffs");
+            Assert(!result.Success, "OV01: implicit func override should fail");
+            Assert(result.Errors != null && result.Errors.Count > 0 && result.Errors[0].Contains("conflicts"), $"OV01: error mentions conflict: {(result.Errors != null && result.Errors.Count > 0 ? result.Errors[0] : "none")}");
+        }
+
+        // OV02: cross-file const override without 'override' keyword → error
+        {
+            var files = new Dictionary<string, string>
+            {
+                { "base.ffs", @"const SPEED: int = 10" }
+            };
+            string source = @"
+include ""base.ffs""
+const SPEED: int = 25
+func main() { Report(SPEED) }";
+            var syscalls = new Dictionary<string, int> { { "Report", 0 } };
+            var resolver = new DictionaryFileResolver(files);
+            var result = compiler.Compile(source, "main", syscalls, null, resolver, "main.ffs");
+            Assert(!result.Success, "OV02: implicit const override should fail");
+        }
+
+        // OV03: cross-file struct override without 'override' keyword → error
+        {
+            var files = new Dictionary<string, string>
+            {
+                { "types.ffs", @"struct Pair { a: int; b: int }" }
+            };
+            string source = @"
+include ""types.ffs""
+struct Pair { a: int; b: int; c: int }
+func main() { var p: Pair; Report(0) }";
+            var syscalls = new Dictionary<string, int> { { "Report", 0 } };
+            var resolver = new DictionaryFileResolver(files);
+            var result = compiler.Compile(source, "main", syscalls, null, resolver, "main.ffs");
+            Assert(!result.Success, "OV03: implicit struct override should fail");
+        }
+
+        // OV04: cross-file enum override without 'override' keyword → error
+        {
+            var files = new Dictionary<string, string>
+            {
+                { "enums.ffs", @"enum Color { RED, GREEN, BLUE }" }
+            };
+            string source = @"
+include ""enums.ffs""
+enum Color { RED, GREEN, BLUE, ALPHA }
+func main() { Report(Color.ALPHA) }";
+            var syscalls = new Dictionary<string, int> { { "Report", 0 } };
+            var resolver = new DictionaryFileResolver(files);
+            var result = compiler.Compile(source, "main", syscalls, null, resolver, "main.ffs");
+            Assert(!result.Success, "OV04: implicit enum override should fail");
+        }
+
+        // OV05: override func with keyword → success
+        {
+            var files = new Dictionary<string, string>
+            {
+                { "base.ffs", @"func getValue(): int { return 1 }" }
+            };
+            string source = @"
+include ""base.ffs""
+override func getValue(): int { return 42 }
+func main() { Report(getValue()) }";
+            var syscalls = new Dictionary<string, int> { { "Report", 0 } };
+            var resolver = new DictionaryFileResolver(files);
+            var result = compiler.Compile(source, "main", syscalls, null, resolver, "main.ffs");
+            Assert(result.Success, $"OV05: override func should succeed: {(result.Errors != null && result.Errors.Count > 0 ? result.Errors[0] : "")}");
+            if (result.Success)
+            {
+                var vals = new List<int>();
+                var world = new VMWorld();
+                world.Modules.Load(0, result.Program);
+                world.Syscalls.Register(0, "Report", (ref VMInstanceState s) => { vals.Add(s.Registers.Get(0).ToInt()); });
+                world.SpawnInstance(0, 0);
+                world.Tick();
+                Assert(vals.Count == 1 && vals[0] == 42, $"OV05: override getValue()=42, got {(vals.Count > 0 ? vals[0].ToString() : "none")}");
+            }
+        }
+
+        // OV06: override + private → parse error
+        {
+            string source = @"
+override private func test(): int { return 0 }
+func main() { Report(0) }";
+            var syscalls = new Dictionary<string, int> { { "Report", 0 } };
+            var result = compiler.Compile(source, "main", syscalls);
+            Assert(!result.Success, "OV06: override + private should fail");
+            Assert(result.Errors != null && result.Errors.Count > 0 && result.Errors[0].Contains("cannot be combined"), $"OV06: error mentions cannot be combined: {(result.Errors != null && result.Errors.Count > 0 ? result.Errors[0] : "none")}");
+        }
+
+        // OV07: private + override → parse error
+        {
+            string source = @"
+private override func test(): int { return 0 }
+func main() { Report(0) }";
+            var syscalls = new Dictionary<string, int> { { "Report", 0 } };
+            var result = compiler.Compile(source, "main", syscalls);
+            Assert(!result.Success, "OV07: private + override should fail");
+        }
+
+        // OV08: override on new declaration (nothing to override) → error
+        {
+            string source = @"
+override func brandNew(): int { return 99 }
+func main() { Report(brandNew()) }";
+            var syscalls = new Dictionary<string, int> { { "Report", 0 } };
+            var result = compiler.Compile(source, "main", syscalls);
+            Assert(!result.Success, "OV08: override without prior decl should fail");
+            Assert(result.Errors != null && result.Errors.Count > 0 && result.Errors[0].Contains("no included file provides a declaration to override"), $"OV08: error mentions no prior declaration: {(result.Errors != null && result.Errors.Count > 0 ? result.Errors[0] : "none")}");
+        }
+
+        // OV09: diamond include — same declarations from same origin through different paths → no error
+        {
+            var files = new Dictionary<string, string>
+            {
+                { "shared.ffs", @"
+const SHARED_VAL: int = 42
+func sharedFunc(): int { return SHARED_VAL }
+struct SharedPoint { x: int; y: int }
+" },
+                { "a.ffs", @"
+include ""shared.ffs""
+func fromA(): int { return sharedFunc() }
+" },
+                { "b.ffs", @"
+include ""shared.ffs""
+func fromB(): int { return SHARED_VAL }
+" }
+            };
+            string source = @"
+include ""a.ffs""
+include ""b.ffs""
+func main() {
+    Report(fromA())
+    Report(fromB())
+}";
+            var syscalls = new Dictionary<string, int> { { "Report", 0 } };
+            var resolver = new DictionaryFileResolver(files);
+            var result = compiler.Compile(source, "main", syscalls, null, resolver, "main.ffs");
+            Assert(result.Success, $"OV09: diamond include should succeed: {(result.Errors != null && result.Errors.Count > 0 ? result.Errors[0] : "")}");
+            if (result.Success)
+            {
+                var vals = new List<int>();
+                var world = new VMWorld();
+                world.Modules.Load(0, result.Program);
+                world.Syscalls.Register(0, "Report", (ref VMInstanceState s) => { vals.Add(s.Registers.Get(0).ToInt()); });
+                world.SpawnInstance(0, 0);
+                world.Tick();
+                Assert(vals.Count == 2 && vals[0] == 42 && vals[1] == 42, $"OV09: diamond values=42,42, got {string.Join(",", vals)}");
+            }
+        }
+
+        // OV10: override const in chain include
+        {
+            var files = new Dictionary<string, string>
+            {
+                { "defaults.ffs", @"const MAX_HP: int = 100" },
+                { "config.ffs", @"
+include ""defaults.ffs""
+override const MAX_HP: int = 200
+" }
+            };
+            string source = @"
+include ""config.ffs""
+func main() { Report(MAX_HP) }";
+            var syscalls = new Dictionary<string, int> { { "Report", 0 } };
+            var resolver = new DictionaryFileResolver(files);
+            var result = compiler.Compile(source, "main", syscalls, null, resolver, "main.ffs");
+            Assert(result.Success, $"OV10: chain override const should succeed: {(result.Errors != null && result.Errors.Count > 0 ? result.Errors[0] : "")}");
+            if (result.Success)
+            {
+                var vals = new List<int>();
+                var world = new VMWorld();
+                world.Modules.Load(0, result.Program);
+                world.Syscalls.Register(0, "Report", (ref VMInstanceState s) => { vals.Add(s.Registers.Get(0).ToInt()); });
+                world.SpawnInstance(0, 0);
+                world.Tick();
+                Assert(vals.Count == 1 && vals[0] == 200, $"OV10: MAX_HP=200, got {(vals.Count > 0 ? vals[0].ToString() : "none")}");
+            }
+        }
+
+        // OV11: public override func — 'public override' combo works
+        {
+            var files = new Dictionary<string, string>
+            {
+                { "base.ffs", @"func calc(): int { return 10 }" }
+            };
+            string source = @"
+include ""base.ffs""
+public override func calc(): int { return 20 }
+func main() { Report(calc()) }";
+            var syscalls = new Dictionary<string, int> { { "Report", 0 } };
+            var resolver = new DictionaryFileResolver(files);
+            var result = compiler.Compile(source, "main", syscalls, null, resolver, "main.ffs");
+            Assert(result.Success, $"OV11: public override should succeed: {(result.Errors != null && result.Errors.Count > 0 ? result.Errors[0] : "")}");
+            if (result.Success)
+            {
+                var vals = new List<int>();
+                var world = new VMWorld();
+                world.Modules.Load(0, result.Program);
+                world.Syscalls.Register(0, "Report", (ref VMInstanceState s) => { vals.Add(s.Registers.Get(0).ToInt()); });
+                world.SpawnInstance(0, 0);
+                world.Tick();
+                Assert(vals.Count == 1 && vals[0] == 20, $"OV11: public override calc()=20, got {(vals.Count > 0 ? vals[0].ToString() : "none")}");
+            }
+        }
+
+        // OV12: error message suggests 'override' or 'private' for resolution
+        {
+            var files = new Dictionary<string, string>
+            {
+                { "lib.ffs", @"var counter: int = 0" }
+            };
+            string source = @"
+include ""lib.ffs""
+var counter: int = 5
+func main() { Report(counter) }";
+            var syscalls = new Dictionary<string, int> { { "Report", 0 } };
+            var resolver = new DictionaryFileResolver(files);
+            var result = compiler.Compile(source, "main", syscalls, null, resolver, "main.ffs");
+            Assert(!result.Success, "OV12: implicit var override should fail");
+            if (result.Errors != null && result.Errors.Count > 0)
+            {
+                Assert(result.Errors[0].Contains("override"), $"OV12: error mentions override: {result.Errors[0]}");
+                Assert(result.Errors[0].Contains("private"), $"OV12: error mentions private: {result.Errors[0]}");
+            }
+        }
+
+        // OV13: child file implicit override (no override keyword) → error
+        {
+            var files = new Dictionary<string, string>
+            {
+                { "defaults.ffs", @"const MAX_HP: int = 100" },
+                { "config.ffs", @"
+include ""defaults.ffs""
+const MAX_HP: int = 200
+" }
+            };
+            string source = @"
+include ""config.ffs""
+func main() { Report(MAX_HP) }";
+            var syscalls = new Dictionary<string, int> { { "Report", 0 } };
+            var resolver = new DictionaryFileResolver(files);
+            var result = compiler.Compile(source, "main", syscalls, null, resolver, "main.ffs");
+            Assert(!result.Success, "OV13: child file implicit override should fail");
+            if (result.Errors != null && result.Errors.Count > 0)
+            {
+                Assert(result.Errors[0].Contains("override"), $"OV13: error mentions override: {result.Errors[0]}");
+                Assert(result.Errors[0].Contains("private"), $"OV13: error mentions private: {result.Errors[0]}");
+            }
+        }
+
+        // OV14: child file with explicit override keyword → success
+        {
+            var files = new Dictionary<string, string>
+            {
+                { "defaults.ffs", @"
+const MAX_HP: int = 100
+func getHP(): int { return MAX_HP }
+struct Config { hp: int }
+enum Mode { A, B }
+" },
+                { "config.ffs", @"
+include ""defaults.ffs""
+override const MAX_HP: int = 200
+override func getHP(): int { return 999 }
+override struct Config { hp: int; mp: int }
+override enum Mode { X, Y, Z }
+" }
+            };
+            string source = @"
+include ""config.ffs""
+func main() {
+    Report(MAX_HP)
+    Report(getHP())
+}";
+            var syscalls = new Dictionary<string, int> { { "Report", 0 } };
+            var resolver = new DictionaryFileResolver(files);
+            var result = compiler.Compile(source, "main", syscalls, null, resolver, "main.ffs");
+            Assert(result.Success, $"OV14: child file explicit override should succeed: {(result.Errors != null && result.Errors.Count > 0 ? result.Errors[0] : "")}");
+            if (result.Success)
+            {
+                var vals = new List<int>();
+                var world = new VMWorld();
+                world.Modules.Load(0, result.Program);
+                world.Syscalls.Register(0, "Report", (ref VMInstanceState s) => { vals.Add(s.Registers.Get(0).ToInt()); });
+                world.SpawnInstance(0, 0);
+                world.Tick();
+                Assert(vals.Count == 2 && vals[0] == 200 && vals[1] == 999, $"OV14: expected 200,999 got {string.Join(",", vals)}");
+            }
+        }
+
+        // OV15: child file override on new decl (nothing to override) → error
+        {
+            var files = new Dictionary<string, string>
+            {
+                { "lib.ffs", @"override func phantom(): int { return 0 }" }
+            };
+            string source = @"
+include ""lib.ffs""
+func main() { Report(phantom()) }";
+            var syscalls = new Dictionary<string, int> { { "Report", 0 } };
+            var resolver = new DictionaryFileResolver(files);
+            var result = compiler.Compile(source, "main", syscalls, null, resolver, "main.ffs");
+            Assert(!result.Success, "OV15: child file override on new decl should fail");
+            if (result.Errors != null && result.Errors.Count > 0)
+            {
+                Assert(result.Errors[0].Contains("override"), $"OV15: error mentions override: {result.Errors[0]}");
+            }
+        }
+
+        // OV16: multi-level chain — grandchild override requires keyword
+        {
+            var files = new Dictionary<string, string>
+            {
+                { "base.ffs", @"func calc(): int { return 10 }" },
+                { "mid.ffs", @"
+include ""base.ffs""
+override func calc(): int { return 20 }
+" },
+                { "top.ffs", @"
+include ""mid.ffs""
+override func calc(): int { return 30 }
+" }
+            };
+            string source = @"
+include ""top.ffs""
+func main() { Report(calc()) }";
+            var syscalls = new Dictionary<string, int> { { "Report", 0 } };
+            var resolver = new DictionaryFileResolver(files);
+            var result = compiler.Compile(source, "main", syscalls, null, resolver, "main.ffs");
+            Assert(result.Success, $"OV16: multi-level chain should succeed: {(result.Errors != null && result.Errors.Count > 0 ? result.Errors[0] : "")}");
+            if (result.Success)
+            {
+                var vals = new List<int>();
+                var world = new VMWorld();
+                world.Modules.Load(0, result.Program);
+                world.Syscalls.Register(0, "Report", (ref VMInstanceState s) => { vals.Add(s.Registers.Get(0).ToInt()); });
+                world.SpawnInstance(0, 0);
+                world.Tick();
+                Assert(vals.Count == 1 && vals[0] == 30, $"OV16: expected 30, got {(vals.Count > 0 ? vals[0].ToString() : "none")}");
+            }
+        }
+
+        // ===== Lang-17: Include As Alias Tests (IA01-IA12) =====
+
+        // IA01: Basic include as — aliased module function call
+        {
+            var files = new Dictionary<string, string>
+            {
+                { "m1", @"
+func Do(): int {
+    return 10
+}
+" }
+            };
+            string source = @"
+include ""m1"" as M1
+
+func main() {
+    Report(M1.Do())
+}";
+            var syscalls = new Dictionary<string, int> { { "Report", 0 } };
+            var resolver = new DictionaryFileResolver(files);
+            var result = compiler.Compile(source, "main", syscalls, null, resolver, "main.ffs");
+            Assert(result.Success, $"IA01: compile success, errors: {(result.Errors != null && result.Errors.Count > 0 ? result.Errors[0] : "none")}");
+
+            var values = new List<int>();
+            var world = new VMWorld();
+            world.Modules.Load(0, result.Program);
+            world.Syscalls.Register(0, "Report", (ref VMInstanceState s) =>
+            {
+                values.Add(s.Registers.Get(0).ToInt());
+            });
+            world.SpawnInstance(0, 0);
+            world.Tick();
+            Assert(values.Count == 1 && values[0] == 10, $"IA01: expected 10, got {(values.Count > 0 ? values[0].ToString() : "none")}");
+        }
+
+        // IA02: Aliased module constant access
+        {
+            var files = new Dictionary<string, string>
+            {
+                { "cfg", @"
+const MAX_HP: int = 100
+" }
+            };
+            string source = @"
+include ""cfg"" as CFG
+
+func main() {
+    Report(CFG.MAX_HP)
+}";
+            var syscalls = new Dictionary<string, int> { { "Report", 0 } };
+            var resolver = new DictionaryFileResolver(files);
+            var result = compiler.Compile(source, "main", syscalls, null, resolver, "main.ffs");
+            Assert(result.Success, $"IA02: compile success, errors: {(result.Errors != null && result.Errors.Count > 0 ? result.Errors[0] : "none")}");
+
+            var values = new List<int>();
+            var world = new VMWorld();
+            world.Modules.Load(0, result.Program);
+            world.Syscalls.Register(0, "Report", (ref VMInstanceState s) =>
+            {
+                values.Add(s.Registers.Get(0).ToInt());
+            });
+            world.SpawnInstance(0, 0);
+            world.Tick();
+            Assert(values.Count == 1 && values[0] == 100, $"IA02: expected 100, got {(values.Count > 0 ? values[0].ToString() : "none")}");
+        }
+
+        // IA03: Aliased module enum access (Alias.Enum.Member)
+        {
+            var files = new Dictionary<string, string>
+            {
+                { "types", @"
+enum Color { RED, GREEN, BLUE }
+" }
+            };
+            string source = @"
+include ""types"" as T
+
+func main() {
+    Report(T.Color.GREEN)
+}";
+            var syscalls = new Dictionary<string, int> { { "Report", 0 } };
+            var resolver = new DictionaryFileResolver(files);
+            var result = compiler.Compile(source, "main", syscalls, null, resolver, "main.ffs");
+            Assert(result.Success, $"IA03: compile success, errors: {(result.Errors != null && result.Errors.Count > 0 ? result.Errors[0] : "none")}");
+
+            var values = new List<int>();
+            var world = new VMWorld();
+            world.Modules.Load(0, result.Program);
+            world.Syscalls.Register(0, "Report", (ref VMInstanceState s) =>
+            {
+                values.Add(s.Registers.Get(0).ToInt());
+            });
+            world.SpawnInstance(0, 0);
+            world.Tick();
+            Assert(values.Count == 1 && values[0] == 1, $"IA03: expected 1 (GREEN), got {(values.Count > 0 ? values[0].ToString() : "none")}");
+        }
+
+        // IA04: Two include-as with same-name functions coexist
+        {
+            var files = new Dictionary<string, string>
+            {
+                { "f1", @"
+func Do(): int { return 1 }
+" },
+                { "f2", @"
+func Do(): int { return 2 }
+" }
+            };
+            string source = @"
+include ""f1"" as M1
+include ""f2"" as M2
+
+func main() {
+    Report(M1.Do())
+    Report(M2.Do())
+}";
+            var syscalls = new Dictionary<string, int> { { "Report", 0 } };
+            var resolver = new DictionaryFileResolver(files);
+            var result = compiler.Compile(source, "main", syscalls, null, resolver, "main.ffs");
+            Assert(result.Success, $"IA04: compile success, errors: {(result.Errors != null && result.Errors.Count > 0 ? result.Errors[0] : "none")}");
+
+            var values = new List<int>();
+            var world = new VMWorld();
+            world.Modules.Load(0, result.Program);
+            world.Syscalls.Register(0, "Report", (ref VMInstanceState s) =>
+            {
+                values.Add(s.Registers.Get(0).ToInt());
+            });
+            world.SpawnInstance(0, 0);
+            world.Tick();
+            Assert(values.Count == 2 && values[0] == 1 && values[1] == 2,
+                $"IA04: expected [1,2], got [{string.Join(",", values)}]");
+        }
+
+        // IA05: Duplicate alias name → error
+        {
+            var files = new Dictionary<string, string>
+            {
+                { "f1", @"func A(): int { return 1 }" },
+                { "f2", @"func B(): int { return 2 }" }
+            };
+            string source = @"
+include ""f1"" as M
+include ""f2"" as M
+
+func main() { Report(1) }";
+            var syscalls = new Dictionary<string, int> { { "Report", 0 } };
+            var resolver = new DictionaryFileResolver(files);
+            var result = compiler.Compile(source, "main", syscalls, null, resolver, "main.ffs");
+            Assert(!result.Success, "IA05: duplicate alias should fail");
+            Assert(result.Errors != null && result.Errors.Count > 0 && result.Errors[0].Contains("Duplicate"),
+                $"IA05: error mentions duplicate: {(result.Errors != null && result.Errors.Count > 0 ? result.Errors[0] : "none")}");
+        }
+
+        // IA06: Traditional include + include-as mixed
+        {
+            var files = new Dictionary<string, string>
+            {
+                { "shared", @"const BASE: int = 5" },
+                { "mod", @"func Calc(): int { return 20 }" }
+            };
+            string source = @"
+include ""shared""
+include ""mod"" as MOD
+
+func main() {
+    Report(BASE + MOD.Calc())
+}";
+            var syscalls = new Dictionary<string, int> { { "Report", 0 } };
+            var resolver = new DictionaryFileResolver(files);
+            var result = compiler.Compile(source, "main", syscalls, null, resolver, "main.ffs");
+            Assert(result.Success, $"IA06: compile success, errors: {(result.Errors != null && result.Errors.Count > 0 ? result.Errors[0] : "none")}");
+
+            var values = new List<int>();
+            var world = new VMWorld();
+            world.Modules.Load(0, result.Program);
+            world.Syscalls.Register(0, "Report", (ref VMInstanceState s) =>
+            {
+                values.Add(s.Registers.Get(0).ToInt());
+            });
+            world.SpawnInstance(0, 0);
+            world.Tick();
+            Assert(values.Count == 1 && values[0] == 25, $"IA06: expected 25, got {(values.Count > 0 ? values[0].ToString() : "none")}");
+        }
+
+        // IA07: Aliased module private function not accessible → error
+        {
+            var files = new Dictionary<string, string>
+            {
+                { "lib", @"
+private func Secret(): int { return 42 }
+func Public(): int { return 1 }
+" }
+            };
+            string source = @"
+include ""lib"" as LIB
+
+func main() {
+    Report(LIB.Secret())
+}";
+            var syscalls = new Dictionary<string, int> { { "Report", 0 } };
+            var resolver = new DictionaryFileResolver(files);
+            var result = compiler.Compile(source, "main", syscalls, null, resolver, "main.ffs");
+            Assert(!result.Success, "IA07: private func through alias should fail");
+        }
+
+        // IA08: Aliased module function with arguments
+        {
+            var files = new Dictionary<string, string>
+            {
+                { "math", @"
+func Add(a: int, b: int): int { return a + b }
+" }
+            };
+            string source = @"
+include ""math"" as MATH
+
+func main() {
+    Report(MATH.Add(3, 7))
+}";
+            var syscalls = new Dictionary<string, int> { { "Report", 0 } };
+            var resolver = new DictionaryFileResolver(files);
+            var result = compiler.Compile(source, "main", syscalls, null, resolver, "main.ffs");
+            Assert(result.Success, $"IA08: compile success, errors: {(result.Errors != null && result.Errors.Count > 0 ? result.Errors[0] : "none")}");
+
+            var values = new List<int>();
+            var world = new VMWorld();
+            world.Modules.Load(0, result.Program);
+            world.Syscalls.Register(0, "Report", (ref VMInstanceState s) =>
+            {
+                values.Add(s.Registers.Get(0).ToInt());
+            });
+            world.SpawnInstance(0, 0);
+            world.Tick();
+            Assert(values.Count == 1 && values[0] == 10, $"IA08: expected 10, got {(values.Count > 0 ? values[0].ToString() : "none")}");
+        }
+
+        // IA09: include as backward compat — include without as still works
+        {
+            var files = new Dictionary<string, string>
+            {
+                { "lib", @"const VAL: int = 99" }
+            };
+            string source = @"
+include ""lib""
+
+func main() {
+    Report(VAL)
+}";
+            var syscalls = new Dictionary<string, int> { { "Report", 0 } };
+            var resolver = new DictionaryFileResolver(files);
+            var result = compiler.Compile(source, "main", syscalls, null, resolver, "main.ffs");
+            Assert(result.Success, $"IA09: backward compat compile success");
+
+            var values = new List<int>();
+            var world = new VMWorld();
+            world.Modules.Load(0, result.Program);
+            world.Syscalls.Register(0, "Report", (ref VMInstanceState s) =>
+            {
+                values.Add(s.Registers.Get(0).ToInt());
+            });
+            world.SpawnInstance(0, 0);
+            world.Tick();
+            Assert(values.Count == 1 && values[0] == 99, $"IA09: expected 99, got {(values.Count > 0 ? values[0].ToString() : "none")}");
+        }
+
+        // IA10: Aliased struct type reference + instantiation
+        {
+            var files = new Dictionary<string, string>
+            {
+                { "types", @"
+struct Pos {
+    x: int
+    y: int
+}
+" }
+            };
+            string source = @"
+include ""types"" as T
+
+func main() {
+    var p: T.Pos = T.Pos { x: 3, y: 7 }
+    Report(p.x + p.y)
+}";
+            var syscalls = new Dictionary<string, int> { { "Report", 0 } };
+            var resolver = new DictionaryFileResolver(files);
+            var result = compiler.Compile(source, "main", syscalls, null, resolver, "main.ffs");
+            Assert(result.Success, $"IA10: compile success, errors: {(result.Errors != null && result.Errors.Count > 0 ? result.Errors[0] : "none")}");
+
+            var values = new List<int>();
+            var world = new VMWorld();
+            world.Modules.Load(0, result.Program);
+            world.Syscalls.Register(0, "Report", (ref VMInstanceState s) =>
+            {
+                values.Add(s.Registers.Get(0).ToInt());
+            });
+            world.SpawnInstance(0, 0);
+            world.Tick();
+            Assert(values.Count == 1 && values[0] == 10, $"IA10: expected 10, got {(values.Count > 0 ? values[0].ToString() : "none")}");
+        }
+
+        // IA11: Aliased const in arithmetic expression (TryFoldConstant)
+        {
+            var files = new Dictionary<string, string>
+            {
+                { "cfg", @"
+const BASE: int = 10
+const MULT: int = 3
+" }
+            };
+            string source = @"
+include ""cfg"" as C
+
+const RESULT: int = C.BASE * C.MULT
+
+func main() {
+    Report(RESULT)
+}";
+            var syscalls = new Dictionary<string, int> { { "Report", 0 } };
+            var resolver = new DictionaryFileResolver(files);
+            var result = compiler.Compile(source, "main", syscalls, null, resolver, "main.ffs");
+            Assert(result.Success, $"IA11: compile success, errors: {(result.Errors != null && result.Errors.Count > 0 ? result.Errors[0] : "none")}");
+
+            var values = new List<int>();
+            var world = new VMWorld();
+            world.Modules.Load(0, result.Program);
+            world.Syscalls.Register(0, "Report", (ref VMInstanceState s) =>
+            {
+                values.Add(s.Registers.Get(0).ToInt());
+            });
+            world.SpawnInstance(0, 0);
+            world.Tick();
+            Assert(values.Count == 1 && values[0] == 30, $"IA11: expected 30, got {(values.Count > 0 ? values[0].ToString() : "none")}");
+        }
+
+        // IA12: Aliased enum in const expression (TryFoldConstant)
+        {
+            var files = new Dictionary<string, string>
+            {
+                { "types", @"
+enum Dir { UP, DOWN, LEFT, RIGHT }
+" }
+            };
+            string source = @"
+include ""types"" as T
+
+const MY_DIR: int = T.Dir.LEFT
+
+func main() {
+    Report(MY_DIR)
+}";
+            var syscalls = new Dictionary<string, int> { { "Report", 0 } };
+            var resolver = new DictionaryFileResolver(files);
+            var result = compiler.Compile(source, "main", syscalls, null, resolver, "main.ffs");
+            Assert(result.Success, $"IA12: compile success, errors: {(result.Errors != null && result.Errors.Count > 0 ? result.Errors[0] : "none")}");
+
+            var values = new List<int>();
+            var world = new VMWorld();
+            world.Modules.Load(0, result.Program);
+            world.Syscalls.Register(0, "Report", (ref VMInstanceState s) =>
+            {
+                values.Add(s.Registers.Get(0).ToInt());
+            });
+            world.SpawnInstance(0, 0);
+            world.Tick();
+            Assert(values.Count == 1 && values[0] == 2, $"IA12: expected 2 (LEFT), got {(values.Count > 0 ? values[0].ToString() : "none")}");
         }
 
         // ===== Summary =====

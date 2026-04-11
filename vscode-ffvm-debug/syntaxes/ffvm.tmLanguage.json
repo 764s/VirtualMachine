@@ -79,7 +79,7 @@
                 },
                 {
                     "name": "storage.modifier.ffvm",
-                    "match": "\\b(public|private)\\b"
+                    "match": "\\b(public|private|override)\\b"
                 },
                 {
                     "name": "constant.language.ffvm",

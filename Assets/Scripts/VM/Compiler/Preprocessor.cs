@@ -44,8 +44,8 @@ namespace FFVM.Compiler
     ///   3. Merge all declarations into a single ModuleNode with override semantics.
     ///   4. Return the merged ModuleNode (no Imports — all resolved).
     ///
-    /// Override rules:
-    ///   - Cross-file: later declaration wins (const type must match, func signature must match).
+    /// Override rules (Lang-16):
+    ///   - Cross-file: requires explicit 'override' keyword regardless of file position in include chain.
     ///   - Same-file: duplicate declaration is a compile error.
     ///   - var cannot override const; const cannot override var.
     /// </summary>
@@ -111,21 +111,33 @@ namespace FFVM.Compiler
                 for (int i = 0; i < module.Structs.Count; i++)
                 {
                     module.Structs[i].OriginFile = filePath;  // Lang-15
+                    // Lang-16: override without includes is invalid
+                    if (module.Structs[i].IsOverride)
+                        _errors.Add($"[{filePath}] 'override' on struct '{module.Structs[i].Name}' but no included file provides a declaration to override");
                     wrapped.Structs.Add(module.Structs[i]);
                 }
                 for (int i = 0; i < module.Functions.Count; i++)
                 {
                     module.Functions[i].OriginFile = filePath;  // Lang-15
+                    if (module.Functions[i].IsOverride)
+                        _errors.Add($"[{filePath}] 'override' on function '{module.Functions[i].Name}' but no included file provides a declaration to override");
                     wrapped.Functions.Add(module.Functions[i]);
                 }
                 for (int i = 0; i < module.ModuleVariables.Count; i++)
                 {
                     module.ModuleVariables[i].OriginFile = filePath;  // Lang-15
+                    if (module.ModuleVariables[i].IsOverride)
+                    {
+                        string kind = module.ModuleVariables[i].IsConst ? "const" : "var";
+                        _errors.Add($"[{filePath}] 'override' on {kind} '{module.ModuleVariables[i].Name}' but no included file provides a declaration to override");
+                    }
                     wrapped.ModuleVariables.Add(module.ModuleVariables[i]);
                 }
                 for (int i = 0; i < module.Enums.Count; i++)
                 {
                     module.Enums[i].OriginFile = filePath;  // Lang-15
+                    if (module.Enums[i].IsOverride)
+                        _errors.Add($"[{filePath}] 'override' on enum '{module.Enums[i].Name}' but no included file provides a declaration to override");
                     wrapped.Enums.Add(module.Enums[i]);
                 }
                 return wrapped;
@@ -149,6 +161,7 @@ namespace FFVM.Compiler
             for (int i = 0; i < module.Imports.Count; i++)
             {
                 string importPath = module.Imports[i].ModulePath;
+                string alias = module.Imports[i].Alias;  // Lang-17
                 string importSource = _fileResolver != null ? _fileResolver.ReadFile(importPath) : null;
                 if (importSource == null)
                 {
@@ -158,6 +171,18 @@ namespace FFVM.Compiler
 
                 var importModule = ResolveRecursive(importSource, importPath, stack);
                 if (_errors.Count > 0) continue;
+
+                // Lang-17: aliased include → store in AliasedModules, no flat merge
+                if (alias != null)
+                {
+                    if (merged.AliasedModules.ContainsKey(alias))
+                    {
+                        _errors.Add($"[{filePath}] Duplicate include alias '{alias}'");
+                        continue;
+                    }
+                    merged.AliasedModules[alias] = importModule;
+                    continue;
+                }
 
                 // Merge imported declarations
                 MergeDeclarations(merged, importModule, constSources, funcSources, structSources, varSources, enumSources, declKinds, filePath);
@@ -190,28 +215,28 @@ namespace FFVM.Compiler
             for (int i = 0; i < source.ModuleVariables.Count; i++)
             {
                 var v = source.ModuleVariables[i];
-                MergeModuleVariable(target, v, constSources, varSources, declKinds, srcFile);
+                MergeModuleVariable(target, v, constSources, varSources, declKinds, srcFile, isMainFile: false);
             }
 
             // Merge funcs
             for (int i = 0; i < source.Functions.Count; i++)
             {
                 var f = source.Functions[i];
-                MergeFunc(target, f, funcSources, srcFile);
+                MergeFunc(target, f, funcSources, srcFile, isMainFile: false);
             }
 
             // Merge structs
             for (int i = 0; i < source.Structs.Count; i++)
             {
                 var s = source.Structs[i];
-                MergeStruct(target, s, structSources, srcFile);
+                MergeStruct(target, s, structSources, srcFile, isMainFile: false);
             }
 
             // Lang-13: Merge enums with cross-file override (same semantics as structs)
             for (int i = 0; i < source.Enums.Count; i++)
             {
                 var e = source.Enums[i];
-                MergeEnum(target, e, enumSources, srcFile);
+                MergeEnum(target, e, enumSources, srcFile, isMainFile: false);
             }
         }
 
@@ -233,26 +258,26 @@ namespace FFVM.Compiler
             for (int i = 0; i < mainModule.ModuleVariables.Count; i++)
             {
                 var v = mainModule.ModuleVariables[i];
-                MergeModuleVariable(target, v, constSources, varSources, declKinds, srcFile);
+                MergeModuleVariable(target, v, constSources, varSources, declKinds, srcFile, isMainFile: true);
             }
 
             for (int i = 0; i < mainModule.Functions.Count; i++)
             {
                 var f = mainModule.Functions[i];
-                MergeFunc(target, f, funcSources, srcFile);
+                MergeFunc(target, f, funcSources, srcFile, isMainFile: true);
             }
 
             for (int i = 0; i < mainModule.Structs.Count; i++)
             {
                 var s = mainModule.Structs[i];
-                MergeStruct(target, s, structSources, srcFile);
+                MergeStruct(target, s, structSources, srcFile, isMainFile: true);
             }
 
             // Lang-13: Merge enums from main file
             for (int i = 0; i < mainModule.Enums.Count; i++)
             {
                 var e = mainModule.Enums[i];
-                MergeEnum(target, e, enumSources, srcFile);
+                MergeEnum(target, e, enumSources, srcFile, isMainFile: true);
             }
         }
 
@@ -261,10 +286,12 @@ namespace FFVM.Compiler
             Dictionary<string, string> constSources,
             Dictionary<string, string> varSources,
             Dictionary<string, bool> declKinds,
-            string srcFile)
+            string srcFile,
+            bool isMainFile)
         {
-            // Lang-15: stamp OriginFile
-            v.OriginFile = srcFile;
+            // Lang-15: stamp OriginFile (preserve original if already set — diamond include)
+            if (v.OriginFile == null) v.OriginFile = srcFile;
+            string origin = v.OriginFile;
 
             string name = v.Name;
 
@@ -273,17 +300,17 @@ namespace FFVM.Compiler
             if (v.IsPrivate)
             {
                 // Check same-file redefinition for private: use qualified key
-                string qualKey = name + "\0" + srcFile;
+                string qualKey = name + "\0" + origin;
                 var sources = v.IsConst ? constSources : varSources;
                 string existingFile;
                 if (sources.TryGetValue(qualKey, out existingFile))
                 {
                     string kind = v.IsConst ? "const" : "var";
-                    _errors.Add($"[{srcFile}] Duplicate private {kind} '{name}' in the same file");
+                    _errors.Add($"[{origin}] Duplicate private {kind} '{name}' in the same file");
                     return;
                 }
                 target.ModuleVariables.Add(v);
-                sources[qualKey] = srcFile;
+                sources[qualKey] = origin;
                 declKinds[qualKey] = v.IsConst;
                 return;
             }
@@ -296,24 +323,39 @@ namespace FFVM.Compiler
             if (declKinds.TryGetValue(name, out existingKind) && existingKind != v.IsConst)
             {
                 if (v.IsConst)
-                    _errors.Add($"[{srcFile}] Cannot override var '{name}' with const");
+                    _errors.Add($"[{origin}] Cannot override var '{name}' with const");
                 else
-                    _errors.Add($"[{srcFile}] Cannot override const '{name}' with var");
+                    _errors.Add($"[{origin}] Cannot override const '{name}' with var");
                 return;
             }
 
-            // Check same-file redefinition
+            // Check same-file redefinition vs diamond include
             string existFile;
-            if (varSrc.TryGetValue(name, out existFile) && existFile == srcFile)
+            if (varSrc.TryGetValue(name, out existFile) && existFile == origin)
             {
-                string kind = v.IsConst ? "const" : "var";
-                _errors.Add($"[{srcFile}] Duplicate {kind} '{name}' in the same file");
+                if (isMainFile)
+                {
+                    // True same-file redefinition → error
+                    string kind = v.IsConst ? "const" : "var";
+                    _errors.Add($"[{origin}] Duplicate {kind} '{name}' in the same file");
+                    return;
+                }
+                // Diamond include: same origin arriving through different include paths → skip silently
                 return;
             }
 
             // Cross-file override or new declaration — replace
             if (varSrc.ContainsKey(name))
             {
+                // Lang-16: require explicit override keyword for any cross-file replacement
+                if (!v.IsOverride)
+                {
+                    string kind = v.IsConst ? "const" : "var";
+                    string existingFrom = varSrc[name];
+                    _errors.Add($"[{origin}] {kind} '{name}' conflicts with declaration from '{existingFrom}'. Use 'override {kind}' to intentionally replace it, or 'private {kind}' to keep both independently");
+                    return;
+                }
+
                 // Replace existing in target (only public can override public)
                 for (int j = 0; j < target.ModuleVariables.Count; j++)
                 {
@@ -326,48 +368,73 @@ namespace FFVM.Compiler
             }
             else
             {
+                // Lang-16: override on a new declaration (nothing to override) → error
+                // Guard on isMainFile: resolved child modules propagate IsOverride through include chains,
+                // but the "no prior declaration" check only applies to the file's own declarations.
+                if (isMainFile && v.IsOverride)
+                {
+                    string kind = v.IsConst ? "const" : "var";
+                    _errors.Add($"[{origin}] 'override' on {kind} '{name}' but no prior declaration exists to override");
+                    return;
+                }
                 target.ModuleVariables.Add(v);
             }
 
-            varSrc[name] = srcFile;
+            varSrc[name] = origin;
             declKinds[name] = v.IsConst;
         }
 
         private void MergeFunc(
             ModuleNode target, FuncDecl f,
             Dictionary<string, string> funcSources,
-            string srcFile)
+            string srcFile,
+            bool isMainFile)
         {
-            // Lang-15: stamp OriginFile
-            f.OriginFile = srcFile;
+            // Lang-15: stamp OriginFile (preserve original if already set — diamond include)
+            if (f.OriginFile == null) f.OriginFile = srcFile;
+            string origin = f.OriginFile;
 
             string name = f.Name;
 
             // Lang-15: private functions never conflict with functions from other files.
             if (f.IsPrivate)
             {
-                string qualKey = name + "\0" + srcFile;
+                string qualKey = name + "\0" + origin;
                 if (funcSources.ContainsKey(qualKey))
                 {
-                    _errors.Add($"[{srcFile}] Duplicate private function '{name}' in the same file");
+                    _errors.Add($"[{origin}] Duplicate private function '{name}' in the same file");
                     return;
                 }
                 target.Functions.Add(f);
-                funcSources[qualKey] = srcFile;
+                funcSources[qualKey] = origin;
                 return;
             }
 
-            // Check same-file redefinition
+            // Check same-file redefinition vs diamond include
             string existingFile;
-            if (funcSources.TryGetValue(name, out existingFile) && existingFile == srcFile)
+            if (funcSources.TryGetValue(name, out existingFile) && existingFile == origin)
             {
-                _errors.Add($"[{srcFile}] Duplicate function '{name}' in the same file");
+                if (isMainFile)
+                {
+                    _errors.Add($"[{origin}] Duplicate function '{name}' in the same file");
+                    return;
+                }
+                // Diamond include → skip silently
                 return;
             }
 
             // Cross-file override or new declaration — replace (public only)
             if (funcSources.ContainsKey(name))
             {
+                string existingFrom = funcSources[name];
+
+                // Lang-16: require explicit override keyword for any cross-file replacement
+                if (!f.IsOverride)
+                {
+                    _errors.Add($"[{origin}] Function '{name}' conflicts with declaration from '{existingFrom}'. Use 'override func' to intentionally replace it, or 'private func' to keep both independently");
+                    return;
+                }
+
                 for (int j = 0; j < target.Functions.Count; j++)
                 {
                     if (target.Functions[j].Name == name && !target.Functions[j].IsPrivate)
@@ -379,47 +446,70 @@ namespace FFVM.Compiler
             }
             else
             {
+                // Lang-16: override on a new declaration (nothing to override) → error
+                // Guard on isMainFile: resolved child modules propagate IsOverride through include chains,
+                // but the "no prior declaration" check only applies to the file's own declarations.
+                if (isMainFile && f.IsOverride)
+                {
+                    _errors.Add($"[{origin}] 'override' on function '{name}' but no prior declaration exists to override");
+                    return;
+                }
                 target.Functions.Add(f);
             }
 
-            funcSources[name] = srcFile;
+            funcSources[name] = origin;
         }
 
         private void MergeStruct(
             ModuleNode target, StructDecl s,
             Dictionary<string, string> structSources,
-            string srcFile)
+            string srcFile,
+            bool isMainFile)
         {
-            // Lang-15: stamp OriginFile
-            s.OriginFile = srcFile;
+            // Lang-15: stamp OriginFile (preserve original if already set — diamond include)
+            if (s.OriginFile == null) s.OriginFile = srcFile;
+            string origin = s.OriginFile;
 
             string name = s.Name;
 
             // Lang-15: private structs never conflict with structs from other files.
             if (s.IsPrivate)
             {
-                string qualKey = name + "\0" + srcFile;
+                string qualKey = name + "\0" + origin;
                 if (structSources.ContainsKey(qualKey))
                 {
-                    _errors.Add($"[{srcFile}] Duplicate private struct '{name}' in the same file");
+                    _errors.Add($"[{origin}] Duplicate private struct '{name}' in the same file");
                     return;
                 }
                 target.Structs.Add(s);
-                structSources[qualKey] = srcFile;
+                structSources[qualKey] = origin;
                 return;
             }
 
-            // Check same-file redefinition
+            // Check same-file redefinition vs diamond include
             string existingFile;
-            if (structSources.TryGetValue(name, out existingFile) && existingFile == srcFile)
+            if (structSources.TryGetValue(name, out existingFile) && existingFile == origin)
             {
-                _errors.Add($"[{srcFile}] Duplicate struct '{name}' in the same file");
+                if (isMainFile)
+                {
+                    _errors.Add($"[{origin}] Duplicate struct '{name}' in the same file");
+                    return;
+                }
+                // Diamond include → skip silently
                 return;
             }
 
             // Cross-file override or new declaration — replace (public only)
             if (structSources.ContainsKey(name))
             {
+                // Lang-16: require explicit override keyword for any cross-file replacement
+                if (!s.IsOverride)
+                {
+                    string existingFrom = structSources[name];
+                    _errors.Add($"[{origin}] Struct '{name}' conflicts with declaration from '{existingFrom}'. Use 'override struct' to intentionally replace it, or 'private struct' to keep both independently");
+                    return;
+                }
+
                 for (int j = 0; j < target.Structs.Count; j++)
                 {
                     if (target.Structs[j].Name == name && !target.Structs[j].IsPrivate)
@@ -431,47 +521,70 @@ namespace FFVM.Compiler
             }
             else
             {
+                // Lang-16: override on a new declaration (nothing to override) → error
+                // Guard on isMainFile: resolved child modules propagate IsOverride through include chains,
+                // but the "no prior declaration" check only applies to the file's own declarations.
+                if (isMainFile && s.IsOverride)
+                {
+                    _errors.Add($"[{origin}] 'override' on struct '{name}' but no prior declaration exists to override");
+                    return;
+                }
                 target.Structs.Add(s);
             }
 
-            structSources[name] = srcFile;
+            structSources[name] = origin;
         }
 
         private void MergeEnum(
             ModuleNode target, EnumDecl e,
             Dictionary<string, string> enumSources,
-            string srcFile)
+            string srcFile,
+            bool isMainFile)
         {
-            // Lang-15: stamp OriginFile
-            e.OriginFile = srcFile;
+            // Lang-15: stamp OriginFile (preserve original if already set — diamond include)
+            if (e.OriginFile == null) e.OriginFile = srcFile;
+            string origin = e.OriginFile;
 
             string name = e.Name;
 
             // Lang-15: private enums never conflict with enums from other files.
             if (e.IsPrivate)
             {
-                string qualKey = name + "\0" + srcFile;
+                string qualKey = name + "\0" + origin;
                 if (enumSources.ContainsKey(qualKey))
                 {
-                    _errors.Add($"[{srcFile}] Duplicate private enum '{name}' in the same file");
+                    _errors.Add($"[{origin}] Duplicate private enum '{name}' in the same file");
                     return;
                 }
                 target.Enums.Add(e);
-                enumSources[qualKey] = srcFile;
+                enumSources[qualKey] = origin;
                 return;
             }
 
-            // Check same-file redefinition
+            // Check same-file redefinition vs diamond include
             string existingFile;
-            if (enumSources.TryGetValue(name, out existingFile) && existingFile == srcFile)
+            if (enumSources.TryGetValue(name, out existingFile) && existingFile == origin)
             {
-                _errors.Add($"[{srcFile}] Duplicate enum '{name}' in the same file");
+                if (isMainFile)
+                {
+                    _errors.Add($"[{origin}] Duplicate enum '{name}' in the same file");
+                    return;
+                }
+                // Diamond include → skip silently
                 return;
             }
 
             // Cross-file override or new declaration — replace (public only)
             if (enumSources.ContainsKey(name))
             {
+                // Lang-16: require explicit override keyword for any cross-file replacement
+                if (!e.IsOverride)
+                {
+                    string existingFrom = enumSources[name];
+                    _errors.Add($"[{origin}] Enum '{name}' conflicts with declaration from '{existingFrom}'. Use 'override enum' to intentionally replace it, or 'private enum' to keep both independently");
+                    return;
+                }
+
                 for (int j = 0; j < target.Enums.Count; j++)
                 {
                     if (target.Enums[j].Name == name && !target.Enums[j].IsPrivate)
@@ -483,10 +596,18 @@ namespace FFVM.Compiler
             }
             else
             {
+                // Lang-16: override on a new declaration (nothing to override) → error
+                // Guard on isMainFile: resolved child modules propagate IsOverride through include chains,
+                // but the "no prior declaration" check only applies to the file's own declarations.
+                if (isMainFile && e.IsOverride)
+                {
+                    _errors.Add($"[{origin}] 'override' on enum '{name}' but no prior declaration exists to override");
+                    return;
+                }
                 target.Enums.Add(e);
             }
 
-            enumSources[name] = srcFile;
+            enumSources[name] = origin;
         }
     }
 }
