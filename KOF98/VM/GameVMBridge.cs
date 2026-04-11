@@ -7,34 +7,6 @@ using FFVM.Compiler;
 namespace KOF98
 {
     /// <summary>
-    /// Filesystem-based file resolver for include directives.
-    /// Resolves include paths relative to a base directory (typically KOF98/Scripts/).
-    /// Paths are validated to stay within the base directory (no path traversal).
-    /// </summary>
-    public class FileSystemFileResolver : IFileResolver
-    {
-        private readonly string _baseDir;
-
-        public FileSystemFileResolver(string baseDir)
-        {
-            _baseDir = Path.GetFullPath(baseDir);
-        }
-
-        public string ReadFile(string path)
-        {
-            string fullPath = Path.GetFullPath(Path.Combine(_baseDir, path));
-            // Append .ffs extension if not present (include "common/constants" → common/constants.ffs)
-            if (!fullPath.EndsWith(".ffs", StringComparison.OrdinalIgnoreCase))
-                fullPath += ".ffs";
-            // Validate path stays within base directory (prevent path traversal)
-            if (!fullPath.StartsWith(_baseDir, StringComparison.OrdinalIgnoreCase))
-                return null;
-            if (!File.Exists(fullPath)) return null;
-            return File.ReadAllText(fullPath);
-        }
-    }
-
-    /// <summary>
     /// Bridge between the KOF98 game framework and FFVM.
     ///
     /// Responsibilities:

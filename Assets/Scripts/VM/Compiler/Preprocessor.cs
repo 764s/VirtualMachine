@@ -1,4 +1,6 @@
+using System;
 using System.Collections.Generic;
+using System.IO;
 using FFVM.AST;
 
 namespace FFVM.Compiler
@@ -32,6 +34,35 @@ namespace FFVM.Compiler
         {
             string result;
             return _files.TryGetValue(path, out result) ? result : null;
+        }
+    }
+
+    /// <summary>
+    /// DX4-P0: Filesystem-based file resolver for include directives.
+    /// Resolves include paths relative to a base directory.
+    /// Auto-appends .ffs extension if not present.
+    /// Validates resolved path stays within baseDir (prevents path traversal).
+    /// </summary>
+    public class FileSystemFileResolver : IFileResolver
+    {
+        private readonly string _baseDir;
+
+        public FileSystemFileResolver(string baseDir)
+        {
+            _baseDir = Path.GetFullPath(baseDir);
+        }
+
+        public string ReadFile(string path)
+        {
+            string fullPath = Path.GetFullPath(Path.Combine(_baseDir, path));
+            // Append .ffs extension if not present (include "common/constants" → common/constants.ffs)
+            if (!fullPath.EndsWith(".ffs", StringComparison.OrdinalIgnoreCase))
+                fullPath += ".ffs";
+            // Validate path stays within base directory (prevent path traversal)
+            if (!fullPath.StartsWith(_baseDir, StringComparison.OrdinalIgnoreCase))
+                return null;
+            if (!File.Exists(fullPath)) return null;
+            return File.ReadAllText(fullPath);
         }
     }
 
