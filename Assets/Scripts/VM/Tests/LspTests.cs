@@ -1673,6 +1673,257 @@ public static class LspTests
             }
         }
 
+        // ================================================================
+        // J. DX4-P0: Workspace & Diagnostics-Only Mode Tests
+        // ================================================================
+
+        // DX4-P0-01: UriToPath converts file:// URI to local path (Unix)
+        {
+            string path = LspServer.UriToPath("file:///home/user/workspace");
+            Assert(path == "/home/user/workspace", "DX4-P0-01: Unix path from file:// URI, got '" + path + "'");
+        }
+
+        // DX4-P0-02: UriToPath handles percent-encoded characters
+        {
+            string path = LspServer.UriToPath("file:///home/user/my%20workspace");
+            Assert(path == "/home/user/my workspace", "DX4-P0-02: percent-decoded path, got '" + path + "'");
+        }
+
+        // DX4-P0-03: UriToPath returns null for null input
+        {
+            string path = LspServer.UriToPath(null);
+            Assert(path == null, "DX4-P0-03: null input → null output");
+        }
+
+        // DX4-P0-04: UriToFilePath computes relative path from workspace root
+        {
+            string rel = LspServer.UriToFilePath("file:///home/user/project/src/main.ffs", "/home/user/project");
+            Assert(rel == "src/main.ffs", "DX4-P0-04: relative path from root, got '" + rel + "'");
+        }
+
+        // DX4-P0-05: UriToFilePath returns full path when not under root
+        {
+            string rel = LspServer.UriToFilePath("file:///other/path/main.ffs", "/home/user/project");
+            Assert(rel == "/other/path/main.ffs", "DX4-P0-05: not under root → full path, got '" + rel + "'");
+        }
+
+        // DX4-P0-06: entryFunc=null compiles without "entry function not found" error
+        {
+            var compiler = new FFVM.Compiler.BytecodeCompiler();
+            var result = compiler.Compile("func helper(): int { return 42 }", null, new Dictionary<string, int>());
+            Assert(result.Success, "DX4-P0-06: entryFunc=null compiles successfully");
+        }
+
+        // DX4-P0-07: entryFunc=null with multiple functions — all compile
+        {
+            string source = "func foo(): int { return 1 }\nfunc bar(): int { return foo() + 1 }";
+            var compiler = new FFVM.Compiler.BytecodeCompiler();
+            var result = compiler.Compile(source, null, new Dictionary<string, int>());
+            Assert(result.Success, "DX4-P0-07: entryFunc=null with multiple funcs compiles, errors=" +
+                (result.Errors != null ? string.Join("; ", result.Errors) : "none"));
+        }
+
+        // DX4-P0-08: entryFunc=null still catches real errors
+        {
+            var compiler = new FFVM.Compiler.BytecodeCompiler();
+            var result = compiler.Compile("func foo() { return unknown_var }", null, new Dictionary<string, int>());
+            Assert(!result.Success, "DX4-P0-08: entryFunc=null still reports real errors");
+        }
+
+        // DX4-P0-09: LSP diagnostics-only mode — no entry func → no error diagnostic
+        {
+            string source = "func helper(): int { return 42 }";
+            var session = new LspBatchSession();
+            session.AddInitialize();
+            session.AddInitialized();
+            session.AddDidOpen("file:///dx4p0-09.ffs", source);
+            session.AddShutdown();
+            session.AddExit();
+            session.Run();
+
+            var allDiags = session.FindAllNotifications("textDocument/publishDiagnostics");
+            bool hasEntryError = false;
+            foreach (var notif in allDiags)
+            {
+                var p = notif.GetObject("params");
+                if (p == null) continue;
+                var diags = p.GetArray("diagnostics");
+                if (diags == null) continue;
+                foreach (var d in diags)
+                {
+                    var dObj = d as JsonObject;
+                    string msg = dObj?.GetString("message") ?? "";
+                    if (msg.Contains("Entry function") || msg.Contains("entry"))
+                        hasEntryError = true;
+                }
+            }
+            Assert(!hasEntryError, "DX4-P0-09: no 'entry function not found' error in diagnostics-only mode");
+        }
+
+        // DX4-P0-10: LSP initialize with rootUri — capabilities still returned
+        {
+            string tmpDir = Path.Combine(Path.GetTempPath(), "dx4p0_test_" + Guid.NewGuid().ToString("N").Substring(0, 8));
+            Directory.CreateDirectory(tmpDir);
+            try
+            {
+                string rootUri = "file:///" + tmpDir.TrimStart('/').Replace("\\", "/");
+                var session = new LspBatchSession();
+                session.AddInitializeWithRootUri(rootUri);
+                session.AddInitialized();
+                session.AddShutdown();
+                session.AddExit();
+                session.Run();
+
+                var initResp = session.ExpectResponse(0);
+                Assert(initResp != null, "DX4-P0-10: initialize response received");
+                if (initResp != null)
+                {
+                    var result = initResp.GetObject("result");
+                    var caps = result?.GetObject("capabilities");
+                    Assert(caps != null, "DX4-P0-10: capabilities present with rootUri");
+                }
+            }
+            finally
+            {
+                try { Directory.Delete(tmpDir, true); } catch { }
+            }
+        }
+
+        // DX4-P0-11: LSP auto-discovers .ffvm.d.json in workspace root
+        {
+            string tmpDir = Path.Combine(Path.GetTempPath(), "dx4p0_test_" + Guid.NewGuid().ToString("N").Substring(0, 8));
+            Directory.CreateDirectory(tmpDir);
+            try
+            {
+                // Write a .ffvm.d.json with a syscall declaration
+                string declJson = "{ \"syscalls\": [ { \"name\": \"TestSyscall\", \"slot\": 99 } ] }";
+                File.WriteAllText(Path.Combine(tmpDir, "host.ffvm.d.json"), declJson);
+
+                string rootUri = "file:///" + tmpDir.TrimStart('/').Replace("\\", "/");
+                // Script that calls TestSyscall — should not produce "unknown syscall" error
+                string source = "func main() { TestSyscall() }";
+                var session = new LspBatchSession();
+                session.AddInitializeWithRootUri(rootUri);
+                session.AddInitialized();
+                session.AddDidOpen("file:///dx4p0-11.ffs", source);
+                session.AddShutdown();
+                session.AddExit();
+                session.Run();
+
+                var allDiags = session.FindAllNotifications("textDocument/publishDiagnostics");
+                bool hasUnknownSyscall = false;
+                foreach (var notif in allDiags)
+                {
+                    var p = notif.GetObject("params");
+                    if (p == null) continue;
+                    var diags = p.GetArray("diagnostics");
+                    if (diags == null) continue;
+                    foreach (var d in diags)
+                    {
+                        var dObj = d as JsonObject;
+                        string msg = dObj?.GetString("message") ?? "";
+                        if (msg.Contains("TestSyscall") && (msg.Contains("Unknown") || msg.Contains("unknown")))
+                            hasUnknownSyscall = true;
+                    }
+                }
+                Assert(!hasUnknownSyscall, "DX4-P0-11: auto-discovered .ffvm.d.json → TestSyscall recognized");
+            }
+            finally
+            {
+                try { Directory.Delete(tmpDir, true); } catch { }
+            }
+        }
+
+        // DX4-P0-12: LSP include resolution via workspace FileResolver
+        {
+            string tmpDir = Path.Combine(Path.GetTempPath(), "dx4p0_test_" + Guid.NewGuid().ToString("N").Substring(0, 8));
+            Directory.CreateDirectory(tmpDir);
+            try
+            {
+                // Write an included file
+                File.WriteAllText(Path.Combine(tmpDir, "common.ffs"), "func helper(): int { return 42 }");
+
+                string rootUri = "file:///" + tmpDir.TrimStart('/').Replace("\\", "/");
+                // Main script includes common.ffs and calls helper
+                string source = "include \"common\"\nfunc main() { var x: int = helper() }";
+                string fileUri = rootUri + "/main.ffs";
+                var session = new LspBatchSession();
+                session.AddInitializeWithRootUri(rootUri);
+                session.AddInitialized();
+                session.AddDidOpen(fileUri, source);
+                session.AddShutdown();
+                session.AddExit();
+                session.Run();
+
+                var allDiags = session.FindAllNotifications("textDocument/publishDiagnostics");
+                bool hasIncludeError = false;
+                foreach (var notif in allDiags)
+                {
+                    var p = notif.GetObject("params");
+                    if (p == null) continue;
+                    var diags = p.GetArray("diagnostics");
+                    if (diags == null) continue;
+                    foreach (var d in diags)
+                    {
+                        var dObj = d as JsonObject;
+                        string msg = dObj?.GetString("message") ?? "";
+                        if (msg.Contains("common") || msg.Contains("helper") || msg.Contains("include"))
+                            hasIncludeError = true;
+                    }
+                }
+                Assert(!hasIncludeError, "DX4-P0-12: include resolved via workspace FileResolver, no errors");
+            }
+            finally
+            {
+                try { Directory.Delete(tmpDir, true); } catch { }
+            }
+        }
+
+        // DX4-P0-13: .ffvm.d.json auto-discovery in subdirectory
+        {
+            string tmpDir = Path.Combine(Path.GetTempPath(), "dx4p0_test_" + Guid.NewGuid().ToString("N").Substring(0, 8));
+            Directory.CreateDirectory(tmpDir);
+            string subDir = Path.Combine(tmpDir, "host");
+            Directory.CreateDirectory(subDir);
+            try
+            {
+                string declJson = "{ \"syscalls\": [ { \"name\": \"SubDirSyscall\", \"slot\": 50 } ] }";
+                File.WriteAllText(Path.Combine(subDir, "sub.ffvm.d.json"), declJson);
+
+                string rootUri = "file:///" + tmpDir.TrimStart('/').Replace("\\", "/");
+                string source = "func main() { SubDirSyscall() }";
+                var session = new LspBatchSession();
+                session.AddInitializeWithRootUri(rootUri);
+                session.AddInitialized();
+                session.AddDidOpen("file:///dx4p0-13.ffs", source);
+                session.AddShutdown();
+                session.AddExit();
+                session.Run();
+
+                var allDiags = session.FindAllNotifications("textDocument/publishDiagnostics");
+                bool hasUnknownSyscall = false;
+                foreach (var notif in allDiags)
+                {
+                    var p = notif.GetObject("params");
+                    if (p == null) continue;
+                    var diags = p.GetArray("diagnostics");
+                    if (diags == null) continue;
+                    foreach (var d in diags)
+                    {
+                        var dObj = d as JsonObject;
+                        string msg = dObj?.GetString("message") ?? "";
+                        if (msg.Contains("SubDirSyscall") && (msg.Contains("Unknown") || msg.Contains("unknown")))
+                            hasUnknownSyscall = true;
+                    }
+                }
+                Assert(!hasUnknownSyscall, "DX4-P0-13: .ffvm.d.json auto-discovered in subdirectory");
+            }
+            finally
+            {
+                try { Directory.Delete(tmpDir, true); } catch { }
+            }
+        }
+
         Debug.Log($"\n===== LspTests: {passed} passed, {failed} failed =====");
     }
 
@@ -1723,6 +1974,18 @@ public static class LspTests
             var parameters = new JsonObject();
             var caps = new JsonObject();
             parameters.Set("capabilities", caps);
+            AddRequest("initialize", parameters);
+        }
+
+        /// <summary>
+        /// DX4-P0: Initialize with rootUri for workspace-aware tests.
+        /// </summary>
+        public void AddInitializeWithRootUri(string rootUri)
+        {
+            var parameters = new JsonObject();
+            var caps = new JsonObject();
+            parameters.Set("capabilities", caps);
+            parameters.Set("rootUri", rootUri);
             AddRequest("initialize", parameters);
         }
 
