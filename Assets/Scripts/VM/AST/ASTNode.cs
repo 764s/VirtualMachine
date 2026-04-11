@@ -250,9 +250,10 @@ namespace FFVM.AST
         public bool IsConst { get; }
         public bool IsExported { get; }
         public bool IsPrivate { get; }
+        public bool IsOverride { get; }
         /// <summary>Lang-15: Source file this declaration originated from. Set by Preprocessor during merge.</summary>
         public string OriginFile { get; set; }
-        public VarDeclStmt(string name, string typeName, Expr initializer, bool isConst = false, bool isExported = false, bool isPrivate = false) : base(NodeKind.VarDecl)
+        public VarDeclStmt(string name, string typeName, Expr initializer, bool isConst = false, bool isExported = false, bool isPrivate = false, bool isOverride = false) : base(NodeKind.VarDecl)
         {
             Name = name;
             TypeName = typeName;
@@ -260,6 +261,7 @@ namespace FFVM.AST
             IsConst = isConst;
             IsExported = isExported;
             IsPrivate = isPrivate;
+            IsOverride = isOverride;
         }
     }
 
@@ -392,12 +394,13 @@ namespace FFVM.AST
         public bool IsPrivate { get; }
         public bool IsExported { get; }
         public bool IsInline { get; }
+        public bool IsOverride { get; }
         public string DocComment { get; set; }
         public string ReturnDoc { get; set; }
         /// <summary>Lang-15: Source file this declaration originated from. Set by Preprocessor during merge.</summary>
         public string OriginFile { get; set; }
 
-        public FuncDecl(string name, List<ParamDecl> parameters, string returnType, BlockStmt body, bool isPrivate, bool isExported = false, bool isInline = false)
+        public FuncDecl(string name, List<ParamDecl> parameters, string returnType, BlockStmt body, bool isPrivate, bool isExported = false, bool isInline = false, bool isOverride = false)
             : base(NodeKind.FuncDecl)
         {
             Name = name;
@@ -407,6 +410,7 @@ namespace FFVM.AST
             IsPrivate = isPrivate;
             IsExported = isExported;
             IsInline = isInline;
+            IsOverride = isOverride;
         }
     }
 
@@ -427,13 +431,15 @@ namespace FFVM.AST
         public List<StructField> Fields { get; }
         public string DocComment { get; set; }
         public bool IsPrivate { get; }
+        public bool IsOverride { get; }
         /// <summary>Lang-15: Source file this declaration originated from. Set by Preprocessor during merge.</summary>
         public string OriginFile { get; set; }
-        public StructDecl(string name, List<StructField> fields, bool isPrivate = false) : base(NodeKind.StructDecl)
+        public StructDecl(string name, List<StructField> fields, bool isPrivate = false, bool isOverride = false) : base(NodeKind.StructDecl)
         {
             Name = name;
             Fields = fields;
             IsPrivate = isPrivate;
+            IsOverride = isOverride;
         }
     }
 
@@ -460,13 +466,15 @@ namespace FFVM.AST
         public List<EnumMember> Members { get; }
         public string DocComment { get; set; }
         public bool IsPrivate { get; }
+        public bool IsOverride { get; }
         /// <summary>Lang-15: Source file this declaration originated from. Set by Preprocessor during merge.</summary>
         public string OriginFile { get; set; }
-        public EnumDecl(string name, List<EnumMember> members, bool isPrivate = false) : base(NodeKind.EnumDecl)
+        public EnumDecl(string name, List<EnumMember> members, bool isPrivate = false, bool isOverride = false) : base(NodeKind.EnumDecl)
         {
             Name = name;
             Members = members;
             IsPrivate = isPrivate;
+            IsOverride = isOverride;
         }
     }
 

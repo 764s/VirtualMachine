@@ -324,10 +324,44 @@ namespace FFVM.Compiler
                 module = parser.Parse(source, out parseErrors);
                 // Lang-15: stamp OriginFile for single-file compilation (no Preprocessor)
                 string origin = filePath ?? "script";
-                for (int i = 0; i < module.Functions.Count; i++) module.Functions[i].OriginFile = origin;
-                for (int i = 0; i < module.ModuleVariables.Count; i++) module.ModuleVariables[i].OriginFile = origin;
-                for (int i = 0; i < module.Structs.Count; i++) module.Structs[i].OriginFile = origin;
-                for (int i = 0; i < module.Enums.Count; i++) module.Enums[i].OriginFile = origin;
+                for (int i = 0; i < module.Functions.Count; i++)
+                {
+                    module.Functions[i].OriginFile = origin;
+                    // Lang-16: override without includes is invalid
+                    if (module.Functions[i].IsOverride)
+                    {
+                        if (parseErrors == null) parseErrors = new List<string>();
+                        parseErrors.Add($"[{origin}] 'override' on function '{module.Functions[i].Name}' but no included file provides a declaration to override");
+                    }
+                }
+                for (int i = 0; i < module.ModuleVariables.Count; i++)
+                {
+                    module.ModuleVariables[i].OriginFile = origin;
+                    if (module.ModuleVariables[i].IsOverride)
+                    {
+                        if (parseErrors == null) parseErrors = new List<string>();
+                        string kind = module.ModuleVariables[i].IsConst ? "const" : "var";
+                        parseErrors.Add($"[{origin}] 'override' on {kind} '{module.ModuleVariables[i].Name}' but no included file provides a declaration to override");
+                    }
+                }
+                for (int i = 0; i < module.Structs.Count; i++)
+                {
+                    module.Structs[i].OriginFile = origin;
+                    if (module.Structs[i].IsOverride)
+                    {
+                        if (parseErrors == null) parseErrors = new List<string>();
+                        parseErrors.Add($"[{origin}] 'override' on struct '{module.Structs[i].Name}' but no included file provides a declaration to override");
+                    }
+                }
+                for (int i = 0; i < module.Enums.Count; i++)
+                {
+                    module.Enums[i].OriginFile = origin;
+                    if (module.Enums[i].IsOverride)
+                    {
+                        if (parseErrors == null) parseErrors = new List<string>();
+                        parseErrors.Add($"[{origin}] 'override' on enum '{module.Enums[i].Name}' but no included file provides a declaration to override");
+                    }
+                }
             }
 
             if (parseErrors != null && parseErrors.Count > 0)
