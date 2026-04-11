@@ -528,6 +528,9 @@ namespace FFVM.Compiler
                 bool isLeaf = _leafFunctions.TryGetValue(fKey, out bool lf) && lf;
                 int funcStartIP = CurrentIP();
                 _functionTable[fKey] = funcStartIP;
+                // DX4-P0: In diagnostics-only mode (entryDecl==null), the first function
+                // is marked as entry so module variable initialization code is emitted
+                // into at least one function body (required for valid bytecode generation).
                 CompileFunction(f, isEntry: entryDecl == null && i == 0);
                 int funcEndIP = CurrentIP();
                 int window = ComputeAndRemapFunctionWindow(funcStartIP, funcEndIP);

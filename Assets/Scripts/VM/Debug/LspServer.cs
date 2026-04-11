@@ -328,8 +328,8 @@ namespace FFVM.Debug
         }
 
         /// <summary>
-        /// DX4-P0: Scan workspace directory for .ffvm.d.json files and load them.
-        /// Non-recursive scan of the root directory only.
+        /// DX4-P0: Scan workspace directory tree for .ffvm.d.json files and load them.
+        /// Recursive scan (AllDirectories) — discovers declaration files in subdirectories too.
         /// </summary>
         private void DiscoverDeclarationFiles(string rootPath)
         {
@@ -359,7 +359,8 @@ namespace FFVM.Debug
         /// <summary>
         /// DX4-P0: Convert a document URI to a relative file path from workspace root.
         /// Used as filePath parameter for include cycle detection and diagnostics.
-        /// Returns null if the URI cannot be resolved relative to rootPath.
+        /// Returns the relative path if under rootPath, otherwise returns the absolute path as fallback.
+        /// Returns null only if the URI itself cannot be parsed.
         /// </summary>
         internal static string UriToFilePath(string uri, string rootPath)
         {
