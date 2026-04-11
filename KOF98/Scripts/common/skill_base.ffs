@@ -31,7 +31,7 @@ include "common/input.ffs"
 include "common/skill_collision.ffs"
 
 // ── Stance Bits (for allowedStances @export const) ────────────
-// Bitfield values — combine with + for multi-stance skills.
+// Bitfield values — combine with | for multi-stance skills (Lang-14).
 // Must match Stance enum order in Types.cs.
 
 const STANCE_GROUNDED: int = 1
@@ -54,16 +54,16 @@ const INPUT_BIT_LK: int = 64
 const INPUT_BIT_HK: int = 128
 const INPUT_BIT_ANY_DIR_H: int = 12
 
-// ── Tag Bit Constants (pre-computed 1 << TAG_*) ─────────────
-// Used with tags @export const to declare skill tags without bit-shift.
+// ── Tag Bit Constants (Lang-14 shift for clarity) ───────────
+// Used with tags @export const to declare skill tags.
 
-const TAG_BIT_IDLE: int = 1
-const TAG_BIT_WALK: int = 2
-const TAG_BIT_JUMP: int = 16
-const TAG_BIT_ATTACK: int = 32
-const TAG_BIT_HIT: int = 64
-const TAG_BIT_KNOCKDOWN: int = 512
-const TAG_BIT_AIR_STATE: int = 2048
+const TAG_BIT_IDLE: int = 1 << 0
+const TAG_BIT_WALK: int = 1 << 1
+const TAG_BIT_JUMP: int = 1 << 4
+const TAG_BIT_ATTACK: int = 1 << 5
+const TAG_BIT_HIT: int = 1 << 6
+const TAG_BIT_KNOCKDOWN: int = 1 << 9
+const TAG_BIT_AIR_STATE: int = 1 << 11
 
 // ── Default Skill Configuration ─────────────────────────────
 // Base @export const defaults — including scripts override only what differs.

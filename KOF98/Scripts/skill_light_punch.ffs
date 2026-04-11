@@ -54,7 +54,7 @@ func main() {
         if f >= hitPhase.startFrame && f < hitPhase.endFrame && hitDone == 0 {
             var target: int = CheckAttackHit(hitPhase.groupId)
             if target > 0 {
-                ApplyDamage(target, 1.0, DMG_NORMAL_UPPER)
+                ApplyDamage(target, 1.0, DamageType.NORMAL_UPPER)
                 hitDone = 1
             }
         }

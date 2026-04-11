@@ -26,11 +26,13 @@
 
 include "common/constants.ffs"
 
-// ── Collision Box Types ─────────────────────────────────────
-const BOX_HURTBOX: int = 0
-const BOX_HITBOX: int = 1
-const BOX_BLOCKBOX: int = 2
-const BOX_PUSHBOX: int = 3
+// ── Collision Box Types (Lang-13 enum) ──────────────────────
+enum BoxType {
+    HURTBOX,
+    HITBOX,
+    BLOCKBOX,
+    PUSHBOX
+}
 
 // ── Collision Struct Types ──────────────────────────────────
 

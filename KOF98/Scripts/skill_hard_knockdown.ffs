@@ -15,7 +15,7 @@ include "common/skill_base.ffs"
 @export const isLooping: int = 0
 @export const activationPriority: int = 50
 @export const interruptPriority: int = 50
-@export const allowedStances: int = STANCE_GROUNDED + STANCE_KNOCKDOWN
+@export const allowedStances: int = STANCE_GROUNDED | STANCE_KNOCKDOWN
 
 func main() {
     // ── Execution ───────────────────────────────────────────
@@ -25,7 +25,7 @@ func main() {
     }
 
     // Impact effect
-    SpawnEffectSelf(FX_HURT_EFFECT, FX_DUR_HURT)
+    SpawnEffectSelf(FxId.HURT_EFFECT, FX_DUR_HURT)
 
     // Lie on ground for the full duration
     var f: int = 0

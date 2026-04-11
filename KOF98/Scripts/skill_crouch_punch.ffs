@@ -15,7 +15,7 @@ include "common/skill_base.ffs"
 @export const isLooping: int = 0
 @export const activationPriority: int = 200
 @export const interruptPriority: int = 200
-@export const allowedStances: int = STANCE_GROUNDED + STANCE_CROUCHING
+@export const allowedStances: int = STANCE_GROUNDED | STANCE_CROUCHING
 @export const requireGrounded: int = 1
 @export const requireInputPressed: int = INPUT_BIT_LP
 @export const requireInputHeld: int = INPUT_BIT_DOWN
@@ -56,9 +56,9 @@ func main() {
         if f >= hitPhase.startFrame && f < hitPhase.endFrame && hitDone == 0 {
             var target: int = CheckAttackHit(hitPhase.groupId)
             if target > 0 {
-                ApplyDamage(target, 1.2, DMG_NORMAL_LOWER)
+                ApplyDamage(target, 1.2, DamageType.NORMAL_LOWER)
                 ApplyHitstun(target, 0, 10, 0, 0)
-                SpawnEffectHit(FX_LIGHT_HIT, FX_DUR_LIGHT_HIT)
+                SpawnEffectHit(FxId.LIGHT_HIT, FX_DUR_LIGHT_HIT)
                 hitDone = 1
             }
         }
