@@ -99,6 +99,9 @@ namespace FFVM
         XLOAD_MVAR   = 53,  // A=destReg, B=instanceId_reg, C=exportVarIndex
         XSTORE_MVAR  = 54,  // A=exportVarIndex, B=instanceId_reg, C=srcReg
 
+        // --- CFG1: wide constant pool access (>256 constants) ---
+        LOAD_CONST_W = 56,  // A=destReg, B=constIndex_lo, C=constIndex_hi → Reg[A] = Constants[B | (C<<8)]
+
         // --- O15: sentinel (never emitted by compiler) ---
         SENTINEL     = 55,  // appended by VMProgram ctor; replaces per-instruction boundary check
     }

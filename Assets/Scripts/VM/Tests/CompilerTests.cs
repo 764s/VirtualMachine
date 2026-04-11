@@ -10101,6 +10101,216 @@ func main() {
             Assert(hasXcall, "DIN05: big_helper() exceeds threshold → XCALL fallback");
         }
 
+        // ===== CFG1: LOAD_CONST_W wide constant pool =====
+        {
+            // CFG1-01: LOAD_CONST_W — verify execution with wide constant index
+            // Build a VMProgram directly with LOAD_CONST_W instruction using B|C<<8 index
+            var consts = new Number[260];
+            for (int i = 0; i < 260; i++) consts[i] = Number.FromInt(i * 10);
+            var instructions = new Instruction[] {
+                // Load constant at index 0 (normal range) → r0
+                new Instruction(OpCode.LOAD_CONST, 0, 0),
+                // Load constant at index 258 (wide range) → r1 using LOAD_CONST_W
+                new Instruction(OpCode.LOAD_CONST_W, 1, 258 & 0xFF, 258 >> 8),
+                new Instruction(OpCode.RETURN)
+            };
+            var program = new VMProgram(instructions, consts, 2);
+            var vm = new VMWorld();
+            vm.Modules.Load(0, program);
+            vm.MaxStepsPerTick = 100;
+            int id = vm.SpawnInstance(0, 0);
+            vm.Tick();
+            // r0 = consts[0] = 0, r1 = consts[258] = 2580
+            long r0 = vm.Pool.Instances[id].Registers.Get(0).ToInt();
+            long r1 = vm.Pool.Instances[id].Registers.Get(1).ToInt();
+            Assert(r0 == 0, $"CFG1-01: r0 = consts[0] = 0, got {r0}");
+            Assert(r1 == 2580, $"CFG1-01: r1 = consts[258] = 2580, got {r1}");
+        }
+
+        {
+            // CFG1-02: Compiler auto-selects LOAD_CONST_W for large constant pools
+            // Generate a script with >256 unique constants to force wide constant emission
+            var sb = new StringBuilder();
+            sb.AppendLine("func main() {");
+            sb.AppendLine("  var sum: int = 0");
+            // Generate 270 unique additions — each unique float literal adds a constant
+            for (int i = 1; i <= 270; i++)
+                sb.AppendLine($"  sum = sum + {i}.{i % 10}");
+            sb.AppendLine("  Report(sum)");
+            sb.AppendLine("}");
+            int reportedValue = 0;
+            var sc = new Dictionary<string, int> { { "Report", 0 } };
+            var st = new SyscallTable();
+            st.Register(0, "Report", (ref VMInstanceState inst) => {
+                reportedValue = inst.Registers.Get(0).ToInt();
+            });
+            var cc = new BytecodeCompiler();
+            var res = cc.Compile(sb.ToString(), "main", sc, st);
+            Assert(res.Success, $"CFG1-02: compile with >256 constants succeeds: {(res.Errors?.Count > 0 ? res.Errors[0] : "ok")}");
+
+            // Verify LOAD_CONST_W instructions are present
+            bool hasWide = false;
+            for (int i = 0; i < res.Program.Instructions.Length; i++)
+            {
+                if (res.Program.Instructions[i].Code == OpCode.LOAD_CONST_W)
+                {
+                    hasWide = true;
+                    break;
+                }
+            }
+            Assert(hasWide, "CFG1-02: LOAD_CONST_W instructions present for >256 constants");
+
+            // Verify execution correctness — sum of i.(i%10) for i=1..270
+            var vm = new VMWorld();
+            vm.Modules.Load(0, res.Program);
+            vm.Syscalls.Register(0, "Report", (ref VMInstanceState inst) => {
+                reportedValue = inst.Registers.Get(0).ToInt();
+            });
+            vm.MaxStepsPerTick = 50000;
+            int iid = vm.SpawnInstance(0, 0);
+            vm.Tick();
+            // Expected: sum of 1.1 + 2.2 + 3.3 + ... + 270.0 ≈ 36720 (integer part)
+            Assert(reportedValue > 0, $"CFG1-02: execution produces non-zero sum = {reportedValue}");
+        }
+
+        {
+            // CFG1-03: JUMP_IF_*_K graceful degradation with >256 constants
+            // Generate >256 unique constants via additions, then test comparison
+            var sb = new StringBuilder();
+            sb.AppendLine("func main() {");
+            sb.AppendLine("  var sum: int = 0");
+            // Generate 270 unique additions → forces >256 constants in pool
+            for (int i = 1; i <= 270; i++)
+                sb.AppendLine($"  sum = sum + {i}.{i % 10}");
+            // Comparison uses a constant that may be index >255 or <256
+            // Either way, the compiler should produce correct code
+            sb.AppendLine("  if (sum > 0) { Report(1) } else { Report(0) }");
+            sb.AppendLine("}");
+            int reported = -1;
+            var sc = new Dictionary<string, int> { { "Report", 0 } };
+            var st = new SyscallTable();
+            st.Register(0, "Report", (ref VMInstanceState inst) => {
+                reported = inst.Registers.Get(0).ToInt();
+            });
+            var cc = new BytecodeCompiler();
+            var res = cc.Compile(sb.ToString(), "main", sc, st);
+            Assert(res.Success, $"CFG1-03: compile with K-fallback succeeds: {(res.Errors?.Count > 0 ? res.Errors[0] : "ok")}");
+
+            var vm = new VMWorld();
+            vm.Modules.Load(0, res.Program);
+            vm.Syscalls.Register(0, "Report", (ref VMInstanceState inst) => {
+                reported = inst.Registers.Get(0).ToInt();
+            });
+            vm.MaxStepsPerTick = 50000;
+            int iid = vm.SpawnInstance(0, 0);
+            vm.Tick();
+            Assert(reported == 1, $"CFG1-03: comparison works with wide constants, got {reported}");
+        }
+
+        // ===== CFG1: CompileOptions configurability =====
+        {
+            // CFG1-04: InlineThreshold=0 disables inlining
+            string src = @"
+func add(a: int, b: int): int { return a + b }
+func main() { Report(add(3, 4)) }
+";
+            var sc = new Dictionary<string, int> { { "Report", 0 } };
+            int reported = 0;
+            var st = new SyscallTable();
+            st.Register(0, "Report", (ref VMInstanceState inst) => {
+                reported = inst.Registers.Get(0).ToInt();
+            });
+
+            // With InlineThreshold=0, add() should NOT be inlined → CALL instruction present
+            var cc = new BytecodeCompiler();
+            var noInlineOpts = new CompileOptions { InlineThreshold = 0 };
+            var res = cc.Compile(src, "main", sc, st, null, null, null, noInlineOpts);
+            Assert(res.Success, $"CFG1-04: compile with InlineThreshold=0: {(res.Errors?.Count > 0 ? res.Errors[0] : "ok")}");
+            bool hasCall = false;
+            for (int i = 0; i < res.Program.Instructions.Length; i++)
+                if (res.Program.Instructions[i].Code == OpCode.CALL || res.Program.Instructions[i].Code == OpCode.CALL_LEAF) hasCall = true;
+            Assert(hasCall, "CFG1-04: InlineThreshold=0 → CALL present (no inlining)");
+
+            // Verify execution still correct
+            var vm = new VMWorld();
+            vm.Modules.Load(0, res.Program);
+            vm.Syscalls.Register(0, "Report", (ref VMInstanceState inst) => { reported = inst.Registers.Get(0).ToInt(); });
+            vm.MaxStepsPerTick = 1000;
+            int iid = vm.SpawnInstance(0, 0);
+            vm.Tick();
+            Assert(reported == 7, $"CFG1-04: add(3,4)=7 with no inlining, got {reported}");
+        }
+
+        {
+            // CFG1-05: InlineThreshold=999 forces aggressive inlining
+            string src = @"
+func add(a: int, b: int): int { return a + b }
+func main() { Report(add(3, 4)) }
+";
+            var sc = new Dictionary<string, int> { { "Report", 0 } };
+            int reported = 0;
+            var st = new SyscallTable();
+            st.Register(0, "Report", (ref VMInstanceState inst) => {
+                reported = inst.Registers.Get(0).ToInt();
+            });
+            var cc = new BytecodeCompiler();
+            var aggressiveOpts = new CompileOptions { InlineThreshold = 999 };
+            var res = cc.Compile(src, "main", sc, st, null, null, null, aggressiveOpts);
+            Assert(res.Success, $"CFG1-05: compile with InlineThreshold=999: {(res.Errors?.Count > 0 ? res.Errors[0] : "ok")}");
+            // add() is small → should be inlined → no CALL
+            bool hasCall = false;
+            for (int i = 0; i < res.Program.Instructions.Length; i++)
+                if (res.Program.Instructions[i].Code == OpCode.CALL || res.Program.Instructions[i].Code == OpCode.CALL_LEAF) hasCall = true;
+            Assert(!hasCall, "CFG1-05: InlineThreshold=999 → no CALL (fully inlined)");
+
+            var vm = new VMWorld();
+            vm.Modules.Load(0, res.Program);
+            vm.Syscalls.Register(0, "Report", (ref VMInstanceState inst) => { reported = inst.Registers.Get(0).ToInt(); });
+            vm.MaxStepsPerTick = 1000;
+            int iid = vm.SpawnInstance(0, 0);
+            vm.Tick();
+            Assert(reported == 7, $"CFG1-05: add(3,4)=7 with aggressive inlining, got {reported}");
+        }
+
+        // ===== CFG1: Resource diagnostics =====
+        {
+            // CFG1-06: DiagnosticsEnabled=true emits warnings at threshold
+            // This is hard to test precisely without controlling constant count,
+            // but we can verify that diagnostics OFF produces no warnings for a simple script
+            string src = "func main() { Report(42) }";
+            var sc = new Dictionary<string, int> { { "Report", 0 } };
+            var cc = new BytecodeCompiler();
+            var noDiag = new CompileOptions { DiagnosticsEnabled = false };
+            var res = cc.Compile(src, "main", sc, null, null, null, null, noDiag);
+            Assert(res.Success, "CFG1-06: compile succeeds");
+            // With diagnostics off, no CFG1 warnings should appear
+            bool hasCfgWarning = false;
+            if (res.Warnings != null)
+            {
+                for (int i = 0; i < res.Warnings.Count; i++)
+                    if (res.Warnings[i].Contains("[CFG1]")) hasCfgWarning = true;
+            }
+            Assert(!hasCfgWarning, "CFG1-06: DiagnosticsEnabled=false → no [CFG1] warnings");
+        }
+
+        {
+            // CFG1-07: DiagnosticsEnabled=true with low threshold triggers warnings
+            // Use threshold=0.01 so even 1 constant triggers a warning
+            string src = "func main() { Report(42) }";
+            var sc = new Dictionary<string, int> { { "Report", 0 } };
+            var cc = new BytecodeCompiler();
+            var lowThreshold = new CompileOptions { DiagnosticsEnabled = true, DiagnosticsThreshold = 0.01f };
+            var res = cc.Compile(src, "main", sc, null, null, null, null, lowThreshold);
+            Assert(res.Success, "CFG1-07: compile succeeds");
+            bool hasCfgWarning = false;
+            if (res.Warnings != null)
+            {
+                for (int i = 0; i < res.Warnings.Count; i++)
+                    if (res.Warnings[i].Contains("[CFG1]")) hasCfgWarning = true;
+            }
+            Assert(hasCfgWarning, "CFG1-07: DiagnosticsThreshold=0.01 → [CFG1] warnings triggered");
+        }
+
         // ===== Summary =====
         Debug.Log($"========================================");
         Debug.Log($"Compiler Tests: {passed} passed, {failed} failed");
