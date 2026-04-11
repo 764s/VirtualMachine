@@ -31,6 +31,10 @@ for var i: int = 0; i < 10; i = i + 1 {
 
 // 没有 i++，只能 i = i + 1
 
+// 位运算（Lang-14）：flag 组合、移位
+var flags: int = 1 | 4             // 按位或
+var bit: int = 1 << 3              // 左移 → 8
+
 // wait / yield：挂起脚本，下一帧继续
 wait 5       // 暂停 5 帧
 yield         // 暂停 1 帧（等价于 wait 1）
@@ -112,6 +116,32 @@ func main() {
 
 - 支持嵌套结构体字面量
 - `const` 结构体禁止整体赋值和字段赋值
+
+### 枚举（Lang-13）
+
+`enum` 是编译期语法糖——声明一组命名整数常量，零运行时开销：
+
+```ffs
+// 自动递增：RED=0, GREEN=1, BLUE=2
+enum Color { RED, GREEN, BLUE }
+
+// 显式值 + 自动递增
+enum DamageType {
+    NONE         = 0,
+    NORMAL_LOWER = 101,
+    NORMAL_UPPER = 102,
+    KNOCKDOWN    = 201
+}
+
+// 使用
+var c: int = Color.RED
+var d: int = DamageType.KNOCKDOWN
+```
+
+- 引用语法：`EnumName.Member`
+- 不可赋值：`Color.RED = 5` → 编译错误
+- 值必须是编译期常量表达式
+- 尾逗号可选
 
 ---
 
@@ -521,6 +551,14 @@ func main() {
 | 函数 | `func f(a: int): int {}` | `int f(int a) {}` |
 | 结构体 | `struct S { x: int }` | `struct S { public int x; }` |
 | 实例化结构体 | `S { x: 1 }` | `new S { x = 1 }` |
+| 枚举 | `enum Color { RED, GREEN, BLUE }` | `enum Color { RED, GREEN, BLUE }` |
+| 枚举引用 | `Color.RED` | `Color.RED` |
+| 按位或 | `a \| b` | `a \| b` |
+| 按位与 | `a & b` | `a & b` |
+| 按位异或 | `a ^ b` | `a ^ b` |
+| 按位取反 | `~a` | `~a` |
+| 左移 | `a << n` | `a << n` |
+| 右移 | `a >> n` | `a >> n` |
 | for 循环 | `for var i: int = 0; i < n; i = i + 1 {}` | `for (int i = 0; i < n; i++) {}` |
 | 暂停 1 帧 | `yield` | `yield return null;` |
 | 暂停 N 帧 | `wait N` | — |

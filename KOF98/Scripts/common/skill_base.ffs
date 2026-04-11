@@ -4,9 +4,9 @@
 // Common base include for all skill scripts.
 // Provides:
 //   - Full constant/input chain (via input.ffs → constants.ffs)
-//   - Stance bit constants (STANCE_*)
-//   - Input bit constants (INPUT_BIT_*) for @export const conditions
-//   - Tag bit constants (TAG_BIT_*)
+//   - Stance bits: enum Stance (Lang-13)
+//   - Input bits: enum InputBit (Lang-13)
+//   - Tag bits: enum TagBit (Lang-13)
 //   - Default @export const declarations (inherited by including scripts)
 //
 // Usage:  include "common/skill_base.ffs"
@@ -20,50 +20,56 @@
 // Base defaults:
 //   @export const totalFrames: int = -1
 //   @export const priority: int = 0
-//   @export const tags: int = TAG_BIT_IDLE
+//   @export const tags: int = TagBit.IDLE
 //   @export const isLooping: int = 1
 //   @export const activationPriority: int = 900
 //   @export const interruptPriority: int = 900
-//   @export const allowedStances: int = STANCE_GROUNDED
+//   @export const allowedStances: int = Stance.GROUNDED
 // ============================================================
 
 include "common/input.ffs"
 include "common/skill_collision.ffs"
 
 // ── Stance Bits (for allowedStances @export const) ────────────
-// Bitfield values — combine with + for multi-stance skills.
+// Bitfield values — combine with | for multi-stance skills (Lang-14).
 // Must match Stance enum order in Types.cs.
 
-const STANCE_GROUNDED: int = 1
-const STANCE_AIRBORNE: int = 2
-const STANCE_CROUCHING: int = 4
-const STANCE_KNOCKDOWN: int = 8
-const STANCE_HITSTUN: int = 16
-const STANCE_DEAD: int = 32
+enum Stance {
+    GROUNDED  = 1,
+    AIRBORNE  = 2,
+    CROUCHING = 4,
+    KNOCKDOWN = 8,
+    HITSTUN   = 16,
+    DEAD      = 32
+}
 
 // ── Input Bit Constants (for require* @export consts) ─────────
 // Bit values matching InputButton flags in PlayerInput.cs.
 
-const INPUT_BIT_UP: int = 1
-const INPUT_BIT_DOWN: int = 2
-const INPUT_BIT_LEFT: int = 4
-const INPUT_BIT_RIGHT: int = 8
-const INPUT_BIT_LP: int = 16
-const INPUT_BIT_HP: int = 32
-const INPUT_BIT_LK: int = 64
-const INPUT_BIT_HK: int = 128
-const INPUT_BIT_ANY_DIR_H: int = 12
+enum InputBit {
+    UP        = 1,
+    DOWN      = 2,
+    LEFT      = 4,
+    RIGHT     = 8,
+    LP        = 16,
+    HP        = 32,
+    LK        = 64,
+    HK        = 128,
+    ANY_DIR_H = 12
+}
 
-// ── Tag Bit Constants (pre-computed 1 << TAG_*) ─────────────
-// Used with tags @export const to declare skill tags without bit-shift.
+// ── Tag Bit Constants (Lang-14 shift for clarity) ───────────
+// Used with tags @export const to declare skill tags.
 
-const TAG_BIT_IDLE: int = 1
-const TAG_BIT_WALK: int = 2
-const TAG_BIT_JUMP: int = 16
-const TAG_BIT_ATTACK: int = 32
-const TAG_BIT_HIT: int = 64
-const TAG_BIT_KNOCKDOWN: int = 512
-const TAG_BIT_AIR_STATE: int = 2048
+enum TagBit {
+    IDLE      = 1 << 0,
+    WALK      = 1 << 1,
+    JUMP      = 1 << 4,
+    ATTACK    = 1 << 5,
+    HIT       = 1 << 6,
+    KNOCKDOWN = 1 << 9,
+    AIR_STATE = 1 << 11
+}
 
 // ── Default Skill Configuration ─────────────────────────────
 // Base @export const defaults — including scripts override only what differs.
@@ -71,8 +77,8 @@ const TAG_BIT_AIR_STATE: int = 2048
 
 @export const totalFrames: int = -1
 @export const priority: int = 0
-@export const tags: int = TAG_BIT_IDLE
+@export const tags: int = TagBit.IDLE
 @export const isLooping: int = 1
 @export const activationPriority: int = 900
 @export const interruptPriority: int = 900
-@export const allowedStances: int = STANCE_GROUNDED
+@export const allowedStances: int = Stance.GROUNDED

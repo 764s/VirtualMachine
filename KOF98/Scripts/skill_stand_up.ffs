@@ -11,11 +11,11 @@ include "common/skill_base.ffs"
 // ── Skill Configuration (overrides only) ────────────────────
 @export const totalFrames: int = 20
 @export const priority: int = 2
-@export const tags: int = TAG_BIT_KNOCKDOWN
+@export const tags: int = TagBit.KNOCKDOWN
 @export const isLooping: int = 0
 @export const activationPriority: int = 80
 @export const interruptPriority: int = 80
-@export const allowedStances: int = STANCE_KNOCKDOWN
+@export const allowedStances: int = Stance.KNOCKDOWN
 
 func main() {
     // ── Execution ───────────────────────────────────────────

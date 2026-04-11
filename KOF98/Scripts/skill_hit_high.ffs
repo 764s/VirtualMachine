@@ -3,7 +3,7 @@
 // ============================================================
 // 30-frame hit reaction for upper-body hits.
 // Passive script: activated by host when character receives a
-// DMG_NORMAL_UPPER or similar hit while standing.
+// DamageType.NORMAL_UPPER or similar hit while standing.
 // Plays the hit animation and spawns a visual effect, then returns.
 
 include "common/skill_base.ffs"
@@ -11,7 +11,7 @@ include "common/skill_base.ffs"
 // ── Skill Configuration (overrides only) ────────────────────
 @export const totalFrames: int = 30
 @export const priority: int = 2
-@export const tags: int = TAG_BIT_HIT
+@export const tags: int = TagBit.HIT
 @export const isLooping: int = 0
 @export const activationPriority: int = 100
 @export const interruptPriority: int = 100
@@ -24,7 +24,7 @@ func main() {
     }
 
     // Visual feedback: spawn hit effect on self
-    SpawnEffectSelf(FX_HURT_EFFECT, FX_DUR_HURT)
+    SpawnEffectSelf(FxId.HURT_EFFECT, FxDuration.HURT)
 
     // Wait for the hit animation to complete
     var f: int = 0

@@ -6,32 +6,52 @@
 // Usage:  include "common/constants.ffs"
 //
 // Categories:
-//   - Damage types (DMG_*)
-//   - Effect / SFX IDs (FX_*)
+//   - Damage types: enum DamageType (Lang-13)
+//   - Effect / SFX IDs: enum FxId (Lang-13)
+//   - Effect durations: enum FxDuration (Lang-13)
+//   - Input button indices: enum InputButton (Lang-13)
 //   - Tag IDs (TAG_*)
 //   - Movement parameters (WALK_SPEED, etc.)
-//   - Input button indices (INPUT_*)
 // ============================================================
 
-// ── Damage Types ─────────────────────────────────────────────
-const DMG_NONE: int = 0
-const DMG_NORMAL_LOWER: int = 101
-const DMG_NORMAL_UPPER: int = 102
-const DMG_KNOCKDOWN: int = 201
-const DMG_THROW: int = 301
-const DMG_SUPER: int = 401
+// ── Damage Types (Lang-13 enum) ──────────────────────────────
+enum DamageType {
+    NONE         = 0,
+    NORMAL_LOWER = 101,
+    NORMAL_UPPER = 102,
+    KNOCKDOWN    = 201,
+    THROW        = 301,
+    SUPER        = 401
+}
 
-// ── Effect / SFX IDs ────────────────────────────────────────
-const FX_LIGHT_HIT: int = 3001
-const FX_SCREEN_SHAKE_S: int = 3002
-const FX_HEAVY_HIT_SFX: int = 3003
-const FX_BLOCK: int = 3004
-const FX_HEAVY_HIT: int = 3005
-const FX_HURT_EFFECT: int = 4001
+// ── Effect / SFX IDs (Lang-13 enum) ─────────────────────────
+enum FxId {
+    LIGHT_HIT      = 3001,
+    SCREEN_SHAKE_S = 3002,
+    HEAVY_HIT_SFX  = 3003,
+    BLOCK          = 3004,
+    HEAVY_HIT      = 3005,
+    HURT_EFFECT    = 4001
+}
 
-// ── Effect Durations (frames) ───────────────────────────────
-const FX_DUR_LIGHT_HIT: int = 30
-const FX_DUR_HURT: int = 300
+// ── Effect Durations in frames (Lang-13 enum) ───────────────
+enum FxDuration {
+    LIGHT_HIT = 30,
+    HURT      = 300
+}
+
+// ── Input Button Indices (Lang-13 enum) ─────────────────────
+// Maps to InputButton enum values used by IsInputHeld/IsInputPressed.
+enum InputButton {
+    UP,
+    DOWN,
+    LEFT,
+    RIGHT,
+    LP,
+    HP,
+    LK,
+    HK
+}
 
 // ── Tag IDs (skill tag bitfield positions) ───────────────────
 const TAG_AIR_STATE: int = 11
@@ -40,14 +60,3 @@ const TAG_AIR_STATE: int = 11
 const WALK_SPEED: float = 0.06
 const BACK_WALK_SPEED: float = 0.04
 const JUMP_VY: float = 0.35
-
-// ── Input Button Indices ────────────────────────────────────
-// These map to InputButton enum values used by IsInputHeld/IsInputPressed.
-const INPUT_UP: int = 0
-const INPUT_DOWN: int = 1
-const INPUT_LEFT: int = 2
-const INPUT_RIGHT: int = 3
-const INPUT_LP: int = 4
-const INPUT_HP: int = 5
-const INPUT_LK: int = 6
-const INPUT_HK: int = 7

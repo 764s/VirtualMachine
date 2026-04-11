@@ -11,30 +11,23 @@ include "common/skill_base.ffs"
 // ── Skill Configuration (overrides only) ────────────────────
 @export const totalFrames: int = 20
 @export const priority: int = 3
-@export const tags: int = TAG_BIT_ATTACK
+@export const tags: int = TagBit.ATTACK
 @export const isLooping: int = 0
 @export const activationPriority: int = 200
 @export const interruptPriority: int = 200
 @export const requireGrounded: int = 1
-@export const requireInputPressed: int = INPUT_BIT_LP
+@export const requireInputPressed: int = InputBit.LP
+
+// ── Collision Configuration (Lang-11 module-level struct const) ──
+const hitPhase: HitPhaseDef = HitPhaseDef {
+    startFrame: 5,
+    endFrame: 10,
+    groupId: 1001,
+    box: Box4 { ox: 0.3, oy: 0.5, hw: 0.25, hh: 0.15 }
+}
+const hurtBox: Box4 = Box4 { ox: 0.0, oy: 0.55, hw: 0.2, hh: 0.5 }
 
 func main() {
-    // ── Collision Configuration ─────────────────────────────
-    var hitPhase: HitPhaseDef
-    hitPhase.startFrame = 5
-    hitPhase.endFrame = 10
-    hitPhase.groupId = 1001
-    hitPhase.box.ox = 0.3
-    hitPhase.box.oy = 0.5
-    hitPhase.box.hw = 0.25
-    hitPhase.box.hh = 0.15
-
-    var hurtBox: Box4
-    hurtBox.ox = 0.0
-    hurtBox.oy = 0.55
-    hurtBox.hw = 0.2
-    hurtBox.hh = 0.5
-
     // ── Execution ───────────────────────────────────────────
     BeginAction(10, 20)
     defer {
@@ -54,7 +47,7 @@ func main() {
         if f >= hitPhase.startFrame && f < hitPhase.endFrame && hitDone == 0 {
             var target: int = CheckAttackHit(hitPhase.groupId)
             if target > 0 {
-                ApplyDamage(target, 1.0, DMG_NORMAL_UPPER)
+                ApplyDamage(target, 1.0, DamageType.NORMAL_UPPER)
                 hitDone = 1
             }
         }
