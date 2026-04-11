@@ -26,6 +26,9 @@ namespace FFVM.AST
         // Expressions - Logical
         And, Or, Not,
 
+        // Expressions - Bitwise (Lang-14)
+        BitAnd, BitOr, BitXor, BitNot, Shl, Shr,
+
         // Expressions - Assignment
         Assign,
 

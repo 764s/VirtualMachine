@@ -10565,6 +10565,347 @@ func main() {
             Assert(reported[0] == 2, $"EN12: E.C=2, got {reported[0]}");
         }
 
+        // ===== Lang-14: Bitwise operations (BW01-BW15) =====
+
+        // BW01: Basic bitwise AND, OR, XOR
+        {
+            string source = @"
+func main() {
+    Report(6 & 3)
+    Report(6 | 3)
+    Report(6 ^ 3)
+}";
+            var reported = new List<int>();
+            var sc = new Dictionary<string, int> { { "Report", 0 } };
+            var res = compiler.Compile(source, "main", sc);
+            Assert(res.Success, "BW01: compiles");
+            var world = new VMWorld();
+            world.Syscalls.Register(0, "Report", (ref VMInstanceState s) => { reported.Add(s.Registers.Get(0).ToInt()); });
+            world.Modules.Load(0, res.Program);
+            world.SpawnInstance(0, 0);
+            world.Tick();
+            Assert(reported[0] == (6 & 3), $"BW01: 6&3=2, got {reported[0]}");
+            Assert(reported[1] == (6 | 3), $"BW01: 6|3=7, got {reported[1]}");
+            Assert(reported[2] == (6 ^ 3), $"BW01: 6^3=5, got {reported[2]}");
+        }
+
+        // BW02: Bitwise NOT and shift
+        {
+            string source = @"
+func main() {
+    Report(~0)
+    Report(~1)
+    Report(1 << 4)
+    Report(16 >> 2)
+}";
+            var reported = new List<int>();
+            var sc = new Dictionary<string, int> { { "Report", 0 } };
+            var res = compiler.Compile(source, "main", sc);
+            Assert(res.Success, "BW02: compiles");
+            var world = new VMWorld();
+            world.Syscalls.Register(0, "Report", (ref VMInstanceState s) => { reported.Add(s.Registers.Get(0).ToInt()); });
+            world.Modules.Load(0, res.Program);
+            world.SpawnInstance(0, 0);
+            world.Tick();
+            Assert(reported[0] == ~0, $"BW02: ~0=-1, got {reported[0]}");
+            Assert(reported[1] == ~1, $"BW02: ~1=-2, got {reported[1]}");
+            Assert(reported[2] == (1 << 4), $"BW02: 1<<4=16, got {reported[2]}");
+            Assert(reported[3] == (16 >> 2), $"BW02: 16>>2=4, got {reported[3]}");
+        }
+
+        // BW03: Precedence — & binds tighter than |
+        {
+            string source = @"
+func main() {
+    Report(5 | 2 & 3)
+}";
+            var reported = new List<int>();
+            var sc = new Dictionary<string, int> { { "Report", 0 } };
+            var res = compiler.Compile(source, "main", sc);
+            Assert(res.Success, "BW03: compiles");
+            var world = new VMWorld();
+            world.Syscalls.Register(0, "Report", (ref VMInstanceState s) => { reported.Add(s.Registers.Get(0).ToInt()); });
+            world.Modules.Load(0, res.Program);
+            world.SpawnInstance(0, 0);
+            world.Tick();
+            // 5 | (2 & 3) = 5 | 2 = 7
+            Assert(reported[0] == (5 | (2 & 3)), $"BW03: 5|(2&3)=7, got {reported[0]}");
+        }
+
+        // BW04: Logical vs bitwise — && and & are distinct
+        {
+            string source = @"
+func main() {
+    Report(3 & 5)
+    var a: int = 3
+    var b: int = 5
+    if (a && b) { Report(1) } else { Report(0) }
+}";
+            var reported = new List<int>();
+            var sc = new Dictionary<string, int> { { "Report", 0 } };
+            var res = compiler.Compile(source, "main", sc);
+            Assert(res.Success, "BW04: compiles");
+            var world = new VMWorld();
+            world.Syscalls.Register(0, "Report", (ref VMInstanceState s) => { reported.Add(s.Registers.Get(0).ToInt()); });
+            world.Modules.Load(0, res.Program);
+            world.SpawnInstance(0, 0);
+            world.Tick();
+            Assert(reported[0] == (3 & 5), $"BW04: 3&5=1, got {reported[0]}");
+            Assert(reported[1] == 1, $"BW04: 3&&5=true→1, got {reported[1]}");
+        }
+
+        // BW05: Constant folding — const with bitwise ops
+        {
+            string source = @"
+const MASK: int = 1 << 11
+const FLAGS: int = (1 << 0) | (1 << 2) | (1 << 4)
+func main() {
+    Report(MASK)
+    Report(FLAGS)
+}";
+            var reported = new List<int>();
+            var sc = new Dictionary<string, int> { { "Report", 0 } };
+            var res = compiler.Compile(source, "main", sc);
+            Assert(res.Success, "BW05: compiles");
+            var world = new VMWorld();
+            world.Syscalls.Register(0, "Report", (ref VMInstanceState s) => { reported.Add(s.Registers.Get(0).ToInt()); });
+            world.Modules.Load(0, res.Program);
+            world.SpawnInstance(0, 0);
+            world.Tick();
+            Assert(reported[0] == (1 << 11), $"BW05: 1<<11=2048, got {reported[0]}");
+            Assert(reported[1] == ((1 << 0) | (1 << 2) | (1 << 4)), $"BW05: flags=21, got {reported[1]}");
+        }
+
+        // BW06: Enum + bitwise — flag pattern
+        {
+            string source = @"
+enum Flags { A = 1, B = 2, C = 4, D = 8 }
+func main() {
+    var mask: int = Flags.A | Flags.C
+    Report(mask)
+    Report(mask & Flags.A)
+    Report(mask & Flags.B)
+    Report(mask & Flags.C)
+}";
+            var reported = new List<int>();
+            var sc = new Dictionary<string, int> { { "Report", 0 } };
+            var res = compiler.Compile(source, "main", sc);
+            Assert(res.Success, "BW06: compiles");
+            var world = new VMWorld();
+            world.Syscalls.Register(0, "Report", (ref VMInstanceState s) => { reported.Add(s.Registers.Get(0).ToInt()); });
+            world.Modules.Load(0, res.Program);
+            world.SpawnInstance(0, 0);
+            world.Tick();
+            Assert(reported[0] == 5, $"BW06: A|C=5, got {reported[0]}");
+            Assert(reported[1] == 1, $"BW06: 5&A=1, got {reported[1]}");
+            Assert(reported[2] == 0, $"BW06: 5&B=0, got {reported[2]}");
+            Assert(reported[3] == 4, $"BW06: 5&C=4, got {reported[3]}");
+        }
+
+        // BW07: Shift roundtrip — (x << N) >> N == x for small x
+        {
+            string source = @"
+func main() {
+    var x: int = 42
+    var shifted: int = (x << 3) >> 3
+    Report(shifted)
+}";
+            var reported = new List<int>();
+            var sc = new Dictionary<string, int> { { "Report", 0 } };
+            var res = compiler.Compile(source, "main", sc);
+            Assert(res.Success, "BW07: compiles");
+            var world = new VMWorld();
+            world.Syscalls.Register(0, "Report", (ref VMInstanceState s) => { reported.Add(s.Registers.Get(0).ToInt()); });
+            world.Modules.Load(0, res.Program);
+            world.SpawnInstance(0, 0);
+            world.Tick();
+            Assert(reported[0] == 42, $"BW07: (42<<3)>>3=42, got {reported[0]}");
+        }
+
+        // BW08: Bitwise XOR swap pattern
+        {
+            string source = @"
+func main() {
+    var a: int = 10
+    var b: int = 25
+    a = a ^ b
+    b = a ^ b
+    a = a ^ b
+    Report(a)
+    Report(b)
+}";
+            var reported = new List<int>();
+            var sc = new Dictionary<string, int> { { "Report", 0 } };
+            var res = compiler.Compile(source, "main", sc);
+            Assert(res.Success, "BW08: compiles");
+            var world = new VMWorld();
+            world.Syscalls.Register(0, "Report", (ref VMInstanceState s) => { reported.Add(s.Registers.Get(0).ToInt()); });
+            world.Modules.Load(0, res.Program);
+            world.SpawnInstance(0, 0);
+            world.Tick();
+            Assert(reported[0] == 25, $"BW08: a=25 after swap, got {reported[0]}");
+            Assert(reported[1] == 10, $"BW08: b=10 after swap, got {reported[1]}");
+        }
+
+        // BW09: Bitwise in if condition
+        {
+            string source = @"
+func main() {
+    var flags: int = 5
+    if (flags & 4) { Report(1) } else { Report(0) }
+    if (flags & 2) { Report(1) } else { Report(0) }
+}";
+            var reported = new List<int>();
+            var sc = new Dictionary<string, int> { { "Report", 0 } };
+            var res = compiler.Compile(source, "main", sc);
+            Assert(res.Success, "BW09: compiles");
+            var world = new VMWorld();
+            world.Syscalls.Register(0, "Report", (ref VMInstanceState s) => { reported.Add(s.Registers.Get(0).ToInt()); });
+            world.Modules.Load(0, res.Program);
+            world.SpawnInstance(0, 0);
+            world.Tick();
+            Assert(reported[0] == 1, $"BW09: 5&4≠0→1, got {reported[0]}");
+            Assert(reported[1] == 0, $"BW09: 5&2=0→0, got {reported[1]}");
+        }
+
+        // BW10: Bitwise ops as function arguments
+        {
+            string source = @"
+func helper(val: int): int {
+    return val & 15
+}
+func main() {
+    Report(helper(255))
+    Report(helper(16))
+}";
+            var reported = new List<int>();
+            var sc = new Dictionary<string, int> { { "Report", 0 } };
+            var res = compiler.Compile(source, "main", sc);
+            Assert(res.Success, "BW10: compiles");
+            var world = new VMWorld();
+            world.Syscalls.Register(0, "Report", (ref VMInstanceState s) => { reported.Add(s.Registers.Get(0).ToInt()); });
+            world.Modules.Load(0, res.Program);
+            world.SpawnInstance(0, 0);
+            world.Tick();
+            Assert(reported[0] == (255 & 15), $"BW10: 255&15=15, got {reported[0]}");
+            Assert(reported[1] == (16 & 15), $"BW10: 16&15=0, got {reported[1]}");
+        }
+
+        // BW11: Precedence — ^ between & and |
+        {
+            string source = @"
+func main() {
+    Report(7 & 3 ^ 1 | 4)
+}";
+            var reported = new List<int>();
+            var sc = new Dictionary<string, int> { { "Report", 0 } };
+            var res = compiler.Compile(source, "main", sc);
+            Assert(res.Success, "BW11: compiles");
+            var world = new VMWorld();
+            world.Syscalls.Register(0, "Report", (ref VMInstanceState s) => { reported.Add(s.Registers.Get(0).ToInt()); });
+            world.Modules.Load(0, res.Program);
+            world.SpawnInstance(0, 0);
+            world.Tick();
+            // ((7 & 3) ^ 1) | 4 = (3 ^ 1) | 4 = 2 | 4 = 6
+            Assert(reported[0] == (((7 & 3) ^ 1) | 4), $"BW11: ((7&3)^1)|4=6, got {reported[0]}");
+        }
+
+        // BW12: Inline auto-support — bitwise in inlinable function
+        {
+            string source = @"
+func setFlag(mask: int, flag: int): int {
+    return mask | flag
+}
+func hasFlag(mask: int, flag: int): int {
+    return mask & flag
+}
+func main() {
+    var m: int = setFlag(0, 4)
+    m = setFlag(m, 1)
+    Report(m)
+    Report(hasFlag(m, 4))
+    Report(hasFlag(m, 2))
+}";
+            var reported = new List<int>();
+            var sc = new Dictionary<string, int> { { "Report", 0 } };
+            var res = compiler.Compile(source, "main", sc);
+            Assert(res.Success, "BW12: compiles");
+            var world = new VMWorld();
+            world.Syscalls.Register(0, "Report", (ref VMInstanceState s) => { reported.Add(s.Registers.Get(0).ToInt()); });
+            world.Modules.Load(0, res.Program);
+            world.SpawnInstance(0, 0);
+            world.Tick();
+            Assert(reported[0] == 5, $"BW12: 0|4|1=5, got {reported[0]}");
+            Assert(reported[1] == 4, $"BW12: 5&4=4, got {reported[1]}");
+            Assert(reported[2] == 0, $"BW12: 5&2=0, got {reported[2]}");
+        }
+
+        // BW13: Shift precedence — << is lower than + but higher than comparison
+        {
+            string source = @"
+func main() {
+    Report(1 + 1 << 3)
+    if (1 << 3 > 4) { Report(1) } else { Report(0) }
+}";
+            var reported = new List<int>();
+            var sc = new Dictionary<string, int> { { "Report", 0 } };
+            var res = compiler.Compile(source, "main", sc);
+            Assert(res.Success, "BW13: compiles");
+            var world = new VMWorld();
+            world.Syscalls.Register(0, "Report", (ref VMInstanceState s) => { reported.Add(s.Registers.Get(0).ToInt()); });
+            world.Modules.Load(0, res.Program);
+            world.SpawnInstance(0, 0);
+            world.Tick();
+            // (1 + 1) << 3 = 2 << 3 = 16
+            Assert(reported[0] == ((1 + 1) << 3), $"BW13: (1+1)<<3=16, got {reported[0]}");
+            // (1 << 3) > 4 → 8 > 4 → true
+            Assert(reported[1] == 1, $"BW13: 8>4=true, got {reported[1]}");
+        }
+
+        // BW14: Bitwise NOT constant folding
+        {
+            string source = @"
+const INV: int = ~255
+func main() {
+    Report(INV)
+}";
+            var reported = new List<int>();
+            var sc = new Dictionary<string, int> { { "Report", 0 } };
+            var res = compiler.Compile(source, "main", sc);
+            Assert(res.Success, "BW14: compiles");
+            var world = new VMWorld();
+            world.Syscalls.Register(0, "Report", (ref VMInstanceState s) => { reported.Add(s.Registers.Get(0).ToInt()); });
+            world.Modules.Load(0, res.Program);
+            world.SpawnInstance(0, 0);
+            world.Tick();
+            Assert(reported[0] == ~255, $"BW14: ~255=-256, got {reported[0]}");
+        }
+
+        // BW15: Loop with bitwise operations
+        {
+            string source = @"
+func main() {
+    var result: int = 0
+    for var i: int = 0; i < 8; i = i + 1 {
+        result = result | (1 << i)
+    }
+    Report(result)
+}";
+            var reported = new List<int>();
+            var sc = new Dictionary<string, int> { { "Report", 0 } };
+            var res = compiler.Compile(source, "main", sc);
+            Assert(res.Success, $"BW15: compiles ({(res.Errors != null && res.Errors.Count > 0 ? res.Errors[0] : "")})");
+            if (res.Success)
+            {
+                var world = new VMWorld();
+                world.Syscalls.Register(0, "Report", (ref VMInstanceState s) => { reported.Add(s.Registers.Get(0).ToInt()); });
+                world.Modules.Load(0, res.Program);
+                world.SpawnInstance(0, 0);
+                world.Tick();
+                Assert(reported[0] == 255, $"BW15: OR all 8 bits=255, got {reported[0]}");
+            }
+        }
+
         // ===== Summary =====
         Debug.Log($"========================================");
         Debug.Log($"Compiler Tests: {passed} passed, {failed} failed");

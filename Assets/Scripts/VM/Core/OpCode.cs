@@ -102,6 +102,14 @@ namespace FFVM
         // --- CFG1: wide constant pool access (>256 constants) ---
         LOAD_CONST_W = 56,  // A=destReg, B=constIndex_lo, C=constIndex_hi → Reg[A] = Constants[B | (C<<8)]
 
+        // --- Lang-14: bitwise operations ---
+        BIT_AND      = 57,  // A=destReg, B=lhsReg, C=rhsReg → Reg[A] = Reg[B] & Reg[C]
+        BIT_OR       = 58,  // A=destReg, B=lhsReg, C=rhsReg → Reg[A] = Reg[B] | Reg[C]
+        BIT_XOR      = 59,  // A=destReg, B=lhsReg, C=rhsReg → Reg[A] = Reg[B] ^ Reg[C]
+        BIT_NOT      = 60,  // A=destReg, B=srcReg            → Reg[A] = ~Reg[B]
+        SHL          = 61,  // A=destReg, B=lhsReg, C=rhsReg → Reg[A] = Reg[B] << Reg[C]
+        SHR          = 62,  // A=destReg, B=lhsReg, C=rhsReg → Reg[A] = Reg[B] >> Reg[C]
+
         // --- O15: sentinel (never emitted by compiler) ---
         SENTINEL     = 55,  // appended by VMProgram ctor; replaces per-instruction boundary check
     }

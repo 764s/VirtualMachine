@@ -456,6 +456,13 @@ namespace FFVM.AST
                 case NodeKind.Lte: return Value.FromBool(lhs.AsNumber() <= rhs.AsNumber());
                 case NodeKind.Gte: return Value.FromBool(lhs.AsNumber() >= rhs.AsNumber());
 
+                // Lang-14: Bitwise
+                case NodeKind.BitAnd: return Value.FromNumber(Number.BitAnd(lhs.AsNumber(), rhs.AsNumber()));
+                case NodeKind.BitOr:  return Value.FromNumber(Number.BitOr(lhs.AsNumber(), rhs.AsNumber()));
+                case NodeKind.BitXor: return Value.FromNumber(Number.BitXor(lhs.AsNumber(), rhs.AsNumber()));
+                case NodeKind.Shl:    return Value.FromNumber(Number.Shl(lhs.AsNumber(), rhs.AsNumber()));
+                case NodeKind.Shr:    return Value.FromNumber(Number.Shr(lhs.AsNumber(), rhs.AsNumber()));
+
                 default:
                     throw new PanicException(VMError.PanicIllegalInstruction,
                         $"Unknown binary operator: {binary.Kind}");
@@ -469,6 +476,7 @@ namespace FFVM.AST
             {
                 case NodeKind.Negate: return Value.FromNumber(-operand.AsNumber());
                 case NodeKind.Not: return Value.FromBool(!operand.AsBool());
+                case NodeKind.BitNot: return Value.FromNumber(Number.BitNot(operand.AsNumber()));
                 default:
                     throw new PanicException(VMError.PanicIllegalInstruction,
                         $"Unknown unary operator: {unary.Kind}");

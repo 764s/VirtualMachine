@@ -1662,6 +1662,61 @@ public static class TreeWalkerTests
             Assert(gcBytes == 0, $"F05: CALL/RET_FUNC 0 GC ({gcBytes} bytes)");
         }
 
+        // ===== Lang-14: Bitwise operations (TreeWalker) =====
+        {
+            // func test(): int { return (6 & 3) | (1 << 4) }
+            var func = new FuncDecl("test",
+                new List<ParamDecl>(),
+                "int",
+                new BlockStmt(new List<Stmt>
+                {
+                    new ReturnStmt(new BinaryExpr(NodeKind.BitOr,
+                        new BinaryExpr(NodeKind.BitAnd,
+                            new IntLiteralExpr(6), new IntLiteralExpr(3)),
+                        new BinaryExpr(NodeKind.Shl,
+                            new IntLiteralExpr(1), new IntLiteralExpr(4))
+                    ))
+                }),
+                false
+            );
+
+            var module = new ModuleNode("test_bitwise");
+            module.Functions.Add(func);
+
+            var walker = new TreeWalker();
+            walker.LoadModule(module);
+
+            var result = walker.CallFunction("test");
+            Assert(result.AsNumber().ToInt() == ((6 & 3) | (1 << 4)), $"TW-BW01: (6&3)|(1<<4)=18, got {result.AsNumber().ToInt()}");
+        }
+
+        // TW-BW02: BitNot, XOR, Shr
+        {
+            // func test(): int { return ~0 ^ (16 >> 2) }
+            var func = new FuncDecl("test",
+                new List<ParamDecl>(),
+                "int",
+                new BlockStmt(new List<Stmt>
+                {
+                    new ReturnStmt(new BinaryExpr(NodeKind.BitXor,
+                        new UnaryExpr(NodeKind.BitNot, new IntLiteralExpr(0)),
+                        new BinaryExpr(NodeKind.Shr,
+                            new IntLiteralExpr(16), new IntLiteralExpr(2))
+                    ))
+                }),
+                false
+            );
+
+            var module = new ModuleNode("test_bitwise2");
+            module.Functions.Add(func);
+
+            var walker = new TreeWalker();
+            walker.LoadModule(module);
+
+            var result = walker.CallFunction("test");
+            Assert(result.AsNumber().ToInt() == (~0 ^ (16 >> 2)), $"TW-BW02: ~0^(16>>2)=-5, got {result.AsNumber().ToInt()}");
+        }
+
         // ===== Summary =====
         Debug.Log($"========================================");
         Debug.Log($"TreeWalker Tests: {passed} passed, {failed} failed");

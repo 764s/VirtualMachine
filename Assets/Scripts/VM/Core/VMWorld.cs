@@ -592,6 +592,38 @@ namespace FFVM
                             inst.IP++;
                             break;
 
+                        // --- Lang-14: Bitwise ---
+
+                        case OpCode.BIT_AND:
+                            regs[Reg(op.A, rb)] = Number.BitAnd(regs[Reg(op.B, rb)], regs[Reg(op.C, rb)]);
+                            inst.IP++;
+                            break;
+
+                        case OpCode.BIT_OR:
+                            regs[Reg(op.A, rb)] = Number.BitOr(regs[Reg(op.B, rb)], regs[Reg(op.C, rb)]);
+                            inst.IP++;
+                            break;
+
+                        case OpCode.BIT_XOR:
+                            regs[Reg(op.A, rb)] = Number.BitXor(regs[Reg(op.B, rb)], regs[Reg(op.C, rb)]);
+                            inst.IP++;
+                            break;
+
+                        case OpCode.BIT_NOT:
+                            regs[Reg(op.A, rb)] = Number.BitNot(regs[Reg(op.B, rb)]);
+                            inst.IP++;
+                            break;
+
+                        case OpCode.SHL:
+                            regs[Reg(op.A, rb)] = Number.Shl(regs[Reg(op.B, rb)], regs[Reg(op.C, rb)]);
+                            inst.IP++;
+                            break;
+
+                        case OpCode.SHR:
+                            regs[Reg(op.A, rb)] = Number.Shr(regs[Reg(op.B, rb)], regs[Reg(op.C, rb)]);
+                            inst.IP++;
+                            break;
+
                         // --- Phase 3: Function Calls ---
 
                         case OpCode.CALL:

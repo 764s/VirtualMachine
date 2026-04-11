@@ -1114,6 +1114,7 @@ namespace FFVM.Compiler
                 case OpCode.MOVE: return 3;           // A=dest, B=src
                 case OpCode.NOT:  return 3;           // A=dest, B=src
                 case OpCode.NEG:  return 3;           // A=dest, B=src
+                case OpCode.BIT_NOT: return 3;        // A=dest, B=src (Lang-14)
                 case OpCode.COPY_BLOCK: return 3;     // A=dest, B=src, C=count (not a register)
 
                 // B = register
@@ -1143,6 +1144,8 @@ namespace FFVM.Compiler
                 case OpCode.CMP_LT:  case OpCode.CMP_LTE:
                 case OpCode.CMP_GT:  case OpCode.CMP_GTE:
                 case OpCode.AND: case OpCode.OR:
+                case OpCode.BIT_AND: case OpCode.BIT_OR: case OpCode.BIT_XOR:
+                case OpCode.SHL: case OpCode.SHR:
                     return 7; // A=dest, B=lhs, C=rhs
 
                 // No register operands: NOP, SYSCALL(slot,start,count), WAIT, PUSH_CLEANUP,
@@ -2763,6 +2766,7 @@ namespace FFVM.Compiler
                 {
                     case NodeKind.Negate: value = -operand; return true;
                     case NodeKind.Not:    value = operand == Number.Zero ? Number.One : Number.Zero; return true;
+                    case NodeKind.BitNot: value = Number.BitNot(operand); return true;
                     default: return false;
                 }
             }
@@ -2785,6 +2789,11 @@ namespace FFVM.Compiler
                     case NodeKind.Gte: value = left >= right ? Number.One : Number.Zero; return true;
                     case NodeKind.And: value = (left != Number.Zero && right != Number.Zero) ? Number.One : Number.Zero; return true;
                     case NodeKind.Or:  value = (left != Number.Zero || right != Number.Zero) ? Number.One : Number.Zero; return true;
+                    case NodeKind.BitAnd: value = Number.BitAnd(left, right); return true;
+                    case NodeKind.BitOr:  value = Number.BitOr(left, right); return true;
+                    case NodeKind.BitXor: value = Number.BitXor(left, right); return true;
+                    case NodeKind.Shl:    value = Number.Shl(left, right); return true;
+                    case NodeKind.Shr:    value = Number.Shr(left, right); return true;
                     default: return false;
                 }
             }
@@ -5288,6 +5297,11 @@ namespace FFVM.Compiler
                 case NodeKind.Gte: return OpCode.CMP_GTE;
                 case NodeKind.And: return OpCode.AND;
                 case NodeKind.Or:  return OpCode.OR;
+                case NodeKind.BitAnd: return OpCode.BIT_AND;
+                case NodeKind.BitOr:  return OpCode.BIT_OR;
+                case NodeKind.BitXor: return OpCode.BIT_XOR;
+                case NodeKind.Shl:    return OpCode.SHL;
+                case NodeKind.Shr:    return OpCode.SHR;
                 default:
                     _errors.Add($"Unknown binary operator: {kind}");
                     return OpCode.NOP;
@@ -5300,6 +5314,7 @@ namespace FFVM.Compiler
             {
                 case NodeKind.Negate: return OpCode.NEG;
                 case NodeKind.Not:    return OpCode.NOT;
+                case NodeKind.BitNot: return OpCode.BIT_NOT;
                 default:
                     _errors.Add($"Unknown unary operator: {kind}");
                     return OpCode.NOP;
@@ -5323,6 +5338,8 @@ namespace FFVM.Compiler
                 case OpCode.CMP_EQ: case OpCode.CMP_NEQ: case OpCode.CMP_LT:
                 case OpCode.CMP_LTE: case OpCode.CMP_GT: case OpCode.CMP_GTE:
                 case OpCode.AND: case OpCode.OR: case OpCode.NOT: case OpCode.NEG:
+                case OpCode.BIT_AND: case OpCode.BIT_OR: case OpCode.BIT_XOR:
+                case OpCode.BIT_NOT: case OpCode.SHL: case OpCode.SHR:
                     return true;
                 default:
                     return false;

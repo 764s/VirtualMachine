@@ -109,6 +109,14 @@ namespace FFVM
         public int CompareTo(Number other) => Raw.CompareTo(other.Raw);
         public override string ToString() => ToFloat().ToString("F4");
 
+        // Lang-14: bitwise operations (operate on integer part, preserve Q31.32 format)
+        public static Number BitAnd(Number a, Number b) => FromInt(a.ToInt() & b.ToInt());
+        public static Number BitOr(Number a, Number b)  => FromInt(a.ToInt() | b.ToInt());
+        public static Number BitXor(Number a, Number b) => FromInt(a.ToInt() ^ b.ToInt());
+        public static Number BitNot(Number a)            => FromInt(~a.ToInt());
+        public static Number Shl(Number a, Number b)    => FromInt(a.ToInt() << b.ToInt());
+        public static Number Shr(Number a, Number b)    => FromInt(a.ToInt() >> b.ToInt());
+
 #else
         // Development mode: raw float stored in 8 bytes for layout compatibility
         [FieldOffset(0)] public readonly double RawDouble;
@@ -160,6 +168,14 @@ namespace FFVM
         public override int GetHashCode() => RawDouble.GetHashCode();
         public int CompareTo(Number other) => RawDouble.CompareTo(other.RawDouble);
         public override string ToString() => RawDouble.ToString("F4");
+
+        // Lang-14: bitwise operations (convert to int, operate, convert back)
+        public static Number BitAnd(Number a, Number b) => FromInt(a.ToInt() & b.ToInt());
+        public static Number BitOr(Number a, Number b)  => FromInt(a.ToInt() | b.ToInt());
+        public static Number BitXor(Number a, Number b) => FromInt(a.ToInt() ^ b.ToInt());
+        public static Number BitNot(Number a)            => FromInt(~a.ToInt());
+        public static Number Shl(Number a, Number b)    => FromInt(a.ToInt() << b.ToInt());
+        public static Number Shr(Number a, Number b)    => FromInt(a.ToInt() >> b.ToInt());
 #endif
 
         // Implicit conversions for ergonomic scripting
