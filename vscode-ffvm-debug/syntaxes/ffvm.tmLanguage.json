@@ -1,21 +1,69 @@
 {
     "name": "FFVM Script",
     "scopeName": "source.ffvm",
-    "fileTypes": ["ffs", "ffvm"],
+    "fileTypes": [
+        "ffs",
+        "ffvm"
+    ],
     "patterns": [
-        { "include": "#comments" },
-        { "include": "#keywords" },
-        { "include": "#types" },
-        { "include": "#numbers" },
-        { "include": "#functions" },
-        { "include": "#operators" }
+        {
+            "include": "#comments"
+        },
+        {
+            "include": "#strings"
+        },
+        {
+            "include": "#annotations"
+        },
+        {
+            "include": "#keywords"
+        },
+        {
+            "include": "#types"
+        },
+        {
+            "include": "#numbers"
+        },
+        {
+            "include": "#functions"
+        },
+        {
+            "include": "#operators"
+        }
     ],
     "repository": {
         "comments": {
             "patterns": [
                 {
+                    "name": "comment.line.documentation.ffvm",
+                    "match": "///.*$"
+                },
+                {
                     "name": "comment.line.double-slash.ffvm",
                     "match": "//.*$"
+                }
+            ]
+        },
+        "strings": {
+            "patterns": [
+                {
+                    "name": "string.quoted.double.ffvm",
+                    "begin": "\"",
+                    "end": "\"",
+                    "patterns": [
+                        {
+                            "name": "constant.character.escape.ffvm",
+                            "match": "\\\\[nt\\\\\"]"
+                        }
+                    ]
+                }
+            ]
+        },
+        "annotations": {
+            "patterns": [
+                {
+                    "name": "storage.modifier.ffvm",
+                    "match": "@(export|inline)\\b"
                 }
             ]
         },
@@ -27,7 +75,7 @@
                 },
                 {
                     "name": "keyword.declaration.ffvm",
-                    "match": "\\b(func|var|struct|enum)\\b"
+                    "match": "\\b(func|var|const|struct|enum|include)\\b"
                 },
                 {
                     "name": "constant.language.ffvm",
