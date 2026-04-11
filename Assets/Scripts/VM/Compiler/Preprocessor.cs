@@ -111,6 +111,7 @@ namespace FFVM.Compiler
                 for (int i = 0; i < module.Structs.Count; i++) wrapped.Structs.Add(module.Structs[i]);
                 for (int i = 0; i < module.Functions.Count; i++) wrapped.Functions.Add(module.Functions[i]);
                 for (int i = 0; i < module.ModuleVariables.Count; i++) wrapped.ModuleVariables.Add(module.ModuleVariables[i]);
+                for (int i = 0; i < module.Enums.Count; i++) wrapped.Enums.Add(module.Enums[i]);
                 return wrapped;
             }
 
@@ -187,6 +188,12 @@ namespace FFVM.Compiler
                 var s = source.Structs[i];
                 MergeStruct(target, s, structSources, srcFile);
             }
+
+            // Lang-13: Merge enums (simple append — duplicates caught by compiler ProcessEnums)
+            for (int i = 0; i < source.Enums.Count; i++)
+            {
+                target.Enums.Add(source.Enums[i]);
+            }
         }
 
         /// <summary>
@@ -219,6 +226,12 @@ namespace FFVM.Compiler
             {
                 var s = mainModule.Structs[i];
                 MergeStruct(target, s, structSources, srcFile);
+            }
+
+            // Lang-13: Merge enums from main file
+            for (int i = 0; i < mainModule.Enums.Count; i++)
+            {
+                target.Enums.Add(mainModule.Enums[i]);
             }
         }
 

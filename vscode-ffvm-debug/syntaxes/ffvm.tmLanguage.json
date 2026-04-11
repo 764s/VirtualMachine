@@ -27,7 +27,7 @@
                 },
                 {
                     "name": "keyword.declaration.ffvm",
-                    "match": "\\b(func|var|struct)\\b"
+                    "match": "\\b(func|var|struct|enum)\\b"
                 },
                 {
                     "name": "constant.language.ffvm",

@@ -791,7 +791,7 @@ public static class LspTests
                 if (items != null)
                 {
                     // Should have keywords (17) only — includes 'include' keyword
-                    Assert(items.Count == 17, $"LSP5-T04: 17 keyword items for empty file, got {items.Count}");
+                    Assert(items.Count == 18, $"LSP5-T04: 18 keyword items for empty file, got {items.Count}");
                     // All should be kind=14 (Keyword)
                     bool allKeywords = true;
                     foreach (var obj in items)
@@ -1506,6 +1506,169 @@ public static class LspTests
                     string value = contents?.GetString("value");
                     Assert(value != null && value.Contains("= 42"),
                         $"FF3-LSP-02: hover shows default '= 42', got '{value}'");
+                }
+            }
+        }
+
+        // ===== Lang-13: LSP Enum Tests =====
+
+        // LSP-EN01: documentSymbol includes enums
+        {
+            string source = "enum Color { RED, GREEN, BLUE }\nfunc main() {\n  wait 1\n}";
+            var session = new LspBatchSession();
+            session.AddInitialize();
+            session.AddInitialized();
+            session.AddDidOpen("file:///en01.ffs", source);
+            session.AddDocumentSymbol("file:///en01.ffs");
+            session.AddShutdown();
+            session.AddExit();
+            session.Run();
+
+            session.ExpectResponse(0); // initialize
+            var symResp = session.ExpectResponse(1); // documentSymbol
+            Assert(symResp != null, "LSP-EN01: documentSymbol response received");
+            if (symResp != null)
+            {
+                var symbols = symResp.GetArray("result");
+                Assert(symbols != null, "LSP-EN01: result is array");
+                if (symbols != null)
+                {
+                    Assert(symbols.Count == 2, $"LSP-EN01: 2 symbols (1 enum + 1 func), got {symbols.Count}");
+                    if (symbols.Count >= 1)
+                    {
+                        var s0 = symbols[0] as JsonObject;
+                        Assert(s0?.GetString("name") == "Color", $"LSP-EN01: first symbol = Color, got {s0?.GetString("name")}");
+                        Assert(s0?.GetInt("kind") == 10, $"LSP-EN01: Color kind = Enum (10), got {s0?.GetInt("kind")}");
+                    }
+                }
+            }
+        }
+
+        // LSP-EN02: EnumName. dot completion lists members
+        {
+            string source = "enum Color { RED, GREEN, BLUE }\nfunc main() {\n  Color.\n}";
+            var session = new LspBatchSession();
+            session.AddInitialize();
+            session.AddInitialized();
+            session.AddDidOpen("file:///en02.ffs", source);
+            // Complete after "Color." on line 2, col 8
+            session.AddCompletion("file:///en02.ffs", 2, 8);
+            session.AddShutdown();
+            session.AddExit();
+            session.Run();
+
+            session.ExpectResponse(0); // initialize
+            var compResp = session.ExpectResponse(1); // completion
+            Assert(compResp != null, "LSP-EN02: completion response received");
+            if (compResp != null)
+            {
+                var items = compResp.GetArray("result");
+                Assert(items != null, "LSP-EN02: result is array");
+                if (items != null)
+                {
+                    Assert(items.Count == 3, $"LSP-EN02: 3 enum members, got {items.Count}");
+                    bool hasRed = false, hasGreen = false, hasBlue = false;
+                    foreach (var obj in items)
+                    {
+                        var item = obj as JsonObject;
+                        string label = item?.GetString("label");
+                        int kind = item?.GetInt("kind") ?? 0;
+                        if (label == "RED" && kind == 20) hasRed = true;
+                        if (label == "GREEN" && kind == 20) hasGreen = true;
+                        if (label == "BLUE" && kind == 20) hasBlue = true;
+                    }
+                    Assert(hasRed, "LSP-EN02: RED member present");
+                    Assert(hasGreen, "LSP-EN02: GREEN member present");
+                    Assert(hasBlue, "LSP-EN02: BLUE member present");
+                }
+            }
+        }
+
+        // LSP-EN03: Enum name hover shows definition
+        {
+            string source = "enum Color { RED, GREEN, BLUE }\nfunc main() {\n  wait 1\n}";
+            var session = new LspBatchSession();
+            session.AddInitialize();
+            session.AddInitialized();
+            session.AddDidOpen("file:///en03.ffs", source);
+            // Hover on "Color" on line 0, col 5 (inside "Color" name)
+            session.AddHover("file:///en03.ffs", 0, 5);
+            session.AddShutdown();
+            session.AddExit();
+            session.Run();
+
+            session.ExpectResponse(0); // initialize
+            var hoverResp = session.ExpectResponse(1); // hover
+            Assert(hoverResp != null, "LSP-EN03: hover response received");
+            if (hoverResp != null)
+            {
+                var result = hoverResp.GetObject("result");
+                Assert(result != null, "LSP-EN03: result is not null");
+                if (result != null)
+                {
+                    var contents = result.GetObject("contents");
+                    string value = contents?.GetString("value");
+                    Assert(value != null && value.Contains("enum Color"), $"LSP-EN03: hover shows 'enum Color', got '{value}'");
+                }
+            }
+        }
+
+        // LSP-EN04: Enum member hover (in function body expression)
+        {
+            // Hover on "Color" in "Color.RED" expression → should show enum info
+            string source = "enum Color { RED, GREEN, BLUE }\nfunc main() {\n  var x: int = Color.RED\n}";
+            var session = new LspBatchSession();
+            session.AddInitialize();
+            session.AddInitialized();
+            session.AddDidOpen("file:///en04.ffs", source);
+            // Hover on "Color" inside "Color.RED" on line 2, col 15 (inside "Color")
+            session.AddHover("file:///en04.ffs", 2, 15);
+            session.AddShutdown();
+            session.AddExit();
+            session.Run();
+
+            session.ExpectResponse(0); // initialize
+            var hoverResp = session.ExpectResponse(1); // hover
+            Assert(hoverResp != null, "LSP-EN04: hover response received");
+            if (hoverResp != null)
+            {
+                var result = hoverResp.GetObject("result");
+                // Expect non-null result with enum info
+                Assert(result != null, "LSP-EN04: result is not null (hover on enum ref in expression)");
+            }
+        }
+
+        // LSP-EN05: General completion lists enum names
+        {
+            string source = "enum Color { RED, GREEN, BLUE }\nfunc main() {\n  \n}";
+            var session = new LspBatchSession();
+            session.AddInitialize();
+            session.AddInitialized();
+            session.AddDidOpen("file:///en05.ffs", source);
+            // Complete at empty line inside function body
+            session.AddCompletion("file:///en05.ffs", 2, 2);
+            session.AddShutdown();
+            session.AddExit();
+            session.Run();
+
+            session.ExpectResponse(0); // initialize
+            var compResp = session.ExpectResponse(1); // completion
+            Assert(compResp != null, "LSP-EN05: completion response received");
+            if (compResp != null)
+            {
+                var items = compResp.GetArray("result");
+                Assert(items != null, "LSP-EN05: result is array");
+                if (items != null)
+                {
+                    bool hasColorEnum = false;
+                    foreach (var obj in items)
+                    {
+                        var item = obj as JsonObject;
+                        string label = item?.GetString("label");
+                        int kind = item?.GetInt("kind") ?? 0;
+                        if (label == "Color" && kind == 13) hasColorEnum = true;
+                    }
+                    Assert(hasColorEnum, "LSP-EN05: 'Color' enum name present with kind=13 (Enum)");
                 }
             }
         }

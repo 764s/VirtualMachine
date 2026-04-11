@@ -10311,6 +10311,260 @@ func main() { Report(add(3, 4)) }
             Assert(hasCfgWarning, "CFG1-07: DiagnosticsThreshold=0.01 → [CFG1] warnings triggered");
         }
 
+        // ===== Lang-13: Enum Tests =====
+
+        // EN01: Basic enum declaration + usage
+        {
+            string source = @"
+enum Color { RED, GREEN, BLUE }
+func main() {
+    Report(Color.RED)
+    Report(Color.GREEN)
+    Report(Color.BLUE)
+}";
+            var reported = new List<int>();
+            var sc = new Dictionary<string, int> { { "Report", 0 } };
+            var res = compiler.Compile(source, "main", sc);
+            Assert(res.Success, "EN01: compile succeeds");
+            var world = new VMWorld();
+            world.Syscalls.Register(0, "Report", (ref VMInstanceState s) => { reported.Add(s.Registers.Get(0).ToInt()); });
+            world.Modules.Load(0, res.Program);
+            int iid = world.SpawnInstance(0, 0);
+            world.Tick();
+            Assert(reported.Count == 3, $"EN01: 3 reports, got {reported.Count}");
+            Assert(reported[0] == 0, $"EN01: Color.RED=0, got {reported[0]}");
+            Assert(reported[1] == 1, $"EN01: Color.GREEN=1, got {reported[1]}");
+            Assert(reported[2] == 2, $"EN01: Color.BLUE=2, got {reported[2]}");
+        }
+
+        // EN02: Explicit value assignment + auto-increment continuation
+        {
+            string source = @"
+enum E { A = 10, B, C = 20, D }
+func main() {
+    Report(E.A)
+    Report(E.B)
+    Report(E.C)
+    Report(E.D)
+}";
+            var reported = new List<int>();
+            var sc = new Dictionary<string, int> { { "Report", 0 } };
+            var res = compiler.Compile(source, "main", sc);
+            Assert(res.Success, "EN02: compile succeeds");
+            var world = new VMWorld();
+            world.Syscalls.Register(0, "Report", (ref VMInstanceState s) => { reported.Add(s.Registers.Get(0).ToInt()); });
+            world.Modules.Load(0, res.Program);
+            int iid = world.SpawnInstance(0, 0);
+            world.Tick();
+            Assert(reported.Count == 4, $"EN02: 4 reports, got {reported.Count}");
+            Assert(reported[0] == 10, $"EN02: E.A=10, got {reported[0]}");
+            Assert(reported[1] == 11, $"EN02: E.B=11, got {reported[1]}");
+            Assert(reported[2] == 20, $"EN02: E.C=20, got {reported[2]}");
+            Assert(reported[3] == 21, $"EN02: E.D=21, got {reported[3]}");
+        }
+
+        // EN03: Constant expression as value
+        {
+            string source = @"
+enum E { A = 1 + 2, B }
+func main() {
+    Report(E.A)
+    Report(E.B)
+}";
+            var reported = new List<int>();
+            var sc = new Dictionary<string, int> { { "Report", 0 } };
+            var res = compiler.Compile(source, "main", sc);
+            Assert(res.Success, "EN03: compile succeeds");
+            var world = new VMWorld();
+            world.Syscalls.Register(0, "Report", (ref VMInstanceState s) => { reported.Add(s.Registers.Get(0).ToInt()); });
+            world.Modules.Load(0, res.Program);
+            int iid = world.SpawnInstance(0, 0);
+            world.Tick();
+            Assert(reported[0] == 3, $"EN03: E.A=3, got {reported[0]}");
+            Assert(reported[1] == 4, $"EN03: E.B=4, got {reported[1]}");
+        }
+
+        // EN04: Empty enum
+        {
+            string source = @"
+enum Empty {}
+func main() {
+    Report(42)
+}";
+            var reported = new List<int>();
+            var sc = new Dictionary<string, int> { { "Report", 0 } };
+            var res = compiler.Compile(source, "main", sc);
+            Assert(res.Success, "EN04: empty enum compiles");
+            var world = new VMWorld();
+            world.Syscalls.Register(0, "Report", (ref VMInstanceState s) => { reported.Add(s.Registers.Get(0).ToInt()); });
+            world.Modules.Load(0, res.Program);
+            int iid = world.SpawnInstance(0, 0);
+            world.Tick();
+            Assert(reported[0] == 42, $"EN04: main runs, got {reported[0]}");
+        }
+
+        // EN05: Duplicate member name → compile error
+        {
+            string source = @"
+enum E { A, A }
+func main() { Report(0) }";
+            var sc = new Dictionary<string, int> { { "Report", 0 } };
+            var res = compiler.Compile(source, "main", sc);
+            Assert(!res.Success, "EN05: duplicate member → compile error");
+            bool hasDupError = false;
+            foreach (var e in res.Errors)
+                if (e.Contains("Duplicate enum member")) hasDupError = true;
+            Assert(hasDupError, $"EN05: error mentions 'Duplicate enum member'");
+        }
+
+        // EN06: Enum name conflicts with struct → compile error
+        {
+            string source = @"
+struct S { x: int }
+enum S { A, B }
+func main() { Report(0) }";
+            var sc = new Dictionary<string, int> { { "Report", 0 } };
+            var res = compiler.Compile(source, "main", sc);
+            Assert(!res.Success, "EN06: enum/struct name conflict → compile error");
+            bool hasConflict = false;
+            foreach (var e in res.Errors)
+                if (e.Contains("conflicts")) hasConflict = true;
+            Assert(hasConflict, "EN06: error mentions 'conflicts'");
+        }
+
+        // EN07: Enum usage in if branches
+        {
+            string source = @"
+enum Dir { UP, DOWN, LEFT, RIGHT }
+func main() {
+    var d: int = Dir.LEFT
+    if (d == Dir.LEFT) {
+        Report(100)
+    } else {
+        Report(200)
+    }
+}";
+            var reported = new List<int>();
+            var sc = new Dictionary<string, int> { { "Report", 0 } };
+            var res = compiler.Compile(source, "main", sc);
+            Assert(res.Success, "EN07: compile succeeds");
+            var world = new VMWorld();
+            world.Syscalls.Register(0, "Report", (ref VMInstanceState s) => { reported.Add(s.Registers.Get(0).ToInt()); });
+            world.Modules.Load(0, res.Program);
+            int iid = world.SpawnInstance(0, 0);
+            world.Tick();
+            Assert(reported[0] == 100, $"EN07: Dir.LEFT matches → 100, got {reported[0]}");
+        }
+
+        // EN08: Cross-function enum usage
+        {
+            string source = @"
+enum Status { IDLE, ACTIVE, DONE }
+func check(s: int): int {
+    if (s == Status.ACTIVE) { return 1 }
+    return 0
+}
+func main() {
+    Report(check(Status.IDLE))
+    Report(check(Status.ACTIVE))
+}";
+            var reported = new List<int>();
+            var sc = new Dictionary<string, int> { { "Report", 0 } };
+            var res = compiler.Compile(source, "main", sc);
+            Assert(res.Success, "EN08: compile succeeds");
+            var world = new VMWorld();
+            world.Syscalls.Register(0, "Report", (ref VMInstanceState s) => { reported.Add(s.Registers.Get(0).ToInt()); });
+            world.Modules.Load(0, res.Program);
+            int iid = world.SpawnInstance(0, 0);
+            world.Tick();
+            Assert(reported[0] == 0, $"EN08: check(IDLE)=0, got {reported[0]}");
+            Assert(reported[1] == 1, $"EN08: check(ACTIVE)=1, got {reported[1]}");
+        }
+
+        // EN09: Include cross-file enum
+        {
+            string enumFile = @"
+enum DamageType { NONE, PHYSICAL, MAGICAL }";
+            string mainFile = @"
+include ""damage_types.ffs""
+func main() {
+    Report(DamageType.PHYSICAL)
+    Report(DamageType.MAGICAL)
+}";
+            var files = new Dictionary<string, string> {
+                { "damage_types.ffs", enumFile }
+            };
+            var resolver = new DictionaryFileResolver(files);
+            var sc = new Dictionary<string, int> { { "Report", 0 } };
+            var cc = new BytecodeCompiler();
+            var reported = new List<int>();
+            var res = cc.Compile(mainFile, "main", sc, null, resolver, "main.ffs");
+            Assert(res.Success, $"EN09: compile succeeds ({(res.Errors != null && res.Errors.Count > 0 ? res.Errors[0] : "")})");
+            if (res.Success)
+            {
+                var world = new VMWorld();
+                world.Syscalls.Register(0, "Report", (ref VMInstanceState s) => { reported.Add(s.Registers.Get(0).ToInt()); });
+                world.Modules.Load(0, res.Program);
+                int iid = world.SpawnInstance(0, 0);
+                world.Tick();
+                Assert(reported[0] == 1, $"EN09: DamageType.PHYSICAL=1, got {reported[0]}");
+                Assert(reported[1] == 2, $"EN09: DamageType.MAGICAL=2, got {reported[1]}");
+            }
+        }
+
+        // EN10: Unknown enum member → compile error
+        {
+            string source = @"
+enum Color { RED, GREEN, BLUE }
+func main() { Report(Color.YELLOW) }";
+            var sc = new Dictionary<string, int> { { "Report", 0 } };
+            var res = compiler.Compile(source, "main", sc);
+            Assert(!res.Success, "EN10: unknown member → compile error");
+            bool hasNoMember = false;
+            foreach (var e in res.Errors)
+                if (e.Contains("has no member")) hasNoMember = true;
+            Assert(hasNoMember, "EN10: error mentions 'has no member'");
+        }
+
+        // EN11: Enum value participates in constant folding
+        {
+            string source = @"
+enum Color { RED, GREEN, BLUE }
+const derived: int = Color.RED + 10
+func main() {
+    Report(derived)
+}";
+            var reported = new List<int>();
+            var sc = new Dictionary<string, int> { { "Report", 0 } };
+            var res = compiler.Compile(source, "main", sc);
+            Assert(res.Success, $"EN11: compile succeeds ({(res.Errors != null && res.Errors.Count > 0 ? res.Errors[0] : "")})");
+            var world = new VMWorld();
+            world.Syscalls.Register(0, "Report", (ref VMInstanceState s) => { reported.Add(s.Registers.Get(0).ToInt()); });
+            world.Modules.Load(0, res.Program);
+            int iid = world.SpawnInstance(0, 0);
+            world.Tick();
+            Assert(reported[0] == 10, $"EN11: Color.RED+10=10, got {reported[0]}");
+        }
+
+        // EN12: Trailing comma
+        {
+            string source = @"
+enum E { A, B, C, }
+func main() {
+    Report(E.C)
+}";
+            var reported = new List<int>();
+            var sc = new Dictionary<string, int> { { "Report", 0 } };
+            var res = compiler.Compile(source, "main", sc);
+            Assert(res.Success, "EN12: trailing comma compiles");
+            var world = new VMWorld();
+            world.Syscalls.Register(0, "Report", (ref VMInstanceState s) => { reported.Add(s.Registers.Get(0).ToInt()); });
+            world.Modules.Load(0, res.Program);
+            int iid = world.SpawnInstance(0, 0);
+            world.Tick();
+            Assert(reported[0] == 2, $"EN12: E.C=2, got {reported[0]}");
+        }
+
         // ===== Summary =====
         Debug.Log($"========================================");
         Debug.Log($"Compiler Tests: {passed} passed, {failed} failed");

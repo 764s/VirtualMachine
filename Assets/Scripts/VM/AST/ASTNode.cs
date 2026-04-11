@@ -54,6 +54,7 @@ namespace FFVM.AST
         // Top-level declarations
         FuncDecl,
         StructDecl,
+        EnumDecl,
         Import,
         Module,
     }
@@ -423,6 +424,35 @@ namespace FFVM.AST
         }
     }
 
+    /// <summary>
+    /// A single member inside an enum declaration, with optional explicit value expression.
+    /// </summary>
+    public class EnumMember
+    {
+        public string Name { get; }
+        public Expr ValueExpr { get; }  // null = auto-increment
+        public int Line { get; set; }
+        public int Column { get; set; }
+        public EnumMember(string name, Expr valueExpr) { Name = name; ValueExpr = valueExpr; }
+    }
+
+    /// <summary>
+    /// Lang-13: enum declaration (syntactic sugar for named integer constant groups).
+    /// <code>enum DamageType { NONE, PHYSICAL = 5, MAGICAL }</code>
+    /// desugars to <c>const DamageType.NONE = 0, DamageType.PHYSICAL = 5, DamageType.MAGICAL = 6</c>.
+    /// </summary>
+    public class EnumDecl : ASTNode
+    {
+        public string Name { get; }
+        public List<EnumMember> Members { get; }
+        public string DocComment { get; set; }
+        public EnumDecl(string name, List<EnumMember> members) : base(NodeKind.EnumDecl)
+        {
+            Name = name;
+            Members = members;
+        }
+    }
+
     public class ImportDecl : ASTNode
     {
         public string ModulePath { get; }
@@ -437,6 +467,7 @@ namespace FFVM.AST
         public string FilePath { get; }
         public List<ImportDecl> Imports { get; }
         public List<StructDecl> Structs { get; }
+        public List<EnumDecl> Enums { get; }
         public List<FuncDecl> Functions { get; }
         public List<VarDeclStmt> ModuleVariables { get; }
 
@@ -445,6 +476,7 @@ namespace FFVM.AST
             FilePath = filePath;
             Imports = new List<ImportDecl>();
             Structs = new List<StructDecl>();
+            Enums = new List<EnumDecl>();
             Functions = new List<FuncDecl>();
             ModuleVariables = new List<VarDeclStmt>();
         }

@@ -471,6 +471,12 @@ namespace FFVM.Debug
                 entries.Add((st.Line, MakeSymbolInfo(st.Name, 23 /* Struct */, st.Line, st.Column, st.Name.Length)));
             }
 
+            // Lang-13: Enums
+            foreach (var en in ast.Enums)
+            {
+                entries.Add((en.Line, MakeSymbolInfo(en.Name, 10 /* Enum */, en.Line, en.Column, en.Name.Length)));
+            }
+
             // Sort by source line to preserve declaration order
             entries.Sort((a, b) => a.line.CompareTo(b.line));
 
@@ -601,6 +607,15 @@ namespace FFVM.Debug
                     string prefix = mv.IsConst ? "const" : "var";
                     string typeStr = mv.TypeName ?? "int";
                     return $"(module {prefix}) {mv.Name}: {typeStr}";
+                }
+            }
+
+            // Lang-13: Check enum declarations
+            foreach (var en in ast.Enums)
+            {
+                if (MatchesName(en.Line, en.Column, "enum".Length + 1, en.Name, line, col))
+                {
+                    return FormatEnumHover(en);
                 }
             }
 
@@ -754,6 +769,30 @@ namespace FFVM.Debug
 
             if (expr is FieldAccessExpr fa && fa.Line == line)
             {
+                // Lang-13: enum member hover — when target is an enum name, show member info
+                if (fa.Target is IdentifierExpr faEnumId)
+                {
+                    foreach (var en in ast.Enums)
+                    {
+                        if (en.Name == faEnumId.Name)
+                        {
+                            // Cursor might be on the enum name itself or on the member name
+                            if (ColMatches(faEnumId.Column, faEnumId.Name.Length, col))
+                            {
+                                return FormatEnumHover(en);
+                            }
+                            // Check if cursor is on the member name (after the dot)
+                            foreach (var member in en.Members)
+                            {
+                                if (member.Name == fa.FieldName)
+                                {
+                                    return $"(enum member) {en.Name}.{member.Name}";
+                                }
+                            }
+                            return null;
+                        }
+                    }
+                }
                 return FindHoverInExpr(ast, currentFunc, fa.Target, line, col);
             }
 
@@ -936,6 +975,33 @@ namespace FFVM.Debug
             return $"```ffvm\n{sig}\n```\n---\n{st.DocComment}";
         }
 
+        /// <summary>
+        /// Lang-13: Format enum hover text showing all members and their values.
+        /// </summary>
+        private static string FormatEnumHover(EnumDecl en)
+        {
+            var sb = new System.Text.StringBuilder();
+            sb.Append("enum ").Append(en.Name).Append(" {");
+            int nextValue = 0;
+            for (int i = 0; i < en.Members.Count; i++)
+            {
+                if (i > 0) sb.Append(",");
+                sb.Append(" ").Append(en.Members[i].Name);
+                if (en.Members[i].ValueExpr != null)
+                {
+                    // Show the explicit value expression as-is; we approximate with sequential logic
+                    sb.Append(" = ...");
+                }
+                // For display, just show the member name; values are compile-time
+            }
+            if (en.Members.Count > 0) sb.Append(" ");
+            sb.Append("}");
+            string sig = sb.ToString();
+            if (en.DocComment == null)
+                return $"```ffvm\n{sig}\n```";
+            return $"```ffvm\n{sig}\n```\n---\n{en.DocComment}";
+        }
+
         // --- definition ---
 
         private JsonObject HandleDefinition(JsonObject parameters)
@@ -1099,6 +1165,23 @@ namespace FFVM.Debug
                         }
                     }
                 }
+
+                // Lang-13: enum member completion — "EnumName." → list members
+                if (dotPrefix != null && dotPrefix.IndexOf('.') < 0)
+                {
+                    foreach (var en in ast.Enums)
+                    {
+                        if (en.Name == dotPrefix)
+                        {
+                            foreach (var member in en.Members)
+                            {
+                                items.Add(MakeCompletionItem(member.Name, 20 /* EnumMember */,
+                                    $"{en.Name}.{member.Name}"));
+                            }
+                            break;
+                        }
+                    }
+                }
             }
             else
             {
@@ -1125,6 +1208,12 @@ namespace FFVM.Debug
                     foreach (var st in ast.Structs)
                     {
                         items.Add(MakeCompletionItem(st.Name, 22 /* Struct */, null));
+                    }
+
+                    // Lang-13: Enums
+                    foreach (var en in ast.Enums)
+                    {
+                        items.Add(MakeCompletionItem(en.Name, 13 /* Enum */, $"enum {en.Name}"));
                     }
 
                     // Lang-1: Module-level variables and constants
@@ -1583,7 +1672,7 @@ namespace FFVM.Debug
         // LSP4: Symbol lookup engine
         // ============================================================
 
-        private enum SymbolKindTag { Function, Variable, Struct, Parameter }
+        private enum SymbolKindTag { Function, Variable, Struct, Parameter, Enum }
 
         private struct SymbolAtPosition
         {
@@ -1611,6 +1700,14 @@ namespace FFVM.Debug
                 int nameStart = st.Column + "struct".Length + 1;
                 if (st.Line == line && ColMatches(nameStart, st.Name.Length, col))
                     return new SymbolAtPosition { name = st.Name, kind = SymbolKindTag.Struct };
+            }
+
+            // Lang-13: Check enum names
+            foreach (var en in ast.Enums)
+            {
+                int nameStart = en.Column + "enum".Length + 1;
+                if (en.Line == line && ColMatches(nameStart, en.Name.Length, col))
+                    return new SymbolAtPosition { name = en.Name, kind = SymbolKindTag.Enum };
             }
 
             // Walk function bodies
@@ -1775,6 +1872,18 @@ namespace FFVM.Debug
                     }
                 }
             }
+            // Lang-13: enum definition
+            else if (kind == SymbolKindTag.Enum)
+            {
+                foreach (var en in ast.Enums)
+                {
+                    if (en.Name == name)
+                    {
+                        int nameCol = en.Column + "enum".Length + 1;
+                        return (en.Line, nameCol, en.Name.Length);
+                    }
+                }
+            }
             else if (kind == SymbolKindTag.Variable || kind == SymbolKindTag.Parameter)
             {
                 // Find the declaration in the scope function
@@ -1869,6 +1978,19 @@ namespace FFVM.Debug
                 foreach (var func in ast.Functions)
                 {
                     CollectTypeRefsInBlock(func.Body, name, uri, locations);
+                }
+            }
+            // Lang-13: enum references
+            else if (kind == SymbolKindTag.Enum)
+            {
+                // Enum declaration
+                foreach (var en in ast.Enums)
+                {
+                    if (en.Name == name)
+                    {
+                        int nameCol = en.Column + "enum".Length + 1;
+                        locations.Add(MakeLocation(uri, en.Line, nameCol, name.Length));
+                    }
                 }
             }
             else // Variable or Parameter

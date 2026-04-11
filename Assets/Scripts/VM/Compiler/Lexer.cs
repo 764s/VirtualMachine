@@ -17,6 +17,7 @@ namespace FFVM.Compiler
         Func, Var, Const, If, Else, While, For, Return,
         Wait, WaitFor, Yield, Defer, Using,
         True, False, Struct, Include, Export, Inline,
+        Enum,
 
         // Operators
         Plus, Minus, Star, Slash, Percent,
@@ -80,6 +81,7 @@ namespace FFVM.Compiler
             { "false",    TokenType.False },
             { "struct",   TokenType.Struct },
             { "include",  TokenType.Include },
+            { "enum",     TokenType.Enum },
         };
 
         public Lexer(string source)
