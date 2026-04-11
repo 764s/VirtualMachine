@@ -3818,8 +3818,10 @@ namespace FFVM.Compiler
             if (expr is CallExpr call)
             {
                 // Only record user function calls (those in _funcDecls)
-                if (ResolveFuncKey(call.FunctionName) != null)
-                    callees.Add(call.FunctionName);
+                // Lang-15: use resolved key (may be qualified for private functions)
+                string resolvedKey = ResolveFuncKey(call.FunctionName);
+                if (resolvedKey != null)
+                    callees.Add(resolvedKey);
                 for (int i = 0; i < call.Arguments.Count; i++)
                     CollectCalleesExpr(call.Arguments[i], callees);
             }
@@ -4247,8 +4249,10 @@ namespace FFVM.Compiler
 
             if (expr is CallExpr call)
             {
-                if (_funcDecls != null && ResolveFuncKey(call.FunctionName) != null)
-                    callees.Add(call.FunctionName);
+                // Lang-15: use resolved key for accurate call graph tracking
+                string resolvedKey = _funcDecls != null ? ResolveFuncKey(call.FunctionName) : null;
+                if (resolvedKey != null)
+                    callees.Add(resolvedKey);
                 for (int i = 0; i < call.Arguments.Count; i++)
                     CollectCalleesExpr(call.Arguments[i], callees);
             }
