@@ -27,3 +27,4 @@
 | D11 | [Step_DIST_Distribution.md](Step_DIST_Distribution.md) §七 | .NET 多版本兼容策略：分发机制对不同 .NET 版本的应对 | ✅ 已完成 | 2026-04-06 | DIST-10 ✅：双目标 TFM + CLI RollForward + KOF98 覆盖验证。AggressiveOptimization 条件编译修复 |
 | D12 | [D_DeepInlining.md](D_DeepInlining.md) | A5 深度内联展开可行性分析 | ✅ 已完成 | 2026-04-10 | Lang-9 可行性分析。核心结论：编译器总是主动内联，`@inline` 仅控制诊断。分阶段路径 P1~P4，✅ 可行。→ [Step_Lang9](../Plan/Step_Lang9_DeepInlining.md) |
 | D13 | [D_PublicPrivateVisibility.md](D_PublicPrivateVisibility.md) | Include 可见性：public / private 修饰符 | ✅ 已完成 | 2026-04-11 | Lang-15 设计讨论。public/private 与 @export 完全隔离。private = 名称隔离不影响 mixin 运行语义。origin-aware lookup 方案。→ [Step_Lang15](../Plan/Step_Lang15_PublicPrivateVisibility.md) |
+| D14 | [D_IncludeAs.md](D_IncludeAs.md) | Include As 别名：命名空间隔离的 include | ✅ 已完成 | 2026-04-11 | Lang-17 设计讨论。`include "path" as Alias` 语法 + Alias.Name 命名空间访问 + override Alias.Name 替换。方案 A（include as）vs 方案 B（using =），采纳方案 A。→ [Step_Lang17](../Plan/Step_Lang17_IncludeAs.md) |
