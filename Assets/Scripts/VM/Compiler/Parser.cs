@@ -35,6 +35,90 @@ namespace FFVM.Compiler
                 {
                     module.Imports.Add(ParseIncludeDecl());
                 }
+                else if (Check(TokenType.Private) || Check(TokenType.Public))
+                {
+                    // Lang-15: visibility modifier prefix
+                    bool isPrivate = Check(TokenType.Private);
+                    Advance(); // consume 'private' or 'public'
+
+                    if (Check(TokenType.Export))
+                    {
+                        // [private|public] @export ...
+                        Advance(); // consume @export
+                        bool inlineHint = false;
+                        if (Check(TokenType.Inline))
+                        {
+                            inlineHint = true;
+                            Advance(); // consume @inline
+                        }
+                        if (Check(TokenType.Func))
+                            module.Functions.Add(ParseFuncDecl(isExported: true, isInline: inlineHint, isPrivate: isPrivate));
+                        else if (inlineHint)
+                        {
+                            Error($"@inline can only be applied to functions, got '{Current().Text}'");
+                            Advance();
+                        }
+                        else if (Check(TokenType.Var))
+                            module.ModuleVariables.Add(ParseVarDecl(false, isExported: true, isPrivate: isPrivate));
+                        else if (Check(TokenType.Const))
+                            module.ModuleVariables.Add(ParseVarDecl(true, isExported: true, isPrivate: isPrivate));
+                        else
+                        {
+                            Error($"Expected 'func', 'var' or 'const' after '@export', got '{Current().Text}'");
+                            Advance();
+                        }
+                    }
+                    else if (Check(TokenType.Inline))
+                    {
+                        // [private|public] @inline ...
+                        Advance(); // consume @inline
+                        if (Check(TokenType.Export))
+                        {
+                            Advance(); // consume @export
+                            if (Check(TokenType.Func))
+                                module.Functions.Add(ParseFuncDecl(isExported: true, isInline: true, isPrivate: isPrivate));
+                            else
+                            {
+                                Error($"Expected 'func' after '@inline @export', got '{Current().Text}'");
+                                Advance();
+                            }
+                        }
+                        else if (Check(TokenType.Func))
+                        {
+                            module.Functions.Add(ParseFuncDecl(isExported: false, isInline: true, isPrivate: isPrivate));
+                        }
+                        else
+                        {
+                            Error($"Expected '@export' or 'func' after '@inline', got '{Current().Text}'");
+                            Advance();
+                        }
+                    }
+                    else if (Check(TokenType.Func))
+                    {
+                        module.Functions.Add(ParseFuncDecl(isPrivate: isPrivate));
+                    }
+                    else if (Check(TokenType.Struct))
+                    {
+                        module.Structs.Add(ParseStructDecl(isPrivate: isPrivate));
+                    }
+                    else if (Check(TokenType.Enum))
+                    {
+                        module.Enums.Add(ParseEnumDecl(isPrivate: isPrivate));
+                    }
+                    else if (Check(TokenType.Var))
+                    {
+                        module.ModuleVariables.Add(ParseVarDecl(false, isPrivate: isPrivate));
+                    }
+                    else if (Check(TokenType.Const))
+                    {
+                        module.ModuleVariables.Add(ParseVarDecl(true, isPrivate: isPrivate));
+                    }
+                    else
+                    {
+                        Error($"Expected 'func', 'struct', 'enum', 'var', 'const', '@export' or '@inline' after '{(isPrivate ? "private" : "public")}', got '{Current().Text}'");
+                        Advance();
+                    }
+                }
                 else if (Check(TokenType.Export))
                 {
                     // @export prefix — next must be var, const, or func (possibly preceded by @inline)
@@ -45,17 +129,24 @@ namespace FFVM.Compiler
                         inlineHint = true;
                         Advance(); // consume @inline
                     }
+                    // Lang-15: @export [private|public] ...
+                    bool privAfterExport = false;
+                    if (Check(TokenType.Private) || Check(TokenType.Public))
+                    {
+                        privAfterExport = Check(TokenType.Private);
+                        Advance(); // consume visibility modifier
+                    }
                     if (Check(TokenType.Func))
-                        module.Functions.Add(ParseFuncDecl(isExported: true, isInline: inlineHint));
+                        module.Functions.Add(ParseFuncDecl(isExported: true, isInline: inlineHint, isPrivate: privAfterExport));
                     else if (inlineHint)
                     {
                         Error($"@inline can only be applied to functions, got '{Current().Text}'");
                         Advance();
                     }
                     else if (Check(TokenType.Var))
-                        module.ModuleVariables.Add(ParseVarDecl(false, isExported: true));
+                        module.ModuleVariables.Add(ParseVarDecl(false, isExported: true, isPrivate: privAfterExport));
                     else if (Check(TokenType.Const))
-                        module.ModuleVariables.Add(ParseVarDecl(true, isExported: true));
+                        module.ModuleVariables.Add(ParseVarDecl(true, isExported: true, isPrivate: privAfterExport));
                     else
                     {
                         Error($"Expected 'func', 'var' or 'const' after '@export', got '{Current().Text}'");
@@ -109,7 +200,7 @@ namespace FFVM.Compiler
                 }
                 else
                 {
-                    Error($"Expected 'func', 'struct', 'enum', 'var', 'const', '@export', '@inline' or 'include', got '{Current().Text}'");
+                    Error($"Expected 'func', 'struct', 'enum', 'var', 'const', '@export', '@inline', 'private', 'public' or 'include', got '{Current().Text}'");
                     Advance();
                 }
             }
@@ -178,7 +269,7 @@ namespace FFVM.Compiler
             return new ImportDecl(path);
         }
 
-        private FuncDecl ParseFuncDecl(bool isExported = false, bool isInline = false)
+        private FuncDecl ParseFuncDecl(bool isExported = false, bool isInline = false, bool isPrivate = false)
         {
             int line = Current().Line, col = Current().Column;
             Expect(TokenType.Func, "");
@@ -217,14 +308,14 @@ namespace FFVM.Compiler
             }
 
             var body = ParseBlock();
-            var decl = new FuncDecl(name, parameters, returnType, body, false, isExported, isInline);
+            var decl = new FuncDecl(name, parameters, returnType, body, isPrivate, isExported, isInline);
             decl.Line = line;
             decl.Column = col;
             AttachDocComment(decl, line);
             return decl;
         }
 
-        private StructDecl ParseStructDecl()
+        private StructDecl ParseStructDecl(bool isPrivate = false)
         {
             int line = Current().Line, col = Current().Column;
             Advance(); // consume 'struct'
@@ -242,7 +333,7 @@ namespace FFVM.Compiler
             }
             Expect(TokenType.RBrace, "to close struct");
 
-            var decl = new StructDecl(name, fields);
+            var decl = new StructDecl(name, fields, isPrivate);
             decl.Line = line;
             decl.Column = col;
             var docLines = CollectDocLines(line);
@@ -255,7 +346,7 @@ namespace FFVM.Compiler
         /// Lang-13: Parse enum declaration.
         /// <code>enum Name { A, B = expr, C }</code>
         /// </summary>
-        private EnumDecl ParseEnumDecl()
+        private EnumDecl ParseEnumDecl(bool isPrivate = false)
         {
             int line = Current().Line, col = Current().Column;
             Advance(); // consume 'enum'
@@ -281,7 +372,7 @@ namespace FFVM.Compiler
             }
             Expect(TokenType.RBrace, "to close enum");
 
-            var decl = new EnumDecl(name, members);
+            var decl = new EnumDecl(name, members, isPrivate);
             decl.Line = line;
             decl.Column = col;
             var enumDocLines = CollectDocLines(line);
@@ -393,7 +484,7 @@ namespace FFVM.Compiler
             }
         }
 
-        private VarDeclStmt ParseVarDecl(bool isConst, bool isExported = false)
+        private VarDeclStmt ParseVarDecl(bool isConst, bool isExported = false, bool isPrivate = false)
         {
             int line = Current().Line, col = Current().Column;
             Advance(); // consume 'var' or 'const'
@@ -411,7 +502,7 @@ namespace FFVM.Compiler
                 Error("'const' declaration requires an initializer");
             }
 
-            var stmt = new VarDeclStmt(name, typeName, initializer, isConst, isExported);
+            var stmt = new VarDeclStmt(name, typeName, initializer, isConst, isExported, isPrivate);
             stmt.Line = line;
             stmt.Column = col;
             return stmt;

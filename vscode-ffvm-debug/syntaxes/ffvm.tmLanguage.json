@@ -78,6 +78,10 @@
                     "match": "\\b(func|var|const|struct|enum|include)\\b"
                 },
                 {
+                    "name": "storage.modifier.ffvm",
+                    "match": "\\b(public|private)\\b"
+                },
+                {
                     "name": "constant.language.ffvm",
                     "match": "\\b(true|false)\\b"
                 }

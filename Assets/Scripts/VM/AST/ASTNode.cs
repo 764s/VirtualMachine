@@ -249,13 +249,17 @@ namespace FFVM.AST
         public Expr Initializer { get; }
         public bool IsConst { get; }
         public bool IsExported { get; }
-        public VarDeclStmt(string name, string typeName, Expr initializer, bool isConst = false, bool isExported = false) : base(NodeKind.VarDecl)
+        public bool IsPrivate { get; }
+        /// <summary>Lang-15: Source file this declaration originated from. Set by Preprocessor during merge.</summary>
+        public string OriginFile { get; set; }
+        public VarDeclStmt(string name, string typeName, Expr initializer, bool isConst = false, bool isExported = false, bool isPrivate = false) : base(NodeKind.VarDecl)
         {
             Name = name;
             TypeName = typeName;
             Initializer = initializer;
             IsConst = isConst;
             IsExported = isExported;
+            IsPrivate = isPrivate;
         }
     }
 
@@ -390,6 +394,8 @@ namespace FFVM.AST
         public bool IsInline { get; }
         public string DocComment { get; set; }
         public string ReturnDoc { get; set; }
+        /// <summary>Lang-15: Source file this declaration originated from. Set by Preprocessor during merge.</summary>
+        public string OriginFile { get; set; }
 
         public FuncDecl(string name, List<ParamDecl> parameters, string returnType, BlockStmt body, bool isPrivate, bool isExported = false, bool isInline = false)
             : base(NodeKind.FuncDecl)
@@ -420,10 +426,14 @@ namespace FFVM.AST
         public string Name { get; }
         public List<StructField> Fields { get; }
         public string DocComment { get; set; }
-        public StructDecl(string name, List<StructField> fields) : base(NodeKind.StructDecl)
+        public bool IsPrivate { get; }
+        /// <summary>Lang-15: Source file this declaration originated from. Set by Preprocessor during merge.</summary>
+        public string OriginFile { get; set; }
+        public StructDecl(string name, List<StructField> fields, bool isPrivate = false) : base(NodeKind.StructDecl)
         {
             Name = name;
             Fields = fields;
+            IsPrivate = isPrivate;
         }
     }
 
@@ -449,10 +459,14 @@ namespace FFVM.AST
         public string Name { get; }
         public List<EnumMember> Members { get; }
         public string DocComment { get; set; }
-        public EnumDecl(string name, List<EnumMember> members) : base(NodeKind.EnumDecl)
+        public bool IsPrivate { get; }
+        /// <summary>Lang-15: Source file this declaration originated from. Set by Preprocessor during merge.</summary>
+        public string OriginFile { get; set; }
+        public EnumDecl(string name, List<EnumMember> members, bool isPrivate = false) : base(NodeKind.EnumDecl)
         {
             Name = name;
             Members = members;
+            IsPrivate = isPrivate;
         }
     }
 

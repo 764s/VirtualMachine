@@ -10906,6 +10906,363 @@ func main() {
             }
         }
 
+        // ===== Lang-15: Public/Private Visibility Tests (PV01-PV18) =====
+        // PV01: private func — same file call succeeds
+        {
+            string source = @"
+private func helper(): int { return 42 }
+func main() { Report(helper()) }";
+            var syscalls = new Dictionary<string, int> { { "Report", 0 } };
+            var result = compiler.Compile(source, "main", syscalls);
+            Assert(result.Success, "PV01 compile success");
+            var vals = new List<int>();
+            var world = new VMWorld();
+            world.Modules.Load(0, result.Program);
+            world.Syscalls.Register(0, "Report", (ref VMInstanceState s) => { vals.Add(s.Registers.Get(0).ToInt()); });
+            world.SpawnInstance(0, 0);
+            world.Tick();
+            Assert(vals.Count == 1 && vals[0] == 42, $"PV01: helper()=42, got {(vals.Count > 0 ? vals[0].ToString() : "none")}");
+        }
+
+        // PV02: private func — cross-file call reports error
+        {
+            var files = new Dictionary<string, string>
+            {
+                { "lib.ffs", @"private func secret(): int { return 99 }" }
+            };
+            string source = @"
+include ""lib.ffs""
+func main() { Report(secret()) }";
+            var syscalls = new Dictionary<string, int> { { "Report", 0 } };
+            var resolver = new DictionaryFileResolver(files);
+            var result = compiler.Compile(source, "main", syscalls, null, resolver, "main.ffs");
+            Assert(!result.Success, "PV02: private func cross-file should fail");
+        }
+
+        // PV03: private var — same file access succeeds
+        {
+            string source = @"
+private var _count: int = 10
+func main() { Report(_count) }";
+            var syscalls = new Dictionary<string, int> { { "Report", 0 } };
+            var result = compiler.Compile(source, "main", syscalls);
+            Assert(result.Success, "PV03 compile success");
+            var vals = new List<int>();
+            var world = new VMWorld();
+            world.Modules.Load(0, result.Program);
+            world.Syscalls.Register(0, "Report", (ref VMInstanceState s) => { vals.Add(s.Registers.Get(0).ToInt()); });
+            world.SpawnInstance(0, 0);
+            world.Tick();
+            Assert(vals.Count == 1 && vals[0] == 10, $"PV03: _count=10, got {(vals.Count > 0 ? vals[0].ToString() : "none")}");
+        }
+
+        // PV04: private var — cross-file not visible
+        {
+            var files = new Dictionary<string, string>
+            {
+                { "lib.ffs", @"private var _internal: int = 7" }
+            };
+            string source = @"
+include ""lib.ffs""
+func main() { Report(_internal) }";
+            var syscalls = new Dictionary<string, int> { { "Report", 0 } };
+            var resolver = new DictionaryFileResolver(files);
+            var result = compiler.Compile(source, "main", syscalls, null, resolver, "main.ffs");
+            Assert(!result.Success, "PV04: private var cross-file should fail");
+        }
+
+        // PV05: private const — same file access succeeds
+        {
+            string source = @"
+private const _SECRET: int = 77
+func main() { Report(_SECRET) }";
+            var syscalls = new Dictionary<string, int> { { "Report", 0 } };
+            var result = compiler.Compile(source, "main", syscalls);
+            Assert(result.Success, "PV05 compile success");
+            var vals = new List<int>();
+            var world = new VMWorld();
+            world.Modules.Load(0, result.Program);
+            world.Syscalls.Register(0, "Report", (ref VMInstanceState s) => { vals.Add(s.Registers.Get(0).ToInt()); });
+            world.SpawnInstance(0, 0);
+            world.Tick();
+            Assert(vals.Count == 1 && vals[0] == 77, $"PV05: _SECRET=77, got {(vals.Count > 0 ? vals[0].ToString() : "none")}");
+        }
+
+        // PV06: private struct — cross-file not visible
+        {
+            var files = new Dictionary<string, string>
+            {
+                { "lib.ffs", @"
+private struct Internal { x: int }
+func make(): int { return 1 }" }
+            };
+            string source = @"
+include ""lib.ffs""
+func main() {
+    var s: Internal = Internal { x: 5 }
+    Report(s.x)
+}";
+            var syscalls = new Dictionary<string, int> { { "Report", 0 } };
+            var resolver = new DictionaryFileResolver(files);
+            var result = compiler.Compile(source, "main", syscalls, null, resolver, "main.ffs");
+            Assert(!result.Success, "PV06: private struct cross-file should fail");
+        }
+
+        // PV07: private enum — cross-file not visible
+        {
+            var files = new Dictionary<string, string>
+            {
+                { "lib.ffs", @"
+private enum InternalState { IDLE, BUSY }
+func dummy(): int { return InternalState.IDLE }" }
+            };
+            string source = @"
+include ""lib.ffs""
+func main() { Report(InternalState.IDLE) }";
+            var syscalls = new Dictionary<string, int> { { "Report", 0 } };
+            var resolver = new DictionaryFileResolver(files);
+            var result = compiler.Compile(source, "main", syscalls, null, resolver, "main.ffs");
+            Assert(!result.Success, "PV07: private enum cross-file should fail");
+        }
+
+        // PV08: same-name private func from different files — no conflict
+        {
+            var files = new Dictionary<string, string>
+            {
+                { "a.ffs", @"
+private func helper(): int { return 10 }
+func getA(): int { return helper() }" },
+                { "b.ffs", @"
+private func helper(): int { return 20 }
+func getB(): int { return helper() }" }
+            };
+            string source = @"
+include ""a.ffs""
+include ""b.ffs""
+func main() {
+    Report(getA())
+    Report(getB())
+}";
+            var syscalls = new Dictionary<string, int> { { "Report", 0 } };
+            var resolver = new DictionaryFileResolver(files);
+            var result = compiler.Compile(source, "main", syscalls, null, resolver, "main.ffs");
+            Assert(result.Success, $"PV08 compile success: {(result.Errors != null && result.Errors.Count > 0 ? result.Errors[0] : "")}");
+            if (result.Success)
+            {
+                var vals = new List<int>();
+                var world = new VMWorld();
+                world.Modules.Load(0, result.Program);
+                world.Syscalls.Register(0, "Report", (ref VMInstanceState s) => { vals.Add(s.Registers.Get(0).ToInt()); });
+                world.SpawnInstance(0, 0);
+                world.Tick();
+                Assert(vals.Count == 2 && vals[0] == 10 && vals[1] == 20, $"PV08: getA()=10, getB()=20, got {string.Join(",", vals)}");
+            }
+        }
+
+        // PV09: same-name private var from different files — no conflict
+        {
+            var files = new Dictionary<string, string>
+            {
+                { "a.ffs", @"
+private var _count: int = 100
+func readA(): int { return _count }" },
+                { "b.ffs", @"
+private var _count: int = 200
+func readB(): int { return _count }" }
+            };
+            string source = @"
+include ""a.ffs""
+include ""b.ffs""
+func main() {
+    Report(readA())
+    Report(readB())
+}";
+            var syscalls = new Dictionary<string, int> { { "Report", 0 } };
+            var resolver = new DictionaryFileResolver(files);
+            var result = compiler.Compile(source, "main", syscalls, null, resolver, "main.ffs");
+            Assert(result.Success, $"PV09 compile success: {(result.Errors != null && result.Errors.Count > 0 ? result.Errors[0] : "")}");
+            if (result.Success)
+            {
+                var vals = new List<int>();
+                var world = new VMWorld();
+                world.Modules.Load(0, result.Program);
+                world.Syscalls.Register(0, "Report", (ref VMInstanceState s) => { vals.Add(s.Registers.Get(0).ToInt()); });
+                world.SpawnInstance(0, 0);
+                world.Tick();
+                Assert(vals.Count == 2 && vals[0] == 100 && vals[1] == 200, $"PV09: readA()=100, readB()=200, got {string.Join(",", vals)}");
+            }
+        }
+
+        // PV10: public vs public cross-file override (existing behavior preserved)
+        {
+            var files = new Dictionary<string, string>
+            {
+                { "base.ffs", @"func getValue(): int { return 1 }" }
+            };
+            string source = @"
+include ""base.ffs""
+func getValue(): int { return 2 }
+func main() { Report(getValue()) }";
+            var syscalls = new Dictionary<string, int> { { "Report", 0 } };
+            var resolver = new DictionaryFileResolver(files);
+            var result = compiler.Compile(source, "main", syscalls, null, resolver, "main.ffs");
+            Assert(result.Success, "PV10 compile success");
+            if (result.Success)
+            {
+                var vals = new List<int>();
+                var world = new VMWorld();
+                world.Modules.Load(0, result.Program);
+                world.Syscalls.Register(0, "Report", (ref VMInstanceState s) => { vals.Add(s.Registers.Get(0).ToInt()); });
+                world.SpawnInstance(0, 0);
+                world.Tick();
+                Assert(vals.Count == 1 && vals[0] == 2, $"PV10: main override=2, got {(vals.Count > 0 ? vals[0].ToString() : "none")}");
+            }
+        }
+
+        // PV11: explicit 'public' equivalent to no modifier (Phase A default)
+        {
+            string source = @"
+public func greet(): int { return 55 }
+func main() { Report(greet()) }";
+            var syscalls = new Dictionary<string, int> { { "Report", 0 } };
+            var result = compiler.Compile(source, "main", syscalls);
+            Assert(result.Success, "PV11 compile success");
+            var vals = new List<int>();
+            var world = new VMWorld();
+            world.Modules.Load(0, result.Program);
+            world.Syscalls.Register(0, "Report", (ref VMInstanceState s) => { vals.Add(s.Registers.Get(0).ToInt()); });
+            world.SpawnInstance(0, 0);
+            world.Tick();
+            Assert(vals.Count == 1 && vals[0] == 55, $"PV11: public greet()=55, got {(vals.Count > 0 ? vals[0].ToString() : "none")}");
+        }
+
+        // PV12: private + @export combination — compiles successfully
+        {
+            string source = @"
+private @export var hp: int = 100
+private @export func getHp(): int { return hp }
+func main() { Report(getHp()) }";
+            var syscalls = new Dictionary<string, int> { { "Report", 0 } };
+            var result = compiler.Compile(source, "main", syscalls);
+            Assert(result.Success, $"PV12 compile success: {(result.Errors != null && result.Errors.Count > 0 ? result.Errors[0] : "")}");
+        }
+
+        // PV13: public + @export combination
+        {
+            string source = @"
+public @export var hp: int = 50
+public @export func getHp(): int { return hp }
+func main() { Report(getHp()) }";
+            var syscalls = new Dictionary<string, int> { { "Report", 0 } };
+            var result = compiler.Compile(source, "main", syscalls);
+            Assert(result.Success, "PV13 compile success");
+        }
+
+        // PV14: private + @inline combination
+        {
+            string source = @"
+private @inline func fast(a: int): int { return a + 1 }
+func main() { Report(fast(10)) }";
+            var syscalls = new Dictionary<string, int> { { "Report", 0 } };
+            var result = compiler.Compile(source, "main", syscalls);
+            Assert(result.Success, "PV14 compile success");
+            var vals = new List<int>();
+            var world = new VMWorld();
+            world.Modules.Load(0, result.Program);
+            world.Syscalls.Register(0, "Report", (ref VMInstanceState s) => { vals.Add(s.Registers.Get(0).ToInt()); });
+            world.SpawnInstance(0, 0);
+            world.Tick();
+            Assert(vals.Count == 1 && vals[0] == 11, $"PV14: fast(10)=11, got {(vals.Count > 0 ? vals[0].ToString() : "none")}");
+        }
+
+        // PV15: private func can be inlined within same origin
+        {
+            string source = @"
+private func tiny(x: int): int { return x * 2 }
+func main() { Report(tiny(5)) }";
+            var syscalls = new Dictionary<string, int> { { "Report", 0 } };
+            var result = compiler.Compile(source, "main", syscalls);
+            Assert(result.Success, "PV15 compile success");
+            var vals = new List<int>();
+            var world = new VMWorld();
+            world.Modules.Load(0, result.Program);
+            world.Syscalls.Register(0, "Report", (ref VMInstanceState s) => { vals.Add(s.Registers.Get(0).ToInt()); });
+            world.SpawnInstance(0, 0);
+            world.Tick();
+            Assert(vals.Count == 1 && vals[0] == 10, $"PV15: tiny(5)=10, got {(vals.Count > 0 ? vals[0].ToString() : "none")}");
+        }
+
+        // PV16: three-level include chain — private isolation correct
+        {
+            var files = new Dictionary<string, string>
+            {
+                { "deep.ffs", @"
+private func internal(): int { return 1 }
+func exposed(): int { return internal() }" },
+                { "mid.ffs", @"
+include ""deep.ffs""
+func mid(): int { return exposed() }" }
+            };
+            string source = @"
+include ""mid.ffs""
+func main() {
+    Report(mid())
+}";
+            var syscalls = new Dictionary<string, int> { { "Report", 0 } };
+            var resolver = new DictionaryFileResolver(files);
+            var result = compiler.Compile(source, "main", syscalls, null, resolver, "main.ffs");
+            Assert(result.Success, $"PV16 compile success: {(result.Errors != null && result.Errors.Count > 0 ? result.Errors[0] : "")}");
+            if (result.Success)
+            {
+                var vals = new List<int>();
+                var world = new VMWorld();
+                world.Modules.Load(0, result.Program);
+                world.Syscalls.Register(0, "Report", (ref VMInstanceState s) => { vals.Add(s.Registers.Get(0).ToInt()); });
+                world.SpawnInstance(0, 0);
+                world.Tick();
+                Assert(vals.Count == 1 && vals[0] == 1, $"PV16: mid()=1, got {(vals.Count > 0 ? vals[0].ToString() : "none")}");
+            }
+        }
+
+        // PV17: backward compatibility — existing code without modifiers works
+        {
+            var files = new Dictionary<string, string>
+            {
+                { "legacy.ffs", @"
+const SPEED: int = 42
+func double(n: int): int { return n * 2 }" }
+            };
+            string source = @"
+include ""legacy.ffs""
+func main() { Report(double(SPEED)) }";
+            var syscalls = new Dictionary<string, int> { { "Report", 0 } };
+            var resolver = new DictionaryFileResolver(files);
+            var result = compiler.Compile(source, "main", syscalls, null, resolver, "main.ffs");
+            Assert(result.Success, "PV17 compile success");
+            var vals = new List<int>();
+            var world = new VMWorld();
+            world.Modules.Load(0, result.Program);
+            world.Syscalls.Register(0, "Report", (ref VMInstanceState s) => { vals.Add(s.Registers.Get(0).ToInt()); });
+            world.SpawnInstance(0, 0);
+            world.Tick();
+            Assert(vals.Count == 1 && vals[0] == 84, $"PV17: double(42)=84, got {(vals.Count > 0 ? vals[0].ToString() : "none")}");
+        }
+
+        // PV18: error message — private symbol cross-file reference reports "undefined"
+        {
+            var files = new Dictionary<string, string>
+            {
+                { "lib.ffs", @"private func hidden(): int { return 0 }" }
+            };
+            string source = @"
+include ""lib.ffs""
+func main() { Report(hidden()) }";
+            var syscalls = new Dictionary<string, int> { { "Report", 0 } };
+            var resolver = new DictionaryFileResolver(files);
+            var result = compiler.Compile(source, "main", syscalls, null, resolver, "main.ffs");
+            Assert(!result.Success, "PV18: private func cross-file should fail");
+        }
+
         // ===== Summary =====
         Debug.Log($"========================================");
         Debug.Log($"Compiler Tests: {passed} passed, {failed} failed");

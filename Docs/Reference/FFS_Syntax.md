@@ -36,7 +36,7 @@ FFScript 是为 FFVM 设计的自定义领域特定语言（DSL），语法风�
 
 不支持块注释（`/* ... */`）。
 
-### 2.2 关键字（18 个）与注解（2 个）
+### 2.2 关键字（20 个）与注解（2 个）
 
 | 类别 | 关键字 |
 |------|--------|
@@ -45,6 +45,7 @@ FFScript 是为 FFVM 设计的自定义领域特定语言（DSL），语法风�
 | 执行控制 | `wait`、`wait_for`、`yield` |
 | 清理 | `defer`、`using` |
 | 模块导入 | `include` |
+| 可见性 | `public`、`private` |
 | 布尔字面量 | `true`、`false` |
 
 **注解**（`@` 前缀，不计入关键字）：
@@ -250,7 +251,39 @@ var resolver = new DictionaryFileResolver(new Dictionary<string, string> {
 var result = compiler.Compile(source, "main", syscalls, syscallTable, resolver, "main.ffs");
 ```
 
-### 4.0.2 @export 声明（跨实例访问）
+### 4.0.2 可见性修饰符（Lang-15）
+
+`public` 和 `private` 关键字控制 include mixin 场景下声明的文件级可见性：
+
+```ffs
+// utils.ffs — 工具模块
+private func helper(): int { return 42 }   // 仅本文件内可见
+public func getAnswer(): int { return helper() }  // 跨文件可见（默认）
+
+private var _counter: int = 0     // 私有模块变量
+private struct _Internal { x: int }  // 私有结构体
+private enum _State { IDLE, BUSY }    // 私有枚举
+```
+
+```ffs
+// main.ffs
+include "utils.ffs"
+func main() {
+    var n: int = getAnswer()  // ✅ public 函数可见
+    // helper()               // ❌ 编译错误：private 不可见
+}
+```
+
+**规则**：
+
+- 默认可见性为 `public`（Phase A 向后兼容，零 breaking change）
+- `private` 声明仅对同一源文件内的代码可见（跨 include 不可见）
+- `public` 与 `@export` 完全正交：`public` 控制 include 合并可见性，`@export` 控制跨实例调用
+- `private` + `@export` 合法（例：内部实现函数可被其他 VM 实例调用，但不被 include 方看到）
+- 同名 `private` 声明来自不同文件不会冲突（各自隔离）
+- 组合语法：`private @export func ...`、`@export private func ...`、`private @inline func ...` 等
+
+### 4.0.3 @export 声明（跨实例访问）
 
 `@export` 注解用于将模块变量或函数标记为"可被其他模块实例访问"。编译器会为包含 `@export` 声明的模块生成 **ExportTable**，供跨实例调用（XCALL）使用。
 
@@ -793,13 +826,17 @@ ApplyDamage(t, 5, 101)
 
 ```ebnf
 (* ===== 顶层 ===== *)
-Module          = { IncludeDecl | ExportDecl | FuncDecl | StructDecl | EnumDecl | ModuleVarDecl | ModuleConstDecl } ;
+Module          = { IncludeDecl | VisibilityDecl | ExportDecl | FuncDecl | StructDecl | EnumDecl | ModuleVarDecl | ModuleConstDecl } ;
 
 (* ===== Include ===== *)
 IncludeDecl     = 'include' StringLiteral ;
 
+(* ===== 可见性修饰符（Lang-15） ===== *)
+Visibility      = 'public' | 'private' ;
+VisibilityDecl  = Visibility ( ExportDecl | FuncDecl | StructDecl | EnumDecl | ModuleVarDecl | ModuleConstDecl ) ;
+
 (* ===== Export / Inline 注解 ===== *)
-ExportDecl      = '@export' ( ModuleVarDecl | ModuleConstDecl | [ '@inline' ] FuncDecl )
+ExportDecl      = '@export' [ Visibility ] ( ModuleVarDecl | ModuleConstDecl | [ '@inline' ] FuncDecl )
                 | '@inline' '@export' FuncDecl ;
 
 (* ===== 声明 ===== *)
