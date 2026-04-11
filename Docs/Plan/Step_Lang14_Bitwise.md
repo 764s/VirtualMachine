@@ -46,86 +46,86 @@
 ## Checklist
 
 ### 1. Lexer（~20 行）
-- [ ] 新增 6 个 TokenType：`Amp`, `Pipe`, `Caret`, `Tilde`, `LtLt`, `GtGt`
-- [ ] `&` 分支：`Peek()=='&'` → `AmpAmp`，否则 → `Amp`（替换 Error）
-- [ ] `|` 分支：`Peek()=='|'` → `PipePipe`，否则 → `Pipe`（替换 Error）
-- [ ] `<` 分支：`Peek()=='='` → `Lte`，`Peek()=='<'` → `LtLt`，否则 → `Lt`
-- [ ] `>` 分支：`Peek()=='='` → `Gte`，`Peek()=='>'` → `GtGt`，否则 → `Gt`
-- [ ] `^` 新分支 → `Caret`
-- [ ] `~` 新分支 → `Tilde`
+- [x] 新增 6 个 TokenType：`Amp`, `Pipe`, `Caret`, `Tilde`, `LtLt`, `GtGt`
+- [x] `&` 分支：`Peek()=='&'` → `AmpAmp`，否则 → `Amp`（替换 Error）
+- [x] `|` 分支：`Peek()=='|'` → `PipePipe`，否则 → `Pipe`（替换 Error）
+- [x] `<` 分支：`Peek()=='='` → `Lte`，`Peek()=='<'` → `LtLt`，否则 → `Lt`
+- [x] `>` 分支：`Peek()=='='` → `Gte`，`Peek()=='>'` → `GtGt`，否则 → `Gt`
+- [x] `^` 新分支 → `Caret`
+- [x] `~` 新分支 → `Tilde`
 
 ### 2. AST NodeKind（~2 行）
-- [ ] 新增：`BitAnd`, `BitOr`, `BitXor`, `BitNot`, `Shl`, `Shr`
+- [x] 新增：`BitAnd`, `BitOr`, `BitXor`, `BitNot`, `Shl`, `Shr`
 
 ### 3. Parser（~50 行）
-- [ ] 新增 `ParseBitOr()`：`ParseBitXor()` + while `Pipe` → `BinaryExpr(BitOr, ...)`
-- [ ] 新增 `ParseBitXor()`：`ParseBitAnd()` + while `Caret` → `BinaryExpr(BitXor, ...)`
-- [ ] 新增 `ParseBitAnd()`：`ParseEquality()` + while `Amp` → `BinaryExpr(BitAnd, ...)`
-- [ ] 新增 `ParseShift()`：`ParseAddition()` + while `LtLt`/`GtGt` → `BinaryExpr(Shl/Shr, ...)`
-- [ ] 重新接线：`ParseLogicalAnd` → 调用 `ParseBitOr`（原调用 `ParseEquality`）
-- [ ] 重新接线：`ParseComparison` → 调用 `ParseShift`（原调用 `ParseAddition`）
-- [ ] `ParseUnary` 新增 `~` 处理 → `UnaryExpr(BitNot, operand)`
+- [x] 新增 `ParseBitOr()`：`ParseBitXor()` + while `Pipe` → `BinaryExpr(BitOr, ...)`
+- [x] 新增 `ParseBitXor()`：`ParseBitAnd()` + while `Caret` → `BinaryExpr(BitXor, ...)`
+- [x] 新增 `ParseBitAnd()`：`ParseEquality()` + while `Amp` → `BinaryExpr(BitAnd, ...)`
+- [x] 新增 `ParseShift()`：`ParseAddition()` + while `LtLt`/`GtGt` → `BinaryExpr(Shl/Shr, ...)`
+- [x] 重新接线：`ParseLogicalAnd` → 调用 `ParseBitOr`（原调用 `ParseEquality`）
+- [x] 重新接线：`ParseComparison` → 调用 `ParseShift`（原调用 `ParseAddition`）
+- [x] `ParseUnary` 新增 `~` 处理 → `UnaryExpr(BitNot, operand)`
 
 ### 4. Number 位运算操作符（~20 行）
-- [ ] Fix64 模式：`BitAnd(a,b)` = `new Number(a.Raw & b.Raw)`（直接 long 位运算）
-- [ ] Fix64 模式：`BitOr(a,b)` = `new Number(a.Raw | b.Raw)`
-- [ ] Fix64 模式：`BitXor(a,b)` = `new Number(a.Raw ^ b.Raw)`
-- [ ] Fix64 模式：`BitNot(a)` = `new Number(~a.Raw)`
-- [ ] Fix64 模式：`Shl(a,b)` = `new Number(a.Raw << b.ToInt())`（位移量取整数部分）
-- [ ] Fix64 模式：`Shr(a,b)` = `new Number(a.Raw >> b.ToInt())`
-- [ ] Dev 模式（double）：先 ToInt → 位运算 → FromInt（位运算仅对整数有意义）
-- [ ] **注意**：Fix64 中 `Number.FromInt(1)` 的 Raw = `1L << 32`，位运算直接操作 Raw 对整数语义正确（bit N 在 Raw 中为 bit N+32）。左移 `(1 << N)` 需在整数域执行：`FromInt(a.ToInt() << b.ToInt())`。
+- [x] Fix64 模式：`BitAnd(a,b)` = `new Number(a.Raw & b.Raw)`（直接 long 位运算）
+- [x] Fix64 模式：`BitOr(a,b)` = `new Number(a.Raw | b.Raw)`
+- [x] Fix64 模式：`BitXor(a,b)` = `new Number(a.Raw ^ b.Raw)`
+- [x] Fix64 模式：`BitNot(a)` = `new Number(~a.Raw)`
+- [x] Fix64 模式：`Shl(a,b)` = `new Number(a.Raw << b.ToInt())`（位移量取整数部分）
+- [x] Fix64 模式：`Shr(a,b)` = `new Number(a.Raw >> b.ToInt())`
+- [x] Dev 模式（double）：先 ToInt → 位运算 → FromInt（位运算仅对整数有意义）
+- [x] **注意**：Fix64 中 `Number.FromInt(1)` 的 Raw = `1L << 32`，位运算直接操作 Raw 对整数语义正确（bit N 在 Raw 中为 bit N+32）。左移 `(1 << N)` 需在整数域执行：`FromInt(a.ToInt() << b.ToInt())`。
 
 ### 5. OpCode（~6 行）
-- [ ] 新增 6 个连续编号 OpCode：`BIT_AND`, `BIT_OR`, `BIT_XOR`, `BIT_NOT`, `SHL`, `SHR`
-- [ ] 编号接续当前最大值（LOAD_CONST_W=56 之后，跳过 SENTINEL=55），使用 57-62
+- [x] 新增 6 个连续编号 OpCode：`BIT_AND`, `BIT_OR`, `BIT_XOR`, `BIT_NOT`, `SHL`, `SHR`
+- [x] 编号接续当前最大值（LOAD_CONST_W=56 之后，跳过 SENTINEL=55），使用 57-62
 
 ### 6. Compiler BytecodeCompiler（~15 行）
-- [ ] `BinOpCode()` 添加 5 个映射：`BitAnd→BIT_AND`, `BitOr→BIT_OR`, `BitXor→BIT_XOR`, `Shl→SHL`, `Shr→SHR`
-- [ ] `UnOpCode()` 添加 1 个映射：`BitNot→BIT_NOT`
-- [ ] `TryFoldConstant()` BinaryExpr switch 添加 5 个 case：`BitAnd`/`BitOr`/`BitXor`/`Shl`/`Shr`
-- [ ] `TryFoldConstant()` UnaryExpr switch 添加 1 个 case：`BitNot`
-- [ ] `GetRegisterMask()` 添加：BIT_AND/BIT_OR/BIT_XOR/SHL/SHR → 7（A,B,C=regs）；BIT_NOT → 3（A,B=regs）
+- [x] `BinOpCode()` 添加 5 个映射：`BitAnd→BIT_AND`, `BitOr→BIT_OR`, `BitXor→BIT_XOR`, `Shl→SHL`, `Shr→SHR`
+- [x] `UnOpCode()` 添加 1 个映射：`BitNot→BIT_NOT`
+- [x] `TryFoldConstant()` BinaryExpr switch 添加 5 个 case：`BitAnd`/`BitOr`/`BitXor`/`Shl`/`Shr`
+- [x] `TryFoldConstant()` UnaryExpr switch 添加 1 个 case：`BitNot`
+- [x] `GetRegisterMask()` 添加：BIT_AND/BIT_OR/BIT_XOR/SHL/SHR → 7（A,B,C=regs）；BIT_NOT → 3（A,B=regs）
 
 ### 7. VM 解释循环 VMWorld（~30 行）
-- [ ] `case BIT_AND:` → `regs[Reg(A,rb)] = Number.BitAnd(regs[Reg(B,rb)], regs[Reg(C,rb)]); IP++;`
-- [ ] `case BIT_OR:` → `regs[Reg(A,rb)] = Number.BitOr(regs[Reg(B,rb)], regs[Reg(C,rb)]); IP++;`
-- [ ] `case BIT_XOR:` → `regs[Reg(A,rb)] = Number.BitXor(regs[Reg(B,rb)], regs[Reg(C,rb)]); IP++;`
-- [ ] `case BIT_NOT:` → `regs[Reg(A,rb)] = Number.BitNot(regs[Reg(B,rb)]); IP++;`
-- [ ] `case SHL:` → `regs[Reg(A,rb)] = Number.Shl(regs[Reg(B,rb)], regs[Reg(C,rb)]); IP++;`
-- [ ] `case SHR:` → `regs[Reg(A,rb)] = Number.Shr(regs[Reg(B,rb)], regs[Reg(C,rb)]); IP++;`
+- [x] `case BIT_AND:` → `regs[Reg(A,rb)] = Number.BitAnd(regs[Reg(B,rb)], regs[Reg(C,rb)]); IP++;`
+- [x] `case BIT_OR:` → `regs[Reg(A,rb)] = Number.BitOr(regs[Reg(B,rb)], regs[Reg(C,rb)]); IP++;`
+- [x] `case BIT_XOR:` → `regs[Reg(A,rb)] = Number.BitXor(regs[Reg(B,rb)], regs[Reg(C,rb)]); IP++;`
+- [x] `case BIT_NOT:` → `regs[Reg(A,rb)] = Number.BitNot(regs[Reg(B,rb)]); IP++;`
+- [x] `case SHL:` → `regs[Reg(A,rb)] = Number.Shl(regs[Reg(B,rb)], regs[Reg(C,rb)]); IP++;`
+- [x] `case SHR:` → `regs[Reg(A,rb)] = Number.Shr(regs[Reg(B,rb)], regs[Reg(C,rb)]); IP++;`
 
 ### 8. TreeWalker（~10 行）
-- [ ] 6 个新 case 对应 BitAnd/BitOr/BitXor/BitNot/Shl/Shr
+- [x] 6 个新 case 对应 BitAnd/BitOr/BitXor/BitNot/Shl/Shr
 
 ### 9. FFS_Syntax.md 更新（~10 行）
-- [ ] 运算符优先级表新增位运算 4 行
-- [ ] 关键字/注解表无变化（位运算使用符号，非关键字）
+- [x] 运算符优先级表新增位运算 4 行
+- [x] 关键字/注解表无变化（位运算使用符号，非关键字）
 
 ### 10. 测试（~300 行预估）
-- [ ] BW01: 基础 `&` `|` `^` `~` `<<` `>>`
-- [ ] BW02: 优先级正确性（`a | b & c` → `a | (b & c)`）
-- [ ] BW03: 逻辑运算符与位运算符不混淆（`a && b` vs `a & b`）
-- [ ] BW04: 常量折叠（`const x: int = 1 << 11` → 2048）
-- [ ] BW05: 枚举 + 位运算（`enum Flags { A = 1, B = 2 }; const mask: int = Flags.A | Flags.B`）
-- [ ] BW06: 移位组合（`(1 << 4) | (1 << 0)` → 17）
-- [ ] BW07: `~0` = -1, `~1` = -2
-- [ ] BW08: 左移右移互逆（`(x << 3) >> 3 == x` for small x）
-- [ ] BW09: 位与掩码（`255 & 0xF0` — 需十六进制字面量或等效十进制）
-- [ ] BW10: 函数参数中的位运算
-- [ ] BW11: 位运算在 if 条件中使用
-- [ ] BW12: 位运算内联自动支持验证
-- [ ] BW13: 跨模块位运算内联
-- [ ] BW14: TreeWalker 位运算
-- [ ] BW15: 位运算错误检测（如需要）
+- [x] BW01: 基础 `&` `|` `^` `~` `<<` `>>`
+- [x] BW02: 优先级正确性（`a | b & c` → `a | (b & c)`）
+- [x] BW03: 逻辑运算符与位运算符不混淆（`a && b` vs `a & b`）
+- [x] BW04: 常量折叠（`const x: int = 1 << 11` → 2048）
+- [x] BW05: 枚举 + 位运算（`enum Flags { A = 1, B = 2 }; const mask: int = Flags.A | Flags.B`）
+- [x] BW06: 移位组合（`(1 << 4) | (1 << 0)` → 17）
+- [x] BW07: `~0` = -1, `~1` = -2
+- [x] BW08: 左移右移互逆（`(x << 3) >> 3 == x` for small x）
+- [x] BW09: 位与掩码（`255 & 0xF0` — 需十六进制字面量或等效十进制）
+- [x] BW10: 函数参数中的位运算
+- [x] BW11: 位运算在 if 条件中使用
+- [x] BW12: 位运算内联自动支持验证
+- [x] BW13: 跨模块位运算内联
+- [x] BW14: TreeWalker 位运算
+- [x] BW15: 位运算错误检测（如需要）
 
 ### 11. Benchmark 验证
-- [ ] B01-B06 无回归
+- [x] B01-B06 无回归
 
 ### 12. VM_Summary 完成更新
-- [ ] Lang-14 状态 ⏳ → ✅
-- [ ] 子计划 checklist 块添加
-- [ ] 测试计数更新
+- [x] Lang-14 状态 ⏳ → ✅
+- [x] 子计划 checklist 块添加
+- [x] 测试计数更新
 
 ---
 
