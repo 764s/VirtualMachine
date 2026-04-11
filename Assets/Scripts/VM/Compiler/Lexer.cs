@@ -23,6 +23,7 @@ namespace FFVM.Compiler
         Plus, Minus, Star, Slash, Percent,
         Assign, Eq, Neq, Lt, Gt, Lte, Gte,
         AmpAmp, PipePipe, Bang,
+        Amp, Pipe, Caret, Tilde, LtLt, GtGt,
 
         // Delimiters
         LParen, RParen, LBrace, RBrace,
@@ -188,16 +189,20 @@ namespace FFVM.Compiler
                     return new Token(TokenType.Bang, "!", startLine, startCol);
                 case '<':
                     if (Peek() == '=') { Advance(); return new Token(TokenType.Lte, "<=", startLine, startCol); }
+                    if (Peek() == '<') { Advance(); return new Token(TokenType.LtLt, "<<", startLine, startCol); }
                     return new Token(TokenType.Lt, "<", startLine, startCol);
                 case '>':
                     if (Peek() == '=') { Advance(); return new Token(TokenType.Gte, ">=", startLine, startCol); }
+                    if (Peek() == '>') { Advance(); return new Token(TokenType.GtGt, ">>", startLine, startCol); }
                     return new Token(TokenType.Gt, ">", startLine, startCol);
                 case '&':
                     if (Peek() == '&') { Advance(); return new Token(TokenType.AmpAmp, "&&", startLine, startCol); }
-                    return new Token(TokenType.Error, $"Unexpected character '&' at {startLine}:{startCol}", startLine, startCol);
+                    return new Token(TokenType.Amp, "&", startLine, startCol);
                 case '|':
                     if (Peek() == '|') { Advance(); return new Token(TokenType.PipePipe, "||", startLine, startCol); }
-                    return new Token(TokenType.Error, $"Unexpected character '|' at {startLine}:{startCol}", startLine, startCol);
+                    return new Token(TokenType.Pipe, "|", startLine, startCol);
+                case '^': return new Token(TokenType.Caret, "^", startLine, startCol);
+                case '~': return new Token(TokenType.Tilde, "~", startLine, startCol);
                 default:
                     return new Token(TokenType.Error, $"Unexpected character '{c}' at {startLine}:{startCol}", startLine, startCol);
             }

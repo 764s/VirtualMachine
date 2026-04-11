@@ -622,12 +622,48 @@ namespace FFVM.Compiler
 
         private Expr ParseLogicalAnd()
         {
-            Expr left = ParseEquality();
+            Expr left = ParseBitOr();
             while (Match(TokenType.AmpAmp))
             {
-                Expr right = ParseEquality();
+                Expr right = ParseBitOr();
                 left = new BinaryExpr(NodeKind.And, left, right);
                 left.Line = right.Line;
+            }
+            return left;
+        }
+
+        // Lang-14: bitwise OR (lowest bitwise precedence)
+        private Expr ParseBitOr()
+        {
+            Expr left = ParseBitXor();
+            while (Match(TokenType.Pipe))
+            {
+                Expr right = ParseBitXor();
+                left = new BinaryExpr(NodeKind.BitOr, left, right);
+            }
+            return left;
+        }
+
+        // Lang-14: bitwise XOR
+        private Expr ParseBitXor()
+        {
+            Expr left = ParseBitAnd();
+            while (Match(TokenType.Caret))
+            {
+                Expr right = ParseBitAnd();
+                left = new BinaryExpr(NodeKind.BitXor, left, right);
+            }
+            return left;
+        }
+
+        // Lang-14: bitwise AND (highest bitwise precedence)
+        private Expr ParseBitAnd()
+        {
+            Expr left = ParseEquality();
+            while (Match(TokenType.Amp))
+            {
+                Expr right = ParseEquality();
+                left = new BinaryExpr(NodeKind.BitAnd, left, right);
             }
             return left;
         }
@@ -647,11 +683,11 @@ namespace FFVM.Compiler
 
         private Expr ParseComparison()
         {
-            Expr left = ParseAddition();
+            Expr left = ParseShift();
             while (Check(TokenType.Lt, TokenType.Gt, TokenType.Lte, TokenType.Gte))
             {
                 var op = Advance();
-                Expr right = ParseAddition();
+                Expr right = ParseShift();
                 NodeKind kind;
                 switch (op.Type)
                 {
@@ -660,6 +696,20 @@ namespace FFVM.Compiler
                     case TokenType.Lte: kind = NodeKind.Lte; break;
                     default:            kind = NodeKind.Gte; break;
                 }
+                left = new BinaryExpr(kind, left, right);
+            }
+            return left;
+        }
+
+        // Lang-14: shift operators (<< >>)
+        private Expr ParseShift()
+        {
+            Expr left = ParseAddition();
+            while (Check(TokenType.LtLt, TokenType.GtGt))
+            {
+                var op = Advance();
+                Expr right = ParseAddition();
+                NodeKind kind = op.Type == TokenType.LtLt ? NodeKind.Shl : NodeKind.Shr;
                 left = new BinaryExpr(kind, left, right);
             }
             return left;
@@ -708,6 +758,11 @@ namespace FFVM.Compiler
             {
                 Expr operand = ParseUnary();
                 return new UnaryExpr(NodeKind.Not, operand);
+            }
+            if (Match(TokenType.Tilde))
+            {
+                Expr operand = ParseUnary();
+                return new UnaryExpr(NodeKind.BitNot, operand);
             }
             return ParsePostfix();
         }
