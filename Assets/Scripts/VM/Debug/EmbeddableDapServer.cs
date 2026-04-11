@@ -129,6 +129,19 @@ namespace FFVM.Debug
         }
 
         /// <summary>
+        /// Block until VS Code finishes configuring breakpoints (configurationDone).
+        /// After this returns, all breakpoints are set and the game can proceed
+        /// without missing any break-worthy instructions.
+        /// </summary>
+        public void WaitForConfigurationDone()
+        {
+            if (!_connected) return;
+            Console.WriteLine("[DAP] Waiting for configurationDone...");
+            _configDoneEvent.Wait();
+            Console.WriteLine("[DAP] configurationDone received — breakpoints active.");
+        }
+
+        /// <summary>
         /// Pause at the first instruction. Call after AttachToWorld, before the game loop.
         /// Sends "stopped on entry" and blocks until VS Code sends continue.
         /// This is an optional call for "custom attach" (sandbox mode).
@@ -284,6 +297,59 @@ namespace FFVM.Debug
             base.OnBreakpointHitCallback(instanceId, ip, line);
         }
 
+        /// <summary>
+        /// Multi-module setBreakpoints: route to the correct module based on source path.
+        /// VS Code sends setBreakpoints per-file; we resolve the file path to a module slot
+        /// and only clear/set breakpoints for that specific module.
+        /// Falls back to legacy single-module handling if no module match is found.
+        /// </summary>
+        private JsonObject HandleSetBreakpointsMultiModule(JsonObject arguments)
+        {
+            // Extract source path from the DAP request
+            var source = arguments?.GetObject("source");
+            string sourcePath = source?.GetString("path");
+
+            // Try to resolve source path → moduleSlot
+            if (!string.IsNullOrEmpty(sourcePath))
+            {
+                string normalizedSource = Path.GetFullPath(sourcePath);
+
+                foreach (var kv in _moduleScriptPaths)
+                {
+                    string normalizedModule = Path.GetFullPath(kv.Value);
+                    if (string.Equals(normalizedSource, normalizedModule, StringComparison.OrdinalIgnoreCase))
+                    {
+                        int moduleSlot = kv.Key;
+                        var moduleProgram = _world?.Modules.Get(moduleSlot);
+                        Console.WriteLine($"[DAP] setBreakpoints: resolved '{Path.GetFileName(sourcePath)}' → module {moduleSlot}");
+                        return HandleSetBreakpointsForModule(arguments, moduleSlot, moduleProgram);
+                    }
+                }
+
+                // No matching module — return breakpoints as unverified (don't clear module breakpoints)
+                Console.WriteLine($"[DAP] setBreakpoints: no module match for '{sourcePath}', breakpoints unverified");
+            }
+
+            var body = new JsonObject();
+            var breakpointsList = new List<object>();
+            var breakpointsArr = arguments?.GetArray("breakpoints");
+            if (breakpointsArr != null)
+            {
+                foreach (var bpObj in breakpointsArr)
+                {
+                    int line = 0;
+                    if (bpObj is JsonObject bpJson)
+                        line = bpJson.GetInt("line");
+                    var bp = new JsonObject();
+                    bp.Set("verified", false);
+                    bp.Set("line", line);
+                    breakpointsList.Add(bp);
+                }
+            }
+            body.Set("breakpoints", breakpointsList);
+            return body;
+        }
+
         // ============================================================
         // DAP thread
         // ============================================================
@@ -372,7 +438,7 @@ namespace FFVM.Debug
                         // Breakpoints may already be buffered from setBreakpoints.
                         break;
                     case "setBreakpoints":
-                        responseBody = HandleSetBreakpointsCore(arguments);
+                        responseBody = HandleSetBreakpointsMultiModule(arguments);
                         break;
                     case "setFunctionBreakpoints":
                         // VS Code sends this during config — return empty list

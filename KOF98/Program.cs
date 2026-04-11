@@ -20,13 +20,15 @@ namespace KOF98
             bool headless = false;
             bool useRaylib = false;
             bool debugMode = false;
+            bool debugWait = false;
             int maxFrames = -1;
 
             for (int i = 0; i < args.Length; i++)
             {
                 if (args[i] == "--headless") headless = true;
                 if (args[i] == "--raylib") useRaylib = true;
-                if (args[i] == "--debug") debugMode = true;
+                if (args[i] == "--debug") { debugMode = true; debugWait = true; }
+                if (args[i] == "--debug-nowait") { debugMode = true; debugWait = false; }
                 if (args[i] == "--frames" && i + 1 < args.Length)
                     int.TryParse(args[i + 1], out maxFrames);
             }
@@ -93,9 +95,13 @@ namespace KOF98
                     dapServer.AttachToWorld(vmBridge.World, null, -1, null);
                 }
 
-                // Wait for VS Code to connect and complete configuration
-                dapServer.WaitForConnection();
-                dapServer.StopOnEntry();
+                // --debug: block until VS Code connects and configures breakpoints
+                // --debug-nowait: DAP server runs in background, attach later
+                if (debugWait)
+                {
+                    dapServer.WaitForConnection();
+                    dapServer.WaitForConfigurationDone();
+                }
             }
 
             // ── Define characters ────────────────────────────────

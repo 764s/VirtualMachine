@@ -33,9 +33,22 @@ function resolveExecutablePath() {
                 const entries = fs.readdirSync(cfgDir, { withFileTypes: true });
                 for (const entry of entries) {
                     if (entry.isDirectory() && entry.name.startsWith("net")) {
-                        const p = path.join(cfgDir, entry.name, "ffvm-cli");
+                        const tfmDir = path.join(cfgDir, entry.name);
+                        // Check directly under TFM folder
+                        const p = path.join(tfmDir, "ffvm-cli");
                         if (fs.existsSync(p)) return p;
                         if (fs.existsSync(p + ".exe")) return p + ".exe";
+                        // Check RID sub-folders (e.g. win-x64, linux-x64)
+                        try {
+                            const ridEntries = fs.readdirSync(tfmDir, { withFileTypes: true });
+                            for (const rid of ridEntries) {
+                                if (rid.isDirectory()) {
+                                    const rp = path.join(tfmDir, rid.name, "ffvm-cli");
+                                    if (fs.existsSync(rp)) return rp;
+                                    if (fs.existsSync(rp + ".exe")) return rp + ".exe";
+                                }
+                            }
+                        } catch { /* ignore */ }
                     }
                 }
             } catch {
@@ -59,7 +72,7 @@ function activate(context) {
                 outputChannel.appendLine(`[FFVM] createDebugAdapterDescriptor called: request=${session.configuration.request}, port=${session.configuration.port}`);
                 if (session.configuration.request === "attach") {
                     const port = session.configuration.port || 4711;
-                    outputChannel.appendLine(`[FFVM] Returning DebugAdapterServer on port ${port}`);
+                    outputChannel.appendLine(`[FFVM] Attaching to DAP server on port ${port}`);
                     return new vscode.DebugAdapterServer(port);
                 }
                 // launch mode: use ffvm-cli dap

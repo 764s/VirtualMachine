@@ -308,6 +308,58 @@ namespace FFVM.Debug
         }
 
         /// <summary>
+        /// Module-aware "setBreakpoints": verify against a specific module's program
+        /// and store breakpoints per-module so they don't interfere across files.
+        /// </summary>
+        protected JsonObject HandleSetBreakpointsForModule(JsonObject arguments, int moduleSlot, VMProgram moduleProgram)
+        {
+            // Clear only this module's breakpoints (not all modules)
+            _debugger?.ClearBreakpoints(moduleSlot);
+
+            var body = new JsonObject();
+            var breakpointsList = new List<object>();
+
+            var breakpointsArr = arguments?.GetArray("breakpoints");
+            if (breakpointsArr != null)
+            {
+                foreach (var bpObj in breakpointsArr)
+                {
+                    int line = 0;
+                    if (bpObj is JsonObject bpJson)
+                        line = bpJson.GetInt("line");
+
+                    bool verified = false;
+
+                    if (moduleProgram?.SourceMap != null && line > 0)
+                    {
+                        for (int ip = 0; ip < moduleProgram.SourceMap.Length; ip++)
+                        {
+                            if (moduleProgram.SourceMap[ip] == line)
+                            {
+                                verified = true;
+                                break;
+                            }
+                        }
+                        if (verified)
+                            _debugger?.AddBreakpoint(moduleSlot, line);
+                    }
+                    else if (line > 0)
+                    {
+                        verified = OnBreakpointNotVerifiable(line);
+                    }
+
+                    var bp = new JsonObject();
+                    bp.Set("verified", verified);
+                    bp.Set("line", line);
+                    breakpointsList.Add(bp);
+                }
+            }
+
+            body.Set("breakpoints", breakpointsList);
+            return body;
+        }
+
+        /// <summary>
         /// Called when a breakpoint line cannot be verified because the program is not yet compiled.
         /// Override to buffer the breakpoint for later application.
         /// Returns true if the breakpoint should be reported as "verified" (optimistic).
