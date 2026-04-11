@@ -1924,6 +1924,325 @@ public static class LspTests
             }
         }
 
+        // ================================================================
+        // K. DX4-P1: .ffproj Project File Tests
+        // ================================================================
+
+        // DX4-P1-01: ProjectFile.Parse — basic includePaths
+        {
+            string json = "{ \"includePaths\": [\"modules/game\", \"modules/skill\"] }";
+            var pf = FFVM.Compiler.ProjectFile.Parse(json, "/test/project");
+            Assert(pf != null, "DX4-P1-01: parsed successfully");
+            Assert(pf.IncludePaths.Length == 2, "DX4-P1-01: 2 include paths, got " + pf.IncludePaths.Length);
+            Assert(pf.IncludePaths[0] == "modules/game", "DX4-P1-01: first path is modules/game");
+            Assert(pf.IncludePaths[1] == "modules/skill", "DX4-P1-01: second path is modules/skill");
+        }
+
+        // DX4-P1-02: ProjectFile.Parse — hostDeclarations
+        {
+            string json = "{ \"hostDeclarations\": [\"host/skill.ffvm.d.json\", \"host/ai.ffvm.d.json\"] }";
+            var pf = FFVM.Compiler.ProjectFile.Parse(json, "/test/project");
+            Assert(pf != null, "DX4-P1-02: parsed successfully");
+            Assert(pf.HostDeclarations.Length == 2, "DX4-P1-02: 2 host declarations, got " + pf.HostDeclarations.Length);
+            Assert(pf.HostDeclarations[0] == "host/skill.ffvm.d.json", "DX4-P1-02: first decl path");
+            Assert(pf.HostDeclarations[1] == "host/ai.ffvm.d.json", "DX4-P1-02: second decl path");
+        }
+
+        // DX4-P1-03: ProjectFile.Parse — entry field
+        {
+            string json = "{ \"entry\": \"scripts/main.ffs\" }";
+            var pf = FFVM.Compiler.ProjectFile.Parse(json, "/test/project");
+            Assert(pf != null, "DX4-P1-03: parsed successfully");
+            Assert(pf.Entry == "scripts/main.ffs", "DX4-P1-03: entry = scripts/main.ffs, got '" + pf.Entry + "'");
+        }
+
+        // DX4-P1-04: ProjectFile.Parse — compileOptions (inlineThreshold)
+        {
+            string json = "{ \"compileOptions\": { \"inlineThreshold\": 32, \"diagnosticsEnabled\": false } }";
+            var pf = FFVM.Compiler.ProjectFile.Parse(json, "/test/project");
+            Assert(pf != null, "DX4-P1-04: parsed successfully");
+            Assert(pf.CompileOptions != null, "DX4-P1-04: compileOptions present");
+            Assert(pf.CompileOptions.InlineThreshold == 32, "DX4-P1-04: inlineThreshold=32, got " + pf.CompileOptions.InlineThreshold);
+            Assert(pf.CompileOptions.DiagnosticsEnabled == false, "DX4-P1-04: diagnosticsEnabled=false");
+        }
+
+        // DX4-P1-05: ProjectFile.Parse — empty JSON → defaults
+        {
+            string json = "{}";
+            var pf = FFVM.Compiler.ProjectFile.Parse(json, "/test/project");
+            Assert(pf != null, "DX4-P1-05: empty JSON still parses");
+            Assert(pf.IncludePaths.Length == 0, "DX4-P1-05: no include paths");
+            Assert(pf.HostDeclarations.Length == 0, "DX4-P1-05: no host declarations");
+            Assert(pf.Entry == null, "DX4-P1-05: entry is null");
+            Assert(pf.CompileOptions == null, "DX4-P1-05: compileOptions is null (use defaults)");
+        }
+
+        // DX4-P1-06: ProjectFile.Parse — null/empty input → null
+        {
+            var pf1 = FFVM.Compiler.ProjectFile.Parse(null, "/test");
+            Assert(pf1 == null, "DX4-P1-06: null input → null");
+            var pf2 = FFVM.Compiler.ProjectFile.Parse("", "/test");
+            Assert(pf2 == null, "DX4-P1-06: empty input → null");
+        }
+
+        // DX4-P1-07: ProjectFile.TryDiscover — finds .ffproj in directory
+        {
+            string tmpDir = Path.Combine(Path.GetTempPath(), "dx4p1_test_" + Guid.NewGuid().ToString("N").Substring(0, 8));
+            Directory.CreateDirectory(tmpDir);
+            try
+            {
+                File.WriteAllText(Path.Combine(tmpDir, "my_project.ffproj"),
+                    "{ \"includePaths\": [\"src\"], \"entry\": \"main.ffs\" }");
+                var pf = FFVM.Compiler.ProjectFile.TryDiscover(tmpDir);
+                Assert(pf != null, "DX4-P1-07: discovered .ffproj");
+                Assert(pf.IncludePaths.Length == 1, "DX4-P1-07: 1 include path");
+                Assert(pf.Entry == "main.ffs", "DX4-P1-07: entry = main.ffs");
+                Assert(pf.ProjectDir == tmpDir, "DX4-P1-07: projectDir set to containing directory");
+            }
+            finally
+            {
+                try { Directory.Delete(tmpDir, true); } catch { }
+            }
+        }
+
+        // DX4-P1-08: ProjectFile.TryDiscover — no .ffproj → null
+        {
+            string tmpDir = Path.Combine(Path.GetTempPath(), "dx4p1_test_" + Guid.NewGuid().ToString("N").Substring(0, 8));
+            Directory.CreateDirectory(tmpDir);
+            try
+            {
+                var pf = FFVM.Compiler.ProjectFile.TryDiscover(tmpDir);
+                Assert(pf == null, "DX4-P1-08: no .ffproj → null");
+            }
+            finally
+            {
+                try { Directory.Delete(tmpDir, true); } catch { }
+            }
+        }
+
+        // DX4-P1-09: CompositeFileResolver — resolves from first matching path
+        {
+            var files1 = new Dictionary<string, string> { { "common", "func c1(): int { return 1 }" } };
+            var files2 = new Dictionary<string, string> { { "common", "func c2(): int { return 2 }" } };
+            var resolver = new FFVM.Compiler.CompositeFileResolver(new FFVM.Compiler.IFileResolver[]
+            {
+                new FFVM.Compiler.DictionaryFileResolver(files1),
+                new FFVM.Compiler.DictionaryFileResolver(files2)
+            });
+            string content = resolver.ReadFile("common");
+            Assert(content != null, "DX4-P1-09: resolved common");
+            Assert(content.Contains("c1"), "DX4-P1-09: first resolver wins, got '" + content + "'");
+        }
+
+        // DX4-P1-10: CompositeFileResolver — falls through to second path
+        {
+            var files1 = new Dictionary<string, string> { { "game", "func g(): int { return 1 }" } };
+            var files2 = new Dictionary<string, string> { { "skill", "func s(): int { return 2 }" } };
+            var resolver = new FFVM.Compiler.CompositeFileResolver(new FFVM.Compiler.IFileResolver[]
+            {
+                new FFVM.Compiler.DictionaryFileResolver(files1),
+                new FFVM.Compiler.DictionaryFileResolver(files2)
+            });
+            string content = resolver.ReadFile("skill");
+            Assert(content != null, "DX4-P1-10: resolved from second resolver");
+            Assert(content.Contains("s()"), "DX4-P1-10: second resolver content");
+        }
+
+        // DX4-P1-11: LSP initialize + .ffproj → includePaths used for include resolution
+        {
+            string tmpDir = Path.Combine(Path.GetTempPath(), "dx4p1_test_" + Guid.NewGuid().ToString("N").Substring(0, 8));
+            Directory.CreateDirectory(tmpDir);
+            string modulesDir = Path.Combine(tmpDir, "modules");
+            Directory.CreateDirectory(modulesDir);
+            try
+            {
+                // Write .ffproj with includePaths pointing to modules/
+                File.WriteAllText(Path.Combine(tmpDir, "project.ffproj"),
+                    "{ \"includePaths\": [\"modules\"] }");
+                // Write an includable file in modules/
+                File.WriteAllText(Path.Combine(modulesDir, "helpers.ffs"),
+                    "func helper(): int { return 42 }");
+
+                string rootUri = "file:///" + tmpDir.TrimStart('/').Replace("\\", "/");
+                // Script includes "helpers" — should resolve via includePaths
+                string source = "include \"helpers\"\nfunc main() { var x: int = helper() }";
+                string fileUri = rootUri + "/main.ffs";
+                var session = new LspBatchSession();
+                session.AddInitializeWithRootUri(rootUri);
+                session.AddInitialized();
+                session.AddDidOpen(fileUri, source);
+                session.AddShutdown();
+                session.AddExit();
+                session.Run();
+
+                var allDiags = session.FindAllNotifications("textDocument/publishDiagnostics");
+                bool hasError = false;
+                foreach (var notif in allDiags)
+                {
+                    var p = notif.GetObject("params");
+                    if (p == null) continue;
+                    var diags = p.GetArray("diagnostics");
+                    if (diags == null) continue;
+                    foreach (var d in diags)
+                    {
+                        var dObj = d as JsonObject;
+                        string msg = dObj?.GetString("message") ?? "";
+                        if (msg.Contains("helpers") || msg.Contains("helper") || msg.Contains("include"))
+                            hasError = true;
+                    }
+                }
+                Assert(!hasError, "DX4-P1-11: include resolved via .ffproj includePaths");
+            }
+            finally
+            {
+                try { Directory.Delete(tmpDir, true); } catch { }
+            }
+        }
+
+        // DX4-P1-12: LSP initialize + .ffproj → hostDeclarations loaded (syscall recognized)
+        {
+            string tmpDir = Path.Combine(Path.GetTempPath(), "dx4p1_test_" + Guid.NewGuid().ToString("N").Substring(0, 8));
+            Directory.CreateDirectory(tmpDir);
+            string hostDir = Path.Combine(tmpDir, "host");
+            Directory.CreateDirectory(hostDir);
+            try
+            {
+                // Write a host declaration file
+                string declJson = "{ \"syscalls\": [ { \"name\": \"ProjectSyscall\", \"slot\": 77 } ] }";
+                File.WriteAllText(Path.Combine(hostDir, "skill.ffvm.d.json"), declJson);
+                // Write .ffproj pointing to the host declaration
+                File.WriteAllText(Path.Combine(tmpDir, "project.ffproj"),
+                    "{ \"hostDeclarations\": [\"host/skill.ffvm.d.json\"] }");
+
+                string rootUri = "file:///" + tmpDir.TrimStart('/').Replace("\\", "/");
+                string source = "func main() { ProjectSyscall() }";
+                var session = new LspBatchSession();
+                session.AddInitializeWithRootUri(rootUri);
+                session.AddInitialized();
+                session.AddDidOpen("file:///dx4p1-12.ffs", source);
+                session.AddShutdown();
+                session.AddExit();
+                session.Run();
+
+                var allDiags = session.FindAllNotifications("textDocument/publishDiagnostics");
+                bool hasUnknownSyscall = false;
+                foreach (var notif in allDiags)
+                {
+                    var p = notif.GetObject("params");
+                    if (p == null) continue;
+                    var diags = p.GetArray("diagnostics");
+                    if (diags == null) continue;
+                    foreach (var d in diags)
+                    {
+                        var dObj = d as JsonObject;
+                        string msg = dObj?.GetString("message") ?? "";
+                        if (msg.Contains("ProjectSyscall") && (msg.Contains("Unknown") || msg.Contains("unknown")))
+                            hasUnknownSyscall = true;
+                    }
+                }
+                Assert(!hasUnknownSyscall, "DX4-P1-12: .ffproj hostDeclarations → ProjectSyscall recognized");
+            }
+            finally
+            {
+                try { Directory.Delete(tmpDir, true); } catch { }
+            }
+        }
+
+        // DX4-P1-13: LSP initialize + .ffproj → multiple includePaths (cross-directory resolution)
+        {
+            string tmpDir = Path.Combine(Path.GetTempPath(), "dx4p1_test_" + Guid.NewGuid().ToString("N").Substring(0, 8));
+            Directory.CreateDirectory(tmpDir);
+            string gameDir = Path.Combine(tmpDir, "game");
+            string skillDir = Path.Combine(tmpDir, "skill");
+            Directory.CreateDirectory(gameDir);
+            Directory.CreateDirectory(skillDir);
+            try
+            {
+                // Write .ffproj with two includePaths
+                File.WriteAllText(Path.Combine(tmpDir, "project.ffproj"),
+                    "{ \"includePaths\": [\"game\", \"skill\"] }");
+                // Write files in each directory
+                File.WriteAllText(Path.Combine(gameDir, "core.ffs"),
+                    "func game_init(): int { return 1 }");
+                File.WriteAllText(Path.Combine(skillDir, "base.ffs"),
+                    "func skill_init(): int { return 2 }");
+
+                string rootUri = "file:///" + tmpDir.TrimStart('/').Replace("\\", "/");
+                // Script includes from both directories
+                string source = "include \"core\"\ninclude \"base\"\nfunc main() { var a: int = game_init()\nvar b: int = skill_init() }";
+                string fileUri = rootUri + "/main.ffs";
+                var session = new LspBatchSession();
+                session.AddInitializeWithRootUri(rootUri);
+                session.AddInitialized();
+                session.AddDidOpen(fileUri, source);
+                session.AddShutdown();
+                session.AddExit();
+                session.Run();
+
+                var allDiags = session.FindAllNotifications("textDocument/publishDiagnostics");
+                bool hasError = false;
+                foreach (var notif in allDiags)
+                {
+                    var p = notif.GetObject("params");
+                    if (p == null) continue;
+                    var diags = p.GetArray("diagnostics");
+                    if (diags == null) continue;
+                    foreach (var d in diags)
+                    {
+                        var dObj = d as JsonObject;
+                        string msg = dObj?.GetString("message") ?? "";
+                        if (msg.Contains("core") || msg.Contains("base") || msg.Contains("game_init") || msg.Contains("skill_init"))
+                            hasError = true;
+                    }
+                }
+                Assert(!hasError, "DX4-P1-13: multiple includePaths resolve cross-directory includes");
+            }
+            finally
+            {
+                try { Directory.Delete(tmpDir, true); } catch { }
+            }
+        }
+
+        // DX4-P1-14: ProjectFile.Parse — compileOptions with all fields
+        {
+            string json = "{ \"compileOptions\": { \"inlineThreshold\": 8, \"inlineDepthMax\": 5, \"maxHoistedPerLoop\": 4, \"diagnosticsEnabled\": true } }";
+            var pf = FFVM.Compiler.ProjectFile.Parse(json, "/test");
+            Assert(pf != null && pf.CompileOptions != null, "DX4-P1-14: all compileOptions parsed");
+            Assert(pf.CompileOptions.InlineThreshold == 8, "DX4-P1-14: inlineThreshold=8, got " + pf.CompileOptions.InlineThreshold);
+            Assert(pf.CompileOptions.InlineDepthMax == 5, "DX4-P1-14: inlineDepthMax=5, got " + pf.CompileOptions.InlineDepthMax);
+            Assert(pf.CompileOptions.MaxHoistedPerLoop == 4, "DX4-P1-14: maxHoistedPerLoop=4, got " + pf.CompileOptions.MaxHoistedPerLoop);
+            Assert(pf.CompileOptions.DiagnosticsEnabled == true, "DX4-P1-14: diagnosticsEnabled=true");
+        }
+
+        // DX4-P1-15: ProjectFile.ResolvePath — relative and absolute paths
+        {
+            var pf = new FFVM.Compiler.ProjectFile { ProjectDir = "/home/user/project" };
+            string abs = pf.ResolvePath("/absolute/path.ffs");
+            Assert(abs == "/absolute/path.ffs", "DX4-P1-15: absolute path unchanged, got '" + abs + "'");
+            string rel = pf.ResolvePath("src/main.ffs");
+            Assert(rel.EndsWith("src/main.ffs"), "DX4-P1-15: relative resolved, got '" + rel + "'");
+            Assert(rel.StartsWith("/"), "DX4-P1-15: result is absolute, got '" + rel + "'");
+        }
+
+        // DX4-P1-16: ProjectFile.BuildFileResolver — no includePaths uses projectDir
+        {
+            string tmpDir = Path.Combine(Path.GetTempPath(), "dx4p1_test_" + Guid.NewGuid().ToString("N").Substring(0, 8));
+            Directory.CreateDirectory(tmpDir);
+            try
+            {
+                File.WriteAllText(Path.Combine(tmpDir, "test.ffs"), "func t(): int { return 1 }");
+                var pf = new FFVM.Compiler.ProjectFile { ProjectDir = tmpDir };
+                var resolver = pf.BuildFileResolver();
+                Assert(resolver != null, "DX4-P1-16: resolver created from projectDir");
+                string content = resolver.ReadFile("test");
+                Assert(content != null, "DX4-P1-16: resolved test.ffs from projectDir");
+            }
+            finally
+            {
+                try { Directory.Delete(tmpDir, true); } catch { }
+            }
+        }
+
         Debug.Log($"\n===== LspTests: {passed} passed, {failed} failed =====");
     }
 
