@@ -497,23 +497,27 @@ namespace FFVM.Compiler
                 }
             }
 
-            if (entryDecl == null)
+            // DX4-P0: entryFunc=null → diagnostics-only mode (skip entry function requirement)
+            if (entryDecl == null && entryFunc != null)
                 return new CompileResult { Errors = new List<string> { $"Entry function '{entryFunc}' not found" } };
 
             // FO1: analyze leaf functions before compilation
             AnalyzeLeafFunctions(module, entryFunc);
 
-            // --- Pass 2: compile entry function first, then all other functions ---
+            // --- Pass 2: compile entry function first (if present), then all other functions ---
             // FO6: after each function, remap temps to pack right after locals and patch CALL window sizes.
             var functionEntries = new List<FunctionEntry>();
 
-            int funcStartIP = 0;
-            string entryKey = FuncKey(entryDecl);
-            _functionTable[entryKey] = 0;
-            CompileFunction(entryDecl, isEntry: true);
-            int funcEndIP = CurrentIP();
-            int entryWindow = ComputeAndRemapFunctionWindow(funcStartIP, funcEndIP);
-            functionEntries.Add(new FunctionEntry(entryDecl.Name, 0, entryDecl.Parameters.Count, entryWindow, false));
+            if (entryDecl != null)
+            {
+                int funcStartIP = 0;
+                string entryKey = FuncKey(entryDecl);
+                _functionTable[entryKey] = 0;
+                CompileFunction(entryDecl, isEntry: true);
+                int funcEndIP = CurrentIP();
+                int entryWindow = ComputeAndRemapFunctionWindow(funcStartIP, funcEndIP);
+                functionEntries.Add(new FunctionEntry(entryDecl.Name, 0, entryDecl.Parameters.Count, entryWindow, false));
+            }
 
             for (int i = 0; i < module.Functions.Count; i++)
             {
@@ -522,10 +526,13 @@ namespace FFVM.Compiler
 
                 string fKey = FuncKey(f);
                 bool isLeaf = _leafFunctions.TryGetValue(fKey, out bool lf) && lf;
-                funcStartIP = CurrentIP();
+                int funcStartIP = CurrentIP();
                 _functionTable[fKey] = funcStartIP;
-                CompileFunction(f, isEntry: false);
-                funcEndIP = CurrentIP();
+                // DX4-P0: In diagnostics-only mode (entryDecl==null), the first function
+                // is marked as entry so module variable initialization code is emitted
+                // into at least one function body (required for valid bytecode generation).
+                CompileFunction(f, isEntry: entryDecl == null && i == 0);
+                int funcEndIP = CurrentIP();
                 int window = ComputeAndRemapFunctionWindow(funcStartIP, funcEndIP);
                 functionEntries.Add(new FunctionEntry(f.Name, funcStartIP, f.Parameters.Count, window, isLeaf));
             }
@@ -542,12 +549,12 @@ namespace FFVM.Compiler
                         var f = aliasModule.Functions[i];
                         if (f.IsPrivate) continue;
                         string qualKey = alias + "." + f.Name;
-                        funcStartIP = CurrentIP();
-                        _functionTable[qualKey] = funcStartIP;
+                        int funcStartIP2 = CurrentIP();
+                        _functionTable[qualKey] = funcStartIP2;
                         CompileFunction(f, isEntry: false);
-                        funcEndIP = CurrentIP();
-                        int window2 = ComputeAndRemapFunctionWindow(funcStartIP, funcEndIP);
-                        functionEntries.Add(new FunctionEntry(qualKey, funcStartIP, f.Parameters.Count, window2, false));
+                        int funcEndIP2 = CurrentIP();
+                        int window2 = ComputeAndRemapFunctionWindow(funcStartIP2, funcEndIP2);
+                        functionEntries.Add(new FunctionEntry(qualKey, funcStartIP2, f.Parameters.Count, window2, false));
                     }
                 }
             }
@@ -3862,10 +3869,10 @@ namespace FFVM.Compiler
                 return maxChildDepth;
             }
 
-            int entryDepth = callGraph.ContainsKey(entryFunc) ? ComputeDepth(entryFunc) : 0;
+            int entryDepth = (entryFunc != null && callGraph.ContainsKey(entryFunc)) ? ComputeDepth(entryFunc) : 0;
             // Note: recursive functions return their non-recursive child depth (ignoring back-edges).
             // This means recursion doesn't inflate the static depth — runtime MaxCallDepth check handles it.
-            if (entryDepth > VMConstants.MaxCallDepth)
+            if (entryDepth > VMConstants.MaxCallDepth && entryFunc != null)
             {
                 _errors.Add($"Static call depth from '{entryFunc}' is {entryDepth}, exceeding MaxCallDepth ({VMConstants.MaxCallDepth}). Reduce function nesting or increase limit.");
             }
@@ -3913,8 +3920,8 @@ namespace FFVM.Compiler
                 return maxTotal;
             }
 
-            int maxWindow = callGraph.ContainsKey(entryFunc) ? ComputeMaxWindow(entryFunc) : 0;
-            if (maxWindow > availableSlots)
+            int maxWindow = (entryFunc != null && callGraph.ContainsKey(entryFunc)) ? ComputeMaxWindow(entryFunc) : 0;
+            if (maxWindow > availableSlots && entryFunc != null)
             {
                 _errors.Add($"Static register window depth from '{entryFunc}' requires {maxWindow} registers, exceeding available {availableSlots} slots (MaxRegisters={VMConstants.MaxRegisters}). Reduce local variable usage or function nesting depth.");
             }
@@ -4106,7 +4113,7 @@ namespace FFVM.Compiler
             {
                 var func = module.Functions[i];
                 string fKey = FuncKey(func);
-                if (func.Name == entryFunc && !func.IsPrivate)
+                if (entryFunc != null && func.Name == entryFunc && !func.IsPrivate)
                 {
                     _leafFunctions[fKey] = false; // entry function is never leaf
                     continue;

@@ -41,6 +41,10 @@ namespace FFVM.Debug
         // --- LSP6: Syscall signature metadata for enhanced completion ---
         private readonly Dictionary<string, SyscallSignature> _syscallSignatures;
 
+        // --- DX4-P0: Workspace root path and file resolver for include support ---
+        private string _rootPath;
+        private IFileResolver _fileResolver;
+
         /// <summary>
         /// Exposed for testing: all diagnostics published since last clear.
         /// Key = URI, Value = list of diagnostic objects.
@@ -241,6 +245,30 @@ namespace FFVM.Debug
 
         private JsonObject HandleInitialize(JsonObject parameters)
         {
+            // DX4-P0: Parse rootUri to establish workspace root for file resolution
+            if (parameters != null)
+            {
+                string rootUri = parameters.GetString("rootUri");
+                if (rootUri != null)
+                {
+                    _rootPath = UriToPath(rootUri);
+                }
+                else
+                {
+                    // Fallback: rootPath (deprecated in LSP but still sent by some clients)
+                    string rootPath = parameters.GetString("rootPath");
+                    if (rootPath != null)
+                        _rootPath = rootPath;
+                }
+
+                if (_rootPath != null)
+                {
+                    _fileResolver = new FileSystemFileResolver(_rootPath);
+                    // Auto-discover .ffvm.d.json declaration files in workspace root
+                    DiscoverDeclarationFiles(_rootPath);
+                }
+            }
+
             var capabilities = new JsonObject();
 
             // Full document sync: client sends entire document on change
@@ -270,6 +298,82 @@ namespace FFVM.Debug
             var result = new JsonObject();
             result.Set("capabilities", capabilities);
             return result;
+        }
+
+        /// <summary>
+        /// DX4-P0: Convert a file:// URI to a local filesystem path.
+        /// Handles percent-encoding and platform-specific path separators.
+        /// </summary>
+        internal static string UriToPath(string uri)
+        {
+            if (uri == null) return null;
+            // file:///path/to/dir or file:///C:/path on Windows
+            if (uri.StartsWith("file:///", StringComparison.Ordinal))
+            {
+                string path = uri.Substring("file:///".Length);
+                // Decode percent-encoded characters
+                path = Uri.UnescapeDataString(path);
+                // On Unix, paths start with / — add it back
+                // On Windows, paths start with drive letter (e.g. C:/...)
+                if (path.Length >= 2 && path[1] == ':')
+                    return path; // Windows path: C:/...
+                return "/" + path; // Unix path: /home/...
+            }
+            // file://host/path (UNC) — unlikely but handle gracefully
+            if (uri.StartsWith("file://", StringComparison.Ordinal))
+            {
+                return Uri.UnescapeDataString(uri.Substring("file://".Length));
+            }
+            return uri; // fallback: return as-is
+        }
+
+        /// <summary>
+        /// DX4-P0: Scan workspace directory tree for .ffvm.d.json files and load them.
+        /// Recursive scan (AllDirectories) — discovers declaration files in subdirectories too.
+        /// </summary>
+        private void DiscoverDeclarationFiles(string rootPath)
+        {
+            try
+            {
+                if (!Directory.Exists(rootPath)) return;
+                string[] files = Directory.GetFiles(rootPath, "*.ffvm.d.json", SearchOption.AllDirectories);
+                for (int i = 0; i < files.Length; i++)
+                {
+                    try
+                    {
+                        string json = File.ReadAllText(files[i]);
+                        LoadDeclarationJson(json);
+                    }
+                    catch
+                    {
+                        // Ignore individual file read errors — don't crash LSP for bad declaration files
+                    }
+                }
+            }
+            catch
+            {
+                // Ignore directory scan errors — rootPath may not exist or be inaccessible
+            }
+        }
+
+        /// <summary>
+        /// DX4-P0: Convert a document URI to a relative file path from workspace root.
+        /// Used as filePath parameter for include cycle detection and diagnostics.
+        /// Returns the relative path if under rootPath, otherwise returns the absolute path as fallback.
+        /// Returns null only if the URI itself cannot be parsed.
+        /// </summary>
+        internal static string UriToFilePath(string uri, string rootPath)
+        {
+            string absPath = UriToPath(uri);
+            if (absPath == null || rootPath == null) return null;
+            // Normalize separators
+            absPath = absPath.Replace('\\', '/');
+            string normalizedRoot = rootPath.Replace('\\', '/');
+            if (!normalizedRoot.EndsWith("/")) normalizedRoot += "/";
+            if (absPath.StartsWith(normalizedRoot, StringComparison.OrdinalIgnoreCase))
+                return absPath.Substring(normalizedRoot.Length);
+            // Not under workspace root — use full path as filePath
+            return absPath;
         }
 
         private void HandleShutdown()
@@ -334,9 +438,13 @@ namespace FFVM.Debug
                 else if (!_documentAsts.ContainsKey(uri) && ast != null)
                     _documentAsts[uri] = ast; // better than nothing on first open
 
-                // Compile for diagnostics
+                // DX4-P0: Compile for diagnostics with workspace file resolver support.
+                // entryFunc=null → diagnostics-only mode (no entry function requirement).
+                // fileResolver → enables include directive resolution from workspace root.
                 var compiler = new BytecodeCompiler();
-                var result = compiler.Compile(source, "entry", _defaultSyscalls);
+                string filePath = _rootPath != null ? UriToFilePath(uri, _rootPath) : null;
+                var result = compiler.Compile(source, null, _defaultSyscalls, null,
+                    _fileResolver, filePath);
 
                 if (!result.Success && result.Errors != null)
                 {
