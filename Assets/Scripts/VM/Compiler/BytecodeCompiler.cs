@@ -36,6 +36,10 @@ namespace FFVM.Compiler
         private const int TempRegBase = VMConstants.TempRegBase;
         private const int ModuleVarRegBase = VMConstants.ModuleVarRegBase;
 
+        // CFG1: Configurable options — defaults used when no CompileOptions provided.
+        private static readonly CompileOptions DefaultOptions = new CompileOptions();
+        private CompileOptions _options;
+
         private List<Instruction> _instructions;
         private List<int> _wideA;  // O8: full int A values parallel to _instructions (byte A may truncate for IP > 255)
         private List<Number> _constants;
@@ -124,8 +128,7 @@ namespace FFVM.Compiler
         private Dictionary<string, ServiceBinding> _serviceBindings;  // varName → binding
 
         // Lang-9: Inline expansion configuration and state
-        private const int InlineThreshold = 16;   // max estimated instruction count for inlinable function
-        private const int InlineDepthMax = 3;     // max nested inline depth
+        // CFG1: InlineThreshold/InlineDepthMax now read from _options (CompileOptions)
         private int _inlineDepth;                  // current inline nesting depth
         private HashSet<string> _inlineStack;      // recursion guard: functions currently being inlined
         // Lang-9 P2: multi-return exit label support
@@ -189,6 +192,19 @@ namespace FFVM.Compiler
             SyscallTable syscallTable, IFileResolver fileResolver, string filePath,
             ServiceBinding[] serviceBindings)
         {
+            return Compile(source, entryFunc, syscalls, syscallTable, fileResolver, filePath, serviceBindings, null);
+        }
+
+        /// <summary>
+        /// CFG1: Compile source text with full options.
+        /// </summary>
+        /// <param name="options">Optional compiler options. Null = use defaults (InlineThreshold=16, InlineDepthMax=3, etc.).</param>
+        public CompileResult Compile(string source, string entryFunc, Dictionary<string, int> syscalls,
+            SyscallTable syscallTable, IFileResolver fileResolver, string filePath,
+            ServiceBinding[] serviceBindings, CompileOptions options)
+        {
+            _options = options ?? DefaultOptions;
+
             ModuleNode module;
             List<string> parseErrors;
 
@@ -224,6 +240,8 @@ namespace FFVM.Compiler
         /// </summary>
         public CompileResult CompileModule(ModuleNode module, string entryFunc, Dictionary<string, int> syscalls, SyscallTable syscallTable, ServiceBinding[] serviceBindings)
         {
+            // CFG1: Use existing _options if set (via Compile with options), otherwise use defaults
+            if (_options == null) _options = DefaultOptions;
             _instructions = new List<Instruction>();
             _wideA = new List<int>();
             _constants = new List<Number>();
@@ -402,6 +420,9 @@ namespace FFVM.Compiler
 
             // Lang-9 P3: Build ModuleInlineInfo for cross-module inline support
             var inlineInfo = BuildModuleInlineInfo(module);
+
+            // CFG1/P5: Emit resource usage diagnostics (warnings when approaching limits)
+            EmitResourceDiagnostics(functionEntries);
 
             return new CompileResult
             {
@@ -763,9 +784,9 @@ namespace FFVM.Compiler
                 int reg = kv.Key;
                 Number val = kv.Value;
                 int ci = AddConst(val);
-                // Load constant into a temp, then store to module var (fixed or extended)
+                // CFG1: use EmitLoadConst to auto-select LOAD_CONST vs LOAD_CONST_W
                 int temp = AllocTemp();
-                Emit(OpCode.LOAD_CONST, temp, ci);
+                EmitLoadConst(ci, temp);
                 EmitStoreModuleVar(reg, temp);
                 ResetTemps();  // Lang-1.1b: reset per-var to support >8 module vars
             }
@@ -985,6 +1006,7 @@ namespace FFVM.Compiler
             {
                 // A = register
                 case OpCode.LOAD_CONST: return 1;    // A=destReg, B=constIndex
+                case OpCode.LOAD_CONST_W: return 1;  // CFG1: A=destReg, B=constIndex_lo, C=constIndex_hi
                 case OpCode.WAIT_FOR:   return 1;    // A=srcReg
                 case OpCode.LOAD_MVAR:  return 1;    // A=destReg, B=mvarSlot
                 case OpCode.LOAD_XREG: return 1;    // A=destReg, B=xidx_lo, C=xidx_hi
@@ -1607,6 +1629,7 @@ namespace FFVM.Compiler
         /// B-ζ1: Emit a LOAD_CONST or reuse a hoisted register.
         /// If the constant was hoisted (LICM), returns the hoisted register directly (no instruction emitted)
         /// or emits a MOVE if a specific destReg is requested.
+        /// CFG1: auto-selects LOAD_CONST (8-bit index ≤255) or LOAD_CONST_W (16-bit index) based on constIndex.
         /// </summary>
         private int EmitLoadConst(int constIndex, int destReg)
         {
@@ -1618,7 +1641,15 @@ namespace FFVM.Compiler
                 return destReg;
             }
             int reg = destReg >= 0 ? destReg : AllocTemp();
-            Emit(OpCode.LOAD_CONST, reg, constIndex);
+            if (constIndex < 256)
+            {
+                Emit(OpCode.LOAD_CONST, reg, constIndex);
+            }
+            else
+            {
+                // CFG1: wide constant index — LOAD_CONST_W with 16-bit index (B=lo, C=hi)
+                Emit(OpCode.LOAD_CONST_W, reg, constIndex & 0xFF, constIndex >> 8);
+            }
             return reg;
         }
 
@@ -1912,9 +1943,10 @@ namespace FFVM.Compiler
                 else
                 {
                     // Default initialize all fields to 0
+                    // CFG1: use EmitLoadConst for wide constant pool safety
                     int ci = AddConst(Number.Zero);
                     for (int i = 0; i < flatCount; i++)
-                        Emit(OpCode.LOAD_CONST, baseReg + i, ci);
+                        EmitLoadConst(ci, baseReg + i);
                 }
                 return;
             }
@@ -1966,8 +1998,7 @@ namespace FFVM.Compiler
         }
 
         // ===== B-ζ1: LICM — Loop-Invariant Constant Motion =====
-
-        private const int MaxHoistedPerLoop = 8;
+        // CFG1: MaxHoistedPerLoop now read from MaxHoistedPerLoop
 
         /// <summary>
         /// Walk an AST subtree and collect all Number constants that would generate LOAD_CONST.
@@ -2047,11 +2078,12 @@ namespace FFVM.Compiler
             int hoisted = 0;
             foreach (var val in literals)
             {
-                if (hoisted >= MaxHoistedPerLoop) break;
+                if (hoisted >= _options.MaxHoistedPerLoop) break;
                 int ci = AddConst(val);
                 if (_hoistedConstants.ContainsKey(ci)) continue; // already hoisted by outer loop
                 int reg = DeclareVar($"$lc{_licmId++}");
-                Emit(OpCode.LOAD_CONST, reg, ci);
+                // CFG1: use EmitLoadConst for wide constant pool safety
+                EmitLoadConst(ci, reg);
                 _hoistedConstants[ci] = reg;
                 hoisted++;
             }
@@ -2088,6 +2120,9 @@ namespace FFVM.Compiler
             {
                 int regLeft = CompileExpr(bin.Left);
                 int ci = AddConst(rightVal);
+                // CFG1: JUMP_IF_*_K uses 8-bit C operand for constant index.
+                // When constant pool exceeds 255, fall back to register compare (caller handles).
+                if (ci > 255) return false;
                 jumpIP = _instructions.Count;
                 Emit(InvertedKOp(kind), 0, regLeft, ci);
                 return true;
@@ -2098,6 +2133,8 @@ namespace FFVM.Compiler
             {
                 int regRight = CompileExpr(bin.Right);
                 int ci = AddConst(leftVal);
+                // CFG1: same 8-bit overflow guard
+                if (ci > 255) return false;
                 jumpIP = _instructions.Count;
                 Emit(InvertedKOp(SwapCompare(kind)), 0, regRight, ci);
                 return true;
@@ -3307,6 +3344,82 @@ namespace FFVM.Compiler
         }
 
         /// <summary>
+        /// CFG1/P5: Emit resource usage diagnostics.
+        /// When DiagnosticsEnabled (default: true), warnings are added to _warnings
+        /// when resource consumption approaches the limit threshold (default: 75%).
+        /// Zero overhead: only runs after compilation, does not affect generated bytecode.
+        /// </summary>
+        private void EmitResourceDiagnostics(List<FunctionEntry> functionEntries)
+        {
+            if (!_options.DiagnosticsEnabled) return;
+            float threshold = _options.DiagnosticsThreshold;
+
+            // 1. Constant pool usage
+            int constCount = _constants.Count;
+            if (constCount > 0)
+            {
+                // Normal LOAD_CONST handles 0-255; LOAD_CONST_W extends to 65535
+                if (constCount > 255)
+                {
+                    _warnings.Add($"[CFG1] Constant pool uses {constCount} entries (>255). Wide LOAD_CONST_W is in use for indices ≥256. Performance impact: negligible.");
+                }
+                else if (constCount >= (int)(256 * threshold))
+                {
+                    _warnings.Add($"[CFG1] Constant pool uses {constCount}/256 entries ({constCount * 100 / 256}%). Exceeding 256 will auto-switch to LOAD_CONST_W (no action needed, negligible cost).");
+                }
+            }
+
+            // 2. String constant pool usage
+            int strCount = _stringConstants.Count;
+            if (strCount > 0 && strCount >= (int)(256 * threshold))
+            {
+                _warnings.Add($"[CFG1] String constant pool uses {strCount}/256 entries ({strCount * 100 / 256}%).");
+            }
+
+            // 3. Module variable slot usage
+            int moduleVarCount = _moduleVarRegisters != null ? _moduleVarRegisters.Count : 0;
+            if (moduleVarCount > 0)
+            {
+                int fixedSlots = VMConstants.ModuleVarSlots;
+                int overflowCount = _nextExtendedReg;
+                if (overflowCount > 0)
+                {
+                    _warnings.Add($"[CFG1] Module variables: {moduleVarCount} total ({fixedSlots} fixed + {overflowCount} extended). Extended vars use heap access (LOAD_XREG/STORE_XREG, ~2x slower per access).");
+                }
+                else if (moduleVarCount >= (int)(fixedSlots * threshold))
+                {
+                    _warnings.Add($"[CFG1] Module variable slots: {moduleVarCount}/{fixedSlots} ({moduleVarCount * 100 / fixedSlots}%). Overflow auto-spills to extended registers (heap access, ~2x slower per access).");
+                }
+            }
+
+            // 4. Per-function local variable usage (peak across all functions)
+            int maxLocals = VMConstants.LocalVarSlots;
+            for (int i = 0; i < functionEntries.Count; i++)
+            {
+                int used = functionEntries[i].LocalRegCount;
+                if (used >= (int)(maxLocals * threshold))
+                {
+                    _warnings.Add($"[CFG1] Function '{functionEntries[i].Name}' uses {used}/{maxLocals} local variable slots ({used * 100 / maxLocals}%).");
+                }
+            }
+
+            // 5. Instruction count
+            int instrCount = _instructions.Count;
+            int maxInstr = VMConstants.MaxModuleSize / 4;  // 4 bytes per instruction
+            if (instrCount >= (int)(maxInstr * threshold))
+            {
+                _warnings.Add($"[CFG1] Bytecode uses {instrCount}/{maxInstr} instructions ({instrCount * 100 / maxInstr}%).");
+            }
+
+            // 6. Jump table count
+            int jtCount = _jumpTables.Count;
+            if (jtCount > 0 && jtCount >= (int)(256 * threshold))
+            {
+                _warnings.Add($"[CFG1] Jump tables: {jtCount}/256 ({jtCount * 100 / 256}%).");
+            }
+        }
+
+        /// <summary>
         /// Recursively collect all user function names called within a block statement.
         /// </summary>
         private void CollectCallees(Stmt stmt, HashSet<string> callees)
@@ -4188,7 +4301,7 @@ namespace FFVM.Compiler
         /// </summary>
         private bool CanInline(string funcName)
         {
-            if (_inlineDepth >= InlineDepthMax) return false;
+            if (_inlineDepth >= _options.InlineDepthMax) return false;
             if (!_funcDecls.TryGetValue(funcName, out var func)) return false;
             // Never inline entry function
             if (_isEntryFunction && func.Name == _currentFunctionName) return false;
@@ -4206,7 +4319,7 @@ namespace FFVM.Compiler
 
             // Size check
             int estimate = EstimateBodySize(func.Body);
-            if (estimate > InlineThreshold) return false;
+            if (estimate > _options.InlineThreshold) return false;
 
             return true;
         }
@@ -4331,7 +4444,7 @@ namespace FFVM.Compiler
                 return s;
             }
             // Yield/Wait/Defer/Using — should not appear in inlinable functions, return large number
-            return InlineThreshold + 1;
+            return _options.InlineThreshold + 1;
         }
 
         private int EstimateExprSize(Expr expr)
@@ -4547,7 +4660,7 @@ namespace FFVM.Compiler
         {
             if (inlineInfo == null) return false;
             int chainDepth = visited != null ? visited.Count : 0;
-            if (_inlineDepth + chainDepth >= InlineDepthMax) return false;
+            if (_inlineDepth + chainDepth >= _options.InlineDepthMax) return false;
             // DC: R8 inlining guard removed — cross-module inlining allowed in cleanup blocks.
             // Recursion guard (compile-time stack)
             if (_inlineStack != null && _inlineStack.Contains(func.Name)) return false;
@@ -4574,7 +4687,7 @@ namespace FFVM.Compiler
 
             // Size check
             int estimate = EstimateBodySize(func.Body);
-            if (estimate > InlineThreshold)
+            if (estimate > _options.InlineThreshold)
             {
                 visited.Remove(func.Name);
                 return false;
@@ -5078,6 +5191,7 @@ namespace FFVM.Compiler
             switch (code)
             {
                 case OpCode.LOAD_CONST:
+                case OpCode.LOAD_CONST_W:  // CFG1: wide constant also produces a result
                 case OpCode.ADD:  case OpCode.SUB: case OpCode.MUL: case OpCode.DIV: case OpCode.MOD:
                 case OpCode.CMP_EQ: case OpCode.CMP_NEQ: case OpCode.CMP_LT:
                 case OpCode.CMP_LTE: case OpCode.CMP_GT: case OpCode.CMP_GTE:

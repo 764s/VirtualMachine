@@ -348,6 +348,14 @@ namespace FFVM
                             inst.IP++;
                             break;
 
+                        // CFG1: wide constant pool access — 16-bit constant index (B | C<<8).
+                        // Zero overhead for modules with ≤256 constants (compiler emits LOAD_CONST).
+                        // Only emitted when constant index ≥256.
+                        case OpCode.LOAD_CONST_W:
+                            regs[Reg(op.A, rb)] = constBase[op.B | (op.C << 8)];
+                            inst.IP++;
+                            break;
+
                         case OpCode.SYSCALL:
                             Syscalls.Invoke(op.A, ref inst);
                             if (inst.ErrorFlag != VMError.None) return;
