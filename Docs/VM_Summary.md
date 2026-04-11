@@ -627,7 +627,35 @@ B 阶段 20 个步骤（B-R1 → B-δ5）全部完成，已归入上方 A 区表
 >
 > **Lang-6 设计来源（Q4 收敛）**：Q4 讨论历经 9 轮（R18~R26），14 项设计决策全部锁定。核心方案：方式 C（语言级引用），服务脚本为 FFS 运行时实体。统一基线设计 XIMA（Cross-Instance Member Access）：`svc.member` 点号语法，编译器根据导出表自动路由 XCALL/XLOAD_MVAR/XSTORE_MVAR。Y1-Plus 编译期保证服务函数不可 yield（无运行时负担）。嵌套深度运行时配置（MaxXCallDepth 默认 4，Warn/Unlimited 两种策略）。性能影响可忽略（< 0.02% 帧预算）。
 
-**Lang-10 ✅ 完成（DV01-DV10 全通过，B01-B06 benchmark 无回归，1310 测试全通过）。SK15 ✅ 全部完成（Phase 2 宿主侧 ExtractSkillDef 重构 + Phase 3 脚本侧 @export var 迁移：8 个脚本迁移完成，SetSkillMeta Syscall 移除，meta capture 机制移除）。Lang-8 ✅ 完成（US01-US15 全通过，B01-B06 benchmark 无回归，1259 测试全通过）。Lang-7 ✅ 完成（AD01-AD12 全通过，B01-B06 benchmark 无回归，1206 测试全通过）。Lang-6 ✅ 完成（XC01-XC16 全通过，B01-B06 benchmark 无回归确认，1164 测试全通过）。Lang-3 ✅ 完成（BB01-BB10 全通过，1111 测试全通过）。Lang-1 ✅ 完成。Lang-1.1a ✅ 完成（MR01-MR08 全通过）。Lang-1.1b ✅ 完成（XR01-XR06 全通过）。Lang-2 ✅ 完成（INC01-INC16 全通过）。P0 语言需求 Phase 1 完毕。Phase 2（Q4 服务脚本 XCALL 路径 Lang-6~Lang-8）全部完成。Lang-11 ✅ 完成（模块级 struct var/const 直接初始化，MSV01-MSV15 全通过，1365 测试总计，B01-B06 无回归）。Lang-12 ✅ 完成（@export const 基础类型，EC01-EC03 全通过，1388 测试总计）。Lang-9 P1 ✅ 完成（模块内 trivial inline：CanInline 判定 + EstimateInstructionCount AST 估算 + TryInlineCall 内联展开 + @inline 诊断，IN01-IN08 全通过，1411 测试总计）。Lang-9 P2 ✅ 完成（模块内一般内联：多语句/分支/循环/多 return exit label/用户函数嵌套内联/struct 参数/void 内联/cleanup 块守护/FO6 窗口修正/tempBaseline，IN09-IN23 全通过，1449 测试总计，B01-B06 无回归）。Lang-9 P3 ✅ 完成（跨模块内联：ModuleInlineInfo + ServiceBinding 扩展 + TryInlineMemberCall + _xInlineVars 导出变量重定向 XLOAD_MVAR/XSTORE_MVAR + CanInlineCrossModule 安全检查，XIN01-XIN10 全通过，1492 测试总计）。Lang-9 P4 ✅ 完成（深度链式内联：BuildModuleInlineInfo 包含全部函数 AST + CanInlineCrossModule visited 集合递归安全检查 + TryInlineCalleeFunc 跨模块内联体内递归展开 callee 函数 + CompileExprStmt/CompileExpr _xInlineInfo 拦截，XIN08 升级 + DIN01-DIN05 全通过，1517 测试总计，B01-B06 无回归）。DC ✅ 完成（Level 3 defer 函数调用：R8 禁令移除 + CallFrame.SavedR0 逐帧保存 + CleanupBase 高位 WasInCleanup 标志 + WAIT/WAIT_FOR InCleanup 运行时守护 + 内联 cleanup 守护移除，R8-01 更新 + DC-01~DC-08 全通过，1557 测试总计）。当前位置 → DC ✅ 完成。**
+**Lang-10 ✅ 完成（DV01-DV10 全通过，B01-B06 benchmark 无回归，1310 测试全通过）。SK15 ✅ 全部完成（Phase 2 宿主侧 ExtractSkillDef 重构 + Phase 3 脚本侧 @export var 迁移：8 个脚本迁移完成，SetSkillMeta Syscall 移除，meta capture 机制移除）。Lang-8 ✅ 完成（US01-US15 全通过，B01-B06 benchmark 无回归，1259 测试全通过）。Lang-7 ✅ 完成（AD01-AD12 全通过，B01-B06 benchmark 无回归，1206 测试全通过）。Lang-6 ✅ 完成（XC01-XC16 全通过，B01-B06 benchmark 无回归确认，1164 测试全通过）。Lang-3 ✅ 完成（BB01-BB10 全通过，1111 测试全通过）。Lang-1 ✅ 完成。Lang-1.1a ✅ 完成（MR01-MR08 全通过）。Lang-1.1b ✅ 完成（XR01-XR06 全通过）。Lang-2 ✅ 完成（INC01-INC16 全通过）。P0 语言需求 Phase 1 完毕。Phase 2（Q4 服务脚本 XCALL 路径 Lang-6~Lang-8）全部完成。Lang-11 ✅ 完成（模块级 struct var/const 直接初始化，MSV01-MSV15 全通过，1365 测试总计，B01-B06 无回归）。Lang-12 ✅ 完成（@export const 基础类型，EC01-EC03 全通过，1388 测试总计）。Lang-9 P1 ✅ 完成（模块内 trivial inline：CanInline 判定 + EstimateInstructionCount AST 估算 + TryInlineCall 内联展开 + @inline 诊断，IN01-IN08 全通过，1411 测试总计）。Lang-9 P2 ✅ 完成（模块内一般内联：多语句/分支/循环/多 return exit label/用户函数嵌套内联/struct 参数/void 内联/cleanup 块守护/FO6 窗口修正/tempBaseline，IN09-IN23 全通过，1449 测试总计，B01-B06 无回归）。Lang-9 P3 ✅ 完成（跨模块内联：ModuleInlineInfo + ServiceBinding 扩展 + TryInlineMemberCall + _xInlineVars 导出变量重定向 XLOAD_MVAR/XSTORE_MVAR + CanInlineCrossModule 安全检查，XIN01-XIN10 全通过，1492 测试总计）。Lang-9 P4 ✅ 完成（深度链式内联：BuildModuleInlineInfo 包含全部函数 AST + CanInlineCrossModule visited 集合递归安全检查 + TryInlineCalleeFunc 跨模块内联体内递归展开 callee 函数 + CompileExprStmt/CompileExpr _xInlineInfo 拦截，XIN08 升级 + DIN01-DIN05 全通过，1517 测试总计，B01-B06 无回归）。DC ✅ 完成（Level 3 defer 函数调用：R8 禁令移除 + CallFrame.SavedR0 逐帧保存 + CleanupBase 高位 WasInCleanup 标志 + WAIT/WAIT_FOR InCleanup 运行时守护 + 内联 cleanup 守护移除，R8-01 更新 + DC-01~DC-08 全通过，1557 测试总计）。CFG1 ✅ 完成（配置化 + 兜底机制：LOAD_CONST_W 宽常量池 + CompileOptions 编译器选项 + 资源诊断 + 兜底原则，CFG1-01~CFG1-07 全通过，1574 测试总计）。当前位置 → CFG1 ✅ 完成。**
+
+> #### 兜底原则（CFG1 总结，适用于所有后续特性）
+>
+> 以下原则由 P4 讨论确定，作为所有资源限制兜底机制的设计约束：
+>
+> | 编号 | 原则 | 说明 |
+> |------|------|------|
+> | F-1 | **不触发时零消耗** | 兜底路径不得在正常执行路径中引入分支、内存分配或额外指令。实现方式：编译期自动选择（常量池 LOAD_CONST vs LOAD_CONST_W）或运行时配置检查仅在启动/编译时执行。 |
+> | F-2 | **触发后代价可控** | 兜底触发后的代价必须是一次性（编译期决策）或低频水位线模式（运行时扩展后不再收缩）。禁止每帧/每指令的持续性代价。 |
+> | F-3 | **可配置关闭** | 所有兜底机制必须可通过 `CompileOptions`（编译期）或 `VMConfig`（运行时）显式关闭。关闭后行为回退为硬错误。 |
+> | F-4 | **接近限制时警告** | 当资源使用率达到阈值（默认 75%），编译器自动发出 `[CFG1]` 警告。可通过 `CompileOptions.DiagnosticsEnabled = false` 关闭。 |
+> | F-5 | **正负作用透明** | 每个可配置参数（InlineThreshold、InlineDepthMax、MaxHoistedPerLoop 等）必须在文档中标注 ↑ 增大和 ↓ 减小的正负影响。详见 `CompileOptions.cs` XML doc。 |
+>
+> **已实现的兜底机制一览**：
+>
+> | 资源 | 限制 | 兜底方式 | 触发代价 | 配置关闭 |
+> |------|------|---------|---------|---------|
+> | 常量池 | 256（LOAD_CONST 8-bit B 操作数） | 自动切换 LOAD_CONST_W（16-bit B\|C<<8，上限 65535） | 零（不同 opcode，同等性能） | N/A（无需关闭） |
+> | 常量比较跳转 | 256（JUMP_IF_\*_K 8-bit C 操作数） | 自动降级为寄存器比较+跳转 | 多 1 条 LOAD_CONST_W 指令 | N/A（自动） |
+> | 模块变量 | 8 固定槽（r56..r63） | 溢出到扩展寄存器（LOAD_XREG/STORE_XREG，Lang-1.1b） | 堆数组访问 ~2x 延迟 | N/A（已有） |
+> | 内联展开 | InlineThreshold(16) / InlineDepthMax(3) | 超限函数退回 CALL/XCALL | 正常函数调用开销 | `CompileOptions.InlineThreshold = 0` |
+> | LICM 常量提升 | MaxHoistedPerLoop(8) | 超限常量保留为循环内 LOAD_CONST | 每次循环迭代多 1 条指令 | `CompileOptions.MaxHoistedPerLoop = 0` |
+>
+> **自查清单（后续特性开发前检查）**：
+> 1. 新特性是否引入了新的资源限制？→ 按 F-1~F-5 设计兜底
+> 2. 硬编码字面数是否应改为常量？→ 使用 `VMConstants` 或 `CompileOptions`
+> 3. 常量是否应可配置？→ 评估性能影响后决定放入 `CompileOptions`（编译期）或 `VMConfig`（运行时）
+> 4. 配置修改的正负作用是否已文档化？→ XML doc 必须包含 ↑/↓ 说明
 
 ---
 
