@@ -74,14 +74,26 @@ namespace FFVM.Compiler
         /// "Function 'update' uses 28/32 local variable slots (87%)",
         /// "Constant pool uses 230/256 entries before wide fallback".</para>
         ///
-        /// <para><b>Default: true</b>. Recommended for development builds.
-        /// Set to false for production builds where warning noise is undesirable.</para>
+        /// <para><b>↑ Enable (true)</b>: early visibility into resource pressure —
+        /// catches approaching-limit issues before they cause failures.
+        /// No runtime cost (diagnostics run at compile-time only).</para>
+        ///
+        /// <para><b>↓ Disable (false)</b>: suppresses all [CFG1] warnings.
+        /// Use in production builds where warning noise is undesirable.</para>
+        ///
+        /// <para><b>Default: true</b>. Recommended for development builds.</para>
         /// </summary>
         public bool DiagnosticsEnabled { get; set; } = true;
 
         /// <summary>
         /// Threshold (0.0–1.0) for resource usage warnings.
         /// A warning is emitted when usage ≥ this fraction of the limit.
+        ///
+        /// <para><b>↑ Increase (→1.0)</b>: warnings fire later → less noise,
+        /// but less lead time to act before hitting hard limits.</para>
+        ///
+        /// <para><b>↓ Decrease (→0.0)</b>: warnings fire earlier → more visibility,
+        /// but higher noise for modules well within limits.</para>
         ///
         /// <para><b>Default: 0.75</b> (75%). Warning fires when 3/4 of a resource is consumed.</para>
         /// </summary>

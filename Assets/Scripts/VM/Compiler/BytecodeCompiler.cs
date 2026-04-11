@@ -1998,7 +1998,7 @@ namespace FFVM.Compiler
         }
 
         // ===== B-ζ1: LICM — Loop-Invariant Constant Motion =====
-        // CFG1: MaxHoistedPerLoop now read from MaxHoistedPerLoop
+        // CFG1: MaxHoistedPerLoop now configurable via _options.MaxHoistedPerLoop (default: 8)
 
         /// <summary>
         /// Walk an AST subtree and collect all Number constants that would generate LOAD_CONST.
