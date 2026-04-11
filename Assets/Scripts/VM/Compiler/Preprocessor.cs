@@ -679,7 +679,6 @@ namespace FFVM.Compiler
             string alias = v.AliasTarget;
             if (!target.AliasedModules.TryGetValue(alias, out var aliasModule))
             {
-                string kind = v.IsConst ? "const" : "var";
                 _errors.Add($"[{mainFilePath}] '{alias}' is not a known include alias; cannot override '{alias}.{v.Name}'");
                 return;
             }
