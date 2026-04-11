@@ -136,7 +136,20 @@ if exist ".vscode\tasks.json" (
     echo [WARN] Could not generate tasks.json
 )
 
-:: ─── Step 6: Install VS Code extension (best-effort) ────────
+:: ─── Step 6: Build ffvm-cli (LSP / DAP server) ──────────────
+
+echo.
+echo [*] Building ffvm-cli (editor LSP ^& DAP support)...
+
+dotnet build src\FFVM.Cli\FFVM.Cli.csproj -c Release --nologo -v q
+if errorlevel 1 (
+    echo [WARN] ffvm-cli build failed — editor LSP/DAP features will not work.
+    echo        You can retry manually: dotnet build src\FFVM.Cli\FFVM.Cli.csproj -c Release
+) else (
+    echo [OK] ffvm-cli build succeeded.
+)
+
+:: ─── Step 7: Install VS Code extension (best-effort) ────────
 
 echo.
 echo [*] Attempting VS Code extension installation...

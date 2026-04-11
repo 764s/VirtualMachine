@@ -239,17 +239,30 @@ cp KOF98/KOF98.csproj.template KOF98/KOF98.csproj
 **症状**：`.ffs` 文件无语法高亮，无自动补全
 
 **解决**：
-1. 确保已安装 FFVM VS Code 扩展：
-   ```bash
-   cd vscode-ffvm-debug
-   npm install
-   npx @vscode/vsce package --no-dependencies -o ffvm-debug.vsix
-   code --install-extension ffvm-debug.vsix
-   ```
-2. 配置 `ffvm.executablePath`（VS Code 设置）：
-   - 默认值 `ffvm-cli`（需在 PATH 中）
-   - 或指定完整路径，如 `C:\path\to\ffvm-cli.exe`
-3. 重启 VS Code
+
+**方法 A：使用初始化脚本（推荐）**
+```bash
+# Windows: 双击 Sandbox\sandbox-init.cmd
+# macOS/Linux: bash Sandbox/sandbox-init.sh
+# 脚本自动完成：构建 ffvm-cli + 安装 VS Code 扩展
+```
+
+**方法 B：手动安装**
+```bash
+# 1. 构建 ffvm-cli（编辑器 LSP/DAP 后端）
+dotnet build src/FFVM.Cli/FFVM.Cli.csproj -c Release
+
+# 2. 安装 VS Code 扩展
+cd vscode-ffvm-debug
+npm install
+npx @vscode/vsce package --no-dependencies -o ffvm-debug.vsix
+code --install-extension ffvm-debug.vsix
+
+# 3. 重启 VS Code
+```
+
+**说明**：扩展会自动在 `src/FFVM.Cli/bin/Release/net8.0/` 下寻找构建好的 `ffvm-cli`。
+如需指定自定义路径，在 VS Code 设置中配置 `ffvm.executablePath`。
 
 ---
 

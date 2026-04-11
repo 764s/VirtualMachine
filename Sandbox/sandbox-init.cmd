@@ -99,10 +99,23 @@ if exist ".vscode\launch.json" (
     echo [WARN] Could not copy launch.json
 )
 
-:: ─── Step 6: Build StandaloneRunner (for DAP/LSP) ──────────
+:: ─── Step 6: Build ffvm-cli (LSP / DAP server) ─────────────
 
 echo.
-echo [*] Setting up StandaloneRunner (DAP/LSP server)...
+echo [*] Building ffvm-cli (editor LSP ^& DAP support)...
+
+dotnet build src\FFVM.Cli\FFVM.Cli.csproj -c Release --nologo -v q
+if errorlevel 1 (
+    echo [WARN] ffvm-cli build failed — editor LSP/DAP features will not work.
+    echo        You can retry manually: dotnet build src\FFVM.Cli\FFVM.Cli.csproj -c Release
+) else (
+    echo [OK] ffvm-cli build succeeded.
+)
+
+:: ─── Step 7: Build StandaloneRunner (for tests) ────────────
+
+echo.
+echo [*] Setting up StandaloneRunner (test runner)...
 
 if not exist "StandaloneRunner\StandaloneRunner.csproj" (
     :: Generate .csproj inline (same as CI)
@@ -125,12 +138,12 @@ if not exist "StandaloneRunner\StandaloneRunner.csproj" (
 
 dotnet build StandaloneRunner\StandaloneRunner.csproj -c Release --nologo -v q
 if errorlevel 1 (
-    echo [WARN] StandaloneRunner build failed — DAP/LSP debugging may not work.
+    echo [WARN] StandaloneRunner build failed — tests may not work.
 ) else (
     echo [OK] StandaloneRunner build succeeded.
 )
 
-:: ─── Step 7: Install VS Code extension (best-effort) ───────
+:: ─── Step 8: Install VS Code extension (best-effort) ───────
 
 echo.
 echo [*] Attempting VS Code extension installation...
