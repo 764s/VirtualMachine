@@ -144,6 +144,9 @@ namespace FFVM.Compiler
         // Lang-9 P4: deep chain inline — callee function lookup during cross-module inline
         private ModuleInlineInfo _xInlineInfo;     // active cross-module inline info (null = not in cross-module inline)
 
+        // Lang-15: origin-aware symbol lookup for public/private visibility
+        private string _currentOriginFile;         // OriginFile of the function currently being compiled
+
         // F4: Register lifecycle analysis
         private struct LiveRange
         {
@@ -160,6 +163,54 @@ namespace FFVM.Compiler
         private int _stmtOrder;                             // current statement order counter for release tracking
         // Lang-9 P2: track which callees were inlined per function (for FO6 window analysis)
         private Dictionary<string, HashSet<string>> _inlinedCalleesPerFunc;
+
+        // ===== Lang-15: origin-aware symbol lookup helpers =====
+
+        /// <summary>
+        /// Returns the internal dictionary key for a FuncDecl.
+        /// Private functions use "name\0originFile"; public functions use "name".
+        /// </summary>
+        private static string FuncKey(FuncDecl f)
+        {
+            return f.IsPrivate ? (f.Name + "\0" + (f.OriginFile ?? "")) : f.Name;
+        }
+
+        /// <summary>
+        /// Resolve a function call name to the internal key, considering origin-aware visibility.
+        /// 1. If a private function from the current origin exists → return qualified key.
+        /// 2. Fall back to public function name.
+        /// 3. Return null if not found.
+        /// </summary>
+        private string ResolveFuncKey(string name)
+        {
+            // Check private function from current origin first
+            if (_currentOriginFile != null)
+            {
+                string privKey = name + "\0" + _currentOriginFile;
+                if (_functionTable.ContainsKey(privKey))
+                    return privKey;
+            }
+            // Fall back to public function
+            if (_functionTable.ContainsKey(name))
+                return name;
+            return null;
+        }
+
+        /// <summary>
+        /// Resolve a struct type name considering origin-aware visibility.
+        /// </summary>
+        private string ResolveStructKey(string name)
+        {
+            if (_currentOriginFile != null)
+            {
+                string privKey = name + "\0" + _currentOriginFile;
+                if (_structTypes.ContainsKey(privKey))
+                    return privKey;
+            }
+            if (_structTypes.ContainsKey(name))
+                return name;
+            return null;
+        }
 
         /// <summary>
         /// Compile source text into a VMProgram.
@@ -281,14 +332,16 @@ namespace FFVM.Compiler
             }
 
             // --- Build struct type table ---
+            // Lang-15: origin-aware struct lookup — private structs use qualified key
             _structTypes = new Dictionary<string, StructDecl>();
             for (int i = 0; i < module.Structs.Count; i++)
             {
                 var s = module.Structs[i];
-                if (_structTypes.ContainsKey(s.Name))
+                string key = s.IsPrivate ? (s.Name + "\0" + (s.OriginFile ?? "")) : s.Name;
+                if (_structTypes.ContainsKey(key))
                     _errors.Add($"Duplicate struct type '{s.Name}'");
                 else
-                    _structTypes[s.Name] = s;
+                    _structTypes[key] = s;
             }
 
             // SN1: Build flattened struct info (recursive expansion + cycle detection)
@@ -307,6 +360,7 @@ namespace FFVM.Compiler
                 return new CompileResult { Errors = _errors };
 
             // --- Pass 1: build function table (name → placeholder IP) ---
+            // Lang-15: private functions use qualified key "name\0originFile"
             _functionTable = new Dictionary<string, int>();
             _funcDecls = new Dictionary<string, FuncDecl>();
             FuncDecl entryDecl = null;
@@ -314,8 +368,9 @@ namespace FFVM.Compiler
             for (int i = 0; i < module.Functions.Count; i++)
             {
                 var f = module.Functions[i];
-                _functionTable[f.Name] = -1; // placeholder
-                _funcDecls[f.Name] = f;
+                string key = FuncKey(f);
+                _functionTable[key] = -1; // placeholder
+                _funcDecls[key] = f;
                 if (f.Name == entryFunc)
                     entryDecl = f;
             }
@@ -331,7 +386,8 @@ namespace FFVM.Compiler
             var functionEntries = new List<FunctionEntry>();
 
             int funcStartIP = 0;
-            _functionTable[entryDecl.Name] = 0;
+            string entryKey = FuncKey(entryDecl);
+            _functionTable[entryKey] = 0;
             CompileFunction(entryDecl, isEntry: true);
             int funcEndIP = CurrentIP();
             int entryWindow = ComputeAndRemapFunctionWindow(funcStartIP, funcEndIP);
@@ -340,11 +396,12 @@ namespace FFVM.Compiler
             for (int i = 0; i < module.Functions.Count; i++)
             {
                 var f = module.Functions[i];
-                if (f.Name == entryFunc) continue;
+                if (f == entryDecl) continue;
 
-                bool isLeaf = _leafFunctions.TryGetValue(f.Name, out bool lf) && lf;
+                string fKey = FuncKey(f);
+                bool isLeaf = _leafFunctions.TryGetValue(fKey, out bool lf) && lf;
                 funcStartIP = CurrentIP();
-                _functionTable[f.Name] = funcStartIP;
+                _functionTable[fKey] = funcStartIP;
                 CompileFunction(f, isEntry: false);
                 funcEndIP = CurrentIP();
                 int window = ComputeAndRemapFunctionWindow(funcStartIP, funcEndIP);
@@ -467,13 +524,14 @@ namespace FFVM.Compiler
             _tempTop = TempRegBase;
             _deferredCleanups = new List<DeferredCleanup>();
             _isEntryFunction = isEntry;
-            _isLeafFunction = !isEntry && _leafFunctions.TryGetValue(func.Name, out bool lf) && lf;
+            _isLeafFunction = !isEntry && _leafFunctions.TryGetValue(FuncKey(func), out bool lf) && lf;
             _inCleanupBlock = false;
             _freeVarRegs = new List<int>();
             _maxVarRegUsed = VarRegBase - 1;
             _maxTempUsed = TempRegBase - 1;  // FO6: no temps used yet
             _stmtOrder = 0;
             _currentFunctionName = func.Name;
+            _currentOriginFile = func.OriginFile;  // Lang-15
 
             // Reset source line to the function declaration line so that
             // parameter-binding MOVEs (emitted before the body) map to the
@@ -482,15 +540,41 @@ namespace FFVM.Compiler
             _currentLine = func.Line;
 
             // Lang-1: Pre-populate scope with module variables and constants
+            // Lang-15: origin-aware filtering — private vars only visible to same-origin functions
             if (_moduleVarRegisters != null)
             {
                 foreach (var kv in _moduleVarRegisters)
-                    _variables[kv.Key] = kv.Value;
+                {
+                    int sepIdx = kv.Key.IndexOf('\0');
+                    if (sepIdx >= 0)
+                    {
+                        // Qualified key (private) — check origin match
+                        string origin = kv.Key.Substring(sepIdx + 1);
+                        if (origin == _currentOriginFile)
+                            _variables[kv.Key.Substring(0, sepIdx)] = kv.Value;
+                    }
+                    else
+                    {
+                        _variables[kv.Key] = kv.Value;
+                    }
+                }
             }
             if (_moduleConstValues != null)
             {
                 foreach (var kv in _moduleConstValues)
-                    _constValues[kv.Key] = kv.Value;
+                {
+                    int sepIdx = kv.Key.IndexOf('\0');
+                    if (sepIdx >= 0)
+                    {
+                        string origin = kv.Key.Substring(sepIdx + 1);
+                        if (origin == _currentOriginFile)
+                            _constValues[kv.Key.Substring(0, sepIdx)] = kv.Value;
+                    }
+                    else
+                    {
+                        _constValues[kv.Key] = kv.Value;
+                    }
+                }
             }
             // Lang-13: inject enum constants into function-scope _constValues
             if (_enumMemberMap != null)
@@ -500,10 +584,23 @@ namespace FFVM.Compiler
                         _constValues[enumKv.Key + "." + memberKv.Key] = memberKv.Value;
             }
             // Lang-11: Pre-populate struct type info for module struct vars
+            // Lang-15: origin-aware filtering for struct var types
             if (_moduleStructVarTypes != null)
             {
                 foreach (var kv in _moduleStructVarTypes)
-                    _structVarTypes[kv.Key] = kv.Value;
+                {
+                    int sepIdx = kv.Key.IndexOf('\0');
+                    if (sepIdx >= 0)
+                    {
+                        string origin = kv.Key.Substring(sepIdx + 1);
+                        if (origin == _currentOriginFile)
+                            _structVarTypes[kv.Key.Substring(0, sepIdx)] = kv.Value;
+                    }
+                    else
+                    {
+                        _structVarTypes[kv.Key] = kv.Value;
+                    }
+                }
             }
             // Module consts with registers (non-foldable) are already in _moduleVarRegisters
             // and marked in _moduleConstVarNames for assignment prevention
@@ -522,10 +619,11 @@ namespace FFVM.Compiler
                 for (int i = 0; i < func.Parameters.Count; i++)
                 {
                     var param = func.Parameters[i];
-                    if (_structTypes.ContainsKey(param.TypeName))
+                    if (_structTypes.ContainsKey(param.TypeName) || ResolveStructKey(param.TypeName) != null)
                     {
+                        string structKey = ResolveStructKey(param.TypeName) ?? param.TypeName;
                         // Struct parameter: allocate consecutive locals, copy multi-reg from scratch
-                        int flatCount = _flatStructInfo[param.TypeName].FlatFieldCount;
+                        int flatCount = _flatStructInfo[structKey].FlatFieldCount;
                         int baseReg = DeclareStructVar(param.Name, flatCount);
                         _structVarTypes[param.Name] = param.TypeName;
                         EmitStructCopy(baseReg, scratchReg, flatCount);
@@ -577,7 +675,8 @@ namespace FFVM.Compiler
             foreach (var enumDecl in module.Enums)
             {
                 // Check for name collisions with struct/func/var/const/enum
-                if (_structTypes.ContainsKey(enumDecl.Name))
+                string enumStructKey = ResolveStructKey(enumDecl.Name);
+                if (enumStructKey != null)
                 {
                     _errors.Add($"Enum name '{enumDecl.Name}' conflicts with struct '{enumDecl.Name}' (line {enumDecl.Line})");
                     continue;
@@ -662,17 +761,21 @@ namespace FFVM.Compiler
             {
                 var decl = module.ModuleVariables[i];
 
+                // Lang-15: for private vars from different files, use qualified key to avoid collision
+                string varKey = decl.IsPrivate ? (decl.Name + "\0" + (decl.OriginFile ?? "")) : decl.Name;
+
                 // Check for duplicate module variable names
-                if (_moduleVarRegisters.ContainsKey(decl.Name) || _moduleConstValues.ContainsKey(decl.Name))
+                if (_moduleVarRegisters.ContainsKey(varKey) || _moduleConstValues.ContainsKey(varKey))
                 {
                     _errors.Add($"Duplicate module variable '{decl.Name}' (line {decl.Line})");
                     continue;
                 }
 
                 // Lang-11: Check if this is a struct-typed module variable
-                if (decl.TypeName != null && _structTypes.ContainsKey(decl.TypeName))
+                string structKey = ResolveStructKey(decl.TypeName);
+                if (decl.TypeName != null && (structKey != null || _structTypes.ContainsKey(decl.TypeName)))
                 {
-                    ProcessModuleStructVar(decl, ref nextModuleReg);
+                    ProcessModuleStructVar(decl, varKey, ref nextModuleReg);
                     continue;
                 }
 
@@ -687,8 +790,10 @@ namespace FFVM.Compiler
 
                     if (TryFoldConstant(decl.Initializer, out Number constVal))
                     {
-                        _moduleConstValues[decl.Name] = constVal;
-                        _constValues[decl.Name] = constVal; // make available for subsequent folding
+                        _moduleConstValues[varKey] = constVal;
+                        _constValues[varKey] = constVal; // make available for subsequent folding
+                        // Lang-15: also store under simple name for same-origin lookups
+                        if (decl.IsPrivate) _constValues[decl.Name] = constVal;
 
                         // Lang-12: @export const needs a register for ExportTable mvarSlot
                         // so cross-instance reads (XLOAD_MVAR / GetVarDefault) work
@@ -703,7 +808,7 @@ namespace FFVM.Compiler
                             {
                                 ecReg = VMConstants.MaxRegisters + _nextExtendedReg++;
                             }
-                            _moduleVarRegisters[decl.Name] = ecReg;
+                            _moduleVarRegisters[varKey] = ecReg;
                             _moduleVarInitValues[ecReg] = constVal;
 
                             _symbolEntries.Add(new SymbolEntry(decl.Name, ecReg, 0, null, "<module>"));
@@ -728,7 +833,7 @@ namespace FFVM.Compiler
                     // Lang-1.1b: Overflow to extended registers
                     reg = VMConstants.MaxRegisters + _nextExtendedReg++;
                 }
-                _moduleVarRegisters[decl.Name] = reg;
+                _moduleVarRegisters[varKey] = reg;
 
                 // Try to fold initializer to a constant value for emit
                 if (decl.Initializer != null)
@@ -757,9 +862,10 @@ namespace FFVM.Compiler
         /// Allocates N consecutive module var registers for the flattened struct fields.
         /// Struct literal initializer: all scalar fields must be compile-time constants.
         /// </summary>
-        private void ProcessModuleStructVar(VarDeclStmt decl, ref int nextModuleReg)
+        private void ProcessModuleStructVar(VarDeclStmt decl, string varKey, ref int nextModuleReg)
         {
-            var flatInfo = _flatStructInfo[decl.TypeName];
+            string structResolvedKey = ResolveStructKey(decl.TypeName) ?? decl.TypeName;
+            var flatInfo = _flatStructInfo[structResolvedKey];
             int flatCount = flatInfo.FlatFieldCount;
 
             // Validate initializer
@@ -795,11 +901,11 @@ namespace FFVM.Compiler
                 _nextExtendedReg += flatCount;
             }
 
-            _moduleVarRegisters[decl.Name] = baseReg;
-            _moduleStructVarTypes[decl.Name] = decl.TypeName;
+            _moduleVarRegisters[varKey] = baseReg;
+            _moduleStructVarTypes[varKey] = decl.TypeName;
 
             if (decl.IsConst)
-                _moduleConstVarNames.Add(decl.Name);
+                _moduleConstVarNames.Add(varKey);
 
             // Fold struct literal field values into _moduleVarInitValues
             if (decl.Initializer is StructLiteralExpr structLit)
@@ -1394,10 +1500,11 @@ namespace FFVM.Compiler
             for (int i = 0; i < sd.Fields.Count; i++)
             {
                 var field = sd.Fields[i];
-                if (_structTypes.ContainsKey(field.TypeName))
+                if (_structTypes.ContainsKey(field.TypeName) || ResolveStructKey(field.TypeName) != null)
                 {
                     // Nested struct field — recursively flatten
-                    var inner = FlattenStruct(field.TypeName, visiting);
+                    string fieldKey = ResolveStructKey(field.TypeName) ?? field.TypeName;
+                    var inner = FlattenStruct(fieldKey, visiting);
                     for (int j = 0; j < inner.FlatFields.Length; j++)
                     {
                         flatFields.Add(new FlatFieldEntry
@@ -2700,7 +2807,7 @@ namespace FFVM.Compiler
             if (stmt.Expression is CallExpr call)
             {
                 // User function — void call
-                if (_functionTable != null && _functionTable.ContainsKey(call.FunctionName))
+                if (_functionTable != null && ResolveFuncKey(call.FunctionName) != null)
                 {
                     CompileUserCallVoid(call);
                     return;
@@ -3107,7 +3214,7 @@ namespace FFVM.Compiler
             if (expr is CallExpr call)
             {
                 // User function call (returns value in r0)
-                if (_functionTable != null && _functionTable.ContainsKey(call.FunctionName))
+                if (_functionTable != null && ResolveFuncKey(call.FunctionName) != null)
                     return CompileUserCallExpr(call, destReg);
 
                 // P4: callee function call during cross-module inline
@@ -3242,10 +3349,11 @@ namespace FFVM.Compiler
             // inside cleanup blocks (defer/using). Runtime handles nested cleanup
             // via per-frame SavedR0 and WasInCleanup flag in CallFrame.CleanupBase.
 
-            int entryIP = _functionTable[call.FunctionName];
+            string resolvedKey = ResolveFuncKey(call.FunctionName);
+            int entryIP = _functionTable[resolvedKey];
 
             // Validate parameter count (FF3: allow fewer args if remaining params have defaults)
-            if (_funcDecls.TryGetValue(call.FunctionName, out var funcDecl))
+            if (_funcDecls.TryGetValue(resolvedKey, out var funcDecl))
             {
                 int requiredCount = 0;
                 for (int i = 0; i < funcDecl.Parameters.Count; i++)
@@ -3344,13 +3452,14 @@ namespace FFVM.Compiler
 
             int callIP = CurrentIP();
             // FO1: emit CALL_LEAF for leaf function targets
-            bool targetIsLeaf = _leafFunctions.TryGetValue(call.FunctionName, out bool tl) && tl;
+            // Lang-15: use resolved key for leaf function lookup
+            bool targetIsLeaf = _leafFunctions.TryGetValue(resolvedKey, out bool tl) && tl;
             Emit(targetIsLeaf ? OpCode.CALL_LEAF : OpCode.CALL, entryIP, windowSize);
 
             // If target IP is still placeholder (-1), record for backpatch
             if (entryIP < 0)
             {
-                _pendingCalls.Add(new PendingCall { InstructionIP = callIP, FunctionName = call.FunctionName });
+                _pendingCalls.Add(new PendingCall { InstructionIP = callIP, FunctionName = resolvedKey });
             }
         }
 
@@ -3364,14 +3473,14 @@ namespace FFVM.Compiler
         /// </summary>
         private void AnalyzeCallDepth(ModuleNode module, string entryFunc, List<FunctionEntry> functionEntries)
         {
-            // Build call graph: funcName → set of called function names
+            // Build call graph: funcKey → set of called function names
             var callGraph = new Dictionary<string, HashSet<string>>();
             for (int i = 0; i < module.Functions.Count; i++)
             {
                 var func = module.Functions[i];
                 var callees = new HashSet<string>();
                 CollectCallees(func.Body, callees);
-                callGraph[func.Name] = callees;
+                callGraph[FuncKey(func)] = callees;
             }
 
             // DFS to compute max depth from each function
@@ -3621,7 +3730,7 @@ namespace FFVM.Compiler
             if (expr is CallExpr call)
             {
                 // Only record user function calls (those in _funcDecls)
-                if (_funcDecls.ContainsKey(call.FunctionName))
+                if (ResolveFuncKey(call.FunctionName) != null)
                     callees.Add(call.FunctionName);
                 for (int i = 0; i < call.Arguments.Count; i++)
                     CollectCalleesExpr(call.Arguments[i], callees);
@@ -3662,18 +3771,19 @@ namespace FFVM.Compiler
             for (int i = 0; i < module.Functions.Count; i++)
             {
                 var func = module.Functions[i];
-                if (func.Name == entryFunc)
+                string fKey = FuncKey(func);
+                if (func.Name == entryFunc && !func.IsPrivate)
                 {
-                    _leafFunctions[func.Name] = false; // entry function is never leaf
+                    _leafFunctions[fKey] = false; // entry function is never leaf
                     continue;
                 }
                 // FF5: functions with defer/using need full CALL/RET_FUNC path for cleanup chain
                 if (ContainsDeferOrUsing(func.Body))
                 {
-                    _leafFunctions[func.Name] = false;
+                    _leafFunctions[fKey] = false;
                     continue;
                 }
-                _leafFunctions[func.Name] = !ContainsNonLeafNode(func.Body);
+                _leafFunctions[fKey] = !ContainsNonLeafNode(func.Body);
             }
         }
 
@@ -4049,7 +4159,7 @@ namespace FFVM.Compiler
 
             if (expr is CallExpr call)
             {
-                if (_funcDecls != null && _funcDecls.ContainsKey(call.FunctionName))
+                if (_funcDecls != null && ResolveFuncKey(call.FunctionName) != null)
                     callees.Add(call.FunctionName);
                 for (int i = 0; i < call.Arguments.Count; i++)
                     CollectCalleesExpr(call.Arguments[i], callees);
@@ -4386,7 +4496,7 @@ namespace FFVM.Compiler
             if (expr is CallExpr call)
             {
                 // Only user function calls disqualify; syscalls don't use the call stack
-                if (_funcDecls.ContainsKey(call.FunctionName))
+                if (ResolveFuncKey(call.FunctionName) != null)
                     return true;
                 // Check arguments even for syscall-like calls
                 for (int i = 0; i < call.Arguments.Count; i++)
@@ -4438,7 +4548,8 @@ namespace FFVM.Compiler
         private bool CanInline(string funcName)
         {
             if (_inlineDepth >= _options.InlineDepthMax) return false;
-            if (!_funcDecls.TryGetValue(funcName, out var func)) return false;
+            string resolvedKey = ResolveFuncKey(funcName);
+            if (resolvedKey == null || !_funcDecls.TryGetValue(resolvedKey, out var func)) return false;
             // Never inline entry function
             if (_isEntryFunction && func.Name == _currentFunctionName) return false;
             // Recursion guard
@@ -4629,7 +4740,7 @@ namespace FFVM.Compiler
                 return false;
             }
 
-            var func = _funcDecls[call.FunctionName];
+            var func = _funcDecls[ResolveFuncKey(call.FunctionName)];
 
             // Validate argument count (same logic as EmitUserCall)
             int requiredCount = 0;
@@ -4775,7 +4886,8 @@ namespace FFVM.Compiler
         /// </summary>
         private void EmitInlineFailureDiagnostic(string funcName, int line)
         {
-            if (!_funcDecls.TryGetValue(funcName, out var func)) return;
+            string resolvedKey = ResolveFuncKey(funcName);
+            if (resolvedKey == null || !_funcDecls.TryGetValue(resolvedKey, out var func)) return;
             if (!func.IsInline) return; // unmarked → silent fallback
             _warnings.Add($"@inline function '{funcName}' could not be inlined. CALL will be used. (line {line})");
         }

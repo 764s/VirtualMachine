@@ -108,10 +108,26 @@ namespace FFVM.Compiler
                 stack.RemoveAt(stack.Count - 1);
                 // Re-wrap with correct filePath (Parser uses "script" by default)
                 var wrapped = new ModuleNode(filePath);
-                for (int i = 0; i < module.Structs.Count; i++) wrapped.Structs.Add(module.Structs[i]);
-                for (int i = 0; i < module.Functions.Count; i++) wrapped.Functions.Add(module.Functions[i]);
-                for (int i = 0; i < module.ModuleVariables.Count; i++) wrapped.ModuleVariables.Add(module.ModuleVariables[i]);
-                for (int i = 0; i < module.Enums.Count; i++) wrapped.Enums.Add(module.Enums[i]);
+                for (int i = 0; i < module.Structs.Count; i++)
+                {
+                    module.Structs[i].OriginFile = filePath;  // Lang-15
+                    wrapped.Structs.Add(module.Structs[i]);
+                }
+                for (int i = 0; i < module.Functions.Count; i++)
+                {
+                    module.Functions[i].OriginFile = filePath;  // Lang-15
+                    wrapped.Functions.Add(module.Functions[i]);
+                }
+                for (int i = 0; i < module.ModuleVariables.Count; i++)
+                {
+                    module.ModuleVariables[i].OriginFile = filePath;  // Lang-15
+                    wrapped.ModuleVariables.Add(module.ModuleVariables[i]);
+                }
+                for (int i = 0; i < module.Enums.Count; i++)
+                {
+                    module.Enums[i].OriginFile = filePath;  // Lang-15
+                    wrapped.Enums.Add(module.Enums[i]);
+                }
                 return wrapped;
             }
 
@@ -189,9 +205,10 @@ namespace FFVM.Compiler
                 MergeStruct(target, s, structSources, srcFile);
             }
 
-            // Lang-13: Merge enums (simple append — duplicates caught by compiler ProcessEnums)
+            // Lang-13: Merge enums
             for (int i = 0; i < source.Enums.Count; i++)
             {
+                source.Enums[i].OriginFile = srcFile;  // Lang-15
                 target.Enums.Add(source.Enums[i]);
             }
         }
@@ -231,6 +248,7 @@ namespace FFVM.Compiler
             // Lang-13: Merge enums from main file
             for (int i = 0; i < mainModule.Enums.Count; i++)
             {
+                mainModule.Enums[i].OriginFile = srcFile;  // Lang-15
                 target.Enums.Add(mainModule.Enums[i]);
             }
         }
@@ -242,8 +260,32 @@ namespace FFVM.Compiler
             Dictionary<string, bool> declKinds,
             string srcFile)
         {
+            // Lang-15: stamp OriginFile
+            v.OriginFile = srcFile;
+
             string name = v.Name;
-            var sources = v.IsConst ? constSources : varSources;
+
+            // Lang-15: private declarations never conflict with declarations from other files.
+            // They are always added (not replaced). Same-file redefinition is still an error.
+            if (v.IsPrivate)
+            {
+                // Check same-file redefinition for private: use qualified key
+                string qualKey = name + "\0" + srcFile;
+                var sources = v.IsConst ? constSources : varSources;
+                string existingFile;
+                if (sources.TryGetValue(qualKey, out existingFile))
+                {
+                    string kind = v.IsConst ? "const" : "var";
+                    _errors.Add($"[{srcFile}] Duplicate private {kind} '{name}' in the same file");
+                    return;
+                }
+                target.ModuleVariables.Add(v);
+                sources[qualKey] = srcFile;
+                declKinds[qualKey] = v.IsConst;
+                return;
+            }
+
+            var varSrc = v.IsConst ? constSources : varSources;
             var otherSources = v.IsConst ? varSources : constSources;
 
             // Check const/var kind conflict
@@ -258,8 +300,8 @@ namespace FFVM.Compiler
             }
 
             // Check same-file redefinition
-            string existingFile;
-            if (sources.TryGetValue(name, out existingFile) && existingFile == srcFile)
+            string existFile;
+            if (varSrc.TryGetValue(name, out existFile) && existFile == srcFile)
             {
                 string kind = v.IsConst ? "const" : "var";
                 _errors.Add($"[{srcFile}] Duplicate {kind} '{name}' in the same file");
@@ -267,12 +309,12 @@ namespace FFVM.Compiler
             }
 
             // Cross-file override or new declaration — replace
-            if (sources.ContainsKey(name))
+            if (varSrc.ContainsKey(name))
             {
-                // Replace existing in target
+                // Replace existing in target (only public can override public)
                 for (int j = 0; j < target.ModuleVariables.Count; j++)
                 {
-                    if (target.ModuleVariables[j].Name == name)
+                    if (target.ModuleVariables[j].Name == name && !target.ModuleVariables[j].IsPrivate)
                     {
                         target.ModuleVariables[j] = v;
                         break;
@@ -284,7 +326,7 @@ namespace FFVM.Compiler
                 target.ModuleVariables.Add(v);
             }
 
-            sources[name] = srcFile;
+            varSrc[name] = srcFile;
             declKinds[name] = v.IsConst;
         }
 
@@ -293,7 +335,24 @@ namespace FFVM.Compiler
             Dictionary<string, string> funcSources,
             string srcFile)
         {
+            // Lang-15: stamp OriginFile
+            f.OriginFile = srcFile;
+
             string name = f.Name;
+
+            // Lang-15: private functions never conflict with functions from other files.
+            if (f.IsPrivate)
+            {
+                string qualKey = name + "\0" + srcFile;
+                if (funcSources.ContainsKey(qualKey))
+                {
+                    _errors.Add($"[{srcFile}] Duplicate private function '{name}' in the same file");
+                    return;
+                }
+                target.Functions.Add(f);
+                funcSources[qualKey] = srcFile;
+                return;
+            }
 
             // Check same-file redefinition
             string existingFile;
@@ -303,12 +362,12 @@ namespace FFVM.Compiler
                 return;
             }
 
-            // Cross-file override or new declaration — replace
+            // Cross-file override or new declaration — replace (public only)
             if (funcSources.ContainsKey(name))
             {
                 for (int j = 0; j < target.Functions.Count; j++)
                 {
-                    if (target.Functions[j].Name == name)
+                    if (target.Functions[j].Name == name && !target.Functions[j].IsPrivate)
                     {
                         target.Functions[j] = f;
                         break;
@@ -328,7 +387,24 @@ namespace FFVM.Compiler
             Dictionary<string, string> structSources,
             string srcFile)
         {
+            // Lang-15: stamp OriginFile
+            s.OriginFile = srcFile;
+
             string name = s.Name;
+
+            // Lang-15: private structs never conflict with structs from other files.
+            if (s.IsPrivate)
+            {
+                string qualKey = name + "\0" + srcFile;
+                if (structSources.ContainsKey(qualKey))
+                {
+                    _errors.Add($"[{srcFile}] Duplicate private struct '{name}' in the same file");
+                    return;
+                }
+                target.Structs.Add(s);
+                structSources[qualKey] = srcFile;
+                return;
+            }
 
             // Check same-file redefinition
             string existingFile;
@@ -338,12 +414,12 @@ namespace FFVM.Compiler
                 return;
             }
 
-            // Cross-file override or new declaration — replace
+            // Cross-file override or new declaration — replace (public only)
             if (structSources.ContainsKey(name))
             {
                 for (int j = 0; j < target.Structs.Count; j++)
                 {
-                    if (target.Structs[j].Name == name)
+                    if (target.Structs[j].Name == name && !target.Structs[j].IsPrivate)
                     {
                         target.Structs[j] = s;
                         break;
