@@ -170,6 +170,42 @@ func main() {
 }
 ```
 
+**结构体类型的模块变量与常量**（Lang-11）：
+
+模块级 `var` / `const` 支持结构体类型，使用结构体字面量初始化：
+
+```ffs
+struct Vec2 {
+    x: float
+    y: float
+}
+
+struct Rect {
+    min: Vec2
+    max: Vec2
+}
+
+var pos: Vec2 = Vec2 { x: 10, y: 20 }
+const origin: Vec2 = Vec2 { x: 0, y: 0 }
+const bounds: Rect = Rect {
+    min: Vec2 { x: 0, y: 0 },
+    max: Vec2 { x: 100, y: 100 }
+}
+
+func main() {
+    Report(pos.x)            // 10
+    Report(origin.y)         // 0
+    pos.x = 99               // var 可以修改字段
+    // origin.x = 1          // ← 编译错误：const 不可赋值
+}
+```
+
+- 支持嵌套结构体字面量初始化（编译器递归折叠字段值）
+- `const` 结构体禁止整体赋值和字段赋值（编译错误）
+- `var` 结构体字段可读写
+
+**规则**：
+
 - 模块变量使用专用寄存器段（绝对寻址），不受函数调用窗口影响
 - 模块常量在编译期求值时不分配寄存器；不可折叠的常量也分配寄存器但禁止赋值
 - 局部变量不可与模块变量同名（编译错误）
@@ -217,6 +253,8 @@ var result = compiler.Compile(source, "main", syscalls, syscallTable, resolver, 
 // 服务模块（被调用方）
 @export var hp: int = 100
 @export var mp: int = 50
+@export const MAX_HP: int = 999
+@export const SPEED: float = 3.5
 
 @export func take_damage(d: int): int {
     hp = hp - d
@@ -235,16 +273,17 @@ func main() {
 **规则**：
 
 - `@export var` — 导出可读写变量
-- `@export const` — 导出只读常量（其他模块不可写入）
+- `@export const` — 导出只读常量（Lang-12）。其他模块不可写入（编译期拒绝，运行时防御性检查）。宿主可通过 `ExportTable.GetVarDefault()` 读取编译期默认值，无需 spawn 实例
 - `@export func` — 导出函数（其他模块可通过 XCALL 调用）
 - 没有 `@export` 的声明仅模块内部可见
+- 当前 `@export const` 仅支持基础类型（`int` / `float`），struct 类型后续扩展
 - 编译器自动检测导出函数的 **退化模式**（Lang-7）：
   - 纯 getter（0 参数、仅返回模块变量）→ 优化为直接读取（XLOAD_MVAR）
   - 纯 setter（1 参数、仅赋值模块变量）→ 优化为直接写入（XSTORE_MVAR）
 
 ### 4.0.3 @inline 注解
 
-`@inline` 注解用于标记导出函数为"建议内联"。当前为编译器提示（记录在 ExportTable 中），未来可能用于自动内联优化。
+`@inline` 注解用于标记函数为"要求内联"。编译器对所有满足条件的函数自动内联（无论是否标注 `@inline`）。`@inline` 不改变内联行为，仅在标注函数无法被内联时触发编译警告。
 
 ```ffs
 @inline @export func get_hp(): int {
@@ -254,11 +293,17 @@ func main() {
 @export @inline func set_hp(val: int) {
     hp = val
 }
+
+// 非导出函数也可标注（不报错，编译器仍自动判断内联可行性）
+@inline func helper(x: int): int {
+    return x * 2
+}
 ```
 
 - `@inline` 和 `@export` 的顺序不限
-- `@inline` 也可用于非导出函数（不报错，但当前无效果）
-- 可用于 LSP 诊断提示
+- 函数是否实际被内联由编译器自动判定（基于 body 大小、嵌套深度、安全性等）
+- 可通过 `CompileOptions.InlineThreshold` / `InlineDepthMax` 调整内联策略
+- 可用于 LSP 诊断提示（标注函数无法内联时发出警告）
 
 ### 4.0.4 跨实例调用——统一语法（svc.member）
 
@@ -837,13 +882,54 @@ func main() {
 
 更多完整示例见 [Skills/](Skills/) 目录。
 
-### 9.5 跨实例调用 — 服务模块与调用方
+### 9.5 模块级结构体变量 — 配置化技能参数
+
+```ffs
+struct HitPhaseDef {
+    startFrame: int
+    endFrame: int
+    hitboxId: int
+}
+
+struct Vec2 {
+    x: float
+    y: float
+}
+
+const hitPhase: HitPhaseDef = HitPhaseDef { startFrame: 9, endFrame: 13, hitboxId: 2001 }
+var velocity: Vec2 = Vec2 { x: 6.5, y: 0 }
+
+func main() {
+    BeginAction(114, 56)
+    defer { EndAction() }
+
+    var mutex: int = 0
+    var f: int = 0
+    while f < 56 {
+        if f == hitPhase.startFrame {
+            ApplySelfHorizKB(velocity.x, 29)
+        }
+        if f >= hitPhase.startFrame && f < hitPhase.endFrame && mutex == 0 {
+            var target: int = CheckAttackHit(hitPhase.hitboxId)
+            if target > 0 {
+                ApplyDamage(target, 5, 101)
+                mutex = 1
+            }
+        }
+        f = f + 1
+        yield
+    }
+}
+```
+
+### 9.6 跨实例调用 — 服务模块与调用方
 
 **服务模块**（提供导出接口）：
 
 ```ffs
 @export var hp: int = 100
 @export var mp: int = 50
+@export const MAX_HP: int = 999
 
 @export func take_damage(d: int): int {
     hp = hp - d
@@ -899,3 +985,4 @@ func main() {
 | `return` 不可在 `defer` / `using` 块内使用 | 防止破坏清理链 |
 | `defer` / `using` 清理块内可调用函数 | 支持嵌套清理（Level 3，类似 Go） |
 | 字符串无运行时操作 | 字符串字面量编译为常量池索引 |
+| `@export const` 仅支持基础类型 | 当前仅支持 `int` / `float`，struct 类型后续扩展 |
