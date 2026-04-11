@@ -790,8 +790,8 @@ public static class LspTests
                 Assert(items != null, "LSP5-T04: result is array");
                 if (items != null)
                 {
-                    // Should have keywords (17) only — includes 'include' keyword
-                    Assert(items.Count == 18, $"LSP5-T04: 18 keyword items for empty file, got {items.Count}");
+                    // Should have keywords (20) only — includes 'include', 'public', 'private' keywords
+                    Assert(items.Count == 20, $"LSP5-T04: 20 keyword items for empty file, got {items.Count}");
                     // All should be kind=14 (Keyword)
                     bool allKeywords = true;
                     foreach (var obj in items)

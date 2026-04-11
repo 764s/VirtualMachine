@@ -213,6 +213,56 @@ namespace FFVM.Compiler
         }
 
         /// <summary>
+        /// Lang-15: Inject private module variables, constants, and struct var types
+        /// for the specified origin into the current scope. Used during inline expansion
+        /// when the inlined function has a different origin than the caller.
+        /// </summary>
+        private void InjectPrivateModuleSymbols(string originFile)
+        {
+            if (_moduleVarRegisters != null)
+            {
+                foreach (var kv in _moduleVarRegisters)
+                {
+                    int sepIdx = kv.Key.IndexOf('\0');
+                    if (sepIdx >= 0 && kv.Key.Substring(sepIdx + 1) == originFile)
+                        _variables[kv.Key.Substring(0, sepIdx)] = kv.Value;
+                }
+            }
+            if (_moduleConstValues != null)
+            {
+                foreach (var kv in _moduleConstValues)
+                {
+                    int sepIdx = kv.Key.IndexOf('\0');
+                    if (sepIdx >= 0 && kv.Key.Substring(sepIdx + 1) == originFile)
+                        _constValues[kv.Key.Substring(0, sepIdx)] = kv.Value;
+                }
+            }
+            if (_moduleStructVarTypes != null)
+            {
+                foreach (var kv in _moduleStructVarTypes)
+                {
+                    int sepIdx = kv.Key.IndexOf('\0');
+                    if (sepIdx >= 0 && kv.Key.Substring(sepIdx + 1) == originFile)
+                        _structVarTypes[kv.Key.Substring(0, sepIdx)] = kv.Value;
+                }
+            }
+            // Inject private enum constants
+            if (_enumMemberMap != null)
+            {
+                foreach (var enumKv in _enumMemberMap)
+                {
+                    int sepIdx = enumKv.Key.IndexOf('\0');
+                    if (sepIdx >= 0 && enumKv.Key.Substring(sepIdx + 1) == originFile)
+                    {
+                        string enumName = enumKv.Key.Substring(0, sepIdx);
+                        foreach (var memberKv in enumKv.Value)
+                            _constValues[enumName + "." + memberKv.Key] = memberKv.Value;
+                    }
+                }
+            }
+        }
+
+        /// <summary>
         /// Compile source text into a VMProgram.
         /// </summary>
         /// <param name="source">Script source code</param>
@@ -272,6 +322,12 @@ namespace FFVM.Compiler
             {
                 var parser = new Parser();
                 module = parser.Parse(source, out parseErrors);
+                // Lang-15: stamp OriginFile for single-file compilation (no Preprocessor)
+                string origin = filePath ?? "script";
+                for (int i = 0; i < module.Functions.Count; i++) module.Functions[i].OriginFile = origin;
+                for (int i = 0; i < module.ModuleVariables.Count; i++) module.ModuleVariables[i].OriginFile = origin;
+                for (int i = 0; i < module.Structs.Count; i++) module.Structs[i].OriginFile = origin;
+                for (int i = 0; i < module.Enums.Count; i++) module.Enums[i].OriginFile = origin;
             }
 
             if (parseErrors != null && parseErrors.Count > 0)
@@ -577,11 +633,27 @@ namespace FFVM.Compiler
                 }
             }
             // Lang-13: inject enum constants into function-scope _constValues
+            // Lang-15: origin-aware filtering for private enums
             if (_enumMemberMap != null)
             {
                 foreach (var enumKv in _enumMemberMap)
+                {
+                    int sepIdx = enumKv.Key.IndexOf('\0');
+                    string enumName;
+                    if (sepIdx >= 0)
+                    {
+                        // Private enum — check origin match
+                        string origin = enumKv.Key.Substring(sepIdx + 1);
+                        if (origin != _currentOriginFile) continue;
+                        enumName = enumKv.Key.Substring(0, sepIdx);
+                    }
+                    else
+                    {
+                        enumName = enumKv.Key;
+                    }
                     foreach (var memberKv in enumKv.Value)
-                        _constValues[enumKv.Key + "." + memberKv.Key] = memberKv.Value;
+                        _constValues[enumName + "." + memberKv.Key] = memberKv.Value;
+                }
             }
             // Lang-11: Pre-populate struct type info for module struct vars
             // Lang-15: origin-aware filtering for struct var types
@@ -674,20 +746,23 @@ namespace FFVM.Compiler
 
             foreach (var enumDecl in module.Enums)
             {
+                // Lang-15: qualified key for private enums
+                string enumKey = enumDecl.IsPrivate ? (enumDecl.Name + "\0" + (enumDecl.OriginFile ?? "")) : enumDecl.Name;
+
                 // Check for name collisions with struct/func/var/const/enum
                 string enumStructKey = ResolveStructKey(enumDecl.Name);
-                if (enumStructKey != null)
+                if (enumStructKey != null && !enumDecl.IsPrivate)
                 {
                     _errors.Add($"Enum name '{enumDecl.Name}' conflicts with struct '{enumDecl.Name}' (line {enumDecl.Line})");
                     continue;
                 }
-                if (_enumNames.Contains(enumDecl.Name))
+                if (_enumNames.Contains(enumKey))
                 {
                     _errors.Add($"Duplicate enum '{enumDecl.Name}' (line {enumDecl.Line})");
                     continue;
                 }
 
-                _enumNames.Add(enumDecl.Name);
+                _enumNames.Add(enumKey);
                 var memberValues = new Dictionary<string, Number>();
                 int nextValue = 0;
                 var memberNamesSeen = new HashSet<string>();
@@ -718,11 +793,15 @@ namespace FFVM.Compiler
                     }
 
                     string qualifiedName = enumDecl.Name + "." + member.Name;
+                    // Lang-15: use qualified key for private enum members
+                    string qualKeyMember = enumKey + "." + member.Name;
                     memberValues[member.Name] = value;
-                    _constValues[qualifiedName] = value;
+                    _constValues[qualKeyMember] = value;
+                    if (!enumDecl.IsPrivate)
+                        _constValues[qualifiedName] = value;  // also under simple name for public
                 }
 
-                _enumMemberMap[enumDecl.Name] = memberValues;
+                _enumMemberMap[enumKey] = memberValues;
             }
 
             // Restore saved const values (ProcessModuleVariables will reinitialize _constValues)
@@ -750,11 +829,16 @@ namespace FFVM.Compiler
             // Temporary _constValues used for cascading const folding during module variable processing
             _constValues = new Dictionary<string, Number>();
             // Lang-13: inject enum constants so they are available during module variable const folding
+            // Lang-15: inject under simple names (all visible during module-level folding)
             if (_enumMemberMap != null)
             {
                 foreach (var enumKv in _enumMemberMap)
+                {
+                    int sepIdx = enumKv.Key.IndexOf('\0');
+                    string enumName = sepIdx >= 0 ? enumKv.Key.Substring(0, sepIdx) : enumKv.Key;
                     foreach (var memberKv in enumKv.Value)
-                        _constValues[enumKv.Key + "." + memberKv.Key] = memberKv.Value;
+                        _constValues[enumName + "." + memberKv.Key] = memberKv.Value;
+                }
             }
 
             for (int i = 0; i < module.ModuleVariables.Count; i++)
@@ -2980,8 +3064,10 @@ namespace FFVM.Compiler
             if (expr is FieldAccessExpr fieldAccess)
             {
                 // Lang-13: check if target is an enum name → compile as constant
+                // Lang-15: origin-aware enum name resolution
                 if (fieldAccess.Target is IdentifierExpr enumIdent &&
-                    _enumNames != null && _enumNames.Contains(enumIdent.Name))
+                    _enumNames != null && (_enumNames.Contains(enumIdent.Name) ||
+                        (_currentOriginFile != null && _enumNames.Contains(enumIdent.Name + "\0" + _currentOriginFile))))
                 {
                     string qualifiedName = enumIdent.Name + "." + fieldAccess.FieldName;
                     if (_constValues != null && _constValues.TryGetValue(qualifiedName, out Number enumVal))
@@ -3086,8 +3172,10 @@ namespace FFVM.Compiler
                 if (assign.Target is FieldAccessExpr fieldTarget)
                 {
                     // Lang-13: prevent assignment to enum members
+                    // Lang-15: origin-aware enum name check
                     if (fieldTarget.Target is IdentifierExpr enumAssignIdent &&
-                        _enumNames != null && _enumNames.Contains(enumAssignIdent.Name))
+                        _enumNames != null && (_enumNames.Contains(enumAssignIdent.Name) ||
+                            (_currentOriginFile != null && _enumNames.Contains(enumAssignIdent.Name + "\0" + _currentOriginFile))))
                     {
                         _errors.Add($"Cannot assign to enum member '{enumAssignIdent.Name}.{fieldTarget.FieldName}' (line {assign.Line})");
                         return destReg >= 0 ? destReg : AllocTemp();
@@ -4774,12 +4862,20 @@ namespace FFVM.Compiler
             var savedStmtOrder = _stmtOrder;
             var savedInlineExitJumps = _inlineExitJumps;
             var savedInlineDestReg = _inlineDestReg;
+            var savedOriginFile = _currentOriginFile;   // Lang-15: save caller's origin
 
             _variables = new Dictionary<string, int>(savedVars);      // copy parent scope
             _constValues = new Dictionary<string, Number>(savedConsts);
             _structVarTypes = new Dictionary<string, string>(savedStructVarTypes);
             _liveRanges = null; // disable F4 register release inside inline body
             _stmtOrder = 0;
+            _currentOriginFile = func.OriginFile;  // Lang-15: switch to inlined function's origin
+
+            // Lang-15: inject private module vars/consts/struct types for inlined function's origin
+            if (func.OriginFile != null && func.OriginFile != savedOriginFile)
+            {
+                InjectPrivateModuleSymbols(func.OriginFile);
+            }
 
             // Bind parameters: map param names → arg registers
             for (int i = 0; i < func.Parameters.Count; i++)
@@ -4867,6 +4963,7 @@ namespace FFVM.Compiler
             _stmtOrder = savedStmtOrder;
             _inlineExitJumps = savedInlineExitJumps;
             _inlineDestReg = savedInlineDestReg;
+            _currentOriginFile = savedOriginFile;  // Lang-15: restore caller's origin
 
             resultReg = actualDest;
 
