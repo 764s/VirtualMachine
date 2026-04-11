@@ -11263,7 +11263,7 @@ func main() { Report(hidden()) }";
             Assert(!result.Success, "PV18: private func cross-file should fail");
         }
 
-        // ===== Lang-16: Override Keyword Tests (OV01-OV12) =====
+        // ===== Lang-16: Override Keyword Tests (OV01-OV16) =====
 
         // OV01: cross-file func override without 'override' keyword → error
         {
