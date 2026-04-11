@@ -11989,6 +11989,318 @@ func main() {
             Assert(values.Count == 1 && values[0] == 2, $"IA12: expected 2 (LEFT), got {(values.Count > 0 ? values[0].ToString() : "none")}");
         }
 
+        // ===== Lang-18: Override Alias Declaration Tests (OA01-OA10) =====
+
+        // OA01: override func Alias.Name — replaces aliased module function
+        {
+            var files = new Dictionary<string, string>
+            {
+                { "base", @"
+func Do(): int {
+    return 1
+}
+" }
+            };
+            string source = @"
+include ""base"" as B
+
+override func B.Do(): int {
+    return 42
+}
+
+func main() {
+    Report(B.Do())
+}";
+            var syscalls = new Dictionary<string, int> { { "Report", 0 } };
+            var resolver = new DictionaryFileResolver(files);
+            var result = compiler.Compile(source, "main", syscalls, null, resolver, "main.ffs");
+            Assert(result.Success, $"OA01: compile success, errors: {(result.Errors != null && result.Errors.Count > 0 ? result.Errors[0] : "none")}");
+
+            var values = new List<int>();
+            var world = new VMWorld();
+            world.Modules.Load(0, result.Program);
+            world.Syscalls.Register(0, "Report", (ref VMInstanceState s) =>
+            {
+                values.Add(s.Registers.Get(0).ToInt());
+            });
+            world.SpawnInstance(0, 0);
+            world.Tick();
+            Assert(values.Count == 1 && values[0] == 42, $"OA01: expected 42, got {(values.Count > 0 ? values[0].ToString() : "none")}");
+        }
+
+        // OA02: override const Alias.Name — replaces aliased module constant
+        {
+            var files = new Dictionary<string, string>
+            {
+                { "cfg", @"
+const MAX_HP: int = 100
+" }
+            };
+            string source = @"
+include ""cfg"" as CFG
+
+override const CFG.MAX_HP: int = 200
+
+func main() {
+    Report(CFG.MAX_HP)
+}";
+            var syscalls = new Dictionary<string, int> { { "Report", 0 } };
+            var resolver = new DictionaryFileResolver(files);
+            var result = compiler.Compile(source, "main", syscalls, null, resolver, "main.ffs");
+            Assert(result.Success, $"OA02: compile success, errors: {(result.Errors != null && result.Errors.Count > 0 ? result.Errors[0] : "none")}");
+
+            var values = new List<int>();
+            var world = new VMWorld();
+            world.Modules.Load(0, result.Program);
+            world.Syscalls.Register(0, "Report", (ref VMInstanceState s) =>
+            {
+                values.Add(s.Registers.Get(0).ToInt());
+            });
+            world.SpawnInstance(0, 0);
+            world.Tick();
+            Assert(values.Count == 1 && values[0] == 200, $"OA02: expected 200, got {(values.Count > 0 ? values[0].ToString() : "none")}");
+        }
+
+        // OA03: override enum Alias.Name — replaces aliased module enum
+        {
+            var files = new Dictionary<string, string>
+            {
+                { "types", @"
+enum Color { RED, GREEN, BLUE }
+" }
+            };
+            string source = @"
+include ""types"" as T
+
+override enum T.Color { RED, GREEN, BLUE, ALPHA }
+
+func main() {
+    Report(T.Color.ALPHA)
+}";
+            var syscalls = new Dictionary<string, int> { { "Report", 0 } };
+            var resolver = new DictionaryFileResolver(files);
+            var result = compiler.Compile(source, "main", syscalls, null, resolver, "main.ffs");
+            Assert(result.Success, $"OA03: compile success, errors: {(result.Errors != null && result.Errors.Count > 0 ? result.Errors[0] : "none")}");
+
+            var values = new List<int>();
+            var world = new VMWorld();
+            world.Modules.Load(0, result.Program);
+            world.Syscalls.Register(0, "Report", (ref VMInstanceState s) =>
+            {
+                values.Add(s.Registers.Get(0).ToInt());
+            });
+            world.SpawnInstance(0, 0);
+            world.Tick();
+            Assert(values.Count == 1 && values[0] == 3, $"OA03: expected 3 (ALPHA), got {(values.Count > 0 ? values[0].ToString() : "none")}");
+        }
+
+        // OA04: override struct Alias.Name — replaces aliased module struct
+        {
+            var files = new Dictionary<string, string>
+            {
+                { "types", @"
+struct Pos { x: int; y: int }
+" }
+            };
+            string source = @"
+include ""types"" as T
+
+override struct T.Pos { x: int; y: int; z: int }
+
+func main() {
+    var p: T.Pos = T.Pos { x: 1, y: 2, z: 3 }
+    Report(p.z)
+}";
+            var syscalls = new Dictionary<string, int> { { "Report", 0 } };
+            var resolver = new DictionaryFileResolver(files);
+            var result = compiler.Compile(source, "main", syscalls, null, resolver, "main.ffs");
+            Assert(result.Success, $"OA04: compile success, errors: {(result.Errors != null && result.Errors.Count > 0 ? result.Errors[0] : "none")}");
+
+            var values = new List<int>();
+            var world = new VMWorld();
+            world.Modules.Load(0, result.Program);
+            world.Syscalls.Register(0, "Report", (ref VMInstanceState s) =>
+            {
+                values.Add(s.Registers.Get(0).ToInt());
+            });
+            world.SpawnInstance(0, 0);
+            world.Tick();
+            Assert(values.Count == 1 && values[0] == 3, $"OA04: expected 3 (z), got {(values.Count > 0 ? values[0].ToString() : "none")}");
+        }
+
+        // OA05: override func Alias.Name but function doesn't exist → error
+        {
+            var files = new Dictionary<string, string>
+            {
+                { "base", @"func Do(): int { return 1 }" }
+            };
+            string source = @"
+include ""base"" as B
+
+override func B.NotExist(): int { return 99 }
+
+func main() { Report(0) }";
+            var syscalls = new Dictionary<string, int> { { "Report", 0 } };
+            var resolver = new DictionaryFileResolver(files);
+            var result = compiler.Compile(source, "main", syscalls, null, resolver, "main.ffs");
+            Assert(!result.Success, "OA05: override non-existing aliased func should fail");
+            Assert(result.Errors != null && result.Errors.Count > 0 && result.Errors[0].Contains("no public function"),
+                $"OA05: error mentions no public function: {(result.Errors != null && result.Errors.Count > 0 ? result.Errors[0] : "none")}");
+        }
+
+        // OA06: override targeting unknown alias → error
+        {
+            var files = new Dictionary<string, string>
+            {
+                { "base", @"func Do(): int { return 1 }" }
+            };
+            string source = @"
+include ""base"" as B
+
+override func X.Do(): int { return 99 }
+
+func main() { Report(0) }";
+            var syscalls = new Dictionary<string, int> { { "Report", 0 } };
+            var resolver = new DictionaryFileResolver(files);
+            var result = compiler.Compile(source, "main", syscalls, null, resolver, "main.ffs");
+            Assert(!result.Success, "OA06: override with unknown alias should fail");
+            Assert(result.Errors != null && result.Errors.Count > 0 && result.Errors[0].Contains("not a known include alias"),
+                $"OA06: error mentions unknown alias: {(result.Errors != null && result.Errors.Count > 0 ? result.Errors[0] : "none")}");
+        }
+
+        // OA07: two aliases, override in each — both work
+        {
+            var files = new Dictionary<string, string>
+            {
+                { "m1", @"func Do(): int { return 10 }" },
+                { "m2", @"func Do(): int { return 20 }" }
+            };
+            string source = @"
+include ""m1"" as A
+include ""m2"" as B
+
+override func A.Do(): int { return 100 }
+override func B.Do(): int { return 200 }
+
+func main() {
+    Report(A.Do())
+    Report(B.Do())
+}";
+            var syscalls = new Dictionary<string, int> { { "Report", 0 } };
+            var resolver = new DictionaryFileResolver(files);
+            var result = compiler.Compile(source, "main", syscalls, null, resolver, "main.ffs");
+            Assert(result.Success, $"OA07: compile success, errors: {(result.Errors != null && result.Errors.Count > 0 ? result.Errors[0] : "none")}");
+
+            var values = new List<int>();
+            var world = new VMWorld();
+            world.Modules.Load(0, result.Program);
+            world.Syscalls.Register(0, "Report", (ref VMInstanceState s) =>
+            {
+                values.Add(s.Registers.Get(0).ToInt());
+            });
+            world.SpawnInstance(0, 0);
+            world.Tick();
+            Assert(values.Count == 2 && values[0] == 100 && values[1] == 200,
+                $"OA07: expected [100,200], got [{string.Join(",", values)}]");
+        }
+
+        // OA08: override func with params — override has different body but same signature
+        {
+            var files = new Dictionary<string, string>
+            {
+                { "math", @"
+func add(a: int, b: int): int {
+    return a + b
+}
+" }
+            };
+            string source = @"
+include ""math"" as M
+
+override func M.add(a: int, b: int): int {
+    return a * b
+}
+
+func main() {
+    Report(M.add(3, 4))
+}";
+            var syscalls = new Dictionary<string, int> { { "Report", 0 } };
+            var resolver = new DictionaryFileResolver(files);
+            var result = compiler.Compile(source, "main", syscalls, null, resolver, "main.ffs");
+            Assert(result.Success, $"OA08: compile success, errors: {(result.Errors != null && result.Errors.Count > 0 ? result.Errors[0] : "none")}");
+
+            var values = new List<int>();
+            var world = new VMWorld();
+            world.Modules.Load(0, result.Program);
+            world.Syscalls.Register(0, "Report", (ref VMInstanceState s) =>
+            {
+                values.Add(s.Registers.Get(0).ToInt());
+            });
+            world.SpawnInstance(0, 0);
+            world.Tick();
+            Assert(values.Count == 1 && values[0] == 12, $"OA08: expected 12 (3*4), got {(values.Count > 0 ? values[0].ToString() : "none")}");
+        }
+
+        // OA09: override private func in aliased module → error (can't override private)
+        {
+            var files = new Dictionary<string, string>
+            {
+                { "base", @"
+private func secret(): int { return 1 }
+func Do(): int { return secret() }
+" }
+            };
+            string source = @"
+include ""base"" as B
+
+override func B.secret(): int { return 99 }
+
+func main() { Report(B.Do()) }";
+            var syscalls = new Dictionary<string, int> { { "Report", 0 } };
+            var resolver = new DictionaryFileResolver(files);
+            var result = compiler.Compile(source, "main", syscalls, null, resolver, "main.ffs");
+            Assert(!result.Success, "OA09: override private aliased func should fail");
+            Assert(result.Errors != null && result.Errors.Count > 0 && result.Errors[0].Contains("no public function"),
+                $"OA09: error mentions no public function: {(result.Errors != null && result.Errors.Count > 0 ? result.Errors[0] : "none")}");
+        }
+
+        // OA10: override func calls main module helper — cross-scope access
+        {
+            var files = new Dictionary<string, string>
+            {
+                { "base", @"
+func getValue(): int { return 1 }
+" }
+            };
+            string source = @"
+include ""base"" as B
+
+func helper(): int { return 50 }
+
+override func B.getValue(): int {
+    return helper()
+}
+
+func main() {
+    Report(B.getValue())
+}";
+            var syscalls = new Dictionary<string, int> { { "Report", 0 } };
+            var resolver = new DictionaryFileResolver(files);
+            var result = compiler.Compile(source, "main", syscalls, null, resolver, "main.ffs");
+            Assert(result.Success, $"OA10: compile success, errors: {(result.Errors != null && result.Errors.Count > 0 ? result.Errors[0] : "none")}");
+
+            var values = new List<int>();
+            var world = new VMWorld();
+            world.Modules.Load(0, result.Program);
+            world.Syscalls.Register(0, "Report", (ref VMInstanceState s) =>
+            {
+                values.Add(s.Registers.Get(0).ToInt());
+            });
+            world.SpawnInstance(0, 0);
+            world.Tick();
+            Assert(values.Count == 1 && values[0] == 50, $"OA10: expected 50, got {(values.Count > 0 ? values[0].ToString() : "none")}");
+        }
+
         // ===== Summary =====
         Debug.Log($"========================================");
         Debug.Log($"Compiler Tests: {passed} passed, {failed} failed");

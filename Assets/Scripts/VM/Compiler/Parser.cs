@@ -330,6 +330,19 @@ namespace FFVM.Compiler
             int line = Current().Line, col = Current().Column;
             Expect(TokenType.Func, "");
             string name = Expect(TokenType.Identifier, "after 'func'").Text ?? "?";
+            // Lang-18: support dotted name for aliased override (override func Alias.Name)
+            string aliasTarget = null;
+            if (Check(TokenType.Dot))
+            {
+                if (!isOverride)
+                {
+                    Error($"Dotted function name '{name}.<name>' is only valid with 'override' keyword");
+                }
+                Advance(); // consume '.'
+                string memberName = Expect(TokenType.Identifier, "after '.' in function name").Text ?? "?";
+                aliasTarget = name;
+                name = memberName;
+            }
             Expect(TokenType.LParen, "after function name");
 
             var parameters = new List<ParamDecl>();
@@ -365,6 +378,7 @@ namespace FFVM.Compiler
 
             var body = ParseBlock();
             var decl = new FuncDecl(name, parameters, returnType, body, isPrivate, isExported, isInline, isOverride);
+            decl.AliasTarget = aliasTarget;
             decl.Line = line;
             decl.Column = col;
             AttachDocComment(decl, line);
@@ -376,6 +390,19 @@ namespace FFVM.Compiler
             int line = Current().Line, col = Current().Column;
             Advance(); // consume 'struct'
             string name = Expect(TokenType.Identifier, "after 'struct'").Text ?? "?";
+            // Lang-18: support dotted name for aliased override (override struct Alias.Name)
+            string aliasTarget = null;
+            if (Check(TokenType.Dot))
+            {
+                if (!isOverride)
+                {
+                    Error($"Dotted struct name '{name}.<name>' is only valid with 'override' keyword");
+                }
+                Advance(); // consume '.'
+                string memberName = Expect(TokenType.Identifier, "after '.' in struct name").Text ?? "?";
+                aliasTarget = name;
+                name = memberName;
+            }
             Expect(TokenType.LBrace, "after struct name");
 
             var fields = new List<StructField>();
@@ -390,11 +417,12 @@ namespace FFVM.Compiler
             Expect(TokenType.RBrace, "to close struct");
 
             var decl = new StructDecl(name, fields, isPrivate, isOverride);
+            decl.AliasTarget = aliasTarget;
             decl.Line = line;
             decl.Column = col;
             var docLines = CollectDocLines(line);
             if (docLines != null) decl.DocComment = string.Join("\n", docLines);
-            _structNames.Add(name);
+            _structNames.Add(aliasTarget != null ? aliasTarget + "." + name : name);
             return decl;
         }
 
@@ -407,6 +435,19 @@ namespace FFVM.Compiler
             int line = Current().Line, col = Current().Column;
             Advance(); // consume 'enum'
             string name = Expect(TokenType.Identifier, "after 'enum'").Text ?? "?";
+            // Lang-18: support dotted name for aliased override (override enum Alias.Name)
+            string aliasTarget = null;
+            if (Check(TokenType.Dot))
+            {
+                if (!isOverride)
+                {
+                    Error($"Dotted enum name '{name}.<name>' is only valid with 'override' keyword");
+                }
+                Advance(); // consume '.'
+                string memberName = Expect(TokenType.Identifier, "after '.' in enum name").Text ?? "?";
+                aliasTarget = name;
+                name = memberName;
+            }
             Expect(TokenType.LBrace, "after enum name");
 
             var members = new List<EnumMember>();
@@ -429,6 +470,7 @@ namespace FFVM.Compiler
             Expect(TokenType.RBrace, "to close enum");
 
             var decl = new EnumDecl(name, members, isPrivate, isOverride);
+            decl.AliasTarget = aliasTarget;
             decl.Line = line;
             decl.Column = col;
             var enumDocLines = CollectDocLines(line);
@@ -545,6 +587,15 @@ namespace FFVM.Compiler
             int line = Current().Line, col = Current().Column;
             Advance(); // consume 'var' or 'const'
             string name = Expect(TokenType.Identifier, isConst ? "after 'const'" : "after 'var'").Text ?? "?";
+            // Lang-18: support dotted name for aliased override (override const Alias.Name: type = value)
+            string aliasTarget = null;
+            if (Check(TokenType.Dot) && isOverride)
+            {
+                Advance(); // consume '.'
+                string memberName = Expect(TokenType.Identifier, "after '.' in variable name").Text ?? "?";
+                aliasTarget = name;
+                name = memberName;
+            }
             Expect(TokenType.Colon, "after variable name");
             string typeName = Expect(TokenType.Identifier, "for variable type").Text ?? "int";
             // Lang-17: dotted type name for aliased struct types (Alias.StructName)
@@ -566,6 +617,7 @@ namespace FFVM.Compiler
             }
 
             var stmt = new VarDeclStmt(name, typeName, initializer, isConst, isExported, isPrivate, isOverride);
+            stmt.AliasTarget = aliasTarget;
             stmt.Line = line;
             stmt.Column = col;
             return stmt;

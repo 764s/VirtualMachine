@@ -258,18 +258,36 @@ namespace FFVM.Compiler
             for (int i = 0; i < mainModule.ModuleVariables.Count; i++)
             {
                 var v = mainModule.ModuleVariables[i];
+                // Lang-18: aliased override → apply to aliased module
+                if (v.AliasTarget != null)
+                {
+                    ApplyAliasedVarOverride(target, v, srcFile);
+                    continue;
+                }
                 MergeModuleVariable(target, v, constSources, varSources, declKinds, srcFile, isMainFile: true);
             }
 
             for (int i = 0; i < mainModule.Functions.Count; i++)
             {
                 var f = mainModule.Functions[i];
+                // Lang-18: aliased override → apply to aliased module
+                if (f.AliasTarget != null)
+                {
+                    ApplyAliasedFuncOverride(target, f, srcFile);
+                    continue;
+                }
                 MergeFunc(target, f, funcSources, srcFile, isMainFile: true);
             }
 
             for (int i = 0; i < mainModule.Structs.Count; i++)
             {
                 var s = mainModule.Structs[i];
+                // Lang-18: aliased override → apply to aliased module
+                if (s.AliasTarget != null)
+                {
+                    ApplyAliasedStructOverride(target, s, srcFile);
+                    continue;
+                }
                 MergeStruct(target, s, structSources, srcFile, isMainFile: true);
             }
 
@@ -277,6 +295,12 @@ namespace FFVM.Compiler
             for (int i = 0; i < mainModule.Enums.Count; i++)
             {
                 var e = mainModule.Enums[i];
+                // Lang-18: aliased override → apply to aliased module
+                if (e.AliasTarget != null)
+                {
+                    ApplyAliasedEnumOverride(target, e, srcFile);
+                    continue;
+                }
                 MergeEnum(target, e, enumSources, srcFile, isMainFile: true);
             }
         }
@@ -608,6 +632,148 @@ namespace FFVM.Compiler
             }
 
             enumSources[name] = origin;
+        }
+
+        // ===== Lang-18: Aliased override application =====
+
+        /// <summary>
+        /// Lang-18: Apply an aliased function override to the aliased module.
+        /// Replaces the matching public function in the aliased module.
+        /// </summary>
+        private void ApplyAliasedFuncOverride(ModuleNode target, FuncDecl f, string mainFilePath)
+        {
+            string alias = f.AliasTarget;
+            if (!target.AliasedModules.TryGetValue(alias, out var aliasModule))
+            {
+                _errors.Add($"[{mainFilePath}] '{alias}' is not a known include alias; cannot override '{alias}.{f.Name}'");
+                return;
+            }
+            if (!f.IsOverride)
+            {
+                _errors.Add($"[{mainFilePath}] Use 'override func {alias}.{f.Name}' to replace a declaration in aliased module '{alias}'");
+                return;
+            }
+            if (f.OriginFile == null) f.OriginFile = mainFilePath;
+            bool found = false;
+            for (int j = 0; j < aliasModule.Functions.Count; j++)
+            {
+                if (aliasModule.Functions[j].Name == f.Name && !aliasModule.Functions[j].IsPrivate)
+                {
+                    aliasModule.Functions[j] = f;
+                    found = true;
+                    break;
+                }
+            }
+            if (!found)
+            {
+                _errors.Add($"[{mainFilePath}] 'override' on function '{alias}.{f.Name}' but no public function '{f.Name}' exists in aliased module '{alias}'");
+            }
+        }
+
+        /// <summary>
+        /// Lang-18: Apply an aliased variable/const override to the aliased module.
+        /// Replaces the matching public var/const in the aliased module.
+        /// </summary>
+        private void ApplyAliasedVarOverride(ModuleNode target, VarDeclStmt v, string mainFilePath)
+        {
+            string alias = v.AliasTarget;
+            if (!target.AliasedModules.TryGetValue(alias, out var aliasModule))
+            {
+                string kind = v.IsConst ? "const" : "var";
+                _errors.Add($"[{mainFilePath}] '{alias}' is not a known include alias; cannot override '{alias}.{v.Name}'");
+                return;
+            }
+            if (!v.IsOverride)
+            {
+                string kind = v.IsConst ? "const" : "var";
+                _errors.Add($"[{mainFilePath}] Use 'override {kind} {alias}.{v.Name}' to replace a declaration in aliased module '{alias}'");
+                return;
+            }
+            if (v.OriginFile == null) v.OriginFile = mainFilePath;
+            bool found = false;
+            for (int j = 0; j < aliasModule.ModuleVariables.Count; j++)
+            {
+                var existing = aliasModule.ModuleVariables[j];
+                if (existing.Name == v.Name && !existing.IsPrivate && existing.IsConst == v.IsConst)
+                {
+                    aliasModule.ModuleVariables[j] = v;
+                    found = true;
+                    break;
+                }
+            }
+            if (!found)
+            {
+                string kind = v.IsConst ? "const" : "var";
+                _errors.Add($"[{mainFilePath}] 'override' on {kind} '{alias}.{v.Name}' but no public {kind} '{v.Name}' exists in aliased module '{alias}'");
+            }
+        }
+
+        /// <summary>
+        /// Lang-18: Apply an aliased struct override to the aliased module.
+        /// Replaces the matching public struct in the aliased module.
+        /// </summary>
+        private void ApplyAliasedStructOverride(ModuleNode target, StructDecl s, string mainFilePath)
+        {
+            string alias = s.AliasTarget;
+            if (!target.AliasedModules.TryGetValue(alias, out var aliasModule))
+            {
+                _errors.Add($"[{mainFilePath}] '{alias}' is not a known include alias; cannot override '{alias}.{s.Name}'");
+                return;
+            }
+            if (!s.IsOverride)
+            {
+                _errors.Add($"[{mainFilePath}] Use 'override struct {alias}.{s.Name}' to replace a declaration in aliased module '{alias}'");
+                return;
+            }
+            if (s.OriginFile == null) s.OriginFile = mainFilePath;
+            bool found = false;
+            for (int j = 0; j < aliasModule.Structs.Count; j++)
+            {
+                if (aliasModule.Structs[j].Name == s.Name && !aliasModule.Structs[j].IsPrivate)
+                {
+                    aliasModule.Structs[j] = s;
+                    found = true;
+                    break;
+                }
+            }
+            if (!found)
+            {
+                _errors.Add($"[{mainFilePath}] 'override' on struct '{alias}.{s.Name}' but no public struct '{s.Name}' exists in aliased module '{alias}'");
+            }
+        }
+
+        /// <summary>
+        /// Lang-18: Apply an aliased enum override to the aliased module.
+        /// Replaces the matching public enum in the aliased module.
+        /// </summary>
+        private void ApplyAliasedEnumOverride(ModuleNode target, EnumDecl e, string mainFilePath)
+        {
+            string alias = e.AliasTarget;
+            if (!target.AliasedModules.TryGetValue(alias, out var aliasModule))
+            {
+                _errors.Add($"[{mainFilePath}] '{alias}' is not a known include alias; cannot override '{alias}.{e.Name}'");
+                return;
+            }
+            if (!e.IsOverride)
+            {
+                _errors.Add($"[{mainFilePath}] Use 'override enum {alias}.{e.Name}' to replace a declaration in aliased module '{alias}'");
+                return;
+            }
+            if (e.OriginFile == null) e.OriginFile = mainFilePath;
+            bool found = false;
+            for (int j = 0; j < aliasModule.Enums.Count; j++)
+            {
+                if (aliasModule.Enums[j].Name == e.Name && !aliasModule.Enums[j].IsPrivate)
+                {
+                    aliasModule.Enums[j] = e;
+                    found = true;
+                    break;
+                }
+            }
+            if (!found)
+            {
+                _errors.Add($"[{mainFilePath}] 'override' on enum '{alias}.{e.Name}' but no public enum '{e.Name}' exists in aliased module '{alias}'");
+            }
         }
     }
 }
