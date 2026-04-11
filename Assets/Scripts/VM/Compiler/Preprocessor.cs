@@ -125,6 +125,7 @@ namespace FFVM.Compiler
             var funcSources = new Dictionary<string, string>();
             var structSources = new Dictionary<string, string>();
             var varSources = new Dictionary<string, string>();
+            var enumSources = new Dictionary<string, string>();
 
             // Track const vs var kind for cross-kind override rejection
             var declKinds = new Dictionary<string, bool>(); // name → isConst
@@ -143,11 +144,11 @@ namespace FFVM.Compiler
                 if (_errors.Count > 0) continue;
 
                 // Merge imported declarations
-                MergeDeclarations(merged, importModule, constSources, funcSources, structSources, varSources, declKinds, filePath);
+                MergeDeclarations(merged, importModule, constSources, funcSources, structSources, varSources, enumSources, declKinds, filePath);
             }
 
             // Now merge main file's own declarations (these override includes)
-            MergeMainDeclarations(merged, module, constSources, funcSources, structSources, varSources, declKinds, filePath);
+            MergeMainDeclarations(merged, module, constSources, funcSources, structSources, varSources, enumSources, declKinds, filePath);
 
             stack.RemoveAt(stack.Count - 1);
             return merged;
@@ -163,6 +164,7 @@ namespace FFVM.Compiler
             Dictionary<string, string> funcSources,
             Dictionary<string, string> structSources,
             Dictionary<string, string> varSources,
+            Dictionary<string, string> enumSources,
             Dictionary<string, bool> declKinds,
             string mainFilePath)
         {
@@ -189,10 +191,11 @@ namespace FFVM.Compiler
                 MergeStruct(target, s, structSources, srcFile);
             }
 
-            // Lang-13: Merge enums (simple append — duplicates caught by compiler ProcessEnums)
+            // Lang-13: Merge enums with cross-file override (same semantics as structs)
             for (int i = 0; i < source.Enums.Count; i++)
             {
-                target.Enums.Add(source.Enums[i]);
+                var e = source.Enums[i];
+                MergeEnum(target, e, enumSources, srcFile);
             }
         }
 
@@ -205,6 +208,7 @@ namespace FFVM.Compiler
             Dictionary<string, string> funcSources,
             Dictionary<string, string> structSources,
             Dictionary<string, string> varSources,
+            Dictionary<string, string> enumSources,
             Dictionary<string, bool> declKinds,
             string mainFilePath)
         {
@@ -231,7 +235,8 @@ namespace FFVM.Compiler
             // Lang-13: Merge enums from main file
             for (int i = 0; i < mainModule.Enums.Count; i++)
             {
-                target.Enums.Add(mainModule.Enums[i]);
+                var e = mainModule.Enums[i];
+                MergeEnum(target, e, enumSources, srcFile);
             }
         }
 
@@ -356,6 +361,41 @@ namespace FFVM.Compiler
             }
 
             structSources[name] = srcFile;
+        }
+
+        private void MergeEnum(
+            ModuleNode target, EnumDecl e,
+            Dictionary<string, string> enumSources,
+            string srcFile)
+        {
+            string name = e.Name;
+
+            // Check same-file redefinition
+            string existingFile;
+            if (enumSources.TryGetValue(name, out existingFile) && existingFile == srcFile)
+            {
+                _errors.Add($"[{srcFile}] Duplicate enum '{name}' in the same file");
+                return;
+            }
+
+            // Cross-file override or new declaration — replace
+            if (enumSources.ContainsKey(name))
+            {
+                for (int j = 0; j < target.Enums.Count; j++)
+                {
+                    if (target.Enums[j].Name == name)
+                    {
+                        target.Enums[j] = e;
+                        break;
+                    }
+                }
+            }
+            else
+            {
+                target.Enums.Add(e);
+            }
+
+            enumSources[name] = srcFile;
         }
     }
 }

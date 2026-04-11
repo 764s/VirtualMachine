@@ -12,19 +12,39 @@
             "type": "coreclr",
             "request": "launch",
             "program": "${workspaceFolder}/KOF98/bin/Debug/__NET_TFM__/KOF98",
-            "args": ["--raylib", "--debug"],
+            "args": ["--raylib", "--debug-nowait"],
             "cwd": "${workspaceFolder}",
             "console": "integratedTerminal",
             "preLaunchTask": "build-kof98"
+        },
+        {
+            "name": "KOF98: C# + DAP Launch",
+            "type": "coreclr",
+            "request": "launch",
+            "program": "${workspaceFolder}/KOF98/bin/Debug/__NET_TFM__/KOF98",
+            "args": ["--raylib", "--debug"],
+            "cwd": "${workspaceFolder}",
+            "console": "integratedTerminal",
+            "preLaunchTask": "build-kof98",
+            "presentation": { "hidden": true }
+        },
+        {
+            "name": "KOF98: FFVM Attach (auto)",
+            "type": "ffvm",
+            "request": "attach",
+            "port": 4711,
+            "preLaunchTask": "wait-for-dap",
+            "presentation": { "hidden": true }
         }
     ],
     "compounds": [
         {
             "name": "KOF98: C# + FFVM Debug",
             "configurations": [
-                "KOF98: C# Debug (Raylib)",
-                "KOF98: Attach FFVM"
-            ]
+                "KOF98: C# + DAP Launch",
+                "KOF98: FFVM Attach (auto)"
+            ],
+            "stopAll": true
         }
     ]
 }

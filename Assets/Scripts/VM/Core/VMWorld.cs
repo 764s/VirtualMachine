@@ -271,7 +271,7 @@ namespace FFVM
                     // --- Breakpoint check (zero overhead when Debugger is null) ---
                     if (srcMap != null)
                     {
-                        if (dbg.CheckBreakpoint(inst.InstanceId, inst.IP, srcMap, inst.CallStackDepth) && dbg.HaltOnBreakpoint)
+                        if (dbg.CheckBreakpoint(inst.InstanceId, inst.IP, srcMap, inst.CallStackDepth, inst.ModuleSlot) && dbg.HaltOnBreakpoint)
                         {
                             // DAP mode: halt BEFORE executing the instruction so the user
                             // sees the breakpoint line as the current line in stackTrace.

@@ -16,6 +16,17 @@
                 "isDefault": true
             },
             "problemMatcher": "$msCompile"
+        },
+        {
+            "label": "wait-for-dap",
+            "type": "shell",
+            "command": "powershell",
+            "args": [
+                "-NoProfile", "-Command",
+                "for ($i = 0; $i -lt 60; $i++) { if (Get-NetTCPConnection -LocalPort 4711 -State Listen -ErrorAction SilentlyContinue) { exit 0 }; Start-Sleep -Milliseconds 500 }; Write-Error 'DAP server not ready after 30s'; exit 1"
+            ],
+            "presentation": { "reveal": "silent" },
+            "problemMatcher": []
         }
     ]
 }

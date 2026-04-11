@@ -35,8 +35,11 @@ namespace FFVM
     /// </summary>
     public class ScriptDebugger
     {
-        /// <summary>Set of source line numbers where breakpoints are active.</summary>
+        /// <summary>Set of source line numbers where breakpoints are active (legacy single-module).</summary>
         private readonly HashSet<int> _breakpointLines = new HashSet<int>();
+
+        /// <summary>Per-module breakpoint lines (moduleSlot → set of line numbers).</summary>
+        private readonly Dictionary<int, HashSet<int>> _moduleBreakpoints = new Dictionary<int, HashSet<int>>();
 
         /// <summary>
         /// Temporary breakpoint IP for single-step operations.
@@ -83,8 +86,25 @@ namespace FFVM
 
         public void AddBreakpoint(int line) => _breakpointLines.Add(line);
         public void RemoveBreakpoint(int line) => _breakpointLines.Remove(line);
-        public void ClearBreakpoints() => _breakpointLines.Clear();
-        public bool HasBreakpoints => _breakpointLines.Count > 0 || _tempBreakpointIP >= 0 || _stepOverFromLine >= 0;
+        public void ClearBreakpoints() { _breakpointLines.Clear(); _moduleBreakpoints.Clear(); }
+        public bool HasBreakpoints => _breakpointLines.Count > 0 || _moduleBreakpoints.Count > 0 || _tempBreakpointIP >= 0 || _stepOverFromLine >= 0;
+
+        // --- Per-module breakpoint management ---
+
+        public void AddBreakpoint(int moduleSlot, int line)
+        {
+            if (!_moduleBreakpoints.TryGetValue(moduleSlot, out var set))
+            {
+                set = new HashSet<int>();
+                _moduleBreakpoints[moduleSlot] = set;
+            }
+            set.Add(line);
+        }
+
+        public void ClearBreakpoints(int moduleSlot)
+        {
+            _moduleBreakpoints.Remove(moduleSlot);
+        }
 
         /// <summary>Set a temporary breakpoint at a specific IP (single-shot, auto-cleared on hit).</summary>
         public void SetTempBreakpoint(int ip) => _tempBreakpointIP = ip;
@@ -119,7 +139,7 @@ namespace FFVM
         /// Returns true if a breakpoint was triggered (caller may want to yield).
         /// Checks temporary breakpoint (IP-exact) first, then line breakpoints.
         /// </summary>
-        public bool CheckBreakpoint(int instanceId, int ip, int[] sourceMap, int callDepth = 0)
+        public bool CheckBreakpoint(int instanceId, int ip, int[] sourceMap, int callDepth = 0, int moduleSlot = -1)
         {
             if (SkipNextCheck)
             {
@@ -160,7 +180,7 @@ namespace FFVM
                 return false;
 
             // --- Line breakpoint check ---
-            if (sourceMap == null || _breakpointLines.Count == 0)
+            if (sourceMap == null)
                 return false;
 
             if (ip < 0 || ip >= sourceMap.Length)
@@ -173,7 +193,13 @@ namespace FFVM
             if (line == _lastHitLine)
                 return false; // Already triggered for this line in this tick
 
-            if (!_breakpointLines.Contains(line))
+            // Check module-specific breakpoints first, then legacy flat set
+            bool isBreakpoint = false;
+            if (moduleSlot >= 0 && _moduleBreakpoints.TryGetValue(moduleSlot, out var moduleSet))
+                isBreakpoint = moduleSet.Contains(line);
+            if (!isBreakpoint)
+                isBreakpoint = _breakpointLines.Contains(line);
+            if (!isBreakpoint)
                 return false;
 
             _lastHitLine = line;

@@ -2,7 +2,7 @@
 setlocal
 
 :: ============================================================
-::  KOF98 Practice — One-Click Console (Windows)
+::  KOF98 Practice â€” One-Click Console (Windows)
 ::
 ::  Usage:
 ::    Double-click this file, or run from command line:
@@ -23,7 +23,7 @@ echo   KOF98 Practice  -  One-Click Console
 echo  ========================================================
 echo.
 
-:: ─── Step 1: Check .NET SDK ─────────────────────────────────
+:: â”€â”€â”€ Step 1: Check .NET SDK â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 dotnet --version >nul 2>&1
 if errorlevel 1 (
@@ -38,7 +38,7 @@ if errorlevel 1 (
 for /f "tokens=*" %%V in ('dotnet --version') do set "DOTNET_VER=%%V"
 echo [OK] .NET SDK: %DOTNET_VER%
 
-:: ─── Step 2: Generate KOF98.csproj ──────────────────────────
+:: â”€â”€â”€ Step 2: Generate KOF98.csproj â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 if exist "KOF98\KOF98.csproj" (
     echo [OK] KOF98\KOF98.csproj already exists, skipping.
@@ -52,7 +52,7 @@ if exist "KOF98\KOF98.csproj" (
     echo [OK] Generated KOF98\KOF98.csproj
 )
 
-:: ─── Step 3: Build KOF98 ────────────────────────────────────
+:: â”€â”€â”€ Step 3: Build KOF98 â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 echo.
 echo [*] Building KOF98 (Release)...
@@ -72,7 +72,7 @@ if errorlevel 1 (
 )
 echo [OK] KOF98 build succeeded.
 
-:: ─── Step 4: Generate run-kof98.cmd ─────────────────────────
+:: â”€â”€â”€ Step 4: Generate run-kof98.cmd â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 (
     echo @echo off
@@ -100,7 +100,7 @@ echo [OK] KOF98 build succeeded.
 ) > KOF98\run-kof98.cmd
 echo [OK] Generated KOF98\run-kof98.cmd
 
-:: ─── Step 5: Generate VS Code debug configuration from templates ──
+:: â”€â”€â”€ Step 5: Generate VS Code debug configuration from templates â”€â”€
 
 if not exist ".vscode" mkdir ".vscode"
 
@@ -138,28 +138,28 @@ if exist ".vscode\tasks.json" (
     echo [WARN] Could not generate tasks.json
 )
 
-:: ─── Step 6: Build ffvm-cli (LSP / DAP server) ──────────────
+:: â”€â”€â”€ Step 6: Build ffvm-cli (LSP / DAP server) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 echo.
 echo [*] Building ffvm-cli (editor LSP ^& DAP support)...
 
 dotnet build src\FFVM.Cli\FFVM.Cli.csproj -c Release --nologo -v q
 if errorlevel 1 (
-    echo [WARN] ffvm-cli build failed — editor LSP/DAP features will not work.
+    echo [WARN] ffvm-cli build failed â€” editor LSP/DAP features will not work.
     echo        You can retry manually: dotnet build src\FFVM.Cli\FFVM.Cli.csproj -c Release
 ) else (
     echo [OK] ffvm-cli build succeeded.
 )
 
-:: ─── Step 7: Install VS Code extension (best-effort) ────────
+:: â”€â”€â”€ Step 7: Install VS Code extension (best-effort) â”€â”€â”€â”€â”€â”€â”€â”€
 
 echo.
 echo [*] Attempting VS Code extension installation...
 
 :: Check for npm
-npm --version >nul 2>&1
+call npm --version >nul 2>&1
 if errorlevel 1 (
-    echo [SKIP] npm not found — skipping VS Code extension installation.
+    echo [SKIP] npm not found â€” skipping VS Code extension installation.
     echo        To install manually: cd vscode-ffvm-debug ^&^& npm install
     goto :ext_done
 )
@@ -175,7 +175,7 @@ if errorlevel 1 (
 
 :: Package VSIX
 echo        Packaging extension with vsce...
-call npx --yes @vscode/vsce package --no-dependencies -o ffvm-debug.vsix >nul 2>&1
+call npx --yes @vscode/vsce package -o ffvm-debug.vsix --allow-missing-repository --skip-license >nul 2>&1
 if errorlevel 1 (
     echo [WARN] Failed to package VS Code extension.
     echo        Try manually: cd vscode-ffvm-debug ^&^& npx @vscode/vsce package
@@ -185,25 +185,45 @@ if errorlevel 1 (
 popd
 
 :: Check for VS Code CLI
-code --version >nul 2>&1
+call code --version >nul 2>&1
 if errorlevel 1 (
     echo [SKIP] VS Code CLI not found.
     echo        To install manually: code --install-extension vscode-ffvm-debug\ffvm-debug.vsix
     goto :ext_done
 )
 
-:: Install extension
-code --install-extension "vscode-ffvm-debug\ffvm-debug.vsix" --force >nul 2>&1
-if errorlevel 1 (
+:: Remove old extension to ensure --force actually overwrites
+for /d %%D in ("%USERPROFILE%\.vscode\extensions\ffvm.ffvm-debug-*") do (
+    rmdir /s /q "%%D" >nul 2>&1
+)
+
+:: Install extension via CLI, then verify; fall back to manual extract
+call code --install-extension "vscode-ffvm-debug\ffvm-debug.vsix" --force >nul 2>&1
+
+:: Verify installation succeeded (check extension directory exists with node_modules)
+set "EXT_DIR=%USERPROFILE%\.vscode\extensions\ffvm.ffvm-debug-0.2.0"
+if not exist "%EXT_DIR%\node_modules" (
+    echo        CLI install incomplete, extracting VSIX manually...
+    if not exist "%EXT_DIR%" mkdir "%EXT_DIR%"
+    powershell -NoProfile -Command ^
+        "Add-Type -A System.IO.Compression.FileSystem; ^
+         $z=[IO.Compression.ZipFile]::OpenRead('vscode-ffvm-debug\ffvm-debug.vsix'); ^
+         $m=$z.GetEntry('extension.vsixmanifest'); ^
+         [IO.Compression.ZipFileExtensions]::ExtractToFile($m,\"$env:USERPROFILE\.vscode\extensions\ffvm.ffvm-debug-0.2.0\.vsixmanifest\",$true); ^
+         foreach($e in $z.Entries){if($e.FullName.StartsWith('extension/') -and -not $e.FullName.EndsWith('/')){$r=$e.FullName.Substring(10);$t=Join-Path $env:USERPROFILE\.vscode\extensions\ffvm.ffvm-debug-0.2.0 $r;$d=Split-Path $t;if(!(Test-Path $d)){md $d -Force|Out-Null};[IO.Compression.ZipFileExtensions]::ExtractToFile($e,$t,$true)}}; ^
+         $z.Dispose()" >nul 2>&1
+)
+
+if exist "%EXT_DIR%\node_modules" (
+    echo [OK] VS Code extension installed successfully.
+) else (
     echo [WARN] Failed to install VS Code extension.
     echo        Try manually: code --install-extension vscode-ffvm-debug\ffvm-debug.vsix
-) else (
-    echo [OK] VS Code extension installed successfully.
 )
 
 :ext_done
 
-:: ─── Done ───────────────────────────────────────────────────
+:: â”€â”€â”€ Done â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 echo.
 echo  ========================================================
@@ -221,7 +241,7 @@ echo.
 echo   VS Code debugging (C# + FFScript):
 echo     1. Open this folder in VS Code
 echo     2. Set breakpoints in .cs and .ffs files
-echo     3. Press F5 — select "KOF98: C# + FFVM Debug"
+echo     3. Press F5 â€” select "KOF98: C# + FFVM Debug"
 echo     4. The game window opens, breakpoints work in both C# and FFScript
 echo.
 echo   Command-line options:
