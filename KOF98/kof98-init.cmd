@@ -107,7 +107,9 @@ if not exist ".vscode" mkdir ".vscode"
 :: Detect TargetFramework from KOF98.csproj (e.g. net8.0)
 set "NET_TFM=net8.0"
 for /f "tokens=*" %%L in ('findstr /i "TargetFramework" KOF98\KOF98.csproj') do (
-    for /f "tokens=2 delims=<>" %%T in ("%%L") do set "NET_TFM=%%T"
+    for /f "tokens=2 delims=>" %%A in ("%%L") do (
+        for /f "tokens=1 delims=<" %%T in ("%%A") do set "NET_TFM=%%T"
+    )
 )
 
 :: Generate launch.json from template (replace __NET_TFM__)
@@ -126,7 +128,7 @@ if exist "KOF98\tasks.json.template" (
 )
 
 if exist ".vscode\launch.json" (
-    echo [OK] Generated .vscode/launch.json  (C# + FFVM debug, TFM=%NET_TFM%)
+    echo [OK] Generated .vscode/launch.json  ^(C# + FFVM debug, TFM=%NET_TFM%^)
 ) else (
     echo [WARN] Could not generate launch.json
 )
