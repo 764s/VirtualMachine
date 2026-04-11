@@ -26,3 +26,4 @@
 | D10 | [D_DapAttachMode.md](D_DapAttachMode.md) | DAP Attach 模式：分发机制的功能缺口 | ✅ 已完成 | 2026-04-06 | DIST-8+DIST-9 已实现：DapServerBase + EmbeddableDapServer 提取到 FFVM 库，Sandbox 消费分发库 API |
 | D11 | [Step_DIST_Distribution.md](Step_DIST_Distribution.md) §七 | .NET 多版本兼容策略：分发机制对不同 .NET 版本的应对 | ✅ 已完成 | 2026-04-06 | DIST-10 ✅：双目标 TFM + CLI RollForward + KOF98 覆盖验证。AggressiveOptimization 条件编译修复 |
 | D12 | [D_DeepInlining.md](D_DeepInlining.md) | A5 深度内联展开可行性分析 | ✅ 已完成 | 2026-04-10 | Lang-9 可行性分析。核心结论：编译器总是主动内联，`@inline` 仅控制诊断。分阶段路径 P1~P4，✅ 可行。→ [Step_Lang9](../Plan/Step_Lang9_DeepInlining.md) |
+| D13 | [D_PublicPrivateVisibility.md](D_PublicPrivateVisibility.md) | Include 可见性：public / private 修饰符 | ✅ 已完成 | 2026-04-11 | Lang-15 设计讨论。public/private 与 @export 完全隔离。private = 名称隔离不影响 mixin 运行语义。origin-aware lookup 方案。→ [Step_Lang15](../Plan/Step_Lang15_PublicPrivateVisibility.md) |
