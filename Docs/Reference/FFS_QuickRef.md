@@ -90,6 +90,29 @@ func main() {
 - 所有函数都可以读写模块变量
 - 局部变量不能和模块变量同名
 
+### 模块级结构体变量与常量（Lang-11）
+
+模块级 `var` / `const` 支持结构体类型，使用结构体字面量初始化：
+
+```ffs
+struct Vec2 {
+    x: float
+    y: float
+}
+
+var pos: Vec2 = Vec2 { x: 10, y: 20 }
+const origin: Vec2 = Vec2 { x: 0, y: 0 }
+
+func main() {
+    Report(pos.x)          // 10
+    pos.x = 99             // var 可修改
+    // origin.x = 1        // ← 编译错误：const 不可赋值
+}
+```
+
+- 支持嵌套结构体字面量
+- `const` 结构体禁止整体赋值和字段赋值
+
 ---
 
 ## 4. 函数
@@ -293,7 +316,7 @@ FFScript 支持模块间的跨实例调用。一个模块用 `@export` 导出变
     return hp
 }
 
-// @inline 提示编译器此函数可考虑内联（当前为 hint）
+// @inline 标记函数为要求内联；编译器自动判断可行性
 @inline @export func get_hp(): int {
     return hp
 }
@@ -312,14 +335,16 @@ func main() {
     svc.hp = 50                        // 写入导出变量
     var r: int = svc.take_damage(30)   // 调用导出函数
     var h: int = svc.get_hp()          // 调用（自动退化为直接变量读取）
+    // svc.MAX_HP = 200               // ← 编译错误：@export const 不可写入
 }
 ```
 
 **关键规则**：
 
 - `@export var` — 读写变量
-- `@export const` — 只读变量（写入报编译错误）
+- `@export const` — 只读常量（写入报编译错误，当前仅支持 `int` / `float`）
 - `@export func` — 可跨实例调用的函数
+- `@inline` — 标记函数为要求内联；编译器对所有满足条件的函数自动内联（无论是否标注），标注后无法内联时触发编译警告
 - 纯 getter/setter 自动退化为直接变量访问（性能优化）
 - 编译器在调用方传入 `ServiceBinding[]` 后自动解析 `svc.member` 语法
 
@@ -405,6 +430,43 @@ var syscallMap = new Dictionary<string, int> {
 var result = compiler.Compile(source, "main", syscallMap, syscallTable);
 ```
 
+### 编译器选项（CompileOptions）
+
+通过 `CompileOptions` 调整编译策略（null = 使用默认值）：
+
+```csharp
+var options = new CompileOptions
+{
+    InlineThreshold   = 16,   // 函数体估算指令数 ≤ 此值时内联（0 = 禁用内联）
+    InlineDepthMax    = 3,    // 最大内联嵌套深度
+    MaxHoistedPerLoop = 8,    // 每个循环最多提升常量数（LICM）
+    DiagnosticsEnabled = true, // 是否发出资源用量警告
+    DiagnosticsThreshold = 0.75f // 资源使用率 ≥ 75% 时警告
+};
+
+var result = compiler.Compile(source, "main", syscallMap,
+    syscallTable, fileResolver, filePath, serviceBindings, options);
+```
+
+> 选项仅影响编译策略，不影响正确性。运行时零开销。
+
+### 导出变量默认值提取（Lang-10）
+
+宿主可在编译后直接读取 `@export var` / `@export const` 的默认值，无需 spawn 实例：
+
+```csharp
+var result = compiler.Compile(source, "main", syscalls);
+var exports = result.Program.ExportTable;
+
+// 单次查找
+Number maxHp = exports.GetVarDefault("MAX_HP", Number.Zero);
+
+// 批量查找（高频场景推荐：先解析名字→索引，再批量读取）
+int[] indices = exports.ResolveVarIndices(new[] { "hp", "mp", "MAX_HP" });
+Number[] defaults = exports.ReadVarDefaults(indices);
+// defaults[0] = hp 默认值, defaults[1] = mp 默认值, defaults[2] = MAX_HP 默认值
+```
+
 ---
 
 ## 11. 完整技能脚本示例
@@ -453,6 +515,8 @@ func main() {
 | 声明局部常量 | `const N: int = 10` | `const int N = 10;` |
 | 模块变量 | `var hp: int = 100`（顶层） | `static int hp = 100;` |
 | 模块常量 | `const MAX: int = 100`（顶层） | `static const int MAX = 100;` |
+| 模块结构体变量 | `var pos: Vec2 = Vec2 { x: 0, y: 0 }`（顶层） | `static Vec2 pos = new Vec2(0, 0);` |
+| 模块结构体常量 | `const origin: Vec2 = Vec2 { x: 0, y: 0 }`（顶层） | `static readonly Vec2 origin = ...;` |
 | 文件包含 | `include "path.ffs"` | `using` / `#include` |
 | 函数 | `func f(a: int): int {}` | `int f(int a) {}` |
 | 结构体 | `struct S { x: int }` | `struct S { public int x; }` |
@@ -464,8 +528,9 @@ func main() {
 | 配对资源 | `using F() { ... }` | `using var x = ...;` |
 | 调用宿主函数 | `print(42)` | 由宿主 `SyscallTable.Register` 注册 |
 | 导出变量 | `@export var hp: int = 100` | `public static int hp` |
+| 导出只读常量 | `@export const MAX: int = 100` | `public static readonly int MAX` |
 | 导出函数 | `@export func f(): int {}` | `public static int f()` |
-| 内联提示 | `@inline @export func f() {}` | `[MethodImpl(Inline)]` |
+| 内联标记 | `@inline @export func f() {}` | `[MethodImpl(Inline)]` |
 | 跨实例函数调用 | `svc.f(args)` | RPC / 接口调用 |
 | 跨实例变量读取 | `var x: int = svc.hp` | `svc.hp` |
 | 跨实例变量写入 | `svc.hp = 50` | `svc.hp = 50` |
