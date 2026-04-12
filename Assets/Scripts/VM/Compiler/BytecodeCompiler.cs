@@ -105,6 +105,9 @@ namespace FFVM.Compiler
 
         // Deferred cleanup blocks (emitted after main body)
         private const int NoReleaseSyscall = -1;
+        // DX8: Placeholder syscall slot offset for external funcs in diagnostics-only mode.
+        // Chosen to be far above any realistic host syscall slot count to avoid collisions.
+        private const int ExternalFuncSlotBase = 90000;
         private struct DeferredCleanup
         {
             public int PushCleanupIP;
@@ -495,7 +498,7 @@ namespace FFVM.Compiler
                     _externalFuncs[f.Name] = f;
                     // Register in syscalls if not already present (auto-assign slot)
                     if (!_syscalls.ContainsKey(f.Name))
-                        _syscalls[f.Name] = _syscalls.Count + 90000; // placeholder slot for diagnostics-only
+                        _syscalls[f.Name] = _syscalls.Count + ExternalFuncSlotBase; // placeholder slot for diagnostics-only
                     continue;
                 }
                 string key = FuncKey(f);
