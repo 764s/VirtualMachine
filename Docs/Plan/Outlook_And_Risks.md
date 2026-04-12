@@ -116,6 +116,7 @@
 | **DX4-P1** | `.ffproj` 項目描述文件：JSON 格式 + LSP 加載 + includePaths + hostDeclarations + compileOptions | ✅ 完成 | DX4-P0 ✅ | DX4-P1-01~16 全通過，1834 測試総計 |
 | **DX4-P2** | CLI 项目编译集成：`ffvm-cli init` 脚手架 + `ffvm-cli compile/run --project x.ffproj` | ✅ 完成 | DX4-P1 ✅ | `init` 生成 `.ffproj` 模板（支持 `--host` 预设）+ `compile/run --project` 读取 .ffproj（FileResolver + LoadHostDeclarations + CompileOptions 转发）+ 共享逻辑 ProjectFile.GenerateTemplate/LoadHostDeclarations/MergeDeclarationJson。DX4-P2-01~13 全通过，1873 测试总计 |
 | **DX4-P3** | 跨文件符号查询：合并 AST + 跨文件 definition/references/hover/completion/signatureHelp | ✅ 完成 | DX4-P1 ✅ | 合并 AST 缓存（_mergedAsts）+ FilePathToUri OriginFile→URI 映射 + ResolveOriginUri 跨文件导航 + HandleDefinition/HandleReferences/HandleHover/HandleCompletion/HandleSignatureHelp 全部使用合并 AST。DX4-P3-01~13 全通过，1901 测试总计 |
+| **DX4-P4** | LSP 辅助创建 `.ffproj`：workspace 内有 `.ffs` 无 `.ffproj` → `window/showMessageRequest` 提示 → `workspace/applyEdit` 生成模板 | ⏳ 待执行 | DX4-P2 ✅ | [D_Usability_ModuleScope.md](../Discussion/D_Usability_ModuleScope.md) §6.5 Layer 2 |
 
 ### 2.5 分发基础设施（DIST 系列）
 
@@ -861,8 +862,9 @@ Gate 3: Unity Editor 内嵌 DAP（可选）             ← DBG7 Phase C
 | **DX4-P1** | `.ffproj` 项目描述文件 | ✅ 完成 | ProjectFile 解析类 + CompositeFileResolver 多路径 include + LSP 自動発見 .ffproj + includePaths/hostDeclarations/entry/compileOptions 全字段支持。DX4-P1-01~16 全通过，1834 测试総計。讨论来源 → [D_Usability_ModuleScope.md](../Discussion/D_Usability_ModuleScope.md) | DX4-P0 ✅ |
 | **DX4-P2** | CLI 项目编译集成 | ✅ 完成 | `ffvm-cli init` 脚手架（支持 `--host` 预设）+ `compile/run --project` 读取 .ffproj（FileResolver + LoadHostDeclarations + CompileOptions 转发）+ 共享逻辑 ProjectFile.GenerateTemplate/LoadHostDeclarations/MergeDeclarationJson。DX4-P2-01~13 全通过，1873 测试总计。讨论来源 → [D_Usability_ModuleScope.md](../Discussion/D_Usability_ModuleScope.md) §6.5 | DX4-P1 ✅ |
 | **DX4-P3** | 跨文件符号查询 | ✅ 完成 | 合并 AST 缓存（_mergedAsts via Preprocessor）+ FilePathToUri（OriginFile→URI）+ ResolveOriginUri（跨文件/同文件判定）+ HandleDefinition/HandleReferences/HandleHover/HandleCompletion/HandleSignatureHelp 全部切换到合并 AST。DX4-P3-01~13 全通过，1901 测试总计。讨论来源 → [D_Usability_ModuleScope.md](../Discussion/D_Usability_ModuleScope.md) | DX4-P1 ✅ |
+| **DX4-P4** | LSP 辅助创建 `.ffproj` | ⏳ 待执行 | LSP 启动时检测 workspace 内有 `.ffs` 文件但无 `.ffproj` → `window/showMessageRequest` 提示用户创建 → 点击后 `workspace/applyEdit` 生成模板文件。讨论来源 → [D_Usability_ModuleScope.md](../Discussion/D_Usability_ModuleScope.md) §6.5 Layer 2 | DX4-P2 ✅ |
 
-> Lang-18 ✅ 完成。DX4-P0 ✅ 完成。DX4-P1 ✅ 完成。DX4-P2 ✅ 完成。DX4-P3 ✅ 完成。1901 测试总计。
+> Lang-18 ✅ 完成。DX4-P0 ✅ 完成。DX4-P1 ✅ 完成。DX4-P2 ✅ 完成。DX4-P3 ✅ 完成。当前位置 → DX4-P4 ⏳。1901 测试总计。
 
 #### 宿主集成侧（C 区间 — 生产必经路径）
 
