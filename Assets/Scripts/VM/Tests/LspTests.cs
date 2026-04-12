@@ -2662,6 +2662,66 @@ public static class LspTests
             Assert(foundHelper, "DX4-P3-13b: completion includes same-file helper without workspace");
         }
 
+        // DX4-P3-14: Go-to-definition across non-root include path (ffproj includePaths)
+        // Regression test: include resolved via a subdirectory include path must produce
+        // a valid OriginFile so that cross-file go-to-definition URI points to the actual file.
+        {
+            string tmpDir = Path.Combine(Path.GetTempPath(), "dx4p3_ip_" + Guid.NewGuid().ToString("N").Substring(0, 8));
+            Directory.CreateDirectory(tmpDir);
+            try
+            {
+                // Create subdirectory structure: scripts/common/helpers.ffs
+                string scriptsDir = Path.Combine(tmpDir, "scripts");
+                string commonDir = Path.Combine(scriptsDir, "common");
+                Directory.CreateDirectory(commonDir);
+                File.WriteAllText(Path.Combine(commonDir, "helpers.ffs"), "func helper(): int { return 42 }");
+
+                // Create .ffproj with includePaths pointing to the subdirectory
+                string ffproj = "{ \"includePaths\": [\".\", \"scripts\"] }";
+                File.WriteAllText(Path.Combine(tmpDir, "project.ffproj"), ffproj);
+
+                // main.ffs at workspace root includes "common/helpers" — resolved via "scripts" include path
+                string source = "include \"common/helpers\"\nfunc main() { var x: int = helper() }";
+                File.WriteAllText(Path.Combine(tmpDir, "main.ffs"), source);
+
+                string rootUri = "file:///" + tmpDir.TrimStart('/').Replace("\\", "/");
+                string fileUri = rootUri + "/main.ffs";
+
+                var session = new LspBatchSession();
+                session.AddInitializeWithRootUri(rootUri);
+                session.AddInitialized();
+                session.AddDidOpen(fileUri, source);
+                // "helper()" call on line 1, col 27
+                session.AddDefinition(fileUri, 1, 27);
+                session.AddShutdown();
+                session.AddExit();
+                session.Run();
+
+                var initResp = session.ExpectResponse(0);
+                var defResp = session.ExpectResponse(1);
+                Assert(defResp != null, "DX4-P3-14a: definition response received");
+                var result = defResp?.GetObject("result");
+                Assert(result != null, "DX4-P3-14b: result not null (cross-file via include path)");
+                if (result != null)
+                {
+                    string defUri = result.GetString("uri");
+                    // The URI must point to the actual file in scripts/common/helpers.ffs
+                    Assert(defUri != null && defUri.Contains("helpers.ffs"),
+                        "DX4-P3-14c: definition URI points to helpers.ffs, got '" + defUri + "'");
+                    Assert(defUri != null && defUri.Contains("scripts/common/helpers"),
+                        "DX4-P3-14d: definition URI includes correct subdirectory path, got '" + defUri + "'");
+                    var range = result.GetObject("range");
+                    var start = range?.GetObject("start");
+                    Assert(start != null && start.GetInt("line") == 0,
+                        "DX4-P3-14e: definition at line 0 in helpers.ffs");
+                }
+            }
+            finally
+            {
+                try { Directory.Delete(tmpDir, true); } catch { }
+            }
+        }
+
         // ================================================================
         // N. DX4-P4: LSP-Assisted .ffproj Creation Tests
         // ================================================================

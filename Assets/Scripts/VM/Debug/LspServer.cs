@@ -729,7 +729,8 @@ namespace FFVM.Debug
                 // This includes all symbols from included files with OriginFile set.
                 if (_fileResolver != null)
                 {
-                    string mergeFilePath = _rootPath != null ? UriToFilePath(uri, _rootPath) : null;
+                    // Use absolute path so OriginFile values are consistent with resolved include paths
+                    string mergeFilePath = UriToPath(uri);
                     var preprocessor = new Preprocessor(_fileResolver);
                     var mergedAst = preprocessor.Resolve(source, mergeFilePath ?? "main", out var ppErrors);
                     if (ppErrors == null || ppErrors.Count == 0)

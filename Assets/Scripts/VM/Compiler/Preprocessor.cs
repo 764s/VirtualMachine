@@ -15,6 +15,13 @@ namespace FFVM.Compiler
         /// Returns null if the file is not found.
         /// </summary>
         string ReadFile(string path);
+
+        /// <summary>
+        /// Resolve the given path to an absolute filesystem path.
+        /// Returns the resolved path if the file exists, or null if not found.
+        /// Used by the Preprocessor to record accurate OriginFile paths for cross-file navigation.
+        /// </summary>
+        string ResolveFilePath(string path);
     }
 
     /// <summary>
@@ -35,6 +42,11 @@ namespace FFVM.Compiler
             string result;
             return _files.TryGetValue(path, out result) ? result : null;
         }
+
+        public string ResolveFilePath(string path)
+        {
+            return _files.ContainsKey(path) ? path : null;
+        }
     }
 
     /// <summary>
@@ -54,6 +66,18 @@ namespace FFVM.Compiler
 
         public string ReadFile(string path)
         {
+            string fullPath = ResolveFullPath(path);
+            if (fullPath == null) return null;
+            return File.ReadAllText(fullPath);
+        }
+
+        public string ResolveFilePath(string path)
+        {
+            return ResolveFullPath(path);
+        }
+
+        private string ResolveFullPath(string path)
+        {
             string fullPath = Path.GetFullPath(Path.Combine(_baseDir, path));
             // Append .ffs extension if not present (include "common/constants" → common/constants.ffs)
             if (!fullPath.EndsWith(".ffs", StringComparison.OrdinalIgnoreCase))
@@ -62,7 +86,7 @@ namespace FFVM.Compiler
             if (!fullPath.StartsWith(_baseDir, StringComparison.OrdinalIgnoreCase))
                 return null;
             if (!File.Exists(fullPath)) return null;
-            return File.ReadAllText(fullPath);
+            return fullPath;
         }
     }
 
@@ -200,7 +224,9 @@ namespace FFVM.Compiler
                     continue;
                 }
 
-                var importModule = ResolveRecursive(importSource, importPath, stack);
+                // Resolve to actual filesystem path for accurate OriginFile (cross-file navigation)
+                string resolvedImportPath = _fileResolver.ResolveFilePath(importPath) ?? importPath;
+                var importModule = ResolveRecursive(importSource, resolvedImportPath, stack);
                 if (_errors.Count > 0) continue;
 
                 // Lang-17: aliased include → store in AliasedModules, no flat merge

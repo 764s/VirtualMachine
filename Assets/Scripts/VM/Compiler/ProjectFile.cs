@@ -336,5 +336,15 @@ namespace FFVM.Compiler
             }
             return null;
         }
+
+        public string ResolveFilePath(string path)
+        {
+            for (int i = 0; i < _resolvers.Length; i++)
+            {
+                string resolved = _resolvers[i].ResolveFilePath(path);
+                if (resolved != null) return resolved;
+            }
+            return null;
+        }
     }
 }
