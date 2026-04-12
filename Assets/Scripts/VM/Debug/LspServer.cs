@@ -2943,8 +2943,10 @@ namespace FFVM.Debug
             if (expr == null) return;
             if (expr is FieldAccessExpr fa)
             {
-                if (fa.FieldName == fieldName)
-                    locations.Add(MakeLocation(uri, fa.Line, fa.Column + fa.FieldName.Length - fieldName.Length, fieldName.Length));
+                // Note: FieldAccessExpr.Column points to the target expression start, not the field name.
+                // We cannot reliably compute the field name column without source text, so we skip
+                // field access usage sites. Declaration-site references (from struct definition)
+                // and struct literal field references are still collected.
                 CollectFieldAccessRefsInExpr(fa.Target, fieldName, uri, locations);
             }
             else if (expr is BinaryExpr bin)
@@ -3226,42 +3228,15 @@ namespace FFVM.Debug
 
         /// <summary>
         /// DX5: Walk a block to find type annotations that reference struct/enum types.
+        /// Note: VarDeclStmt.Column points to 'var'/'const' keyword, not the type annotation.
+        /// We skip type usage tokens here since we cannot compute precise positions.
+        /// Struct/enum declarations and their fields/members are still properly tokenized.
         /// </summary>
         private static void CollectTypeUsageTokens(BlockStmt block, HashSet<string> structNames, HashSet<string> enumNames,
             List<(int line, int col, int len, int type, int mod)> tokens)
         {
-            if (block == null) return;
-            foreach (var stmt in block.Statements)
-            {
-                if (stmt is VarDeclStmt vd && vd.TypeName != null)
-                {
-                    if (structNames.Contains(vd.TypeName))
-                        tokens.Add((vd.Line, vd.Column, vd.TypeName.Length, 1 /* struct */, 0));
-                    else if (enumNames.Contains(vd.TypeName))
-                        tokens.Add((vd.Line, vd.Column, vd.TypeName.Length, 2 /* enum */, 0));
-                }
-                // Recurse into nested blocks
-                if (stmt is BlockStmt bs) CollectTypeUsageTokens(bs, structNames, enumNames, tokens);
-                else if (stmt is IfStmt ifs)
-                {
-                    if (ifs.ThenBranch is BlockStmt tb) CollectTypeUsageTokens(tb, structNames, enumNames, tokens);
-                    if (ifs.ElseBranch is BlockStmt eb) CollectTypeUsageTokens(eb, structNames, enumNames, tokens);
-                }
-                else if (stmt is WhileStmt ws && ws.Body is BlockStmt wb) CollectTypeUsageTokens(wb, structNames, enumNames, tokens);
-                else if (stmt is ForStmt fs)
-                {
-                    if (fs.Initializer is VarDeclStmt fvd && fvd.TypeName != null)
-                    {
-                        if (structNames.Contains(fvd.TypeName))
-                            tokens.Add((fvd.Line, fvd.Column, fvd.TypeName.Length, 1, 0));
-                        else if (enumNames.Contains(fvd.TypeName))
-                            tokens.Add((fvd.Line, fvd.Column, fvd.TypeName.Length, 2, 0));
-                    }
-                    if (fs.Body is BlockStmt fb) CollectTypeUsageTokens(fb, structNames, enumNames, tokens);
-                }
-                else if (stmt is DeferStmt ds) CollectTypeUsageTokens(ds.Body, structNames, enumNames, tokens);
-                else if (stmt is UsingStmt us) CollectTypeUsageTokens(us.Body, structNames, enumNames, tokens);
-            }
+            // Intentionally empty: type annotation positions not available in current AST.
+            // The TextMate grammar provides fallback coloring for type annotations via regex patterns.
         }
 
         // ============================================================

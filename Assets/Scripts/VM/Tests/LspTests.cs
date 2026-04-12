@@ -3347,7 +3347,7 @@ public static class LspTests
                 $"DX5-19: ≥1 text edit for enum rename, got {edits?.Count ?? 0}");
         }
 
-        // DX5-20: Semantic tokens — type annotation using struct type gets colored
+        // DX5-20: Semantic tokens — struct decl + field tokens (type usage relies on TextMate)
         {
             string source = "struct Pos { x: int }\nfunc main() {\n  var p: Pos = Pos { x: 1 }\n  wait 1\n}";
             var session = new LspBatchSession();
@@ -3362,9 +3362,9 @@ public static class LspTests
             session.ExpectResponse(0);
             var semResp = session.ExpectResponse(1);
             var data = semResp?.GetObject("result")?.GetArray("data");
-            // struct decl name + field + type usage in "var p: Pos" = 3 tokens × 5 = 15
-            Assert(data != null && data.Count >= 15,
-                $"DX5-20: ≥15 data ints for struct decl + field + type usage, got {data?.Count ?? 0}");
+            // struct decl name + field = 2 tokens × 5 = 10 ints
+            Assert(data != null && data.Count >= 10,
+                $"DX5-20: ≥10 data ints for struct decl + field, got {data?.Count ?? 0}");
         }
 
         Debug.Log($"\n===== LspTests: {passed} passed, {failed} failed =====");

@@ -265,9 +265,10 @@ namespace FFVM.Compiler
                     if (c == '"') { inString = true; sb.Append(c); }
                     else if (c == '/' && i + 1 < input.Length && input[i + 1] == '/')
                     {
-                        // Skip rest of line
+                        // Skip rest of line (comment)
                         while (i < input.Length && input[i] != '\n') i++;
-                        if (i < input.Length) sb.Append('\n'); // keep the newline
+                        // i now points to '\n' or past end; let the outer loop handle '\n'
+                        if (i < input.Length) i--; // back up so the outer for-loop increments to '\n'
                     }
                     else sb.Append(c);
                 }
