@@ -422,6 +422,8 @@ namespace FFVM.AST
     {
         public string Name { get; }
         public string TypeName { get; }
+        public int Line { get; set; }
+        public int Column { get; set; }
         public StructField(string name, string typeName)
         {
             Name = name;

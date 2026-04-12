@@ -311,6 +311,7 @@ namespace FFVM.Compiler
 
         private ImportDecl ParseIncludeDecl()
         {
+            int line = Current().Line, col = Current().Column;
             Expect(TokenType.Include, "");
             var pathToken = Expect(TokenType.StringLiteral, "after 'include'");
             string path = pathToken.Text ?? "";
@@ -322,7 +323,10 @@ namespace FFVM.Compiler
                 var aliasToken = Expect(TokenType.Identifier, "after 'as'");
                 alias = aliasToken.Text;
             }
-            return new ImportDecl(path, alias);
+            var decl = new ImportDecl(path, alias);
+            decl.Line = line;
+            decl.Column = col;
+            return decl;
         }
 
         private FuncDecl ParseFuncDecl(bool isExported = false, bool isInline = false, bool isPrivate = false, bool isOverride = false)
@@ -408,10 +412,14 @@ namespace FFVM.Compiler
             var fields = new List<StructField>();
             while (!Check(TokenType.RBrace) && !IsAtEnd())
             {
+                int fLine = Current().Line, fCol = Current().Column;
                 string fieldName = Expect(TokenType.Identifier, "for struct field name").Text ?? "?";
                 Expect(TokenType.Colon, "after field name");
                 string fieldType = Expect(TokenType.Identifier, "for field type").Text ?? "int";
-                fields.Add(new StructField(fieldName, fieldType));
+                var sf = new StructField(fieldName, fieldType);
+                sf.Line = fLine;
+                sf.Column = fCol;
+                fields.Add(sf);
                 Match(TokenType.Semicolon); // optional semicolons
             }
             Expect(TokenType.RBrace, "to close struct");
