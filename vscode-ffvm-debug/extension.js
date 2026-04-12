@@ -209,6 +209,8 @@ function activate(context) {
 
         const clientOptions = {
             documentSelector: [{ scheme: "file", language: "ffvm" }],
+            // DX6: Enable workspace/willRenameFiles so the server can update include paths
+            // when .ffs files are renamed in the file explorer.
             middleware: {
                 workspace: {
                     willRenameFiles: (params, next) => next(params)

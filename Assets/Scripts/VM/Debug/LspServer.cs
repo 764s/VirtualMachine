@@ -2383,10 +2383,9 @@ namespace FFVM.Debug
                 // DX7: Check if cursor is on the field name token (after '.')
                 if (fa.FieldNameLine == line && fa.FieldNameLine > 0 && ColMatches(fa.FieldNameColumn, fa.FieldName.Length, col))
                 {
-                    // Determine parent struct from target expression
-                    string parentStruct = null;
-                    // Not always determinable from just AST; but we can still identify the field
-                    return new SymbolAtPosition { name = fa.FieldName, kind = SymbolKindTag.StructField, parentName = parentStruct };
+                    // Parent struct cannot always be resolved from AST alone (no type inference);
+                    // callers handle parentName=null by searching all structs.
+                    return new SymbolAtPosition { name = fa.FieldName, kind = SymbolKindTag.StructField, parentName = null };
                 }
                 return FindSymbolInExpr(func, fa.Target, line, col);
             }
@@ -3447,7 +3446,7 @@ namespace FFVM.Debug
                     // DX7: struct field type annotation — semantic token for struct/enum types
                     if (field.TypeNameLine > 0)
                     {
-                        string baseType = field.TypeName.Contains(".") ? field.TypeName.Split('.')[0] : field.TypeName;
+                        string baseType = GetBaseTypeName(field.TypeName);
                         if (structNames.Contains(baseType))
                             rawTokens.Add((field.TypeNameLine, field.TypeNameColumn, baseType.Length, 1 /* struct */, 0));
                         else if (enumNames.Contains(baseType))
@@ -3475,7 +3474,7 @@ namespace FFVM.Debug
                 {
                     if (param.TypeNameLine > 0)
                     {
-                        string baseType = param.TypeName.Contains(".") ? param.TypeName.Split('.')[0] : param.TypeName;
+                        string baseType = GetBaseTypeName(param.TypeName);
                         if (structNames.Contains(baseType))
                             rawTokens.Add((param.TypeNameLine, param.TypeNameColumn, baseType.Length, 1 /* struct */, 0));
                         else if (enumNames.Contains(baseType))
@@ -3491,7 +3490,7 @@ namespace FFVM.Debug
             {
                 if (mv.TypeNameLine > 0)
                 {
-                    string baseType = mv.TypeName.Contains(".") ? mv.TypeName.Split('.')[0] : mv.TypeName;
+                    string baseType = GetBaseTypeName(mv.TypeName);
                     if (structNames.Contains(baseType))
                         rawTokens.Add((mv.TypeNameLine, mv.TypeNameColumn, baseType.Length, 1 /* struct */, 0));
                     else if (enumNames.Contains(baseType))
@@ -3542,13 +3541,23 @@ namespace FFVM.Debug
                 CollectTypeUsageTokensInStmt(stmt, structNames, enumNames, tokens);
         }
 
+        /// <summary>
+        /// DX7: Extract the base type name from a potentially dotted type (e.g. "Alias.Struct" → "Alias").
+        /// For simple types, returns the type name unchanged.
+        /// </summary>
+        private static string GetBaseTypeName(string typeName)
+        {
+            int dotIndex = typeName.IndexOf('.');
+            return dotIndex >= 0 ? typeName.Substring(0, dotIndex) : typeName;
+        }
+
         private static void CollectTypeUsageTokensInStmt(Stmt stmt, HashSet<string> structNames, HashSet<string> enumNames,
             List<(int line, int col, int len, int type, int mod)> tokens)
         {
             if (stmt == null) return;
             if (stmt is VarDeclStmt vd && vd.TypeNameLine > 0)
             {
-                string baseType = vd.TypeName.Contains(".") ? vd.TypeName.Split('.')[0] : vd.TypeName;
+                string baseType = GetBaseTypeName(vd.TypeName);
                 if (structNames.Contains(baseType))
                     tokens.Add((vd.TypeNameLine, vd.TypeNameColumn, baseType.Length, 1 /* struct */, 0));
                 else if (enumNames.Contains(baseType))
