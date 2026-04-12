@@ -113,7 +113,7 @@
 | ID | 内容 | 状态 | 前置 | 说明 |
 |----|------|------|------|------|
 | **DX4-P0** | LSP workspace 快速改善：rootUri → FileSystemFileResolver + .ffvm.d.json 自動発見 + entryFunc=null | ✅ 完成 | — | DX4-P0-01~13 全通過，1791 測試総計 |
-| **DX4-P1** | `.ffproj` 項目描述文件：JSON 格式 + LSP 加載 + includePaths + hostDeclarations | ⏳ | DX4-P0 ✅ | 対標 tsconfig.json，完整項目配置 |
+| **DX4-P1** | `.ffproj` 項目描述文件：JSON 格式 + LSP 加載 + includePaths + hostDeclarations + compileOptions | ✅ 完成 | DX4-P0 ✅ | DX4-P1-01~16 全通過，1834 測試総計 |
 | **DX4-P2** | CLI 项目编译集成：`ffvm-cli init` 脚手架 + `ffvm-cli compile --project x.ffproj` | ⏳ | DX4-P1 | LSP 和 CLI 共用项目配置；`init` 生成带注释的 `.ffproj` 模板（§6.5） |
 | **DX4-P3** | 跨文件符号查询：合并 AST + 跨文件 definition/references/hover | ⏳ | DX4-P1 | 完整跨文件导航 |
 

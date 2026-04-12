@@ -45,6 +45,10 @@ namespace FFVM.Debug
         private string _rootPath;
         private IFileResolver _fileResolver;
 
+        // --- DX4-P1: Project file configuration ---
+        private ProjectFile _projectFile;
+        private CompileOptions _projectCompileOptions;
+
         /// <summary>
         /// Exposed for testing: all diagnostics published since last clear.
         /// Key = URI, Value = list of diagnostic objects.
@@ -263,8 +267,28 @@ namespace FFVM.Debug
 
                 if (_rootPath != null)
                 {
-                    _fileResolver = new FileSystemFileResolver(_rootPath);
-                    // Auto-discover .ffvm.d.json declaration files in workspace root
+                    // DX4-P1: Try to discover and load a .ffproj project file first.
+                    // If found, use its includePaths for file resolution and hostDeclarations for syscalls.
+                    _projectFile = ProjectFile.TryDiscover(_rootPath);
+                    if (_projectFile != null)
+                    {
+                        // Build file resolver from project's includePaths
+                        _fileResolver = _projectFile.BuildFileResolver();
+
+                        // Load host declaration files specified by project
+                        LoadProjectHostDeclarations(_projectFile);
+
+                        // Apply project compile options
+                        _projectCompileOptions = _projectFile.CompileOptions;
+                    }
+                    else
+                    {
+                        // DX4-P0 fallback: use workspace root as sole include base
+                        _fileResolver = new FileSystemFileResolver(_rootPath);
+                    }
+
+                    // Auto-discover .ffvm.d.json declaration files in workspace root (DX4-P0)
+                    // This runs regardless of .ffproj presence — always provides fallback discovery
                     DiscoverDeclarationFiles(_rootPath);
                 }
             }
@@ -357,6 +381,31 @@ namespace FFVM.Debug
         }
 
         /// <summary>
+        /// DX4-P1: Load host declaration files specified in a .ffproj project file.
+        /// Each path in hostDeclarations is resolved relative to the project directory.
+        /// </summary>
+        private void LoadProjectHostDeclarations(ProjectFile project)
+        {
+            if (project == null || project.HostDeclarations == null) return;
+            foreach (string declPath in project.HostDeclarations)
+            {
+                try
+                {
+                    string absPath = project.ResolvePath(declPath);
+                    if (absPath != null && File.Exists(absPath))
+                    {
+                        string json = File.ReadAllText(absPath);
+                        LoadDeclarationJson(json);
+                    }
+                }
+                catch
+                {
+                    // Ignore individual file errors — don't crash LSP for bad declaration files
+                }
+            }
+        }
+
+        /// <summary>
         /// DX4-P0: Convert a document URI to a relative file path from workspace root.
         /// Used as filePath parameter for include cycle detection and diagnostics.
         /// Returns the relative path if under rootPath, otherwise returns the absolute path as fallback.
@@ -441,10 +490,11 @@ namespace FFVM.Debug
                 // DX4-P0: Compile for diagnostics with workspace file resolver support.
                 // entryFunc=null → diagnostics-only mode (no entry function requirement).
                 // fileResolver → enables include directive resolution from workspace root.
+                // DX4-P1: Pass project compile options when available.
                 var compiler = new BytecodeCompiler();
                 string filePath = _rootPath != null ? UriToFilePath(uri, _rootPath) : null;
                 var result = compiler.Compile(source, null, _defaultSyscalls, null,
-                    _fileResolver, filePath);
+                    _fileResolver, filePath, null, _projectCompileOptions);
 
                 if (!result.Success && result.Errors != null)
                 {
