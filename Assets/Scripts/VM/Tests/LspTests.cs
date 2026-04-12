@@ -3774,6 +3774,177 @@ public static class LspTests
             Assert(willRename != null, "DX6-10: workspace.fileOperations.willRename capability advertised");
         }
 
+        // ============================================================
+        // DX7: AST precise position tracking (field access + type annotations)
+        // ============================================================
+
+        // DX7-01: FieldAccessExpr — references on v.x includes usage site
+        {
+            string source = "struct Vec2 { x: int; y: int }\nfunc main() {\n  var v: Vec2 = Vec2 { x: 1, y: 2 }\n  wait v.x\n}";
+            var session = new LspBatchSession();
+            session.AddInitialize();
+            session.AddInitialized();
+            session.AddDidOpen("file:///dx7fa.ffs", source);
+            // References on "x" in struct field declaration — line 0, col 14 (0-based)
+            session.AddReferences("file:///dx7fa.ffs", 0, 14);
+            session.AddShutdown();
+            session.AddExit();
+            session.Run();
+
+            session.ExpectResponse(0);
+            var refResp = session.ExpectResponse(1);
+            var refs = refResp?.GetArray("result");
+            // 1 decl (struct field) + 1 struct literal + 1 field access (v.x) = ≥3
+            Assert(refs != null && refs.Count >= 3,
+                $"DX7-01: ≥3 references for struct field (decl+literal+usage), got {refs?.Count ?? 0}");
+        }
+
+        // DX7-02: FieldAccessExpr — definition on v.x jumps to struct field
+        {
+            string source = "struct Pos { px: int; py: int }\nfunc main() {\n  var p: Pos = Pos { px: 10, py: 20 }\n  wait p.px\n}";
+            var session = new LspBatchSession();
+            session.AddInitialize();
+            session.AddInitialized();
+            session.AddDidOpen("file:///dx7def.ffs", source);
+            // Definition on "px" in "p.px" — line 3, col 9 (0-based: 'wait p.px', px starts at col 9)
+            session.AddDefinition("file:///dx7def.ffs", 3, 9);
+            session.AddShutdown();
+            session.AddExit();
+            session.Run();
+
+            session.ExpectResponse(0);
+            var defResp = session.ExpectResponse(1);
+            var result = defResp?.GetObject("result");
+            Assert(result != null, "DX7-02: definition on field access (v.px) returns result");
+        }
+
+        // DX7-03: Semantic tokens — type annotation on local variable colored as struct
+        {
+            string source = "struct Color { r: int; g: int; b: int }\nfunc main() {\n  var c: Color = Color { r: 255, g: 0, b: 0 }\n  wait c.r\n}";
+            var session = new LspBatchSession();
+            session.AddInitialize();
+            session.AddInitialized();
+            session.AddDidOpen("file:///dx7sem.ffs", source);
+            session.AddSemanticTokensFull("file:///dx7sem.ffs");
+            session.AddShutdown();
+            session.AddExit();
+            session.Run();
+
+            session.ExpectResponse(0);
+            var semResp = session.ExpectResponse(1);
+            var data = semResp?.GetObject("result")?.GetArray("data");
+            // struct decl "Color" + 3 fields (r,g,b) + type annotation "Color" in var decl = ≥5 tokens × 5 = ≥25 ints
+            Assert(data != null && data.Count >= 25,
+                $"DX7-03: ≥25 data ints (struct decl + fields + type usage), got {data?.Count ?? 0}");
+        }
+
+        // DX7-04: Semantic tokens — parameter type annotation colored as struct
+        {
+            string source = "struct Vec2 { x: int; y: int }\nfunc length(v: Vec2): int {\n  return v.x + v.y\n}";
+            var session = new LspBatchSession();
+            session.AddInitialize();
+            session.AddInitialized();
+            session.AddDidOpen("file:///dx7param.ffs", source);
+            session.AddSemanticTokensFull("file:///dx7param.ffs");
+            session.AddShutdown();
+            session.AddExit();
+            session.Run();
+
+            session.ExpectResponse(0);
+            var semResp = session.ExpectResponse(1);
+            var data = semResp?.GetObject("result")?.GetArray("data");
+            // struct "Vec2" decl + 2 fields + param type "Vec2" = 4 tokens × 5 = 20 ints
+            Assert(data != null && data.Count >= 20,
+                $"DX7-04: ≥20 data ints (struct + fields + param type), got {data?.Count ?? 0}");
+        }
+
+        // DX7-05: Semantic tokens — struct field type annotation (nested struct type)
+        {
+            string source = "struct Inner { val: int }\nstruct Outer { child: Inner }\nfunc main() {\n  wait 1\n}";
+            var session = new LspBatchSession();
+            session.AddInitialize();
+            session.AddInitialized();
+            session.AddDidOpen("file:///dx7nested.ffs", source);
+            session.AddSemanticTokensFull("file:///dx7nested.ffs");
+            session.AddShutdown();
+            session.AddExit();
+            session.Run();
+
+            session.ExpectResponse(0);
+            var semResp = session.ExpectResponse(1);
+            var data = semResp?.GetObject("result")?.GetArray("data");
+            // "Inner" decl + "val" field + "Outer" decl + "child" field + "Inner" type annotation = 5 tokens × 5 = 25
+            Assert(data != null && data.Count >= 25,
+                $"DX7-05: ≥25 data ints (2 structs + 2 fields + 1 field type), got {data?.Count ?? 0}");
+        }
+
+        // DX7-06: Rename struct field — includes usage site v.x
+        {
+            string source = "struct Vec2 { x: int; y: int }\nfunc main() {\n  var v: Vec2 = Vec2 { x: 1, y: 2 }\n  wait v.x\n}";
+            var session = new LspBatchSession();
+            session.AddInitialize();
+            session.AddInitialized();
+            session.AddDidOpen("file:///dx7ren.ffs", source);
+            // Rename "x" in struct field declaration — line 0, col 14 (0-based)
+            session.AddRename("file:///dx7ren.ffs", 0, 14, "px");
+            session.AddShutdown();
+            session.AddExit();
+            session.Run();
+
+            session.ExpectResponse(0);
+            var renResp = session.ExpectResponse(1);
+            var changes = renResp?.GetObject("result")?.GetObject("changes");
+            var edits = changes?.GetArray("file:///dx7ren.ffs");
+            // decl (struct x:) + struct literal x: + field access v.x = ≥3 edits
+            Assert(edits != null && edits.Count >= 3,
+                $"DX7-06: ≥3 text edits for field rename (decl+literal+access), got {edits?.Count ?? 0}");
+        }
+
+        // DX7-07: Semantic tokens — enum type annotation in variable
+        {
+            string source = "enum Dir { Up, Down, Left, Right }\nfunc main() {\n  var d: Dir = Dir.Up\n  wait 1\n}";
+            var session = new LspBatchSession();
+            session.AddInitialize();
+            session.AddInitialized();
+            session.AddDidOpen("file:///dx7enum.ffs", source);
+            session.AddSemanticTokensFull("file:///dx7enum.ffs");
+            session.AddShutdown();
+            session.AddExit();
+            session.Run();
+
+            session.ExpectResponse(0);
+            var semResp = session.ExpectResponse(1);
+            var data = semResp?.GetObject("result")?.GetArray("data");
+            // enum "Dir" decl + 4 members + "Dir" type annotation in var = 6 tokens × 5 = 30 ints
+            Assert(data != null && data.Count >= 30,
+                $"DX7-07: ≥30 data ints (enum decl + members + type usage), got {data?.Count ?? 0}");
+        }
+
+        // DX7-08: prepareRename on field access usage site works
+        {
+            string source = "struct Pt { x: int; y: int }\nfunc main() {\n  var p: Pt = Pt { x: 1, y: 2 }\n  wait p.x\n}";
+            var session = new LspBatchSession();
+            session.AddInitialize();
+            session.AddInitialized();
+            session.AddDidOpen("file:///dx7prep.ffs", source);
+            // prepareRename on "x" in "p.x" — line 3, col 9
+            session.AddPrepareRename("file:///dx7prep.ffs", 3, 9);
+            session.AddShutdown();
+            session.AddExit();
+            session.Run();
+
+            session.ExpectResponse(0);
+            var prepResp = session.ExpectResponse(1);
+            var result = prepResp?.GetObject("result");
+            Assert(result != null, "DX7-08: prepareRename on field access returns result");
+            if (result != null)
+            {
+                string placeholder = result.GetString("placeholder");
+                Assert(placeholder == "x",
+                    $"DX7-08: placeholder='x', got '{placeholder}'");
+            }
+        }
+
         Debug.Log($"\n===== LspTests: {passed} passed, {failed} failed =====");
     }
 

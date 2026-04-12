@@ -865,9 +865,9 @@ Gate 3: Unity Editor 内嵌 DAP（可选）             ← DBG7 Phase C
 | **DX4-P4** | LSP 辅助创建 `.ffproj` | ✅ 完成 | LSP 启动时检测 workspace 内有 `.ffs` 文件但无 `.ffproj` → `window/showMessageRequest` 提示用户创建 → 点击后 `workspace/applyEdit` 生成模板文件。DX4-P4-01~13 全通过，1915 测试总计。讨论来源 → [D_Usability_ModuleScope.md](../Discussion/D_Usability_ModuleScope.md) §6.5 Layer 2 | DX4-P2 ✅ |
 | **DX5** | LSP 重命名 + 语义染色 + Include 导航 + 成员符号 | ✅ 完成 | `textDocument/rename` + `prepareRename`（函数/变量/结构体/枚举重命名，跨引用 WorkspaceEdit）。`textDocument/semanticTokens/full`（struct/enum/field/member 声明处语义染色）。Include 路径 go-to-definition（`ResolveIncludeFileUri`）+ find-references。StructField/EnumMember 新 SymbolKindTag + definition/references。`.ffproj` 自动创建使用文件夹名 + GenerateTemplate 带注释模板 + StripLineComments。TextMate grammar 增强。DX5-01~20（38 asserts）全通过，1953 测试总计 | DX4 ✅ |
 | **DX6** | Include 文件重命名自动更新引用 | ✅ 完成 | LSP `workspace/willRenameFiles` 请求处理：用户在文件管理器中重命名 `.ffs` 文件时，自动扫描 workspace 内所有 `include "old_path"` → 批量更新为 `include "new_path"`。覆盖：普通 include + `include as` 别名 + 跨 includePaths 搜索路径解析 + 子目录路径 + 显式 .ffs 扩展名。capability 注册 `workspace.fileOperations.willRename`。VSCode 扩展 middleware 注册。DX6-01~10（22 asserts）全通过，1975 测试总计 | DX5 ✅ |
-| **DX7** | AST 精确位置追踪（字段访问 + 类型注解） | ⏳ 待执行 | R2: FieldAccessExpr 新增 FieldNameLine/FieldNameColumn（`.fieldName` token 精确位置），使 rename/references 覆盖 `v.x` 使用处。R3: VarDeclStmt/ParamDecl/StructField 新增 TypeNameLine/TypeNameColumn（类型名 token 位置），使 semantic tokens 覆盖类型注解使用处。纯 additive AST + Parser 改动，BytecodeCompiler 零变更 | DX5 ✅ |
+| **DX7** | AST 精确位置追踪（字段访问 + 类型注解） | ✅ 完成 | R2: FieldAccessExpr 新增 FieldNameLine/FieldNameColumn（`.fieldName` token 精确位置）→ rename/references 覆盖 `v.x` 使用处。FindSymbolInExpr 支持字段访问位置匹配。FindDefinitionLocation/CollectReferencesWithOrigin 支持 parentName=null 全局搜索。CollectFieldAccessRefsInExpr 使用 DX7 位置。WaitStmt 加入字段引用收集。R3: VarDeclStmt/ParamDecl/StructField 新增 TypeNameLine/TypeNameColumn → semantic tokens 覆盖类型注解（struct/enum 用色）。CollectTypeUsageTokens 实际递归遍历 block。参数类型/模块变量类型/字段类型全覆盖。纯 additive AST + Parser 改动，BytecodeCompiler 零变更。DX7-01~08（10 asserts）全通过，1984 测试总计 | DX6 ✅ |
 
-> Lang-18 ✅ 完成。DX4-P0 ✅ 完成。DX4-P1 ✅ 完成。DX4-P2 ✅ 完成。DX4-P3 ✅ 完成。DX4-P4 ✅ 完成。DX5 ✅ 完成。DX6 ✅ 完成。当前位置 → DX7 ⏳。1975 测试总计。
+> Lang-18 ✅ 完成。DX4-P0 ✅ 完成。DX4-P1 ✅ 完成。DX4-P2 ✅ 完成。DX4-P3 ✅ 完成。DX4-P4 ✅ 完成。DX5 ✅ 完成。DX6 ✅ 完成。DX7 ✅ 完成。1984 测试总计。
 
 #### 宿主集成侧（C 区间 — 生产必经路径）
 

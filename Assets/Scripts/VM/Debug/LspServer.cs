@@ -2380,6 +2380,14 @@ namespace FFVM.Debug
             }
             if (expr is FieldAccessExpr fa)
             {
+                // DX7: Check if cursor is on the field name token (after '.')
+                if (fa.FieldNameLine == line && fa.FieldNameLine > 0 && ColMatches(fa.FieldNameColumn, fa.FieldName.Length, col))
+                {
+                    // Determine parent struct from target expression
+                    string parentStruct = null;
+                    // Not always determinable from just AST; but we can still identify the field
+                    return new SymbolAtPosition { name = fa.FieldName, kind = SymbolKindTag.StructField, parentName = parentStruct };
+                }
                 return FindSymbolInExpr(func, fa.Target, line, col);
             }
 
@@ -2440,6 +2448,19 @@ namespace FFVM.Debug
                             if (field.Name == name)
                                 return (field.Line, field.Column, field.Name.Length, st.OriginFile);
                         }
+                    }
+                }
+            }
+            // DX7: struct field definition when parentName is unknown (from field access expression)
+            else if (kind == SymbolKindTag.StructField && parentName == null)
+            {
+                // Search all structs for the field name — first match wins
+                foreach (var st in ast.Structs)
+                {
+                    foreach (var field in st.Fields)
+                    {
+                        if (field.Name == name)
+                            return (field.Line, field.Column, field.Name.Length, st.OriginFile);
                     }
                 }
             }
@@ -2657,6 +2678,26 @@ namespace FFVM.Debug
                 {
                     string funcUri = ResolveOriginUri(requestingUri, func.OriginFile);
                     CollectFieldAccessRefsInBlock(func.Body, name, parentName, funcUri, locations);
+                }
+            }
+            // DX7: struct field references when parentName unknown (from field access usage site)
+            else if (kind == SymbolKindTag.StructField && parentName == null)
+            {
+                // Search all structs for matching field name
+                foreach (var st in ast.Structs)
+                {
+                    string targetUri = ResolveOriginUri(requestingUri, st.OriginFile);
+                    foreach (var field in st.Fields)
+                    {
+                        if (field.Name == name)
+                            locations.Add(MakeLocation(targetUri, field.Line, field.Column, name.Length));
+                    }
+                    // Also collect field access usages
+                    foreach (var func in ast.Functions)
+                    {
+                        string funcUri = ResolveOriginUri(requestingUri, func.OriginFile);
+                        CollectFieldAccessRefsInBlock(func.Body, name, st.Name, funcUri, locations);
+                    }
                 }
             }
             // DX5: enum member references
@@ -3162,6 +3203,7 @@ namespace FFVM.Debug
                 foreach (var arg in us.Arguments) CollectFieldAccessRefsInExpr(arg, fieldName, uri, locations);
                 CollectFieldAccessRefsInBlock(us.Body, fieldName, structName, uri, locations);
             }
+            else if (stmt is WaitStmt wst) CollectFieldAccessRefsInExpr(wst.FrameCount, fieldName, uri, locations);
         }
 
         private static void CollectFieldAccessRefsInExpr(Expr expr, string fieldName, string uri, List<object> locations)
@@ -3169,10 +3211,11 @@ namespace FFVM.Debug
             if (expr == null) return;
             if (expr is FieldAccessExpr fa)
             {
-                // Note: FieldAccessExpr.Column points to the target expression start, not the field name.
-                // We cannot reliably compute the field name column without source text, so we skip
-                // field access usage sites. Declaration-site references (from struct definition)
-                // and struct literal field references are still collected.
+                // DX7: FieldNameLine/FieldNameColumn now tracks precise field name position
+                if (fa.FieldName == fieldName && fa.FieldNameLine > 0)
+                {
+                    locations.Add(MakeLocation(uri, fa.FieldNameLine, fa.FieldNameColumn, fieldName.Length));
+                }
                 CollectFieldAccessRefsInExpr(fa.Target, fieldName, uri, locations);
             }
             else if (expr is BinaryExpr bin)
@@ -3401,6 +3444,15 @@ namespace FFVM.Debug
                 foreach (var field in st.Fields)
                 {
                     rawTokens.Add((field.Line, field.Column, field.Name.Length, 4 /* property */, 1 /* declaration */));
+                    // DX7: struct field type annotation — semantic token for struct/enum types
+                    if (field.TypeNameLine > 0)
+                    {
+                        string baseType = field.TypeName.Contains(".") ? field.TypeName.Split('.')[0] : field.TypeName;
+                        if (structNames.Contains(baseType))
+                            rawTokens.Add((field.TypeNameLine, field.TypeNameColumn, baseType.Length, 1 /* struct */, 0));
+                        else if (enumNames.Contains(baseType))
+                            rawTokens.Add((field.TypeNameLine, field.TypeNameColumn, baseType.Length, 2 /* enum */, 0));
+                    }
                 }
             }
 
@@ -3415,10 +3467,36 @@ namespace FFVM.Debug
                 }
             }
 
-            // 3. Struct/Enum type usage in variable declarations (type annotation)
+            // 3. Function parameter type annotations + local variable type annotations
             foreach (var func in ast.Functions)
             {
+                // DX7: parameter type annotations
+                foreach (var param in func.Parameters)
+                {
+                    if (param.TypeNameLine > 0)
+                    {
+                        string baseType = param.TypeName.Contains(".") ? param.TypeName.Split('.')[0] : param.TypeName;
+                        if (structNames.Contains(baseType))
+                            rawTokens.Add((param.TypeNameLine, param.TypeNameColumn, baseType.Length, 1 /* struct */, 0));
+                        else if (enumNames.Contains(baseType))
+                            rawTokens.Add((param.TypeNameLine, param.TypeNameColumn, baseType.Length, 2 /* enum */, 0));
+                    }
+                }
+                // DX7: local variable type annotations
                 CollectTypeUsageTokens(func.Body, structNames, enumNames, rawTokens);
+            }
+
+            // DX7: module-level variable type annotations
+            foreach (var mv in ast.ModuleVariables)
+            {
+                if (mv.TypeNameLine > 0)
+                {
+                    string baseType = mv.TypeName.Contains(".") ? mv.TypeName.Split('.')[0] : mv.TypeName;
+                    if (structNames.Contains(baseType))
+                        rawTokens.Add((mv.TypeNameLine, mv.TypeNameColumn, baseType.Length, 1 /* struct */, 0));
+                    else if (enumNames.Contains(baseType))
+                        rawTokens.Add((mv.TypeNameLine, mv.TypeNameColumn, baseType.Length, 2 /* enum */, 0));
+                }
             }
 
             // Sort by (line, col) for delta encoding
@@ -3453,16 +3531,43 @@ namespace FFVM.Debug
         }
 
         /// <summary>
-        /// DX5: Walk a block to find type annotations that reference struct/enum types.
-        /// Note: VarDeclStmt.Column points to 'var'/'const' keyword, not the type annotation.
-        /// We skip type usage tokens here since we cannot compute precise positions.
-        /// Struct/enum declarations and their fields/members are still properly tokenized.
+        /// DX7: Walk a block to find type annotations in local variable declarations
+        /// that reference struct/enum types, and emit semantic tokens for them.
         /// </summary>
         private static void CollectTypeUsageTokens(BlockStmt block, HashSet<string> structNames, HashSet<string> enumNames,
             List<(int line, int col, int len, int type, int mod)> tokens)
         {
-            // Intentionally empty: type annotation positions not available in current AST.
-            // The TextMate grammar provides fallback coloring for type annotations via regex patterns.
+            if (block == null) return;
+            foreach (var stmt in block.Statements)
+                CollectTypeUsageTokensInStmt(stmt, structNames, enumNames, tokens);
+        }
+
+        private static void CollectTypeUsageTokensInStmt(Stmt stmt, HashSet<string> structNames, HashSet<string> enumNames,
+            List<(int line, int col, int len, int type, int mod)> tokens)
+        {
+            if (stmt == null) return;
+            if (stmt is VarDeclStmt vd && vd.TypeNameLine > 0)
+            {
+                string baseType = vd.TypeName.Contains(".") ? vd.TypeName.Split('.')[0] : vd.TypeName;
+                if (structNames.Contains(baseType))
+                    tokens.Add((vd.TypeNameLine, vd.TypeNameColumn, baseType.Length, 1 /* struct */, 0));
+                else if (enumNames.Contains(baseType))
+                    tokens.Add((vd.TypeNameLine, vd.TypeNameColumn, baseType.Length, 2 /* enum */, 0));
+            }
+            else if (stmt is BlockStmt bs) CollectTypeUsageTokens(bs, structNames, enumNames, tokens);
+            else if (stmt is IfStmt ifs)
+            {
+                CollectTypeUsageTokensInStmt(ifs.ThenBranch, structNames, enumNames, tokens);
+                CollectTypeUsageTokensInStmt(ifs.ElseBranch, structNames, enumNames, tokens);
+            }
+            else if (stmt is WhileStmt ws) CollectTypeUsageTokensInStmt(ws.Body, structNames, enumNames, tokens);
+            else if (stmt is ForStmt fs)
+            {
+                CollectTypeUsageTokensInStmt(fs.Initializer, structNames, enumNames, tokens);
+                CollectTypeUsageTokensInStmt(fs.Body, structNames, enumNames, tokens);
+            }
+            else if (stmt is DeferStmt ds) CollectTypeUsageTokens(ds.Body, structNames, enumNames, tokens);
+            else if (stmt is UsingStmt us) CollectTypeUsageTokens(us.Body, structNames, enumNames, tokens);
         }
 
         // ============================================================
