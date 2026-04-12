@@ -3658,6 +3658,17 @@ namespace FFVM.Compiler
         {
             int slot = _syscalls[call.FunctionName];
 
+            // DX8: parameter count validation for external func declarations
+            FuncDecl extDecl;
+            if (_externalFuncs != null && _externalFuncs.TryGetValue(call.FunctionName, out extDecl))
+            {
+                if (call.Arguments.Count != extDecl.Parameters.Count)
+                {
+                    AddError($"External function '{call.FunctionName}' expects {extDecl.Parameters.Count} arguments but got {call.Arguments.Count} (line {call.Line})");
+                    return;
+                }
+            }
+
             // C4: requires_cleanup check — only 'using' wrapped calls are exempt (they don't go through this path)
             if (_syscallTable != null && _syscallTable.RequiresCleanup(slot))
             {
