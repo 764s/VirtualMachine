@@ -9,10 +9,10 @@ include "common/skill_base.ffs"
 
 // ── Skill Configuration (overrides only) ────────────────────
 // All values match skill_base defaults — kept for documentation.
-@export const totalFrames: int = -1
-@export const activationPriority: int = 900
-@export const interruptPriority: int = 900
-@export const allowedStances: int = Stance.GROUNDED
+override @export const totalFrames: int = -1
+override @export const activationPriority: int = 900
+override @export const interruptPriority: int = 900
+override @export const allowedStances: int = Stance.GROUNDED
 
 func main() {
     // ── Execution ───────────────────────────────────────────
