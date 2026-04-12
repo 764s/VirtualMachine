@@ -133,6 +133,10 @@ namespace FFVM.AST
     {
         public Expr Target { get; }
         public string FieldName { get; }
+        /// <summary>DX7: 1-based line of the field name token (after '.').</summary>
+        public int FieldNameLine { get; set; }
+        /// <summary>DX7: 1-based column of the field name token (after '.').</summary>
+        public int FieldNameColumn { get; set; }
         public FieldAccessExpr(Expr target, string fieldName) : base(NodeKind.FieldAccess)
         {
             Target = target;
@@ -255,6 +259,10 @@ namespace FFVM.AST
         public string AliasTarget { get; set; }
         /// <summary>Lang-15: Source file this declaration originated from. Set by Preprocessor during merge.</summary>
         public string OriginFile { get; set; }
+        /// <summary>DX7: 1-based line of the type name token in the type annotation.</summary>
+        public int TypeNameLine { get; set; }
+        /// <summary>DX7: 1-based column of the type name token in the type annotation.</summary>
+        public int TypeNameColumn { get; set; }
         public VarDeclStmt(string name, string typeName, Expr initializer, bool isConst = false, bool isExported = false, bool isPrivate = false, bool isOverride = false) : base(NodeKind.VarDecl)
         {
             Name = name;
@@ -379,6 +387,10 @@ namespace FFVM.AST
         public string DocComment { get; set; }
         /// <summary>FF3: Optional default value expression (null = required parameter).</summary>
         public Expr DefaultValue { get; }
+        /// <summary>DX7: 1-based line of the type name token in parameter type annotation.</summary>
+        public int TypeNameLine { get; set; }
+        /// <summary>DX7: 1-based column of the type name token in parameter type annotation.</summary>
+        public int TypeNameColumn { get; set; }
         public ParamDecl(string name, string typeName, Expr defaultValue = null)
         {
             Name = name;
@@ -424,6 +436,10 @@ namespace FFVM.AST
         public string TypeName { get; }
         public int Line { get; set; }
         public int Column { get; set; }
+        /// <summary>DX7: 1-based line of the type name token in field type annotation.</summary>
+        public int TypeNameLine { get; set; }
+        /// <summary>DX7: 1-based column of the type name token in field type annotation.</summary>
+        public int TypeNameColumn { get; set; }
         public StructField(string name, string typeName)
         {
             Name = name;

@@ -357,7 +357,8 @@ namespace FFVM.Compiler
                 {
                     string pName = Expect(TokenType.Identifier, "in parameter list").Text ?? "?";
                     Expect(TokenType.Colon, "after parameter name");
-                    string pType = Expect(TokenType.Identifier, "for parameter type").Text ?? "int";
+                    var pTypeToken = Expect(TokenType.Identifier, "for parameter type");
+                    string pType = pTypeToken.Text ?? "int";
                     // FF3: optional default value
                     Expr defaultValue = null;
                     if (Match(TokenType.Assign))
@@ -369,7 +370,11 @@ namespace FFVM.Compiler
                     {
                         _errors.Add($"Required parameter '{pName}' cannot follow optional parameter (line {Current().Line})");
                     }
-                    parameters.Add(new ParamDecl(pName, pType, defaultValue));
+                    var param = new ParamDecl(pName, pType, defaultValue);
+                    // DX7: track precise position of parameter type name token
+                    param.TypeNameLine = pTypeToken.Line;
+                    param.TypeNameColumn = pTypeToken.Column;
+                    parameters.Add(param);
                 } while (Match(TokenType.Comma));
             }
             Expect(TokenType.RParen, "after parameters");
@@ -415,10 +420,14 @@ namespace FFVM.Compiler
                 int fLine = Current().Line, fCol = Current().Column;
                 string fieldName = Expect(TokenType.Identifier, "for struct field name").Text ?? "?";
                 Expect(TokenType.Colon, "after field name");
-                string fieldType = Expect(TokenType.Identifier, "for field type").Text ?? "int";
+                var fieldTypeToken = Expect(TokenType.Identifier, "for field type");
+                string fieldType = fieldTypeToken.Text ?? "int";
                 var sf = new StructField(fieldName, fieldType);
                 sf.Line = fLine;
                 sf.Column = fCol;
+                // DX7: track precise position of field type name token
+                sf.TypeNameLine = fieldTypeToken.Line;
+                sf.TypeNameColumn = fieldTypeToken.Column;
                 fields.Add(sf);
                 Match(TokenType.Semicolon); // optional semicolons
             }
@@ -605,7 +614,9 @@ namespace FFVM.Compiler
                 name = memberName;
             }
             Expect(TokenType.Colon, "after variable name");
-            string typeName = Expect(TokenType.Identifier, "for variable type").Text ?? "int";
+            var typeToken = Expect(TokenType.Identifier, "for variable type");
+            string typeName = typeToken.Text ?? "int";
+            int typeNameLine = typeToken.Line, typeNameCol = typeToken.Column;
             // Lang-17: dotted type name for aliased struct types (Alias.StructName)
             if (Check(TokenType.Dot))
             {
@@ -628,6 +639,9 @@ namespace FFVM.Compiler
             stmt.AliasTarget = aliasTarget;
             stmt.Line = line;
             stmt.Column = col;
+            // DX7: track precise position of type name token
+            stmt.TypeNameLine = typeNameLine;
+            stmt.TypeNameColumn = typeNameCol;
             return stmt;
         }
 
@@ -987,7 +1001,8 @@ namespace FFVM.Compiler
             while (Check(TokenType.Dot))
             {
                 Advance(); // consume '.'
-                string fieldName = Expect(TokenType.Identifier, "after '.'").Text ?? "?";
+                var fieldToken = Expect(TokenType.Identifier, "after '.'");
+                string fieldName = fieldToken.Text ?? "?";
                 // Lang-8: check if followed by '(' → MemberCallExpr (svc.func(args))
                 if (Check(TokenType.LParen) && expr is IdentifierExpr targetIdent)
                 {
@@ -1011,6 +1026,9 @@ namespace FFVM.Compiler
                     var fa = new FieldAccessExpr(expr, fieldName);
                     fa.Line = expr.Line;
                     fa.Column = expr.Column;
+                    // DX7: track precise position of the field name token (after '.')
+                    fa.FieldNameLine = fieldToken.Line;
+                    fa.FieldNameColumn = fieldToken.Column;
                     expr = fa;
                     // Lang-17: check if followed by '{' and 'identifier:' → aliased struct literal
                     if (expr is FieldAccessExpr faExpr && faExpr.Target is IdentifierExpr aliasExpr &&

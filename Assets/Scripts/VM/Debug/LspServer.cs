@@ -16,7 +16,10 @@ namespace FFVM.Debug
     ///   Requests:       initialize, shutdown,
     ///                   textDocument/documentSymbol, textDocument/hover,
     ///                   textDocument/definition, textDocument/references,
-    ///                   textDocument/completion, textDocument/signatureHelp
+    ///                   textDocument/completion, textDocument/signatureHelp,
+    ///                   textDocument/rename, textDocument/prepareRename,
+    ///                   textDocument/semanticTokens/full,
+    ///                   workspace/willRenameFiles
     ///   Notifications:  initialized, exit, textDocument/didOpen, textDocument/didChange
     ///   Server→Client:  textDocument/publishDiagnostics
     ///
@@ -225,6 +228,9 @@ namespace FFVM.Debug
                     case "textDocument/semanticTokens/full":
                         result = HandleSemanticTokensFull(parameters);
                         break;
+                    case "workspace/willRenameFiles":
+                        result = HandleWillRenameFiles(parameters);
+                        break;
                     default:
                         success = false;
                         errorCode = -32601; // MethodNotFound
@@ -358,6 +364,20 @@ namespace FFVM.Debug
             legend.Set("tokenModifiers", new List<object> { "declaration", "definition" });
             semanticTokensProvider.Set("legend", legend);
             capabilities.Set("semanticTokensProvider", semanticTokensProvider);
+
+            // DX6: File rename support — workspace/willRenameFiles
+            // Server can update include paths when .ffs files are renamed.
+            var workspace = new JsonObject();
+            var fileOps = new JsonObject();
+            var willRenameFilter = new JsonObject();
+            var filterPattern = new JsonObject();
+            filterPattern.Set("glob", "**/*.ffs");
+            var filters = new List<object> { new JsonObject() };
+            ((JsonObject)filters[0]).Set("pattern", filterPattern);
+            willRenameFilter.Set("filters", filters);
+            fileOps.Set("willRename", willRenameFilter);
+            workspace.Set("fileOperations", fileOps);
+            capabilities.Set("workspace", workspace);
 
             var result = new JsonObject();
             result.Set("capabilities", capabilities);
@@ -2360,6 +2380,13 @@ namespace FFVM.Debug
             }
             if (expr is FieldAccessExpr fa)
             {
+                // DX7: Check if cursor is on the field name token (after '.')
+                if (fa.FieldNameLine == line && fa.FieldNameLine > 0 && ColMatches(fa.FieldNameColumn, fa.FieldName.Length, col))
+                {
+                    // Parent struct cannot always be resolved from AST alone (no type inference);
+                    // callers handle parentName=null by searching all structs.
+                    return new SymbolAtPosition { name = fa.FieldName, kind = SymbolKindTag.StructField, parentName = null };
+                }
                 return FindSymbolInExpr(func, fa.Target, line, col);
             }
 
@@ -2420,6 +2447,19 @@ namespace FFVM.Debug
                             if (field.Name == name)
                                 return (field.Line, field.Column, field.Name.Length, st.OriginFile);
                         }
+                    }
+                }
+            }
+            // DX7: struct field definition when parentName is unknown (from field access expression)
+            else if (kind == SymbolKindTag.StructField && parentName == null)
+            {
+                // Search all structs for the field name — first match wins
+                foreach (var st in ast.Structs)
+                {
+                    foreach (var field in st.Fields)
+                    {
+                        if (field.Name == name)
+                            return (field.Line, field.Column, field.Name.Length, st.OriginFile);
                     }
                 }
             }
@@ -2637,6 +2677,26 @@ namespace FFVM.Debug
                 {
                     string funcUri = ResolveOriginUri(requestingUri, func.OriginFile);
                     CollectFieldAccessRefsInBlock(func.Body, name, parentName, funcUri, locations);
+                }
+            }
+            // DX7: struct field references when parentName unknown (from field access usage site)
+            else if (kind == SymbolKindTag.StructField && parentName == null)
+            {
+                // Search all structs for matching field name
+                foreach (var st in ast.Structs)
+                {
+                    string targetUri = ResolveOriginUri(requestingUri, st.OriginFile);
+                    foreach (var field in st.Fields)
+                    {
+                        if (field.Name == name)
+                            locations.Add(MakeLocation(targetUri, field.Line, field.Column, name.Length));
+                    }
+                    // Also collect field access usages
+                    foreach (var func in ast.Functions)
+                    {
+                        string funcUri = ResolveOriginUri(requestingUri, func.OriginFile);
+                        CollectFieldAccessRefsInBlock(func.Body, name, st.Name, funcUri, locations);
+                    }
                 }
             }
             // DX5: enum member references
@@ -2895,6 +2955,212 @@ namespace FFVM.Debug
             }
         }
 
+        // ============================================================
+        // DX6: File rename — workspace/willRenameFiles
+        // ============================================================
+
+        /// <summary>
+        /// DX6: Handle workspace/willRenameFiles request.
+        /// When a .ffs file is renamed, scan all workspace files for include directives
+        /// referencing the old path and return a WorkspaceEdit to update them.
+        /// Covers: plain include, include-as alias, cross-includePaths resolution.
+        /// </summary>
+        private JsonObject HandleWillRenameFiles(JsonObject parameters)
+        {
+            if (parameters == null || _rootPath == null) return new JsonObject();
+
+            var files = parameters.GetArray("files");
+            if (files == null || files.Count == 0) return new JsonObject();
+
+            // Collect all text edits grouped by file URI
+            var editsByUri = new Dictionary<string, List<object>>();
+
+            foreach (var item in files)
+            {
+                var fileRename = item as JsonObject;
+                if (fileRename == null) continue;
+
+                string oldUri = fileRename.GetString("oldUri");
+                string newUri = fileRename.GetString("newUri");
+                if (oldUri == null || newUri == null) continue;
+
+                // Convert URIs to workspace-relative include paths (without .ffs extension)
+                string oldAbsPath = UriToPath(oldUri);
+                string newAbsPath = UriToPath(newUri);
+                if (oldAbsPath == null || newAbsPath == null) continue;
+
+                // Determine which include paths could reference this file
+                var oldIncludePaths = ResolveFileToIncludePaths(oldAbsPath);
+                var newIncludePaths = ResolveFileToIncludePaths(newAbsPath);
+                if (oldIncludePaths.Count == 0) continue;
+
+                // Scan all .ffs files in workspace for imports matching old paths
+                ScanWorkspaceForRenames(oldIncludePaths, newIncludePaths, editsByUri);
+            }
+
+            // Build WorkspaceEdit response
+            if (editsByUri.Count == 0) return new JsonObject();
+
+            var changes = new JsonObject();
+            foreach (var kvp in editsByUri)
+                changes.Set(kvp.Key, kvp.Value);
+
+            var workspaceEdit = new JsonObject();
+            workspaceEdit.Set("changes", changes);
+            return workspaceEdit;
+        }
+
+        /// <summary>
+        /// DX6: Resolve an absolute file path to all possible include path strings.
+        /// Returns a list of (includePath, basePath) tuples where includePath is what appears
+        /// in source code (e.g. "utils" or "lib/helper") and basePath is the base directory
+        /// used for resolution.
+        /// </summary>
+        private List<(string includePath, string basePath)> ResolveFileToIncludePaths(string absPath)
+        {
+            var result = new List<(string, string)>();
+            if (absPath == null) return result;
+
+            absPath = Path.GetFullPath(absPath).Replace('\\', '/');
+
+            // Collect all base directories to check: workspace root + project includePaths
+            var baseDirs = new List<string>();
+            if (_rootPath != null)
+                baseDirs.Add(Path.GetFullPath(_rootPath).Replace('\\', '/'));
+
+            if (_projectFile != null)
+            {
+                foreach (var incPath in _projectFile.IncludePaths)
+                {
+                    string basePath = Path.IsPathRooted(incPath)
+                        ? incPath
+                        : Path.Combine(_rootPath, incPath);
+                    basePath = Path.GetFullPath(basePath).Replace('\\', '/');
+                    if (!baseDirs.Contains(basePath))
+                        baseDirs.Add(basePath);
+                }
+            }
+
+            foreach (var baseDir in baseDirs)
+            {
+                string normalizedBase = baseDir.EndsWith("/") ? baseDir : baseDir + "/";
+                if (absPath.StartsWith(normalizedBase, StringComparison.OrdinalIgnoreCase))
+                {
+                    string relative = absPath.Substring(normalizedBase.Length);
+                    // Strip .ffs extension if present (include paths typically omit it)
+                    string withoutExt = relative;
+                    if (withoutExt.EndsWith(".ffs", StringComparison.OrdinalIgnoreCase))
+                        withoutExt = withoutExt.Substring(0, withoutExt.Length - 4);
+                    result.Add((withoutExt, baseDir));
+                    // Also add with .ffs extension (some users include "utils.ffs" explicitly)
+                    if (relative != withoutExt)
+                        result.Add((relative, baseDir));
+                }
+            }
+
+            return result;
+        }
+
+        /// <summary>
+        /// DX6: Scan all .ffs files in workspace for include directives matching old paths
+        /// and build text edits to replace with new paths.
+        /// </summary>
+        private void ScanWorkspaceForRenames(
+            List<(string includePath, string basePath)> oldPaths,
+            List<(string includePath, string basePath)> newPaths,
+            Dictionary<string, List<object>> editsByUri)
+        {
+            if (_rootPath == null || oldPaths.Count == 0 || newPaths.Count == 0) return;
+
+            // Build lookup: old include path → new include path
+            // Match by base directory: for each oldPath entry, find newPath entry with same basePath
+            var renameMap = new Dictionary<string, string>(StringComparer.Ordinal);
+            foreach (var oldEntry in oldPaths)
+            {
+                foreach (var newEntry in newPaths)
+                {
+                    if (string.Equals(oldEntry.basePath, newEntry.basePath, StringComparison.OrdinalIgnoreCase))
+                    {
+                        // Preserve extension convention: if old had .ffs, new should too
+                        if (oldEntry.includePath.EndsWith(".ffs", StringComparison.OrdinalIgnoreCase)
+                            == newEntry.includePath.EndsWith(".ffs", StringComparison.OrdinalIgnoreCase))
+                        {
+                            renameMap[oldEntry.includePath] = newEntry.includePath;
+                        }
+                    }
+                }
+            }
+
+            if (renameMap.Count == 0) return;
+
+            // Scan workspace .ffs files
+            string[] ffsFiles;
+            try
+            {
+                ffsFiles = Directory.GetFiles(_rootPath, "*.ffs", SearchOption.AllDirectories);
+            }
+            catch
+            {
+                return; // Can't scan workspace
+            }
+
+            var parser = new Parser();
+            foreach (var filePath in ffsFiles)
+            {
+                string source;
+                try { source = File.ReadAllText(filePath); }
+                catch { continue; }
+
+                // Check if this file is open in the editor (use cached content)
+                string fileUri = PathToFileUri(filePath);
+                if (_documents.ContainsKey(fileUri))
+                    source = _documents[fileUri];
+
+                var ast = parser.Parse(source, out var errors);
+                if (ast == null) continue;
+
+                foreach (var imp in ast.Imports)
+                {
+                    if (renameMap.TryGetValue(imp.ModulePath, out string newPath))
+                    {
+                        // Calculate position of the include path string (inside quotes)
+                        // include "path" or include "path" as Alias
+                        // AST Line/Column are 1-based; convert to 0-based for LSP
+                        int lspLine = imp.Line - 1;
+                        int pathStart = imp.Column - 1 + "include".Length + 2; // 'include "' = keyword + space + quote
+                        int pathLen = imp.ModulePath.Length;
+
+                        var edit = MakeTextEdit(lspLine, pathStart, lspLine, pathStart + pathLen, newPath);
+
+                        if (!editsByUri.ContainsKey(fileUri))
+                            editsByUri[fileUri] = new List<object>();
+                        editsByUri[fileUri].Add(edit);
+                    }
+                }
+            }
+        }
+
+        /// <summary>
+        /// DX6: Create an LSP TextEdit object.
+        /// </summary>
+        private static JsonObject MakeTextEdit(int startLine, int startChar, int endLine, int endChar, string newText)
+        {
+            var range = new JsonObject();
+            var start = new JsonObject();
+            start.Set("line", startLine);
+            start.Set("character", startChar);
+            range.Set("start", start);
+            var end = new JsonObject();
+            end.Set("line", endLine);
+            end.Set("character", endChar);
+            range.Set("end", end);
+
+            var textEdit = new JsonObject();
+            textEdit.Set("range", range);
+            textEdit.Set("newText", newText);
+            return textEdit;
+        }
+
         /// <summary>
         /// DX5: Collect references to a struct field (field access expressions in function bodies).
         /// </summary>
@@ -2936,6 +3202,7 @@ namespace FFVM.Debug
                 foreach (var arg in us.Arguments) CollectFieldAccessRefsInExpr(arg, fieldName, uri, locations);
                 CollectFieldAccessRefsInBlock(us.Body, fieldName, structName, uri, locations);
             }
+            else if (stmt is WaitStmt wst) CollectFieldAccessRefsInExpr(wst.FrameCount, fieldName, uri, locations);
         }
 
         private static void CollectFieldAccessRefsInExpr(Expr expr, string fieldName, string uri, List<object> locations)
@@ -2943,10 +3210,11 @@ namespace FFVM.Debug
             if (expr == null) return;
             if (expr is FieldAccessExpr fa)
             {
-                // Note: FieldAccessExpr.Column points to the target expression start, not the field name.
-                // We cannot reliably compute the field name column without source text, so we skip
-                // field access usage sites. Declaration-site references (from struct definition)
-                // and struct literal field references are still collected.
+                // DX7: FieldNameLine/FieldNameColumn now tracks precise field name position
+                if (fa.FieldName == fieldName && fa.FieldNameLine > 0)
+                {
+                    locations.Add(MakeLocation(uri, fa.FieldNameLine, fa.FieldNameColumn, fieldName.Length));
+                }
                 CollectFieldAccessRefsInExpr(fa.Target, fieldName, uri, locations);
             }
             else if (expr is BinaryExpr bin)
@@ -3175,6 +3443,15 @@ namespace FFVM.Debug
                 foreach (var field in st.Fields)
                 {
                     rawTokens.Add((field.Line, field.Column, field.Name.Length, 4 /* property */, 1 /* declaration */));
+                    // DX7: struct field type annotation — semantic token for struct/enum types
+                    if (field.TypeNameLine > 0)
+                    {
+                        string baseType = GetBaseTypeName(field.TypeName);
+                        if (structNames.Contains(baseType))
+                            rawTokens.Add((field.TypeNameLine, field.TypeNameColumn, baseType.Length, 1 /* struct */, 0));
+                        else if (enumNames.Contains(baseType))
+                            rawTokens.Add((field.TypeNameLine, field.TypeNameColumn, baseType.Length, 2 /* enum */, 0));
+                    }
                 }
             }
 
@@ -3189,10 +3466,36 @@ namespace FFVM.Debug
                 }
             }
 
-            // 3. Struct/Enum type usage in variable declarations (type annotation)
+            // 3. Function parameter type annotations + local variable type annotations
             foreach (var func in ast.Functions)
             {
+                // DX7: parameter type annotations
+                foreach (var param in func.Parameters)
+                {
+                    if (param.TypeNameLine > 0)
+                    {
+                        string baseType = GetBaseTypeName(param.TypeName);
+                        if (structNames.Contains(baseType))
+                            rawTokens.Add((param.TypeNameLine, param.TypeNameColumn, baseType.Length, 1 /* struct */, 0));
+                        else if (enumNames.Contains(baseType))
+                            rawTokens.Add((param.TypeNameLine, param.TypeNameColumn, baseType.Length, 2 /* enum */, 0));
+                    }
+                }
+                // DX7: local variable type annotations
                 CollectTypeUsageTokens(func.Body, structNames, enumNames, rawTokens);
+            }
+
+            // DX7: module-level variable type annotations
+            foreach (var mv in ast.ModuleVariables)
+            {
+                if (mv.TypeNameLine > 0)
+                {
+                    string baseType = GetBaseTypeName(mv.TypeName);
+                    if (structNames.Contains(baseType))
+                        rawTokens.Add((mv.TypeNameLine, mv.TypeNameColumn, baseType.Length, 1 /* struct */, 0));
+                    else if (enumNames.Contains(baseType))
+                        rawTokens.Add((mv.TypeNameLine, mv.TypeNameColumn, baseType.Length, 2 /* enum */, 0));
+                }
             }
 
             // Sort by (line, col) for delta encoding
@@ -3227,16 +3530,53 @@ namespace FFVM.Debug
         }
 
         /// <summary>
-        /// DX5: Walk a block to find type annotations that reference struct/enum types.
-        /// Note: VarDeclStmt.Column points to 'var'/'const' keyword, not the type annotation.
-        /// We skip type usage tokens here since we cannot compute precise positions.
-        /// Struct/enum declarations and their fields/members are still properly tokenized.
+        /// DX7: Walk a block to find type annotations in local variable declarations
+        /// that reference struct/enum types, and emit semantic tokens for them.
         /// </summary>
         private static void CollectTypeUsageTokens(BlockStmt block, HashSet<string> structNames, HashSet<string> enumNames,
             List<(int line, int col, int len, int type, int mod)> tokens)
         {
-            // Intentionally empty: type annotation positions not available in current AST.
-            // The TextMate grammar provides fallback coloring for type annotations via regex patterns.
+            if (block == null) return;
+            foreach (var stmt in block.Statements)
+                CollectTypeUsageTokensInStmt(stmt, structNames, enumNames, tokens);
+        }
+
+        /// <summary>
+        /// DX7: Extract the base type name from a potentially dotted type (e.g. "Alias.Struct" → "Alias").
+        /// For simple types, returns the type name unchanged.
+        /// </summary>
+        private static string GetBaseTypeName(string typeName)
+        {
+            int dotIndex = typeName.IndexOf('.');
+            return dotIndex >= 0 ? typeName.Substring(0, dotIndex) : typeName;
+        }
+
+        private static void CollectTypeUsageTokensInStmt(Stmt stmt, HashSet<string> structNames, HashSet<string> enumNames,
+            List<(int line, int col, int len, int type, int mod)> tokens)
+        {
+            if (stmt == null) return;
+            if (stmt is VarDeclStmt vd && vd.TypeNameLine > 0)
+            {
+                string baseType = GetBaseTypeName(vd.TypeName);
+                if (structNames.Contains(baseType))
+                    tokens.Add((vd.TypeNameLine, vd.TypeNameColumn, baseType.Length, 1 /* struct */, 0));
+                else if (enumNames.Contains(baseType))
+                    tokens.Add((vd.TypeNameLine, vd.TypeNameColumn, baseType.Length, 2 /* enum */, 0));
+            }
+            else if (stmt is BlockStmt bs) CollectTypeUsageTokens(bs, structNames, enumNames, tokens);
+            else if (stmt is IfStmt ifs)
+            {
+                CollectTypeUsageTokensInStmt(ifs.ThenBranch, structNames, enumNames, tokens);
+                CollectTypeUsageTokensInStmt(ifs.ElseBranch, structNames, enumNames, tokens);
+            }
+            else if (stmt is WhileStmt ws) CollectTypeUsageTokensInStmt(ws.Body, structNames, enumNames, tokens);
+            else if (stmt is ForStmt fs)
+            {
+                CollectTypeUsageTokensInStmt(fs.Initializer, structNames, enumNames, tokens);
+                CollectTypeUsageTokensInStmt(fs.Body, structNames, enumNames, tokens);
+            }
+            else if (stmt is DeferStmt ds) CollectTypeUsageTokens(ds.Body, structNames, enumNames, tokens);
+            else if (stmt is UsingStmt us) CollectTypeUsageTokens(us.Body, structNames, enumNames, tokens);
         }
 
         // ============================================================
