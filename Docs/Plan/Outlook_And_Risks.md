@@ -116,7 +116,7 @@
 | **DX4-P1** | `.ffproj` 項目描述文件：JSON 格式 + LSP 加載 + includePaths + hostDeclarations + compileOptions | ✅ 完成 | DX4-P0 ✅ | DX4-P1-01~16 全通過，1834 測試総計 |
 | **DX4-P2** | CLI 项目编译集成：`ffvm-cli init` 脚手架 + `ffvm-cli compile/run --project x.ffproj` | ✅ 完成 | DX4-P1 ✅ | `init` 生成 `.ffproj` 模板（支持 `--host` 预设）+ `compile/run --project` 读取 .ffproj（FileResolver + LoadHostDeclarations + CompileOptions 转发）+ 共享逻辑 ProjectFile.GenerateTemplate/LoadHostDeclarations/MergeDeclarationJson。DX4-P2-01~13 全通过，1873 测试总计 |
 | **DX4-P3** | 跨文件符号查询：合并 AST + 跨文件 definition/references/hover/completion/signatureHelp | ✅ 完成 | DX4-P1 ✅ | 合并 AST 缓存（_mergedAsts）+ FilePathToUri OriginFile→URI 映射 + ResolveOriginUri 跨文件导航 + HandleDefinition/HandleReferences/HandleHover/HandleCompletion/HandleSignatureHelp 全部使用合并 AST。DX4-P3-01~13 全通过，1901 测试总计 |
-| **DX4-P4** | LSP 辅助创建 `.ffproj`：workspace 内有 `.ffs` 无 `.ffproj` → `window/showMessageRequest` 提示 → `workspace/applyEdit` 生成模板 | ⏳ 待执行 | DX4-P2 ✅ | [D_Usability_ModuleScope.md](../Discussion/D_Usability_ModuleScope.md) §6.5 Layer 2 |
+| **DX4-P4** | LSP 辅助创建 `.ffproj`：workspace 内有 `.ffs` 无 `.ffproj` → `window/showMessageRequest` 提示 → `workspace/applyEdit` 生成模板 | ✅ 完成 | DX4-P2 ✅ | `initialized` 通知触发检查（有 .ffs 无 .ffproj）→ `window/showMessageRequest`（Create/Ignore/Don't ask again）→ 用户选 Create → `workspace/applyEdit`（CreateFile + TextDocumentEdit 插入 GenerateTemplate 模板）。服务端请求基础设施（SendRequest + _pendingServerRequests + HandleServerResponse）。DX4-P4-01~13 全通过，1915 测试总计 |
 
 ### 2.5 分发基础设施（DIST 系列）
 
