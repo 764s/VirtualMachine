@@ -35,6 +35,9 @@ namespace FFVM.Debug
         private readonly Dictionary<string, string> _documents = new Dictionary<string, string>();
         private readonly Dictionary<string, ModuleNode> _documentAsts = new Dictionary<string, ModuleNode>();
 
+        // --- DX4-P3: Merged (preprocessor-resolved) AST cache for cross-file symbol queries ---
+        private readonly Dictionary<string, ModuleNode> _mergedAsts = new Dictionary<string, ModuleNode>();
+
         // --- Syscall table for compilation (stub, no real syscalls needed for diagnostics) ---
         private readonly Dictionary<string, int> _defaultSyscalls;
 
@@ -487,6 +490,25 @@ namespace FFVM.Debug
                 else if (!_documentAsts.ContainsKey(uri) && ast != null)
                     _documentAsts[uri] = ast; // better than nothing on first open
 
+                // DX4-P3: Build merged AST via Preprocessor for cross-file symbol queries.
+                // This includes all symbols from included files with OriginFile set.
+                if (_fileResolver != null)
+                {
+                    string mergeFilePath = _rootPath != null ? UriToFilePath(uri, _rootPath) : null;
+                    var preprocessor = new Preprocessor(_fileResolver);
+                    var mergedAst = preprocessor.Resolve(source, mergeFilePath ?? "main", out var ppErrors);
+                    if (ppErrors == null || ppErrors.Count == 0)
+                        _mergedAsts[uri] = mergedAst;
+                    else if (!_mergedAsts.ContainsKey(uri) && mergedAst != null)
+                        _mergedAsts[uri] = mergedAst;
+                }
+                else
+                {
+                    // No file resolver — merged AST is same as per-file AST
+                    if (_documentAsts.ContainsKey(uri))
+                        _mergedAsts[uri] = _documentAsts[uri];
+                }
+
                 // DX4-P0: Compile for diagnostics with workspace file resolver support.
                 // entryFunc=null → diagnostics-only mode (no entry function requirement).
                 // fileResolver → enables include directive resolution from workspace root.
@@ -606,7 +628,47 @@ namespace FFVM.Debug
             return null;
         }
 
-        // --- documentSymbol ---
+        /// <summary>
+        /// DX4-P3: Get merged (preprocessor-resolved) AST for a document URI.
+        /// Falls back to the per-file AST if no merged AST is available.
+        /// The merged AST includes symbols from all included files with OriginFile set.
+        /// </summary>
+        private ModuleNode GetMergedAst(string uri)
+        {
+            if (uri != null && _mergedAsts.TryGetValue(uri, out var merged))
+                return merged;
+            return GetCachedAst(uri);
+        }
+
+        /// <summary>
+        /// DX4-P3: Convert an OriginFile path (relative or absolute) to a file:// URI.
+        /// Used for cross-file navigation (definition/references).
+        /// </summary>
+        internal static string FilePathToUri(string originFile, string rootPath)
+        {
+            if (originFile == null) return null;
+            // Resolve relative paths against rootPath
+            string absPath;
+            if (rootPath != null && !Path.IsPathRooted(originFile))
+                absPath = Path.GetFullPath(Path.Combine(rootPath, originFile));
+            else if (Path.IsPathRooted(originFile))
+                absPath = originFile;
+            else
+                return null; // relative path without rootPath — cannot resolve
+            // Normalize separators for URI
+            absPath = absPath.Replace('\\', '/');
+            // Append .ffs extension if the file doesn't have one and the .ffs file exists
+            if (!absPath.EndsWith(".ffs", StringComparison.OrdinalIgnoreCase))
+            {
+                string withExt = absPath + ".ffs";
+                if (File.Exists(withExt))
+                    absPath = withExt;
+            }
+            // Build file:// URI
+            if (absPath.Length >= 2 && absPath[1] == ':')
+                return "file:///" + Uri.EscapeDataString(absPath).Replace("%2F", "/").Replace("%3A", ":");
+            return "file:///" + absPath.TrimStart('/');
+        }
 
         private JsonObject HandleDocumentSymbol(JsonObject parameters)
         {
@@ -716,8 +778,9 @@ namespace FFVM.Debug
             int astLine = lspLine + 1;
             int astCol = lspChar + 1;
 
-            // Try to find a symbol at this position
-            string hoverText = FindHoverText(ast, astLine, astCol);
+            // DX4-P3: Use merged AST for hover (resolves symbols from included files)
+            var mergedAst = GetMergedAst(uri);
+            string hoverText = FindHoverText(mergedAst, astLine, astCol);
             if (hoverText == null) return null;
 
             // Auto-wrap in code fence if not already markdown
@@ -1174,16 +1237,53 @@ namespace FFVM.Debug
             int astLine = position.GetInt("line") + 1;
             int astCol = position.GetInt("character") + 1;
 
-            // Find what symbol is at this position
+            // Find what symbol is at this position (using per-file AST for position matching)
             var target = FindSymbolAtPosition(ast, astLine, astCol);
             if (target == null) return null;
 
-            // Find the definition location
-            var defLoc = FindDefinitionLocation(ast, target.Value.name, target.Value.kind, target.Value.scopeFunc);
+            // DX4-P3: Use merged AST to find definition (may be in included file)
+            var mergedAst = GetMergedAst(uri);
+            var defLoc = FindDefinitionLocation(mergedAst, target.Value.name, target.Value.kind, target.Value.scopeFunc);
             if (defLoc == null) return null;
 
-            var loc = MakeLocation(uri, defLoc.Value.line, defLoc.Value.col, defLoc.Value.nameLen);
+            // DX4-P3: Resolve target URI — may point to a different file via OriginFile
+            string targetUri = ResolveOriginUri(uri, defLoc.Value.originFile);
+            var loc = MakeLocation(targetUri, defLoc.Value.line, defLoc.Value.col, defLoc.Value.nameLen);
             return loc;
+        }
+
+        /// <summary>
+        /// DX4-P3: Resolve the target URI for a definition or reference location.
+        /// If the symbol's OriginFile matches the current file's path, returns the requesting URI.
+        /// Otherwise, converts OriginFile to a file:// URI for cross-file navigation.
+        /// </summary>
+        private string ResolveOriginUri(string requestingUri, string originFile)
+        {
+            if (originFile == null) return requestingUri;
+
+            // Check if originFile matches the requesting document's path
+            string requestingPath = _rootPath != null ? UriToFilePath(requestingUri, _rootPath) : null;
+            if (requestingPath != null)
+            {
+                // Normalize both for comparison
+                string normOrigin = originFile.Replace('\\', '/');
+                string normReq = requestingPath.Replace('\\', '/');
+                if (string.Equals(normOrigin, normReq, StringComparison.OrdinalIgnoreCase))
+                    return requestingUri;
+            }
+            // Also check full absolute path
+            string requestingAbsPath = UriToPath(requestingUri);
+            if (requestingAbsPath != null)
+            {
+                string normOriginAbs = originFile.Replace('\\', '/');
+                string normAbsReq = requestingAbsPath.Replace('\\', '/');
+                if (string.Equals(normOriginAbs, normAbsReq, StringComparison.OrdinalIgnoreCase))
+                    return requestingUri;
+            }
+
+            // Cross-file: convert OriginFile to URI
+            string crossUri = FilePathToUri(originFile, _rootPath);
+            return crossUri ?? requestingUri;
         }
 
         // --- references ---
@@ -1203,8 +1303,10 @@ namespace FFVM.Debug
             var target = FindSymbolAtPosition(ast, astLine, astCol);
             if (target == null) return MakeArrayResult(new List<object>());
 
+            // DX4-P3: Use merged AST for cross-file reference collection
+            var mergedAst = GetMergedAst(uri);
             var locations = new List<object>();
-            CollectReferences(ast, target.Value.name, target.Value.kind, uri, locations);
+            CollectReferencesWithOrigin(mergedAst, target.Value.name, target.Value.kind, uri, locations);
             return MakeArrayResult(locations);
         }
 
@@ -1216,6 +1318,8 @@ namespace FFVM.Debug
         {
             string uri = GetDocumentUri(parameters);
             var ast = GetCachedAst(uri);
+            // DX4-P3: Use merged AST for symbol lists (includes cross-file symbols)
+            var mergedAst = GetMergedAst(uri);
             string source = null;
             if (uri != null) _documents.TryGetValue(uri, out source);
 
@@ -1252,7 +1356,7 @@ namespace FFVM.Debug
 
             var items = new List<object>();
 
-            if (isDotContext && dotPrefix != null && ast != null)
+            if (isDotContext && dotPrefix != null && mergedAst != null)
             {
                 // SN1: Struct field completion with nested dot-chain support
                 // dotPrefix can be "a" or "a.inner" etc.
@@ -1264,21 +1368,21 @@ namespace FFVM.Debug
                     if (dotIdx < 0)
                     {
                         // Simple case: "varName."
-                        resolvedStructType = FindVariableStructType(ast, containingFunc, dotPrefix);
+                        resolvedStructType = FindVariableStructType(mergedAst, containingFunc, dotPrefix);
                     }
                     else
                     {
                         // Chained case: "varName.field1.field2." — resolve through struct types
                         string rootVar = dotPrefix.Substring(0, dotIdx);
                         string fieldChain = dotPrefix.Substring(dotIdx + 1);
-                        string currentType = FindVariableStructType(ast, containingFunc, rootVar);
+                        string currentType = FindVariableStructType(mergedAst, containingFunc, rootVar);
                         if (currentType != null)
                         {
                             string[] parts = fieldChain.Split('.');
                             for (int pi = 0; pi < parts.Length && currentType != null; pi++)
                             {
                                 string nextType = null;
-                                foreach (var st in ast.Structs)
+                                foreach (var st in mergedAst.Structs)
                                 {
                                     if (st.Name == currentType)
                                     {
@@ -1287,7 +1391,7 @@ namespace FFVM.Debug
                                             if (field.Name == parts[pi])
                                             {
                                                 // Check if this field's type is a struct
-                                                foreach (var st2 in ast.Structs)
+                                                foreach (var st2 in mergedAst.Structs)
                                                 {
                                                     if (st2.Name == field.TypeName)
                                                     {
@@ -1309,7 +1413,7 @@ namespace FFVM.Debug
 
                     if (resolvedStructType != null)
                     {
-                        foreach (var st in ast.Structs)
+                        foreach (var st in mergedAst.Structs)
                         {
                             if (st.Name == resolvedStructType)
                             {
@@ -1327,7 +1431,7 @@ namespace FFVM.Debug
                 // Lang-13: enum member completion — "EnumName." → list members
                 if (dotPrefix != null && dotPrefix.IndexOf('.') < 0)
                 {
-                    foreach (var en in ast.Enums)
+                    foreach (var en in mergedAst.Enums)
                     {
                         if (en.Name == dotPrefix)
                         {
@@ -1350,10 +1454,10 @@ namespace FFVM.Debug
                     items.Add(MakeCompletionItem(kw, 14 /* Keyword */, null));
                 }
 
-                if (ast != null)
+                if (mergedAst != null)
                 {
                     // Functions
-                    foreach (var func in ast.Functions)
+                    foreach (var func in mergedAst.Functions)
                     {
                         string detail = FormatFuncSignature(func);
                         if (func.DocComment != null)
@@ -1363,19 +1467,19 @@ namespace FFVM.Debug
                     }
 
                     // Structs
-                    foreach (var st in ast.Structs)
+                    foreach (var st in mergedAst.Structs)
                     {
                         items.Add(MakeCompletionItem(st.Name, 22 /* Struct */, null));
                     }
 
                     // Lang-13: Enums
-                    foreach (var en in ast.Enums)
+                    foreach (var en in mergedAst.Enums)
                     {
                         items.Add(MakeCompletionItem(en.Name, 13 /* Enum */, $"enum {en.Name}"));
                     }
 
                     // Lang-1: Module-level variables and constants
-                    foreach (var mv in ast.ModuleVariables)
+                    foreach (var mv in mergedAst.ModuleVariables)
                     {
                         string prefix = mv.IsConst ? "const" : "var";
                         string typeStr = mv.TypeName ?? "int";
@@ -1442,12 +1546,13 @@ namespace FFVM.Debug
                 return null;
 
             // Look up function signature: first user functions, then syscalls
-            var ast = GetCachedAst(uri);
+            // DX4-P3: Use merged AST for cross-file function signatures
+            var mergedAst = GetMergedAst(uri);
 
             // User-defined function
-            if (ast != null)
+            if (mergedAst != null)
             {
-                foreach (var func in ast.Functions)
+                foreach (var func in mergedAst.Functions)
                 {
                     if (func.Name == funcName)
                         return MakeSignatureHelp(FormatFuncSignature(func), func.Parameters, activeParam, func.DocComment);
@@ -2005,7 +2110,11 @@ namespace FFVM.Debug
         /// Find the definition location for a named symbol.
         /// Returns (line, col, nameLen) in AST coordinates (1-based).
         /// </summary>
-        private static (int line, int col, int nameLen)? FindDefinitionLocation(
+        /// <summary>
+        /// DX4-P3: Find the definition location with OriginFile for cross-file navigation.
+        /// Returns (line, col, nameLen, originFile) where originFile may differ from the requesting file.
+        /// </summary>
+        private static (int line, int col, int nameLen, string originFile)? FindDefinitionLocation(
             ModuleNode ast, string name, SymbolKindTag kind, string scopeFunc)
         {
             if (kind == SymbolKindTag.Function)
@@ -2015,7 +2124,7 @@ namespace FFVM.Debug
                     if (func.Name == name)
                     {
                         int nameCol = func.Column + "func".Length + 1;
-                        return (func.Line, nameCol, func.Name.Length);
+                        return (func.Line, nameCol, func.Name.Length, func.OriginFile);
                     }
                 }
             }
@@ -2026,7 +2135,7 @@ namespace FFVM.Debug
                     if (st.Name == name)
                     {
                         int nameCol = st.Column + "struct".Length + 1;
-                        return (st.Line, nameCol, st.Name.Length);
+                        return (st.Line, nameCol, st.Name.Length, st.OriginFile);
                     }
                 }
             }
@@ -2038,7 +2147,7 @@ namespace FFVM.Debug
                     if (en.Name == name)
                     {
                         int nameCol = en.Column + "enum".Length + 1;
-                        return (en.Line, nameCol, en.Name.Length);
+                        return (en.Line, nameCol, en.Name.Length, en.OriginFile);
                     }
                 }
             }
@@ -2058,14 +2167,14 @@ namespace FFVM.Debug
                                 {
                                     // Parameters don't have their own Line/Column;
                                     // use the function declaration line
-                                    return (func.Line, func.Column, func.Name.Length);
+                                    return (func.Line, func.Column, func.Name.Length, func.OriginFile);
                                 }
                             }
                         }
 
                         // Check variable declarations in body
                         var loc = FindVarDeclLocation(func.Body, name);
-                        if (loc != null) return loc;
+                        if (loc != null) return (loc.Value.line, loc.Value.col, loc.Value.nameLen, func.OriginFile);
                     }
                 }
             }
@@ -2157,6 +2266,76 @@ namespace FFVM.Debug
                 foreach (var func in ast.Functions)
                 {
                     CollectIdentRefsInBlock(func.Body, name, uri, locations);
+                }
+            }
+        }
+
+        /// <summary>
+        /// DX4-P3: Collect references with cross-file URI resolution via OriginFile.
+        /// For function/struct/enum declarations, resolves URI based on OriginFile.
+        /// For call sites and usages within function bodies, uses the function's OriginFile.
+        /// </summary>
+        private void CollectReferencesWithOrigin(ModuleNode ast, string name, SymbolKindTag kind, string requestingUri, List<object> locations)
+        {
+            if (kind == SymbolKindTag.Function)
+            {
+                // Function declaration
+                foreach (var func in ast.Functions)
+                {
+                    if (func.Name == name)
+                    {
+                        string targetUri = ResolveOriginUri(requestingUri, func.OriginFile);
+                        int nameCol = func.Column + "func".Length + 1;
+                        locations.Add(MakeLocation(targetUri, func.Line, nameCol, name.Length));
+                    }
+                }
+
+                // Function call sites — resolve per calling function's origin
+                foreach (var func in ast.Functions)
+                {
+                    string funcUri = ResolveOriginUri(requestingUri, func.OriginFile);
+                    CollectCallRefsInBlock(func.Body, name, funcUri, locations);
+                }
+            }
+            else if (kind == SymbolKindTag.Struct)
+            {
+                // Struct declaration
+                foreach (var st in ast.Structs)
+                {
+                    if (st.Name == name)
+                    {
+                        string targetUri = ResolveOriginUri(requestingUri, st.OriginFile);
+                        int nameCol = st.Column + "struct".Length + 1;
+                        locations.Add(MakeLocation(targetUri, st.Line, nameCol, name.Length));
+                    }
+                }
+
+                // Struct usage in VarDeclStmt.TypeName — per function origin
+                foreach (var func in ast.Functions)
+                {
+                    string funcUri = ResolveOriginUri(requestingUri, func.OriginFile);
+                    CollectTypeRefsInBlock(func.Body, name, funcUri, locations);
+                }
+            }
+            // Lang-13: enum references
+            else if (kind == SymbolKindTag.Enum)
+            {
+                foreach (var en in ast.Enums)
+                {
+                    if (en.Name == name)
+                    {
+                        string targetUri = ResolveOriginUri(requestingUri, en.OriginFile);
+                        int nameCol = en.Column + "enum".Length + 1;
+                        locations.Add(MakeLocation(targetUri, en.Line, nameCol, name.Length));
+                    }
+                }
+            }
+            else // Variable or Parameter
+            {
+                foreach (var func in ast.Functions)
+                {
+                    string funcUri = ResolveOriginUri(requestingUri, func.OriginFile);
+                    CollectIdentRefsInBlock(func.Body, name, funcUri, locations);
                 }
             }
         }

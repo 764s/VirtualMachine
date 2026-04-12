@@ -2243,6 +2243,425 @@ public static class LspTests
             }
         }
 
+        // ================================================================
+        // L. DX4-P3: Cross-file symbol query tests
+        // ================================================================
+
+        // DX4-P3-01: FilePathToUri — relative path with rootPath
+        {
+            string uri = LspServer.FilePathToUri("common.ffs", "/home/user/project");
+            Assert(uri == "file:///home/user/project/common.ffs", "DX4-P3-01: relative → file URI, got '" + uri + "'");
+        }
+
+        // DX4-P3-02: FilePathToUri — absolute path preserved
+        {
+            string uri = LspServer.FilePathToUri("/home/user/project/src/common.ffs", "/home/user/project");
+            Assert(uri == "file:///home/user/project/src/common.ffs", "DX4-P3-02: absolute → file URI, got '" + uri + "'");
+        }
+
+        // DX4-P3-03: FilePathToUri — null inputs
+        {
+            Assert(LspServer.FilePathToUri(null, "/root") == null, "DX4-P3-03a: null originFile → null");
+            Assert(LspServer.FilePathToUri("rel.ffs", null) == null, "DX4-P3-03b: relative + null rootPath → null");
+        }
+
+        // DX4-P3-04: Preprocessor sets OriginFile on included function
+        {
+            var resolver = new FFVM.Compiler.DictionaryFileResolver(new Dictionary<string, string> {
+                { "common", "func helper(): int { return 42 }" }
+            });
+            var preprocessor = new FFVM.Compiler.Preprocessor(resolver);
+            string mainSrc = "include \"common\"\nfunc main() { var x: int = helper() }";
+            var merged = preprocessor.Resolve(mainSrc, "main.ffs", out var errors);
+            Assert(errors == null || errors.Count == 0, "DX4-P3-04a: no preprocessor errors");
+            bool found = false;
+            foreach (var func in merged.Functions)
+            {
+                if (func.Name == "helper")
+                {
+                    Assert(func.OriginFile == "common", "DX4-P3-04b: helper OriginFile = 'common', got '" + func.OriginFile + "'");
+                    found = true;
+                }
+            }
+            Assert(found, "DX4-P3-04c: helper found in merged AST");
+        }
+
+        // DX4-P3-05: Go-to-definition on cross-file function — jumps to included file
+        {
+            string tmpDir = Path.Combine(Path.GetTempPath(), "dx4p3_test_" + Guid.NewGuid().ToString("N").Substring(0, 8));
+            Directory.CreateDirectory(tmpDir);
+            try
+            {
+                File.WriteAllText(Path.Combine(tmpDir, "common.ffs"), "func helper(): int { return 42 }");
+                string rootUri = "file:///" + tmpDir.TrimStart('/').Replace("\\", "/");
+                string source = "include \"common\"\nfunc main() { var x: int = helper() }";
+                string fileUri = rootUri + "/main.ffs";
+
+                var session = new LspBatchSession();
+                session.AddInitializeWithRootUri(rootUri);
+                session.AddInitialized();
+                session.AddDidOpen(fileUri, source);
+                // "helper()" call on line 1, "var x: int = helper()" → "helper" starts at col 27
+                session.AddDefinition(fileUri, 1, 27);
+                session.AddShutdown();
+                session.AddExit();
+                session.Run();
+
+                var initResp = session.ExpectResponse(0);
+                var defResp = session.ExpectResponse(1);
+                Assert(defResp != null, "DX4-P3-05a: definition response received");
+                var result = defResp?.GetObject("result");
+                Assert(result != null, "DX4-P3-05b: result not null (cross-file definition)");
+                if (result != null)
+                {
+                    string defUri = result.GetString("uri");
+                    Assert(defUri != null && defUri.Contains("common.ffs"),
+                        "DX4-P3-05c: definition URI points to common.ffs, got '" + defUri + "'");
+                    var range = result.GetObject("range");
+                    var start = range?.GetObject("start");
+                    Assert(start != null && start.GetInt("line") == 0,
+                        "DX4-P3-05d: definition at line 0 in common.ffs");
+                }
+            }
+            finally
+            {
+                try { Directory.Delete(tmpDir, true); } catch { }
+            }
+        }
+
+        // DX4-P3-06: Go-to-definition on same-file function still works
+        {
+            string tmpDir = Path.Combine(Path.GetTempPath(), "dx4p3_test_" + Guid.NewGuid().ToString("N").Substring(0, 8));
+            Directory.CreateDirectory(tmpDir);
+            try
+            {
+                string rootUri = "file:///" + tmpDir.TrimStart('/').Replace("\\", "/");
+                string source = "func helper(): int { return 42 }\nfunc main() { var x: int = helper() }";
+                string fileUri = rootUri + "/test.ffs";
+
+                var session = new LspBatchSession();
+                session.AddInitializeWithRootUri(rootUri);
+                session.AddInitialized();
+                session.AddDidOpen(fileUri, source);
+                // "helper()" call on line 1, col ~28
+                session.AddDefinition(fileUri, 1, 28);
+                session.AddShutdown();
+                session.AddExit();
+                session.Run();
+
+                var initResp = session.ExpectResponse(0);
+                var defResp = session.ExpectResponse(1);
+                var result = defResp?.GetObject("result");
+                Assert(result != null, "DX4-P3-06a: result not null");
+                if (result != null)
+                {
+                    string defUri = result.GetString("uri");
+                    Assert(defUri != null && defUri.Contains("test.ffs"),
+                        "DX4-P3-06b: same-file definition URI");
+                    var range = result.GetObject("range");
+                    var start = range?.GetObject("start");
+                    Assert(start != null && start.GetInt("line") == 0,
+                        "DX4-P3-06c: definition at line 0 (same file)");
+                }
+            }
+            finally
+            {
+                try { Directory.Delete(tmpDir, true); } catch { }
+            }
+        }
+
+        // DX4-P3-07: Cross-file hover on included function shows signature
+        {
+            string tmpDir = Path.Combine(Path.GetTempPath(), "dx4p3_test_" + Guid.NewGuid().ToString("N").Substring(0, 8));
+            Directory.CreateDirectory(tmpDir);
+            try
+            {
+                File.WriteAllText(Path.Combine(tmpDir, "common.ffs"),
+                    "/// Returns the answer\nfunc helper(): int { return 42 }");
+                string rootUri = "file:///" + tmpDir.TrimStart('/').Replace("\\", "/");
+                string source = "include \"common\"\nfunc main() { var x: int = helper() }";
+                string fileUri = rootUri + "/main.ffs";
+
+                var session = new LspBatchSession();
+                session.AddInitializeWithRootUri(rootUri);
+                session.AddInitialized();
+                session.AddDidOpen(fileUri, source);
+                session.AddHover(fileUri, 1, 27);
+                session.AddShutdown();
+                session.AddExit();
+                session.Run();
+
+                var initResp = session.ExpectResponse(0);
+                var hoverResp = session.ExpectResponse(1);
+                var result = hoverResp?.GetObject("result");
+                Assert(result != null, "DX4-P3-07a: hover result not null (cross-file function)");
+                if (result != null)
+                {
+                    var contents = result.GetObject("contents");
+                    string value = contents?.GetString("value") ?? "";
+                    Assert(value.Contains("helper"), "DX4-P3-07b: hover shows helper, got '" + value + "'");
+                    Assert(value.Contains("int"), "DX4-P3-07c: hover shows return type");
+                }
+            }
+            finally
+            {
+                try { Directory.Delete(tmpDir, true); } catch { }
+            }
+        }
+
+        // DX4-P3-08: Cross-file completion includes function from included file
+        {
+            string tmpDir = Path.Combine(Path.GetTempPath(), "dx4p3_test_" + Guid.NewGuid().ToString("N").Substring(0, 8));
+            Directory.CreateDirectory(tmpDir);
+            try
+            {
+                File.WriteAllText(Path.Combine(tmpDir, "common.ffs"),
+                    "func crossHelper(): int { return 99 }");
+                string rootUri = "file:///" + tmpDir.TrimStart('/').Replace("\\", "/");
+                string source = "include \"common\"\nfunc main() { var x: int = crossHelper() }";
+                string fileUri = rootUri + "/main.ffs";
+
+                var session = new LspBatchSession();
+                session.AddInitializeWithRootUri(rootUri);
+                session.AddInitialized();
+                session.AddDidOpen(fileUri, source);
+                session.AddCompletion(fileUri, 1, 18);
+                session.AddShutdown();
+                session.AddExit();
+                session.Run();
+
+                var initResp = session.ExpectResponse(0);
+                var compResp = session.ExpectResponse(1);
+                bool foundCrossHelper = false;
+                var arr = compResp?.GetArray("result");
+                if (arr != null)
+                {
+                    foreach (var item in arr)
+                    {
+                        var itemObj = item as JsonObject;
+                        if (itemObj != null && itemObj.GetString("label") == "crossHelper")
+                        {
+                            foundCrossHelper = true;
+                            break;
+                        }
+                    }
+                }
+                Assert(foundCrossHelper, "DX4-P3-08: cross-file function appears in completion");
+            }
+            finally
+            {
+                try { Directory.Delete(tmpDir, true); } catch { }
+            }
+        }
+
+        // DX4-P3-09: Cross-file signature help for included function
+        {
+            string tmpDir = Path.Combine(Path.GetTempPath(), "dx4p3_test_" + Guid.NewGuid().ToString("N").Substring(0, 8));
+            Directory.CreateDirectory(tmpDir);
+            try
+            {
+                File.WriteAllText(Path.Combine(tmpDir, "lib.ffs"),
+                    "func add(a: int, b: int): int { return a + b }");
+                string rootUri = "file:///" + tmpDir.TrimStart('/').Replace("\\", "/");
+                string source = "include \"lib\"\nfunc main() { var r: int = add(1, 2) }";
+                string fileUri = rootUri + "/main.ffs";
+
+                var session = new LspBatchSession();
+                session.AddInitializeWithRootUri(rootUri);
+                session.AddInitialized();
+                session.AddDidOpen(fileUri, source);
+                session.AddSignatureHelp(fileUri, 1, 32);
+                session.AddShutdown();
+                session.AddExit();
+                session.Run();
+
+                var initResp = session.ExpectResponse(0);
+                var sigResp = session.ExpectResponse(1);
+                var result = sigResp?.GetObject("result");
+                if (result != null)
+                {
+                    var signatures = result.GetArray("signatures");
+                    Assert(signatures != null && signatures.Count > 0,
+                        "DX4-P3-09a: cross-file signature help has signatures");
+                    if (signatures != null && signatures.Count > 0)
+                    {
+                        var sig = signatures[0] as JsonObject;
+                        string label = sig?.GetString("label") ?? "";
+                        Assert(label.Contains("add"), "DX4-P3-09b: signature label contains 'add', got '" + label + "'");
+                        Assert(label.Contains("a: int"), "DX4-P3-09c: signature shows param types");
+                    }
+                }
+            }
+            finally
+            {
+                try { Directory.Delete(tmpDir, true); } catch { }
+            }
+        }
+
+        // DX4-P3-10: Merged AST per-document isolation — file B without include doesn't get file A's symbols
+        {
+            string tmpDir = Path.Combine(Path.GetTempPath(), "dx4p3_test_" + Guid.NewGuid().ToString("N").Substring(0, 8));
+            Directory.CreateDirectory(tmpDir);
+            try
+            {
+                File.WriteAllText(Path.Combine(tmpDir, "common.ffs"), "func shared(): int { return 1 }");
+                string rootUri = "file:///" + tmpDir.TrimStart('/').Replace("\\", "/");
+                string srcA = "include \"common\"\nfunc mainA() { var x: int = shared() }";
+                string srcB = "func mainB() { var y: int = 99 }";
+                string uriA = rootUri + "/a.ffs";
+                string uriB = rootUri + "/b.ffs";
+
+                var session = new LspBatchSession();
+                session.AddInitializeWithRootUri(rootUri);
+                session.AddInitialized();
+                session.AddDidOpen(uriA, srcA);
+                session.AddDidOpen(uriB, srcB);
+                session.AddCompletion(uriA, 1, 30);
+                session.AddCompletion(uriB, 0, 20);
+                session.AddShutdown();
+                session.AddExit();
+                session.Run();
+
+                var initResp = session.ExpectResponse(0);
+                var compA = session.ExpectResponse(1);
+                var compB = session.ExpectResponse(2);
+
+                // File A should have "shared" in completion
+                bool aHasShared = false;
+                var arrA = compA?.GetArray("result");
+                if (arrA != null) foreach (var item in arrA)
+                {
+                    var itemObj = item as JsonObject;
+                    if (itemObj?.GetString("label") == "shared") { aHasShared = true; break; }
+                }
+                Assert(aHasShared, "DX4-P3-10a: file A completion includes cross-file 'shared'");
+
+                // File B should NOT have "shared"
+                bool bHasShared = false;
+                var arrB = compB?.GetArray("result");
+                if (arrB != null) foreach (var item in arrB)
+                {
+                    var itemObj = item as JsonObject;
+                    if (itemObj?.GetString("label") == "shared") { bHasShared = true; break; }
+                }
+                Assert(!bHasShared, "DX4-P3-10b: file B does NOT include 'shared' (no include)");
+            }
+            finally
+            {
+                try { Directory.Delete(tmpDir, true); } catch { }
+            }
+        }
+
+        // DX4-P3-11: Transitive include — definition jumps to transitively included file
+        {
+            string tmpDir = Path.Combine(Path.GetTempPath(), "dx4p3_test_" + Guid.NewGuid().ToString("N").Substring(0, 8));
+            Directory.CreateDirectory(tmpDir);
+            try
+            {
+                File.WriteAllText(Path.Combine(tmpDir, "util.ffs"),
+                    "func utilFunc(): int { return 7 }");
+                File.WriteAllText(Path.Combine(tmpDir, "lib.ffs"),
+                    "include \"util\"\nfunc libFunc(): int { return utilFunc() }");
+                string rootUri = "file:///" + tmpDir.TrimStart('/').Replace("\\", "/");
+                string source = "include \"lib\"\nfunc main() { var x: int = utilFunc() }";
+                string fileUri = rootUri + "/main.ffs";
+
+                var session = new LspBatchSession();
+                session.AddInitializeWithRootUri(rootUri);
+                session.AddInitialized();
+                session.AddDidOpen(fileUri, source);
+                // "utilFunc()" call on line 1
+                session.AddDefinition(fileUri, 1, 28);
+                session.AddShutdown();
+                session.AddExit();
+                session.Run();
+
+                var initResp = session.ExpectResponse(0);
+                var defResp = session.ExpectResponse(1);
+                var result = defResp?.GetObject("result");
+                Assert(result != null, "DX4-P3-11a: transitive definition result not null");
+                if (result != null)
+                {
+                    string defUri = result.GetString("uri");
+                    Assert(defUri != null && defUri.Contains("util.ffs"),
+                        "DX4-P3-11b: transitive definition URI → util.ffs, got '" + defUri + "'");
+                }
+            }
+            finally
+            {
+                try { Directory.Delete(tmpDir, true); } catch { }
+            }
+        }
+
+        // DX4-P3-12: Cross-file struct field dot-completion
+        {
+            string tmpDir = Path.Combine(Path.GetTempPath(), "dx4p3_test_" + Guid.NewGuid().ToString("N").Substring(0, 8));
+            Directory.CreateDirectory(tmpDir);
+            try
+            {
+                File.WriteAllText(Path.Combine(tmpDir, "types.ffs"),
+                    "struct Point { x: int; y: int }\nfunc makePoint(): Point { return Point { x: 1, y: 2 } }");
+                string rootUri = "file:///" + tmpDir.TrimStart('/').Replace("\\", "/");
+                // Use makePoint() to avoid struct literal parse issue in main file
+                string source = "include \"types\"\nfunc main() {\n    var p: Point = makePoint()\n    var a: int = p.x\n}";
+                string fileUri = rootUri + "/main.ffs";
+
+                var session = new LspBatchSession();
+                session.AddInitializeWithRootUri(rootUri);
+                session.AddInitialized();
+                session.AddDidOpen(fileUri, source);
+                // Dot-completion on "p." — line 3, after the dot at "p." col ~19
+                session.AddCompletion(fileUri, 3, 19);
+                session.AddShutdown();
+                session.AddExit();
+                session.Run();
+
+                var initResp = session.ExpectResponse(0);
+                var compResp = session.ExpectResponse(1);
+                bool hasX = false, hasY = false;
+                var arr = compResp?.GetArray("result");
+                if (arr != null) foreach (var item in arr)
+                {
+                    var itemObj = item as JsonObject;
+                    string label = itemObj?.GetString("label") ?? "";
+                    if (label == "x") hasX = true;
+                    if (label == "y") hasY = true;
+                }
+                Assert(hasX && hasY, "DX4-P3-12: dot-completion shows cross-file struct fields (x, y)");
+            }
+            finally
+            {
+                try { Directory.Delete(tmpDir, true); } catch { }
+            }
+        }
+
+        // DX4-P3-13: No workspace root — no crash, falls back to per-file AST
+        {
+            string source = "func helper(): int { return 42 }\nfunc main() { var x: int = helper() }";
+            var session = new LspBatchSession();
+            session.AddInitialize(); // no rootUri
+            session.AddInitialized();
+            session.AddDidOpen("file:///noroot.ffs", source);
+            session.AddDefinition("file:///noroot.ffs", 1, 28);
+            session.AddCompletion("file:///noroot.ffs", 1, 18);
+            session.AddShutdown();
+            session.AddExit();
+            session.Run();
+
+            var initResp = session.ExpectResponse(0);
+            var defResp = session.ExpectResponse(1);
+            var compResp = session.ExpectResponse(2);
+            Assert(defResp != null, "DX4-P3-13a: definition works without workspace root");
+            bool foundHelper = false;
+            var arr = compResp?.GetArray("result");
+            if (arr != null) foreach (var item in arr)
+            {
+                var itemObj = item as JsonObject;
+                if (itemObj?.GetString("label") == "helper") { foundHelper = true; break; }
+            }
+            Assert(foundHelper, "DX4-P3-13b: completion includes same-file helper without workspace");
+        }
+
         Debug.Log($"\n===== LspTests: {passed} passed, {failed} failed =====");
     }
 
