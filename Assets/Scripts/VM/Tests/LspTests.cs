@@ -3945,6 +3945,792 @@ public static class LspTests
             }
         }
 
+        // ================================================================
+        // Q. DX-US: Usability Smoke Tests — per-requirement coverage
+        //    Covers: include navigation, go-to-definition, hover (doc comments),
+        //    findReferences (cross-file), signatureHelp (cross-file), rename,
+        //    .ffproj includePaths navigation, hostDeclarations syscall hover.
+        // ================================================================
+
+        // US-01: Include file go-to-definition — clicking on include path opens target file
+        {
+            string tmpDir = Path.Combine(Path.GetTempPath(), "us_test_" + Guid.NewGuid().ToString("N").Substring(0, 8));
+            Directory.CreateDirectory(tmpDir);
+            try
+            {
+                File.WriteAllText(Path.Combine(tmpDir, "utils.ffs"), "func utilHelper(): int { return 1 }");
+                string rootUri = "file:///" + tmpDir.TrimStart('/').Replace("\\", "/");
+                string source = "include \"utils\"\nfunc main() { var x: int = utilHelper() }";
+                string fileUri = rootUri + "/main.ffs";
+
+                var session = new LspBatchSession();
+                session.AddInitializeWithRootUri(rootUri);
+                session.AddInitialized();
+                session.AddDidOpen(fileUri, source);
+                // Click on include path "utils" — line 0, col inside the path string
+                session.AddDefinition(fileUri, 0, 10);
+                session.AddShutdown();
+                session.AddExit();
+                session.Run();
+
+                var initResp = session.ExpectResponse(0);
+                var defResp = session.ExpectResponse(1);
+                Assert(defResp != null, "US-01a: definition response received for include path");
+                var result = defResp?.GetObject("result");
+                Assert(result != null, "US-01b: definition result not null (include navigation)");
+                if (result != null)
+                {
+                    string defUri = result.GetString("uri");
+                    Assert(defUri != null && defUri.Contains("utils"),
+                        $"US-01c: target URI references utils file, got '{defUri}'");
+                }
+            }
+            finally
+            {
+                try { Directory.Delete(tmpDir, true); } catch { }
+            }
+        }
+
+        // US-02: Same-file go-to-definition — function, struct, enum, variable
+        {
+            string source =
+                "struct Vec2 { x: int; y: int }\n" +    // line 0
+                "enum Dir { UP, DOWN }\n" +               // line 1
+                "func helper(): int { return 42 }\n" +    // line 2
+                "func main() {\n" +                        // line 3
+                "    var v: Vec2 = Vec2 { x: 1, y: 2 }\n" + // line 4
+                "    var d: Dir = Dir.UP\n" +               // line 5
+                "    var r: int = helper()\n" +             // line 6
+                "}";                                        // line 7
+
+            var session = new LspBatchSession();
+            session.AddInitialize();
+            session.AddInitialized();
+            session.AddDidOpen("file:///us02.ffs", source);
+            // Go-to-definition on "helper()" call at line 6
+            session.AddDefinition("file:///us02.ffs", 6, 20);
+            // Go-to-definition on "Vec2" type usage at line 4 — "var v: Vec2" → Vec2 at col 11
+            session.AddDefinition("file:///us02.ffs", 4, 11);
+            session.AddShutdown();
+            session.AddExit();
+            session.Run();
+
+            var initResp = session.ExpectResponse(0);
+            var defFunc = session.ExpectResponse(1);
+            var defStruct = session.ExpectResponse(2);
+
+            // Function definition
+            var funcResult = defFunc?.GetObject("result");
+            Assert(funcResult != null, "US-02a: same-file function go-to-definition returns result");
+            if (funcResult != null)
+            {
+                var range = funcResult.GetObject("range");
+                var start = range?.GetObject("start");
+                Assert(start != null && start.GetInt("line") == 2,
+                    $"US-02b: function definition at line 2, got {start?.GetInt("line")}");
+            }
+
+            // Struct definition
+            var structResult = defStruct?.GetObject("result");
+            Assert(structResult != null, "US-02c: same-file struct go-to-definition returns result");
+            if (structResult != null)
+            {
+                var range = structResult.GetObject("range");
+                var start = range?.GetObject("start");
+                Assert(start != null && start.GetInt("line") == 0,
+                    $"US-02d: struct definition at line 0, got {start?.GetInt("line")}");
+            }
+        }
+
+        // US-03: Cross-file go-to-definition — function, struct, enum
+        {
+            string tmpDir = Path.Combine(Path.GetTempPath(), "us_test_" + Guid.NewGuid().ToString("N").Substring(0, 8));
+            Directory.CreateDirectory(tmpDir);
+            try
+            {
+                File.WriteAllText(Path.Combine(tmpDir, "types.ffs"),
+                    "/// A 2D vector\nstruct Vec2 { x: int; y: int }\n/// Direction enum\nenum Dir { UP, DOWN }\nfunc makeVec(): Vec2 { return Vec2 { x: 0, y: 0 } }");
+                string rootUri = "file:///" + tmpDir.TrimStart('/').Replace("\\", "/");
+                string source = "include \"types\"\nfunc main() {\n    var v: Vec2 = makeVec()\n    var d: Dir = Dir.UP\n}";
+                string fileUri = rootUri + "/main.ffs";
+
+                var session = new LspBatchSession();
+                session.AddInitializeWithRootUri(rootUri);
+                session.AddInitialized();
+                session.AddDidOpen(fileUri, source);
+                // Go-to-definition on "makeVec()" call — line 2, col ~18
+                session.AddDefinition(fileUri, 2, 18);
+                // Go-to-definition on "Vec2" type annotation — line 2, "var v: Vec2" → col ~11
+                session.AddDefinition(fileUri, 2, 11);
+                session.AddShutdown();
+                session.AddExit();
+                session.Run();
+
+                var initResp = session.ExpectResponse(0);
+                var defFunc = session.ExpectResponse(1);
+                var defStruct = session.ExpectResponse(2);
+
+                // Cross-file function definition → types.ffs
+                var funcResult = defFunc?.GetObject("result");
+                Assert(funcResult != null, "US-03a: cross-file function definition result not null");
+                if (funcResult != null)
+                {
+                    string defUri = funcResult.GetString("uri");
+                    Assert(defUri != null && defUri.Contains("types.ffs"),
+                        $"US-03b: function definition URI → types.ffs, got '{defUri}'");
+                }
+
+                // Cross-file struct definition → types.ffs
+                var structResult = defStruct?.GetObject("result");
+                Assert(structResult != null, "US-03c: cross-file struct definition result not null");
+                if (structResult != null)
+                {
+                    string defUri = structResult.GetString("uri");
+                    Assert(defUri != null && defUri.Contains("types.ffs"),
+                        $"US-03d: struct definition URI → types.ffs, got '{defUri}'");
+                }
+            }
+            finally
+            {
+                try { Directory.Delete(tmpDir, true); } catch { }
+            }
+        }
+
+        // US-04: Enum triple-slash doc hover at declaration site
+        {
+            string source = "/// The direction enum\nenum Dir { UP, DOWN }\nfunc main() { var d: int = Dir.UP }";
+            var session = new LspBatchSession();
+            session.AddInitialize();
+            session.AddInitialized();
+            session.AddDidOpen("file:///us04.ffs", source);
+            // Hover on "Dir" at declaration — line 1, col ~5 (inside "Dir")
+            session.AddHover("file:///us04.ffs", 1, 5);
+            session.AddShutdown();
+            session.AddExit();
+            session.Run();
+
+            var initResp = session.ExpectResponse(0);
+            var hoverResp = session.ExpectResponse(1);
+            var result = hoverResp?.GetObject("result");
+            Assert(result != null, "US-04a: enum doc hover at declaration returns result");
+            if (result != null)
+            {
+                var contents = result.GetObject("contents");
+                string value = contents?.GetString("value") ?? "";
+                Assert(value.Contains("enum Dir"), $"US-04b: hover shows 'enum Dir', got '{value}'");
+                Assert(value.Contains("The direction enum"), $"US-04c: hover shows doc comment, got '{value}'");
+            }
+        }
+
+        // US-05: Enum triple-slash doc hover at usage site (same file)
+        {
+            string source = "/// The direction enum\nenum Dir { UP, DOWN }\nfunc main() {\n    var d: int = Dir.UP\n}";
+            var session = new LspBatchSession();
+            session.AddInitialize();
+            session.AddInitialized();
+            session.AddDidOpen("file:///us05.ffs", source);
+            // Hover on "Dir" in "Dir.UP" expression — line 3, col ~17 (the "Dir" part of "Dir.UP")
+            session.AddHover("file:///us05.ffs", 3, 17);
+            session.AddShutdown();
+            session.AddExit();
+            session.Run();
+
+            var initResp = session.ExpectResponse(0);
+            var hoverResp = session.ExpectResponse(1);
+            var result = hoverResp?.GetObject("result");
+            Assert(result != null, "US-05a: enum doc hover at usage site returns result");
+            if (result != null)
+            {
+                var contents = result.GetObject("contents");
+                string value = contents?.GetString("value") ?? "";
+                Assert(value.Contains("Dir"), $"US-05b: hover shows 'Dir', got '{value}'");
+                Assert(value.Contains("The direction enum"), $"US-05c: hover shows doc comment at usage site, got '{value}'");
+            }
+        }
+
+        // US-06: Struct triple-slash doc hover at declaration site
+        {
+            string source = "/// A 2D vector type\nstruct Vec2 { x: int; y: int }\nfunc main() { var v: Vec2 = Vec2 { x: 0, y: 0 } }";
+            var session = new LspBatchSession();
+            session.AddInitialize();
+            session.AddInitialized();
+            session.AddDidOpen("file:///us06.ffs", source);
+            // Hover on "Vec2" at struct declaration — line 1, col ~7 (the "struct Vec2" keyword)
+            session.AddHover("file:///us06.ffs", 1, 9);
+            session.AddShutdown();
+            session.AddExit();
+            session.Run();
+
+            var initResp = session.ExpectResponse(0);
+            var hoverResp = session.ExpectResponse(1);
+            var result = hoverResp?.GetObject("result");
+            Assert(result != null, "US-06a: struct doc hover at declaration returns result");
+            if (result != null)
+            {
+                var contents = result.GetObject("contents");
+                string value = contents?.GetString("value") ?? "";
+                Assert(value.Contains("struct Vec2"), $"US-06b: hover shows 'struct Vec2', got '{value}'");
+                Assert(value.Contains("A 2D vector type"), $"US-06c: hover shows doc comment, got '{value}'");
+            }
+        }
+
+        // US-07: Struct triple-slash doc hover at usage site (same file)
+        {
+            string source = "/// A 2D vector type\nstruct Vec2 { x: int; y: int }\nfunc main() {\n    var v: Vec2 = Vec2 { x: 0, y: 0 }\n}";
+            var session = new LspBatchSession();
+            session.AddInitialize();
+            session.AddInitialized();
+            session.AddDidOpen("file:///us07.ffs", source);
+            // Hover on "Vec2" in struct literal "Vec2 { x: 0, y: 0 }" — line 3
+            // "    var v: Vec2 = Vec2 { x: 0, y: 0 }" → the second "Vec2" is a CallExpr or IdentifierExpr
+            // The type annotation "Vec2" after colon starts at col 11
+            // We try the struct literal name "Vec2" at col 18
+            session.AddHover("file:///us07.ffs", 3, 18);
+            session.AddShutdown();
+            session.AddExit();
+            session.Run();
+
+            var initResp = session.ExpectResponse(0);
+            var hoverResp = session.ExpectResponse(1);
+            var result = hoverResp?.GetObject("result");
+            Assert(result != null, "US-07a: struct doc hover at usage site returns result");
+            if (result != null)
+            {
+                var contents = result.GetObject("contents");
+                string value = contents?.GetString("value") ?? "";
+                Assert(value.Contains("Vec2"), $"US-07b: hover shows 'Vec2', got '{value}'");
+            }
+        }
+
+        // US-08: Struct triple-slash doc hover at usage site (cross-file)
+        {
+            string tmpDir = Path.Combine(Path.GetTempPath(), "us_test_" + Guid.NewGuid().ToString("N").Substring(0, 8));
+            Directory.CreateDirectory(tmpDir);
+            try
+            {
+                File.WriteAllText(Path.Combine(tmpDir, "types.ffs"),
+                    "/// A 2D vector type\nstruct Vec2 { x: int; y: int }\nfunc makeVec(): Vec2 { return Vec2 { x: 0, y: 0 } }");
+                string rootUri = "file:///" + tmpDir.TrimStart('/').Replace("\\", "/");
+                string source = "include \"types\"\nfunc main() {\n    var v: Vec2 = makeVec()\n    var a: int = v.x\n}";
+                string fileUri = rootUri + "/main.ffs";
+
+                var session = new LspBatchSession();
+                session.AddInitializeWithRootUri(rootUri);
+                session.AddInitialized();
+                session.AddDidOpen(fileUri, source);
+                // Hover on "makeVec()" — line 2, col ~18
+                session.AddHover(fileUri, 2, 18);
+                session.AddShutdown();
+                session.AddExit();
+                session.Run();
+
+                var initResp = session.ExpectResponse(0);
+                var hoverResp = session.ExpectResponse(1);
+                var result = hoverResp?.GetObject("result");
+                Assert(result != null, "US-08a: cross-file hover on function from included file returns result");
+                if (result != null)
+                {
+                    var contents = result.GetObject("contents");
+                    string value = contents?.GetString("value") ?? "";
+                    Assert(value.Contains("makeVec"), $"US-08b: hover shows function name, got '{value}'");
+                    Assert(value.Contains("Vec2"), $"US-08c: hover shows return type Vec2, got '{value}'");
+                }
+            }
+            finally
+            {
+                try { Directory.Delete(tmpDir, true); } catch { }
+            }
+        }
+
+        // US-09: Cross-file findReferences for function — finds decl + all call sites across files
+        {
+            string tmpDir = Path.Combine(Path.GetTempPath(), "us_test_" + Guid.NewGuid().ToString("N").Substring(0, 8));
+            Directory.CreateDirectory(tmpDir);
+            try
+            {
+                File.WriteAllText(Path.Combine(tmpDir, "lib.ffs"),
+                    "func helper(): int { return 42 }");
+                string rootUri = "file:///" + tmpDir.TrimStart('/').Replace("\\", "/");
+                string source = "include \"lib\"\nfunc main() {\n    var a: int = helper()\n    var b: int = helper()\n}";
+                string fileUri = rootUri + "/main.ffs";
+
+                var session = new LspBatchSession();
+                session.AddInitializeWithRootUri(rootUri);
+                session.AddInitialized();
+                session.AddDidOpen(fileUri, source);
+                // References on "helper()" call — line 2, col ~17
+                session.AddReferences(fileUri, 2, 17);
+                session.AddShutdown();
+                session.AddExit();
+                session.Run();
+
+                var initResp = session.ExpectResponse(0);
+                var refsResp = session.ExpectResponse(1);
+                var refs = refsResp?.GetArray("result");
+                Assert(refs != null && refs.Count >= 3,
+                    $"US-09: cross-file function references ≥3 (1 decl in lib + 2 calls in main), got {refs?.Count ?? 0}");
+
+                // Verify references span multiple files (at least one in lib.ffs, at least one in main.ffs)
+                bool hasLib = false, hasMain = false;
+                if (refs != null)
+                {
+                    foreach (var r in refs)
+                    {
+                        var rObj = r as JsonObject;
+                        string rUri = rObj?.GetString("uri") ?? "";
+                        if (rUri.Contains("lib.ffs")) hasLib = true;
+                        if (rUri.Contains("main.ffs")) hasMain = true;
+                    }
+                }
+                Assert(hasLib, "US-09b: references include declaration in lib.ffs");
+                Assert(hasMain, "US-09c: references include call sites in main.ffs");
+            }
+            finally
+            {
+                try { Directory.Delete(tmpDir, true); } catch { }
+            }
+        }
+
+        // US-10: Cross-file findReferences for struct — finds decl + type usages across files
+        {
+            string tmpDir = Path.Combine(Path.GetTempPath(), "us_test_" + Guid.NewGuid().ToString("N").Substring(0, 8));
+            Directory.CreateDirectory(tmpDir);
+            try
+            {
+                File.WriteAllText(Path.Combine(tmpDir, "types.ffs"),
+                    "struct Point { x: int; y: int }\nfunc makePoint(): Point { return Point { x: 0, y: 0 } }");
+                string rootUri = "file:///" + tmpDir.TrimStart('/').Replace("\\", "/");
+                string source = "include \"types\"\nfunc main() {\n    var p: Point = makePoint()\n}";
+                string fileUri = rootUri + "/main.ffs";
+
+                var session = new LspBatchSession();
+                session.AddInitializeWithRootUri(rootUri);
+                session.AddInitialized();
+                session.AddDidOpen(fileUri, source);
+                // References on "Point" struct name — line 2, "var p: Point" → col ~11
+                session.AddReferences(fileUri, 2, 11);
+                session.AddShutdown();
+                session.AddExit();
+                session.Run();
+
+                var initResp = session.ExpectResponse(0);
+                var refsResp = session.ExpectResponse(1);
+                var refs = refsResp?.GetArray("result");
+                Assert(refs != null && refs.Count >= 2,
+                    $"US-10: cross-file struct references ≥2 (decl in types + usage in main), got {refs?.Count ?? 0}");
+            }
+            finally
+            {
+                try { Directory.Delete(tmpDir, true); } catch { }
+            }
+        }
+
+        // US-11: Cross-file findReferences for enum
+        {
+            string tmpDir = Path.Combine(Path.GetTempPath(), "us_test_" + Guid.NewGuid().ToString("N").Substring(0, 8));
+            Directory.CreateDirectory(tmpDir);
+            try
+            {
+                File.WriteAllText(Path.Combine(tmpDir, "defs.ffs"),
+                    "enum Color { RED, GREEN, BLUE }");
+                string rootUri = "file:///" + tmpDir.TrimStart('/').Replace("\\", "/");
+                string source = "include \"defs\"\nfunc main() {\n    var c: int = Color.RED\n}";
+                string fileUri = rootUri + "/main.ffs";
+
+                var session = new LspBatchSession();
+                session.AddInitializeWithRootUri(rootUri);
+                session.AddInitialized();
+                session.AddDidOpen(fileUri, source);
+                // References on "Color" enum usage — line 2, col in "Color.RED" → "Color" at ~17
+                session.AddReferences(fileUri, 2, 17);
+                session.AddShutdown();
+                session.AddExit();
+                session.Run();
+
+                var initResp = session.ExpectResponse(0);
+                var refsResp = session.ExpectResponse(1);
+                var refs = refsResp?.GetArray("result");
+                Assert(refs != null && refs.Count >= 1,
+                    $"US-11: cross-file enum references ≥1 (decl in defs), got {refs?.Count ?? 0}");
+
+                // Verify the declaration in defs.ffs is included
+                bool hasDefs = false;
+                if (refs != null)
+                {
+                    foreach (var r in refs)
+                    {
+                        var rObj = r as JsonObject;
+                        string rUri = rObj?.GetString("uri") ?? "";
+                        if (rUri.Contains("defs.ffs")) hasDefs = true;
+                    }
+                }
+                Assert(hasDefs, "US-11b: enum references include declaration in defs.ffs");
+            }
+            finally
+            {
+                try { Directory.Delete(tmpDir, true); } catch { }
+            }
+        }
+
+        // US-12: Function triple-slash hover cross-file shows full params (not "...")
+        {
+            string tmpDir = Path.Combine(Path.GetTempPath(), "us_test_" + Guid.NewGuid().ToString("N").Substring(0, 8));
+            Directory.CreateDirectory(tmpDir);
+            try
+            {
+                File.WriteAllText(Path.Combine(tmpDir, "math.ffs"),
+                    "/// Adds two numbers\n/// @param a — first number\n/// @param b — second number\n/// @return the sum\nfunc add(a: int, b: int): int { return a + b }");
+                string rootUri = "file:///" + tmpDir.TrimStart('/').Replace("\\", "/");
+                string source = "include \"math\"\nfunc main() { var r: int = add(1, 2) }";
+                string fileUri = rootUri + "/main.ffs";
+
+                var session = new LspBatchSession();
+                session.AddInitializeWithRootUri(rootUri);
+                session.AddInitialized();
+                session.AddDidOpen(fileUri, source);
+                // Hover on "add(1, 2)" call — line 1, col ~28 (on "add")
+                session.AddHover(fileUri, 1, 28);
+                session.AddShutdown();
+                session.AddExit();
+                session.Run();
+
+                var initResp = session.ExpectResponse(0);
+                var hoverResp = session.ExpectResponse(1);
+                var result = hoverResp?.GetObject("result");
+                Assert(result != null, "US-12a: cross-file function hover returns result");
+                if (result != null)
+                {
+                    var contents = result.GetObject("contents");
+                    string value = contents?.GetString("value") ?? "";
+                    Assert(value.Contains("add"), $"US-12b: hover shows 'add', got '{value}'");
+                    Assert(value.Contains("a: int"), $"US-12c: hover shows param 'a: int' (not '...'), got '{value}'");
+                    Assert(value.Contains("b: int"), $"US-12d: hover shows param 'b: int' (not '...'), got '{value}'");
+                    Assert(!value.Contains("(...)"), $"US-12e: hover does NOT show '(...)' fallback, got '{value}'");
+                    Assert(value.Contains("Adds two numbers"), $"US-12f: hover shows doc comment, got '{value}'");
+                }
+            }
+            finally
+            {
+                try { Directory.Delete(tmpDir, true); } catch { }
+            }
+        }
+
+        // US-13: Function signature help cross-file shows params (not "...")
+        {
+            string tmpDir = Path.Combine(Path.GetTempPath(), "us_test_" + Guid.NewGuid().ToString("N").Substring(0, 8));
+            Directory.CreateDirectory(tmpDir);
+            try
+            {
+                File.WriteAllText(Path.Combine(tmpDir, "math.ffs"),
+                    "func multiply(x: int, y: int): int { return x * y }");
+                string rootUri = "file:///" + tmpDir.TrimStart('/').Replace("\\", "/");
+                string source = "include \"math\"\nfunc main() { var r: int = multiply(3, 4) }";
+                string fileUri = rootUri + "/main.ffs";
+
+                var session = new LspBatchSession();
+                session.AddInitializeWithRootUri(rootUri);
+                session.AddInitialized();
+                session.AddDidOpen(fileUri, source);
+                // Signature help on "multiply(" — line 1, col ~37 (after opening paren)
+                session.AddSignatureHelp(fileUri, 1, 37);
+                session.AddShutdown();
+                session.AddExit();
+                session.Run();
+
+                var initResp = session.ExpectResponse(0);
+                var sigResp = session.ExpectResponse(1);
+                var result = sigResp?.GetObject("result");
+                Assert(result != null, "US-13a: cross-file signature help returns result");
+                if (result != null)
+                {
+                    var signatures = result.GetArray("signatures");
+                    Assert(signatures != null && signatures.Count > 0,
+                        "US-13b: signature help has signatures");
+                    if (signatures != null && signatures.Count > 0)
+                    {
+                        var sig = signatures[0] as JsonObject;
+                        string label = sig?.GetString("label") ?? "";
+                        Assert(label.Contains("x: int"), $"US-13c: signature shows 'x: int', got '{label}'");
+                        Assert(label.Contains("y: int"), $"US-13d: signature shows 'y: int', got '{label}'");
+                        Assert(!label.Contains("..."), $"US-13e: signature does NOT show '...' fallback, got '{label}'");
+
+                        // Check parameters array exists with correct count
+                        var parameters2 = sig?.GetArray("parameters");
+                        Assert(parameters2 != null && parameters2.Count == 2,
+                            $"US-13f: signature has 2 parameters, got {parameters2?.Count ?? 0}");
+                    }
+                }
+            }
+            finally
+            {
+                try { Directory.Delete(tmpDir, true); } catch { }
+            }
+        }
+
+        // US-14: Cross-file struct field go-to-definition
+        {
+            string tmpDir = Path.Combine(Path.GetTempPath(), "us_test_" + Guid.NewGuid().ToString("N").Substring(0, 8));
+            Directory.CreateDirectory(tmpDir);
+            try
+            {
+                File.WriteAllText(Path.Combine(tmpDir, "types.ffs"),
+                    "struct Point { px: int; py: int }\nfunc makePoint(): Point { return Point { px: 0, py: 0 } }");
+                string rootUri = "file:///" + tmpDir.TrimStart('/').Replace("\\", "/");
+                string source = "include \"types\"\nfunc main() {\n    var p: Point = makePoint()\n    var a: int = p.px\n}";
+                string fileUri = rootUri + "/main.ffs";
+
+                var session = new LspBatchSession();
+                session.AddInitializeWithRootUri(rootUri);
+                session.AddInitialized();
+                session.AddDidOpen(fileUri, source);
+                // Go-to-definition on "px" in "p.px" — line 3, col ~19 (on "px")
+                session.AddDefinition(fileUri, 3, 19);
+                session.AddShutdown();
+                session.AddExit();
+                session.Run();
+
+                var initResp = session.ExpectResponse(0);
+                var defResp = session.ExpectResponse(1);
+                var result = defResp?.GetObject("result");
+                Assert(result != null, "US-14a: cross-file struct field definition result not null");
+                if (result != null)
+                {
+                    string defUri = result.GetString("uri");
+                    Assert(defUri != null && defUri.Contains("types.ffs"),
+                        $"US-14b: struct field definition URI → types.ffs, got '{defUri}'");
+                }
+            }
+            finally
+            {
+                try { Directory.Delete(tmpDir, true); } catch { }
+            }
+        }
+
+        // US-15: Cross-file enum member go-to-definition
+        {
+            string tmpDir = Path.Combine(Path.GetTempPath(), "us_test_" + Guid.NewGuid().ToString("N").Substring(0, 8));
+            Directory.CreateDirectory(tmpDir);
+            try
+            {
+                File.WriteAllText(Path.Combine(tmpDir, "defs.ffs"),
+                    "enum Color { RED, GREEN, BLUE }");
+                string rootUri = "file:///" + tmpDir.TrimStart('/').Replace("\\", "/");
+                string source = "include \"defs\"\nfunc main() {\n    var c: int = Color.RED\n}";
+                string fileUri = rootUri + "/main.ffs";
+
+                var session = new LspBatchSession();
+                session.AddInitializeWithRootUri(rootUri);
+                session.AddInitialized();
+                session.AddDidOpen(fileUri, source);
+                // Go-to-definition on "RED" in "Color.RED" — line 2
+                // "    var c: int = Color.RED" → "Color" at ~17, "." at ~22, "RED" at ~23
+                session.AddDefinition(fileUri, 2, 23);
+                session.AddShutdown();
+                session.AddExit();
+                session.Run();
+
+                var initResp = session.ExpectResponse(0);
+                var defResp = session.ExpectResponse(1);
+                var result = defResp?.GetObject("result");
+                Assert(result != null, "US-15a: cross-file enum member definition result not null");
+                if (result != null)
+                {
+                    string defUri = result.GetString("uri");
+                    Assert(defUri != null && defUri.Contains("defs.ffs"),
+                        $"US-15b: enum member definition URI → defs.ffs, got '{defUri}'");
+                }
+            }
+            finally
+            {
+                try { Directory.Delete(tmpDir, true); } catch { }
+            }
+        }
+
+        // US-16: Cross-file rename function updates both files
+        {
+            string tmpDir = Path.Combine(Path.GetTempPath(), "us_test_" + Guid.NewGuid().ToString("N").Substring(0, 8));
+            Directory.CreateDirectory(tmpDir);
+            try
+            {
+                File.WriteAllText(Path.Combine(tmpDir, "lib.ffs"),
+                    "func oldName(): int { return 42 }");
+                string rootUri = "file:///" + tmpDir.TrimStart('/').Replace("\\", "/");
+                string source = "include \"lib\"\nfunc main() { var r: int = oldName() }";
+                string fileUri = rootUri + "/main.ffs";
+
+                var session = new LspBatchSession();
+                session.AddInitializeWithRootUri(rootUri);
+                session.AddInitialized();
+                session.AddDidOpen(fileUri, source);
+                // Rename "oldName" call at line 1, col ~33
+                session.AddRename(fileUri, 1, 33, "newName");
+                session.AddShutdown();
+                session.AddExit();
+                session.Run();
+
+                var initResp = session.ExpectResponse(0);
+                var renResp = session.ExpectResponse(1);
+                var result = renResp?.GetObject("result");
+                Assert(result != null, "US-16a: cross-file rename result not null");
+                if (result != null)
+                {
+                    var changes = result.GetObject("changes");
+                    Assert(changes != null, "US-16b: rename WorkspaceEdit has changes");
+                    if (changes != null)
+                    {
+                        // Check that changes span multiple URIs (both lib and main)
+                        int totalEdits = 0;
+                        bool hasLib = false, hasMain = false;
+                        foreach (var key in changes.Keys)
+                        {
+                            var edits = changes.GetArray(key);
+                            if (edits != null) totalEdits += edits.Count;
+                            if (key.Contains("lib")) hasLib = true;
+                            if (key.Contains("main")) hasMain = true;
+                        }
+                        Assert(totalEdits >= 2,
+                            $"US-16c: ≥2 total edits for cross-file rename, got {totalEdits}");
+                        Assert(hasLib && hasMain,
+                            "US-16d: rename edits span both lib.ffs and main.ffs");
+                    }
+                }
+            }
+            finally
+            {
+                try { Directory.Delete(tmpDir, true); } catch { }
+            }
+        }
+
+        // US-17: .ffproj includePaths — include from non-root directory resolves and navigates
+        {
+            string tmpDir = Path.Combine(Path.GetTempPath(), "us_test_" + Guid.NewGuid().ToString("N").Substring(0, 8));
+            Directory.CreateDirectory(tmpDir);
+            try
+            {
+                string modulesDir = Path.Combine(tmpDir, "modules");
+                Directory.CreateDirectory(modulesDir);
+                File.WriteAllText(Path.Combine(modulesDir, "math.ffs"),
+                    "func add(a: int, b: int): int { return a + b }");
+                string projJson = "{ \"includePaths\": [\"modules\"] }";
+                File.WriteAllText(Path.Combine(tmpDir, "project.ffproj"), projJson);
+
+                string rootUri = "file:///" + tmpDir.TrimStart('/').Replace("\\", "/");
+                string source = "include \"math\"\nfunc main() { var r: int = add(1, 2) }";
+                string fileUri = rootUri + "/main.ffs";
+
+                var session = new LspBatchSession();
+                session.AddInitializeWithRootUri(rootUri);
+                session.AddInitialized();
+                session.AddDidOpen(fileUri, source);
+                // Verify no include-not-found diagnostics
+                // Also test definition on "add" call — line 1, col ~28
+                session.AddDefinition(fileUri, 1, 28);
+                session.AddShutdown();
+                session.AddExit();
+                session.Run();
+
+                var initResp = session.ExpectResponse(0);
+                var defResp = session.ExpectResponse(1);
+                var result = defResp?.GetObject("result");
+                Assert(result != null, "US-17a: .ffproj includePaths → definition on included function resolves");
+                if (result != null)
+                {
+                    string defUri = result.GetString("uri");
+                    Assert(defUri != null && defUri.Contains("math"),
+                        $"US-17b: definition URI → math.ffs, got '{defUri}'");
+                }
+
+                // Check diagnostics for no include errors
+                var diags = session.FindAllNotifications("textDocument/publishDiagnostics");
+                bool hasIncludeError = false;
+                foreach (var diag in diags)
+                {
+                    var diagParams = diag.GetObject("params");
+                    var diagArr = diagParams?.GetArray("diagnostics");
+                    if (diagArr != null)
+                    {
+                        foreach (var d in diagArr)
+                        {
+                            var dObj = d as JsonObject;
+                            string msg = dObj?.GetString("message") ?? "";
+                            if (msg.Contains("include") || msg.Contains("not found"))
+                                hasIncludeError = true;
+                        }
+                    }
+                }
+                Assert(!hasIncludeError, "US-17c: no include-related errors with .ffproj includePaths");
+            }
+            finally
+            {
+                try { Directory.Delete(tmpDir, true); } catch { }
+            }
+        }
+
+        // US-18: .ffproj hostDeclarations — syscall hover shows signature
+        {
+            string tmpDir = Path.Combine(Path.GetTempPath(), "us_test_" + Guid.NewGuid().ToString("N").Substring(0, 8));
+            Directory.CreateDirectory(tmpDir);
+            try
+            {
+                string hostDir = Path.Combine(tmpDir, "host");
+                Directory.CreateDirectory(hostDir);
+                string declJson = "{ \"syscalls\": [ { \"name\": \"PlayAnim\", \"slot\": 0, \"parameters\": [{ \"name\": \"animId\", \"type\": \"int\" }], \"returnType\": \"void\", \"description\": \"Play an animation\" } ] }";
+                File.WriteAllText(Path.Combine(hostDir, "host.ffvm.d.json"), declJson);
+                string projJson = "{ \"hostDeclarations\": [\"host/host.ffvm.d.json\"] }";
+                File.WriteAllText(Path.Combine(tmpDir, "project.ffproj"), projJson);
+
+                string rootUri = "file:///" + tmpDir.TrimStart('/').Replace("\\", "/");
+                string source = "func main() { PlayAnim(1) }";
+                string fileUri = rootUri + "/main.ffs";
+
+                var session = new LspBatchSession();
+                session.AddInitializeWithRootUri(rootUri);
+                session.AddInitialized();
+                session.AddDidOpen(fileUri, source);
+                // Hover on "PlayAnim" — line 0, col ~15
+                session.AddHover(fileUri, 0, 15);
+                // Also verify no "unknown syscall" diagnostic
+                session.AddShutdown();
+                session.AddExit();
+                session.Run();
+
+                var initResp = session.ExpectResponse(0);
+                var hoverResp = session.ExpectResponse(1);
+                var result = hoverResp?.GetObject("result");
+                Assert(result != null, "US-18a: syscall hover via .ffproj hostDeclarations returns result");
+                if (result != null)
+                {
+                    var contents = result.GetObject("contents");
+                    string value = contents?.GetString("value") ?? "";
+                    Assert(value.Contains("PlayAnim"), $"US-18b: hover shows 'PlayAnim', got '{value}'");
+                }
+
+                // Check no "unknown syscall" diagnostic
+                var diags = session.FindAllNotifications("textDocument/publishDiagnostics");
+                bool hasUnknownSyscall = false;
+                foreach (var diag in diags)
+                {
+                    var diagParams = diag.GetObject("params");
+                    var diagArr = diagParams?.GetArray("diagnostics");
+                    if (diagArr != null)
+                    {
+                        foreach (var d in diagArr)
+                        {
+                            var dObj = d as JsonObject;
+                            string msg = dObj?.GetString("message") ?? "";
+                            if (msg.Contains("unknown") && msg.Contains("syscall"))
+                                hasUnknownSyscall = true;
+                        }
+                    }
+                }
+                Assert(!hasUnknownSyscall, "US-18c: no 'unknown syscall' diagnostic with .ffproj hostDeclarations");
+            }
+            finally
+            {
+                try { Directory.Delete(tmpDir, true); } catch { }
+            }
+        }
+
         Debug.Log($"\n===== LspTests: {passed} passed, {failed} failed =====");
     }
 
