@@ -185,6 +185,83 @@ namespace FFVM.Compiler
             if (resolvers.Count == 1) return resolvers[0];
             return new CompositeFileResolver(resolvers.ToArray());
         }
+
+        /// <summary>
+        /// DX4-P2: Load host declaration files (.ffvm.d.json) specified in hostDeclarations
+        /// and merge syscall name→slot mappings into the given dictionary.
+        /// This method is shared between LSP and CLI to avoid duplicating the JSON parsing logic.
+        /// </summary>
+        /// <param name="syscalls">Target dictionary to merge syscall declarations into</param>
+        public void LoadHostDeclarations(Dictionary<string, int> syscalls)
+        {
+            if (HostDeclarations == null || syscalls == null) return;
+
+            foreach (string declPath in HostDeclarations)
+            {
+                try
+                {
+                    string absPath = ResolvePath(declPath);
+                    if (absPath == null || !File.Exists(absPath)) continue;
+
+                    string json = File.ReadAllText(absPath);
+                    MergeDeclarationJson(json, syscalls);
+                }
+                catch
+                {
+                    // Ignore individual file errors — continue loading remaining declarations
+                }
+            }
+        }
+
+        /// <summary>
+        /// DX4-P2: Parse a .ffvm.d.json string and merge syscall name→slot mappings into the given dictionary.
+        /// Shared parsing logic used by both CLI and LSP host declaration loading.
+        /// </summary>
+        public static void MergeDeclarationJson(string json, Dictionary<string, int> syscalls)
+        {
+            if (string.IsNullOrEmpty(json) || syscalls == null) return;
+
+            var root = FFVM.Debug.JsonObject.Parse(json);
+            if (root == null) return;
+
+            var syscallArr = root.GetArray("syscalls");
+            if (syscallArr == null) return;
+
+            foreach (var item in syscallArr)
+            {
+                var obj = item as FFVM.Debug.JsonObject;
+                if (obj == null) continue;
+
+                string name = obj.GetString("name");
+                int slot = obj.GetInt("slot", -1);
+                if (!string.IsNullOrEmpty(name) && slot >= 0)
+                    syscalls[name] = slot;
+            }
+        }
+
+        /// <summary>
+        /// DX4-P2: Generate a .ffproj JSON template string.
+        /// Optionally fills hostDeclarations with a preset path.
+        /// </summary>
+        /// <param name="hostPreset">Optional host preset name (e.g. "skill"). When specified,
+        /// generates a hostDeclarations entry pointing to "host/{preset}.ffvm.d.json".</param>
+        /// <returns>JSON string suitable for writing to a .ffproj file</returns>
+        public static string GenerateTemplate(string hostPreset)
+        {
+            string hostDeclarationsValue = "[]";
+            if (!string.IsNullOrEmpty(hostPreset))
+            {
+                string declFile = "host/" + hostPreset + ".ffvm.d.json";
+                hostDeclarationsValue = "[\"" + declFile + "\"]";
+            }
+
+            return "{\n"
+                 + "  \"includePaths\": [\".\"],\n"
+                 + "  \"hostDeclarations\": " + hostDeclarationsValue + ",\n"
+                 + "  \"entry\": null,\n"
+                 + "  \"compileOptions\": {}\n"
+                 + "}\n";
+        }
     }
 
     /// <summary>
