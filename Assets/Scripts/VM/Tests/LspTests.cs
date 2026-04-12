@@ -2722,6 +2722,120 @@ public static class LspTests
             }
         }
 
+        // DX4-P3-15: Cross-file go-to-definition for struct type across non-root include path
+        // Verifies that struct definitions in included files (resolved via includePaths) produce
+        // correct URIs for go-to-definition on type annotations.
+        {
+            string tmpDir = Path.Combine(Path.GetTempPath(), "dx4p3_st_" + Guid.NewGuid().ToString("N").Substring(0, 8));
+            Directory.CreateDirectory(tmpDir);
+            try
+            {
+                // Create subdirectory structure: modules/types.ffs with struct definition
+                string modulesDir = Path.Combine(tmpDir, "modules");
+                Directory.CreateDirectory(modulesDir);
+                File.WriteAllText(Path.Combine(modulesDir, "types.ffs"), "struct Vec2 { x: int; y: int }");
+
+                // Create .ffproj with includePaths pointing to the subdirectory
+                string ffproj = "{ \"includePaths\": [\"modules\"] }";
+                File.WriteAllText(Path.Combine(tmpDir, "project.ffproj"), ffproj);
+
+                // main.ffs includes "types" — resolved via "modules" include path
+                string source = "include \"types\"\nfunc main() { var v: Vec2 = Vec2 { x = 1; y = 2 } }";
+                File.WriteAllText(Path.Combine(tmpDir, "main.ffs"), source);
+
+                string rootUri = "file:///" + tmpDir.TrimStart('/').Replace("\\", "/");
+                string fileUri = rootUri + "/main.ffs";
+
+                var session = new LspBatchSession();
+                session.AddInitializeWithRootUri(rootUri);
+                session.AddInitialized();
+                session.AddDidOpen(fileUri, source);
+                // "Vec2" type annotation on line 1 — "var v: Vec2" — col 22 (inside "Vec2")
+                session.AddDefinition(fileUri, 1, 22);
+                session.AddShutdown();
+                session.AddExit();
+                session.Run();
+
+                var initResp = session.ExpectResponse(0);
+                var defResp = session.ExpectResponse(1);
+                Assert(defResp != null, "DX4-P3-15a: definition response received");
+                var result = defResp?.GetObject("result");
+                Assert(result != null, "DX4-P3-15b: result not null (cross-file struct via include path)");
+                if (result != null)
+                {
+                    string defUri = result.GetString("uri");
+                    Assert(defUri != null && defUri.Contains("types.ffs"),
+                        "DX4-P3-15c: definition URI points to types.ffs, got '" + defUri + "'");
+                    Assert(defUri != null && defUri.Contains("modules/types"),
+                        "DX4-P3-15d: definition URI includes correct subdirectory path, got '" + defUri + "'");
+                }
+            }
+            finally
+            {
+                try { Directory.Delete(tmpDir, true); } catch { }
+            }
+        }
+
+        // DX4-P3-16: Cross-file find-references across non-root include path
+        // Verifies that references to functions defined in included files (resolved via includePaths)
+        // produce correct URIs for both the definition site and usage site.
+        {
+            string tmpDir = Path.Combine(Path.GetTempPath(), "dx4p3_ref_" + Guid.NewGuid().ToString("N").Substring(0, 8));
+            Directory.CreateDirectory(tmpDir);
+            try
+            {
+                string scriptsDir = Path.Combine(tmpDir, "scripts");
+                string commonDir = Path.Combine(scriptsDir, "common");
+                Directory.CreateDirectory(commonDir);
+                File.WriteAllText(Path.Combine(commonDir, "util.ffs"), "func calcDamage(): int { return 10 }");
+
+                string ffproj = "{ \"includePaths\": [\".\", \"scripts\"] }";
+                File.WriteAllText(Path.Combine(tmpDir, "project.ffproj"), ffproj);
+
+                string source = "include \"common/util\"\nfunc main() { var x: int = calcDamage() }";
+                File.WriteAllText(Path.Combine(tmpDir, "main.ffs"), source);
+
+                string rootUri = "file:///" + tmpDir.TrimStart('/').Replace("\\", "/");
+                string fileUri = rootUri + "/main.ffs";
+
+                var session = new LspBatchSession();
+                session.AddInitializeWithRootUri(rootUri);
+                session.AddInitialized();
+                session.AddDidOpen(fileUri, source);
+                // "calcDamage()" call on line 1 — col 28
+                session.AddReferences(fileUri, 1, 28);
+                session.AddShutdown();
+                session.AddExit();
+                session.Run();
+
+                var initResp = session.ExpectResponse(0);
+                var refResp = session.ExpectResponse(1);
+                Assert(refResp != null, "DX4-P3-16a: references response received");
+                var resultArr = refResp?.GetArray("result");
+                Assert(resultArr != null && resultArr.Count >= 2,
+                    "DX4-P3-16b: ≥2 reference locations (def + usage), got " + (resultArr?.Count ?? 0));
+                if (resultArr != null && resultArr.Count >= 2)
+                {
+                    // Collect all URIs
+                    bool hasUtilUri = false;
+                    bool hasMainUri = false;
+                    for (int ri = 0; ri < resultArr.Count; ri++)
+                    {
+                        var loc = resultArr[ri] as JsonObject;
+                        string locUri = loc?.GetString("uri");
+                        if (locUri != null && locUri.Contains("util.ffs")) hasUtilUri = true;
+                        if (locUri != null && locUri.Contains("main.ffs")) hasMainUri = true;
+                    }
+                    Assert(hasUtilUri, "DX4-P3-16c: references include definition in util.ffs");
+                    Assert(hasMainUri, "DX4-P3-16d: references include usage in main.ffs");
+                }
+            }
+            finally
+            {
+                try { Directory.Delete(tmpDir, true); } catch { }
+            }
+        }
+
         // ================================================================
         // N. DX4-P4: LSP-Assisted .ffproj Creation Tests
         // ================================================================
