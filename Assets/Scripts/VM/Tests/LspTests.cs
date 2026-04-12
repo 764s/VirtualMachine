@@ -2899,6 +2899,474 @@ public static class LspTests
             Assert(uri == null, "DX4-P4-13: null path → null URI");
         }
 
+        // ============================================================
+        // O. DX5: Usability — Rename, Semantic Tokens, Include Navigation, Struct/Enum Members
+        // ============================================================
+
+        // DX5-01: Rename capability is declared
+        {
+            var session = new LspBatchSession();
+            session.AddInitialize();
+            session.AddShutdown();
+            session.AddExit();
+            session.Run();
+            var initResp = session.ExpectResponse(0);
+            var caps = initResp?.GetObject("result")?.GetObject("capabilities");
+            var rename = caps?.GetObject("renameProvider");
+            Assert(rename != null, "DX5-01: renameProvider declared in capabilities");
+            if (rename != null)
+                Assert(rename.GetBool("prepareProvider", false), "DX5-01: prepareProvider=true");
+        }
+
+        // DX5-02: Semantic tokens capability is declared
+        {
+            var session = new LspBatchSession();
+            session.AddInitialize();
+            session.AddShutdown();
+            session.AddExit();
+            session.Run();
+            var initResp = session.ExpectResponse(0);
+            var caps = initResp?.GetObject("result")?.GetObject("capabilities");
+            var semTok = caps?.GetObject("semanticTokensProvider");
+            Assert(semTok != null, "DX5-02: semanticTokensProvider declared in capabilities");
+            if (semTok != null)
+            {
+                var legend = semTok.GetObject("legend");
+                Assert(legend != null, "DX5-02: legend present");
+                var tokenTypes = legend?.GetArray("tokenTypes");
+                Assert(tokenTypes != null && tokenTypes.Count > 0, "DX5-02: tokenTypes non-empty");
+            }
+        }
+
+        // DX5-03: Semantic tokens — struct declaration produces struct token
+        {
+            string source = "struct Vec2 { x: int; y: int }\nfunc main() {\n  wait 1\n}";
+            var session = new LspBatchSession();
+            session.AddInitialize();
+            session.AddInitialized();
+            session.AddDidOpen("file:///sem.ffs", source);
+            session.AddSemanticTokensFull("file:///sem.ffs");
+            session.AddShutdown();
+            session.AddExit();
+            session.Run();
+
+            session.ExpectResponse(0); // init
+            var semResp = session.ExpectResponse(1);
+            Assert(semResp != null, "DX5-03: semantic tokens response received");
+            var semResult = semResp?.GetObject("result");
+            var data = semResult?.GetArray("data");
+            Assert(data != null && data.Count >= 5, "DX5-03: data array has tokens, count=" + (data?.Count ?? 0));
+            // First token should be struct name "Vec2" on line 0
+            if (data != null && data.Count >= 5)
+            {
+                int deltaLine = Convert.ToInt32(data[0]);
+                int tokenType = Convert.ToInt32(data[3]);
+                Assert(deltaLine == 0, $"DX5-03: first token on line 0, got {deltaLine}");
+                Assert(tokenType == 1, $"DX5-03: first token is struct (type=1), got {tokenType}");
+            }
+        }
+
+        // DX5-04: Semantic tokens — enum declaration produces enum + enumMember tokens
+        {
+            string source = "enum Color { RED, GREEN, BLUE }\nfunc main() {\n  wait 1\n}";
+            var session = new LspBatchSession();
+            session.AddInitialize();
+            session.AddInitialized();
+            session.AddDidOpen("file:///sem2.ffs", source);
+            session.AddSemanticTokensFull("file:///sem2.ffs");
+            session.AddShutdown();
+            session.AddExit();
+            session.Run();
+
+            session.ExpectResponse(0);
+            var semResp = session.ExpectResponse(1);
+            var data = semResp?.GetObject("result")?.GetArray("data");
+            // Should have: enum name (type=2) + 3 enum members (type=3) = 4 tokens × 5 ints = 20
+            Assert(data != null && data.Count >= 20, $"DX5-04: ≥20 data ints for enum+3 members, got {data?.Count ?? 0}");
+            if (data != null && data.Count >= 5)
+            {
+                int firstType = Convert.ToInt32(data[3]);
+                Assert(firstType == 2, $"DX5-04: first token is enum (type=2), got {firstType}");
+            }
+        }
+
+        // DX5-05: Semantic tokens — struct field (property) token in declaration
+        {
+            string source = "struct Pos { x: int; y: int }\nfunc main() {\n  wait 1\n}";
+            var session = new LspBatchSession();
+            session.AddInitialize();
+            session.AddInitialized();
+            session.AddDidOpen("file:///sem3.ffs", source);
+            session.AddSemanticTokensFull("file:///sem3.ffs");
+            session.AddShutdown();
+            session.AddExit();
+            session.Run();
+
+            session.ExpectResponse(0);
+            var semResp = session.ExpectResponse(1);
+            var data = semResp?.GetObject("result")?.GetArray("data");
+            // struct name (type=1) + 2 fields (type=4) = 3 tokens × 5 ints = 15
+            Assert(data != null && data.Count >= 15, $"DX5-05: ≥15 data ints for struct+2 fields, got {data?.Count ?? 0}");
+            // Second token should be field 'x' (type=4=property)
+            if (data != null && data.Count >= 10)
+            {
+                int secondType = Convert.ToInt32(data[8]);
+                Assert(secondType == 4, $"DX5-05: second token is property (type=4), got {secondType}");
+            }
+        }
+
+        // DX5-06: prepareRename on a function name returns valid range
+        {
+            string source = "func helper(): int {\n  return 42\n}\nfunc main() {\n  var x: int = helper()\n  wait x\n}";
+            var session = new LspBatchSession();
+            session.AddInitialize();
+            session.AddInitialized();
+            session.AddDidOpen("file:///ren.ffs", source);
+            // prepareRename on "helper" in declaration — line 0, col 5 (0-based)
+            session.AddPrepareRename("file:///ren.ffs", 0, 5);
+            session.AddShutdown();
+            session.AddExit();
+            session.Run();
+
+            session.ExpectResponse(0);
+            var prepResp = session.ExpectResponse(1);
+            Assert(prepResp != null, "DX5-06: prepareRename response received");
+            var prepResult = prepResp?.GetObject("result");
+            Assert(prepResult != null, "DX5-06: prepareRename result not null");
+            if (prepResult != null)
+            {
+                string placeholder = prepResult.GetString("placeholder");
+                Assert(placeholder == "helper", $"DX5-06: placeholder='helper', got '{placeholder}'");
+            }
+        }
+
+        // DX5-07: Rename function — all references updated
+        {
+            string source = "func helper(): int {\n  return 42\n}\nfunc main() {\n  var x: int = helper()\n  wait x\n}";
+            var session = new LspBatchSession();
+            session.AddInitialize();
+            session.AddInitialized();
+            session.AddDidOpen("file:///ren2.ffs", source);
+            // Rename "helper" to "assist" — on call site line 4, col 15
+            session.AddRename("file:///ren2.ffs", 4, 15, "assist");
+            session.AddShutdown();
+            session.AddExit();
+            session.Run();
+
+            session.ExpectResponse(0);
+            var renResp = session.ExpectResponse(1);
+            Assert(renResp != null, "DX5-07: rename response received");
+            var renResult = renResp?.GetObject("result");
+            Assert(renResult != null, "DX5-07: rename result not null (WorkspaceEdit)");
+            if (renResult != null)
+            {
+                var changes = renResult.GetObject("changes");
+                Assert(changes != null, "DX5-07: changes map present");
+                if (changes != null)
+                {
+                    var fileEdits = changes.GetArray("file:///ren2.ffs");
+                    // 1 declaration + 1 call = 2 edits
+                    Assert(fileEdits != null && fileEdits.Count == 2,
+                        $"DX5-07: 2 text edits (decl+call), got {fileEdits?.Count ?? 0}");
+                    if (fileEdits != null && fileEdits.Count > 0)
+                    {
+                        var firstEdit = fileEdits[0] as JsonObject;
+                        Assert(firstEdit?.GetString("newText") == "assist",
+                            "DX5-07: newText='assist'");
+                    }
+                }
+            }
+        }
+
+        // DX5-08: Rename variable — all references updated
+        {
+            string source = "func main() {\n  var counter: int = 0\n  counter = counter + 1\n  wait counter\n}";
+            var session = new LspBatchSession();
+            session.AddInitialize();
+            session.AddInitialized();
+            session.AddDidOpen("file:///ren3.ffs", source);
+            // Rename "counter" in declaration — line 1, col 6
+            session.AddRename("file:///ren3.ffs", 1, 6, "cnt");
+            session.AddShutdown();
+            session.AddExit();
+            session.Run();
+
+            session.ExpectResponse(0);
+            var renResp = session.ExpectResponse(1);
+            var changes = renResp?.GetObject("result")?.GetObject("changes");
+            var edits = changes?.GetArray("file:///ren3.ffs");
+            // var counter declaration + counter = ... + ... counter + 1 + wait counter = ≥4
+            Assert(edits != null && edits.Count >= 4,
+                $"DX5-08: ≥4 text edits for variable rename, got {edits?.Count ?? 0}");
+        }
+
+        // DX5-09: Definition on struct field → jumps to field declaration
+        {
+            string source = "struct Vec2 { x: int; y: int }\nfunc main() {\n  var v: Vec2 = Vec2 { x: 1, y: 2 }\n  wait v.x\n}";
+            var session = new LspBatchSession();
+            session.AddInitialize();
+            session.AddInitialized();
+            session.AddDidOpen("file:///sf.ffs", source);
+            // Definition on "x" in struct declaration body — line 0
+            // struct Vec2 { x: int; y: int }
+            //              ^ col 14 (0-based)
+            session.AddDefinition("file:///sf.ffs", 0, 14);
+            session.AddShutdown();
+            session.AddExit();
+            session.Run();
+
+            session.ExpectResponse(0);
+            var defResp = session.ExpectResponse(1);
+            var result = defResp?.GetObject("result");
+            Assert(result != null, "DX5-09: definition on struct field name returns result");
+        }
+
+        // DX5-10: Definition on enum member → jumps to enum member declaration
+        {
+            string source = "enum Color { RED, GREEN, BLUE }\nfunc main() {\n  wait 1\n}";
+            var session = new LspBatchSession();
+            session.AddInitialize();
+            session.AddInitialized();
+            session.AddDidOpen("file:///em.ffs", source);
+            // Definition on "RED" in enum declaration — line 0
+            // enum Color { RED, GREEN, BLUE }
+            //              ^ col 13 (0-based)
+            session.AddDefinition("file:///em.ffs", 0, 13);
+            session.AddShutdown();
+            session.AddExit();
+            session.Run();
+
+            session.ExpectResponse(0);
+            var defResp = session.ExpectResponse(1);
+            var result = defResp?.GetObject("result");
+            Assert(result != null, "DX5-10: definition on enum member returns result");
+        }
+
+        // DX5-11: References on struct name → includes declaration + type annotation usage
+        {
+            string source = "struct Vec2 { x: int; y: int }\nfunc main() {\n  var v: Vec2 = Vec2 { x: 1, y: 2 }\n  wait 1\n}";
+            var session = new LspBatchSession();
+            session.AddInitialize();
+            session.AddInitialized();
+            session.AddDidOpen("file:///sr.ffs", source);
+            // References on "Vec2" in struct declaration — line 0, col 7
+            session.AddReferences("file:///sr.ffs", 0, 7);
+            session.AddShutdown();
+            session.AddExit();
+            session.Run();
+
+            session.ExpectResponse(0);
+            var refResp = session.ExpectResponse(1);
+            var refs = refResp?.GetArray("result");
+            // 1 declaration + 1 usage in "var v: Vec2" = at least 2
+            Assert(refs != null && refs.Count >= 2,
+                $"DX5-11: ≥2 references for struct name, got {refs?.Count ?? 0}");
+        }
+
+        // DX5-12: Include navigation — definition on include path opens file
+        {
+            string tmpDir = Path.Combine(Path.GetTempPath(), "dx5_incnav_" + Guid.NewGuid().ToString("N").Substring(0, 8));
+            try
+            {
+                Directory.CreateDirectory(tmpDir);
+                File.WriteAllText(Path.Combine(tmpDir, "utils.ffs"), "func add(a: int, b: int): int { return a + b }");
+                string mainSource = "include \"utils\"\nfunc main() {\n  var r: int = add(1, 2)\n  wait r\n}";
+                File.WriteAllText(Path.Combine(tmpDir, "main.ffs"), mainSource);
+                // Also create .ffproj for proper workspace setup
+                File.WriteAllText(Path.Combine(tmpDir, "test.ffproj"), "{ \"includePaths\": [\".\"] }");
+
+                string rootUri = "file:///" + tmpDir.Replace('\\', '/').TrimStart('/');
+                string mainUri = rootUri + "/main.ffs";
+
+                var session = new LspBatchSession();
+                session.AddInitializeWithRootUri(rootUri);
+                session.AddInitialized();
+                session.AddDidOpen(mainUri, mainSource);
+                // Definition on "utils" in include line — line 0, col 9 (inside the string)
+                session.AddDefinition(mainUri, 0, 9);
+                session.AddShutdown();
+                session.AddExit();
+                session.Run();
+
+                session.ExpectResponse(0);
+                var defResp = session.ExpectResponse(1);
+                var result = defResp?.GetObject("result");
+                Assert(result != null, "DX5-12: definition on include path returns result");
+                if (result != null)
+                {
+                    string targetUri = result.GetString("uri");
+                    Assert(targetUri != null && targetUri.Contains("utils"),
+                        $"DX5-12: target URI contains 'utils', got '{targetUri}'");
+                }
+            }
+            finally
+            {
+                try { Directory.Delete(tmpDir, true); } catch { }
+            }
+        }
+
+        // DX5-13: Include references — find all includes of same file
+        {
+            string source = "include \"utils\"\ninclude \"utils\"\nfunc main() {\n  wait 1\n}";
+            var session = new LspBatchSession();
+            session.AddInitialize();
+            session.AddInitialized();
+            session.AddDidOpen("file:///incref.ffs", source);
+            // References on "utils" in first include — line 0, col 9
+            session.AddReferences("file:///incref.ffs", 0, 9);
+            session.AddShutdown();
+            session.AddExit();
+            session.Run();
+
+            session.ExpectResponse(0);
+            var refResp = session.ExpectResponse(1);
+            var refs = refResp?.GetArray("result");
+            Assert(refs != null && refs.Count == 2,
+                $"DX5-13: 2 references for duplicate include, got {refs?.Count ?? 0}");
+        }
+
+        // DX5-14: prepareRename on include path returns null (not renamable)
+        {
+            string source = "include \"utils\"\nfunc main() {\n  wait 1\n}";
+            var session = new LspBatchSession();
+            session.AddInitialize();
+            session.AddInitialized();
+            session.AddDidOpen("file:///incprep.ffs", source);
+            session.AddPrepareRename("file:///incprep.ffs", 0, 9);
+            session.AddShutdown();
+            session.AddExit();
+            session.Run();
+
+            session.ExpectResponse(0);
+            var prepResp = session.ExpectResponse(1);
+            var prepResult = prepResp?.GetObject("result");
+            Assert(prepResult == null, "DX5-14: prepareRename on include path returns null");
+        }
+
+        // DX5-15: ffproj auto-creation uses folder name
+        {
+            string tmpDir = Path.Combine(Path.GetTempPath(), "MyProject_" + Guid.NewGuid().ToString("N").Substring(0, 8));
+            try
+            {
+                Directory.CreateDirectory(tmpDir);
+                File.WriteAllText(Path.Combine(tmpDir, "main.ffs"), "func main() { wait 1 }");
+
+                string rootUri = "file:///" + tmpDir.Replace('\\', '/').TrimStart('/');
+                var session = new LspBatchSession();
+                session.AddInitializeWithRootUri(rootUri);
+                session.AddInitialized();
+                var createResult = new JsonObject();
+                createResult.Set("title", "Create");
+                session.AddResponse(900001, createResult);
+                var applyResult = new JsonObject();
+                applyResult.Set("applied", true);
+                session.AddResponse(900002, applyResult);
+                session.AddShutdown();
+                session.AddExit();
+                session.Run();
+
+                var applyEditReq = session.FindRequest("workspace/applyEdit");
+                Assert(applyEditReq != null, "DX5-15: workspace/applyEdit sent");
+                if (applyEditReq != null)
+                {
+                    var docChanges = applyEditReq.GetObject("params")?.GetObject("edit")?.GetArray("documentChanges");
+                    if (docChanges != null && docChanges.Count >= 1)
+                    {
+                        var cf = docChanges[0] as JsonObject;
+                        string cfUri = cf?.GetString("uri");
+                        string folderName = Path.GetFileName(tmpDir.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar));
+                        string expected = folderName + ".ffproj";
+                        Assert(cfUri != null && cfUri.EndsWith(expected),
+                            $"DX5-15: URI ends with '{expected}', got '{cfUri}'");
+                    }
+                }
+            }
+            finally
+            {
+                try { Directory.Delete(tmpDir, true); } catch { }
+            }
+        }
+
+        // DX5-16: GenerateTemplate produces parseable JSON (with comments)
+        {
+            string template = FFVM.Compiler.ProjectFile.GenerateTemplate(null);
+            Assert(template.Contains("//"), "DX5-16: template contains comment lines");
+            var pf = FFVM.Compiler.ProjectFile.Parse(template, "/test");
+            Assert(pf != null, "DX5-16: template with comments is parseable");
+            Assert(pf.IncludePaths.Length == 1 && pf.IncludePaths[0] == ".", "DX5-16: default includePath preserved");
+        }
+
+        // DX5-17: StripLineComments preserves strings containing //
+        {
+            string input = "{ \"url\": \"https://example.com\" }";
+            string stripped = FFVM.Compiler.ProjectFile.StripLineComments(input);
+            Assert(stripped.Contains("https://example.com"), "DX5-17: URL inside string preserved");
+        }
+
+        // DX5-18: Rename struct name — declaration and type usage updated
+        {
+            string source = "struct Vec2 { x: int; y: int }\nfunc main() {\n  var v: Vec2 = Vec2 { x: 1, y: 2 }\n  wait 1\n}";
+            var session = new LspBatchSession();
+            session.AddInitialize();
+            session.AddInitialized();
+            session.AddDidOpen("file:///renstruct.ffs", source);
+            // Rename "Vec2" in declaration — line 0, col 7
+            session.AddRename("file:///renstruct.ffs", 0, 7, "Point");
+            session.AddShutdown();
+            session.AddExit();
+            session.Run();
+
+            session.ExpectResponse(0);
+            var renResp = session.ExpectResponse(1);
+            var changes = renResp?.GetObject("result")?.GetObject("changes");
+            var edits = changes?.GetArray("file:///renstruct.ffs");
+            // declaration + type usage in "var v: Vec2" = at least 2
+            Assert(edits != null && edits.Count >= 2,
+                $"DX5-18: ≥2 text edits for struct rename, got {edits?.Count ?? 0}");
+        }
+
+        // DX5-19: Rename enum name
+        {
+            string source = "enum Color { RED, GREEN, BLUE }\nfunc main() {\n  wait 1\n}";
+            var session = new LspBatchSession();
+            session.AddInitialize();
+            session.AddInitialized();
+            session.AddDidOpen("file:///renenum.ffs", source);
+            // Rename "Color" — line 0, col 5 (0-based)
+            session.AddRename("file:///renenum.ffs", 0, 5, "Hue");
+            session.AddShutdown();
+            session.AddExit();
+            session.Run();
+
+            session.ExpectResponse(0);
+            var renResp = session.ExpectResponse(1);
+            var changes = renResp?.GetObject("result")?.GetObject("changes");
+            var edits = changes?.GetArray("file:///renenum.ffs");
+            // at least the declaration
+            Assert(edits != null && edits.Count >= 1,
+                $"DX5-19: ≥1 text edit for enum rename, got {edits?.Count ?? 0}");
+        }
+
+        // DX5-20: Semantic tokens — struct decl + field tokens (type usage relies on TextMate)
+        {
+            string source = "struct Pos { x: int }\nfunc main() {\n  var p: Pos = Pos { x: 1 }\n  wait 1\n}";
+            var session = new LspBatchSession();
+            session.AddInitialize();
+            session.AddInitialized();
+            session.AddDidOpen("file:///semuse.ffs", source);
+            session.AddSemanticTokensFull("file:///semuse.ffs");
+            session.AddShutdown();
+            session.AddExit();
+            session.Run();
+
+            session.ExpectResponse(0);
+            var semResp = session.ExpectResponse(1);
+            var data = semResp?.GetObject("result")?.GetArray("data");
+            // struct decl name + field = 2 tokens × 5 = 10 ints
+            Assert(data != null && data.Count >= 10,
+                $"DX5-20: ≥10 data ints for struct decl + field, got {data?.Count ?? 0}");
+        }
+
         Debug.Log($"\n===== LspTests: {passed} passed, {failed} failed =====");
     }
 
@@ -3082,6 +3550,51 @@ public static class LspTests
             pos.Set("character", character);
             parameters.Set("position", pos);
             AddRequest("textDocument/signatureHelp", parameters);
+        }
+
+        /// <summary>
+        /// DX5: Add a textDocument/rename request.
+        /// </summary>
+        public void AddRename(string uri, int line, int character, string newName)
+        {
+            var parameters = new JsonObject();
+            var textDoc = new JsonObject();
+            textDoc.Set("uri", uri);
+            parameters.Set("textDocument", textDoc);
+            var pos = new JsonObject();
+            pos.Set("line", line);
+            pos.Set("character", character);
+            parameters.Set("position", pos);
+            parameters.Set("newName", newName);
+            AddRequest("textDocument/rename", parameters);
+        }
+
+        /// <summary>
+        /// DX5: Add a textDocument/prepareRename request.
+        /// </summary>
+        public void AddPrepareRename(string uri, int line, int character)
+        {
+            var parameters = new JsonObject();
+            var textDoc = new JsonObject();
+            textDoc.Set("uri", uri);
+            parameters.Set("textDocument", textDoc);
+            var pos = new JsonObject();
+            pos.Set("line", line);
+            pos.Set("character", character);
+            parameters.Set("position", pos);
+            AddRequest("textDocument/prepareRename", parameters);
+        }
+
+        /// <summary>
+        /// DX5: Add a textDocument/semanticTokens/full request.
+        /// </summary>
+        public void AddSemanticTokensFull(string uri)
+        {
+            var parameters = new JsonObject();
+            var textDoc = new JsonObject();
+            textDoc.Set("uri", uri);
+            parameters.Set("textDocument", textDoc);
+            AddRequest("textDocument/semanticTokens/full", parameters);
         }
 
         /// <summary>

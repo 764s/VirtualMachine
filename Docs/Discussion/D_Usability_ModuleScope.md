@@ -1,6 +1,6 @@
 # 易用性补充：语法信息来源范围 × 编译方式
 
-> **状态**：✅ 已完成讨论 → VM_Summary.md §七 Lang 串行计划（DX4 系列）
+> **状态**：✅ 已完成讨论 → VM_Summary.md §七 Lang 串行计划（DX4 系列 ✅ 全部完成；DX5 ✅ 已完成）
 > **来源**：DX4 — 模块化编译与宿主集成易用性
 > **日期**：2026-04-11
 
@@ -383,4 +383,30 @@ ffvm-cli init --host skill       # 生成 + 预填技能系统 host 声明路径
 - 语法信息来源分为静态模块（include/include-as）和动态宿主（syscall/ServiceBinding/.ffvm.d.json）两层
 - 编译方式为整体联合编译（同模块内）+ 分块编译（跨模块间）混合策略
 - 跨语言对比确认 `.ffproj` 项目描述文件是最符合 FFVM 定位的易用性补充方案
-- 实施拆分为 DX4-P0 ~ DX4-P3 四个子需求，纳入 Lang 串行计划
+- 实施拆分为 DX4-P0 ~ DX4-P4 五个子需求，纳入 Lang 串行计划
+
+---
+
+## 十一、后续补充功能（DX5 已实现）
+
+> **状态**：✅ 已完成 — DX5 系列（2026-04-12）
+
+DX4 系列完成后，DX5 补充了以下 LSP 易用性功能：
+
+| 功能 | 实现方式 | 对应 DX5 测试 |
+|------|---------|--------------|
+| **LSP 重命名**（F2） | `textDocument/rename` + `prepareRename`，函数/变量/结构体/枚举跨引用 WorkspaceEdit | DX5-06~08, 18~19 |
+| **语义染色** | `textDocument/semanticTokens/full`，struct/enum/field/member 声明处 token | DX5-03~05, 20 |
+| **Include 路径导航** | `textDocument/definition` 点击 include 路径 → 跳转目标文件；`textDocument/references` 查找同路径 include | DX5-12~14 |
+| **结构体字段 / 枚举成员** | `SymbolKindTag.StructField`/`EnumMember` + definition/references | DX5-09~11 |
+| **`.ffproj` 文件夹名** | 自动创建使用工作区文件夹名（`MyProject.ffproj`） | DX5-15 |
+| **GenerateTemplate 带注释** | 模板含中英双语 `//` 注释 + `StripLineComments` 解析 | DX5-16~17 |
+| **TextMate grammar 增强** | struct/enum 声明 + 类型注解正则染色（LSP semantic tokens 降级方案） | — |
+
+**遗留项（已提交串行计划）**：
+
+| 编号 | 遗留项 | 根本原因 | 串行计划编号 |
+|------|--------|---------|-------------|
+| R1 | Include 文件重命名时自动更新所有 `include` 引用 | LSP rename 无法操作文件系统；需 `workspace/willRenameFiles` | **DX6** ⏳ |
+| R2 | 结构体字段使用处（`v.x`）精确 references/rename | `FieldAccessExpr` 缺少 `FieldNameLine`/`FieldNameColumn` | **DX7** ⏳ |
+| R3 | 类型注解使用处（`var v: Vec2`）精确语义染色 | `VarDeclStmt`/`ParamDecl` 缺少 `TypeNameLine`/`TypeNameColumn` | **DX7** ⏳ |

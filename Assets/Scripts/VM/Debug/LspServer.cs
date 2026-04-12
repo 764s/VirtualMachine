@@ -216,6 +216,15 @@ namespace FFVM.Debug
                     case "textDocument/signatureHelp":
                         result = HandleSignatureHelp(parameters);
                         break;
+                    case "textDocument/rename":
+                        result = HandleRename(parameters);
+                        break;
+                    case "textDocument/prepareRename":
+                        result = HandlePrepareRename(parameters);
+                        break;
+                    case "textDocument/semanticTokens/full":
+                        result = HandleSemanticTokensFull(parameters);
+                        break;
                     default:
                         success = false;
                         errorCode = -32601; // MethodNotFound
@@ -331,6 +340,24 @@ namespace FFVM.Debug
             var sigTriggerChars = new List<object> { "(", "," };
             signatureHelpProvider.Set("triggerCharacters", sigTriggerChars);
             capabilities.Set("signatureHelpProvider", signatureHelpProvider);
+
+            // DX5: Rename support (textDocument/rename + textDocument/prepareRename)
+            var renameProvider = new JsonObject();
+            renameProvider.Set("prepareProvider", true);
+            capabilities.Set("renameProvider", renameProvider);
+
+            // DX5: Semantic tokens for struct/enum coloring
+            var semanticTokensProvider = new JsonObject();
+            semanticTokensProvider.Set("full", true);
+            var legend = new JsonObject();
+            // tokenTypes: type(0), struct(1), enum(2), enumMember(3), property(4), variable(5),
+            //             function(6), parameter(7), string(8)
+            var tokenTypes = new List<object> { "type", "struct", "enum", "enumMember", "property",
+                                                 "variable", "function", "parameter", "string" };
+            legend.Set("tokenTypes", tokenTypes);
+            legend.Set("tokenModifiers", new List<object> { "declaration", "definition" });
+            semanticTokensProvider.Set("legend", legend);
+            capabilities.Set("semanticTokensProvider", semanticTokensProvider);
 
             var result = new JsonObject();
             result.Set("capabilities", capabilities);
@@ -532,7 +559,10 @@ namespace FFVM.Debug
         {
             if (_rootPath == null) return;
 
-            string ffprojPath = Path.Combine(_rootPath, ".ffproj");
+            // DX5: Use workspace folder name as .ffproj filename (e.g., "MyProject.ffproj")
+            string folderName = Path.GetFileName(_rootPath.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar));
+            string ffprojFileName = !string.IsNullOrEmpty(folderName) ? folderName + ".ffproj" : "project.ffproj";
+            string ffprojPath = Path.Combine(_rootPath, ffprojFileName);
             string ffprojUri = PathToFileUri(ffprojPath);
             string template = ProjectFile.GenerateTemplate(null);
 
@@ -1426,9 +1456,18 @@ namespace FFVM.Debug
             var target = FindSymbolAtPosition(ast, astLine, astCol);
             if (target == null) return null;
 
+            // DX5: Include file navigation — resolve to target file URI
+            if (target.Value.kind == SymbolKindTag.IncludeFile)
+            {
+                string includeUri = ResolveIncludeFileUri(uri, target.Value.name);
+                if (includeUri != null)
+                    return MakeLocation(includeUri, 1, 1, 0);
+                return null;
+            }
+
             // DX4-P3: Use merged AST to find definition (may be in included file)
             var mergedAst = GetMergedAst(uri);
-            var defLoc = FindDefinitionLocation(mergedAst, target.Value.name, target.Value.kind, target.Value.scopeFunc);
+            var defLoc = FindDefinitionLocation(mergedAst, target.Value.name, target.Value.kind, target.Value.scopeFunc, target.Value.parentName);
             if (defLoc == null) return null;
 
             // DX4-P3: Resolve target URI — may point to a different file via OriginFile
@@ -1488,11 +1527,19 @@ namespace FFVM.Debug
             var target = FindSymbolAtPosition(ast, astLine, astCol);
             if (target == null) return MakeArrayResult(new List<object>());
 
+            // DX5: Include file references — find all includes of the same path
+            if (target.Value.kind == SymbolKindTag.IncludeFile)
+            {
+                var locations = new List<object>();
+                CollectIncludeReferences(ast, target.Value.name, uri, locations);
+                return MakeArrayResult(locations);
+            }
+
             // DX4-P3: Use merged AST for cross-file reference collection
             var mergedAst = GetMergedAst(uri);
-            var locations = new List<object>();
-            CollectReferencesWithOrigin(mergedAst, target.Value.name, target.Value.kind, uri, locations);
-            return MakeArrayResult(locations);
+            var locs = new List<object>();
+            CollectReferencesWithOrigin(mergedAst, target.Value.name, target.Value.kind, uri, locs, target.Value.parentName);
+            return MakeArrayResult(locs);
         }
 
         // ============================================================
@@ -2120,20 +2167,34 @@ namespace FFVM.Debug
         // LSP4: Symbol lookup engine
         // ============================================================
 
-        private enum SymbolKindTag { Function, Variable, Struct, Parameter, Enum }
+        private enum SymbolKindTag { Function, Variable, Struct, Parameter, Enum, IncludeFile, StructField, EnumMember }
 
         private struct SymbolAtPosition
         {
             public string name;
             public SymbolKindTag kind;
             public string scopeFunc; // null for top-level symbols
+            public string parentName; // for StructField → struct name, for EnumMember → enum name
         }
 
         /// <summary>
-        /// Find what symbol (function/variable/struct/parameter) is at the given AST position.
+        /// Find what symbol (function/variable/struct/parameter/include/struct field/enum member) is at the given AST position.
         /// </summary>
         private static SymbolAtPosition? FindSymbolAtPosition(ModuleNode ast, int line, int col)
         {
+            // DX5: Check include declarations (cursor on file path string)
+            foreach (var imp in ast.Imports)
+            {
+                if (imp.Line == line)
+                {
+                    // include "path" → the string starts after 'include "'
+                    int pathStart = imp.Column + "include".Length + 2; // include + space + opening quote
+                    int pathLen = imp.ModulePath.Length;
+                    if (ColMatches(pathStart, pathLen, col))
+                        return new SymbolAtPosition { name = imp.ModulePath, kind = SymbolKindTag.IncludeFile };
+                }
+            }
+
             // Check function names (on the FuncDecl line)
             foreach (var func in ast.Functions)
             {
@@ -2148,6 +2209,13 @@ namespace FFVM.Debug
                 int nameStart = st.Column + "struct".Length + 1;
                 if (st.Line == line && ColMatches(nameStart, st.Name.Length, col))
                     return new SymbolAtPosition { name = st.Name, kind = SymbolKindTag.Struct };
+
+                // DX5: Check struct field names in struct declaration body
+                foreach (var field in st.Fields)
+                {
+                    if (field.Line == line && ColMatches(field.Column, field.Name.Length, col))
+                        return new SymbolAtPosition { name = field.Name, kind = SymbolKindTag.StructField, parentName = st.Name };
+                }
             }
 
             // Lang-13: Check enum names
@@ -2156,6 +2224,13 @@ namespace FFVM.Debug
                 int nameStart = en.Column + "enum".Length + 1;
                 if (en.Line == line && ColMatches(nameStart, en.Name.Length, col))
                     return new SymbolAtPosition { name = en.Name, kind = SymbolKindTag.Enum };
+
+                // DX5: Check enum member names in enum declaration body
+                foreach (var member in en.Members)
+                {
+                    if (member.Line == line && ColMatches(member.Column, member.Name.Length, col))
+                        return new SymbolAtPosition { name = member.Name, kind = SymbolKindTag.EnumMember, parentName = en.Name };
+                }
             }
 
             // Walk function bodies
@@ -2292,12 +2367,12 @@ namespace FFVM.Debug
         }
 
         /// <summary>
-        /// DX4-P3: Find the definition location with OriginFile for cross-file navigation.
+        /// DX4-P3/DX5: Find the definition location with OriginFile for cross-file navigation.
         /// Returns (line, col, nameLen, originFile) where originFile may differ from the requesting file.
         /// Returns null if no symbol found. Coordinates are 1-based (AST convention).
         /// </summary>
         private static (int line, int col, int nameLen, string originFile)? FindDefinitionLocation(
-            ModuleNode ast, string name, SymbolKindTag kind, string scopeFunc)
+            ModuleNode ast, string name, SymbolKindTag kind, string scopeFunc, string parentName = null)
         {
             if (kind == SymbolKindTag.Function)
             {
@@ -2330,6 +2405,36 @@ namespace FFVM.Debug
                     {
                         int nameCol = en.Column + "enum".Length + 1;
                         return (en.Line, nameCol, en.Name.Length, en.OriginFile);
+                    }
+                }
+            }
+            // DX5: struct field definition
+            else if (kind == SymbolKindTag.StructField && parentName != null)
+            {
+                foreach (var st in ast.Structs)
+                {
+                    if (st.Name == parentName)
+                    {
+                        foreach (var field in st.Fields)
+                        {
+                            if (field.Name == name)
+                                return (field.Line, field.Column, field.Name.Length, st.OriginFile);
+                        }
+                    }
+                }
+            }
+            // DX5: enum member definition
+            else if (kind == SymbolKindTag.EnumMember && parentName != null)
+            {
+                foreach (var en in ast.Enums)
+                {
+                    if (en.Name == parentName)
+                    {
+                        foreach (var member in en.Members)
+                        {
+                            if (member.Name == name)
+                                return (member.Line, member.Column, member.Name.Length, en.OriginFile);
+                        }
                     }
                 }
             }
@@ -2453,11 +2558,11 @@ namespace FFVM.Debug
         }
 
         /// <summary>
-        /// DX4-P3: Collect references with cross-file URI resolution via OriginFile.
+        /// DX4-P3/DX5: Collect references with cross-file URI resolution via OriginFile.
         /// For function/struct/enum declarations, resolves URI based on OriginFile.
         /// For call sites and usages within function bodies, uses the function's OriginFile.
         /// </summary>
-        private void CollectReferencesWithOrigin(ModuleNode ast, string name, SymbolKindTag kind, string requestingUri, List<object> locations)
+        private void CollectReferencesWithOrigin(ModuleNode ast, string name, SymbolKindTag kind, string requestingUri, List<object> locations, string parentName = null)
         {
             if (kind == SymbolKindTag.Function)
             {
@@ -2509,6 +2614,44 @@ namespace FFVM.Debug
                         string targetUri = ResolveOriginUri(requestingUri, en.OriginFile);
                         int nameCol = en.Column + "enum".Length + 1;
                         locations.Add(MakeLocation(targetUri, en.Line, nameCol, name.Length));
+                    }
+                }
+            }
+            // DX5: struct field references
+            else if (kind == SymbolKindTag.StructField && parentName != null)
+            {
+                foreach (var st in ast.Structs)
+                {
+                    if (st.Name == parentName)
+                    {
+                        string targetUri = ResolveOriginUri(requestingUri, st.OriginFile);
+                        foreach (var field in st.Fields)
+                        {
+                            if (field.Name == name)
+                                locations.Add(MakeLocation(targetUri, field.Line, field.Column, name.Length));
+                        }
+                    }
+                }
+                // Also collect field access usages in function bodies
+                foreach (var func in ast.Functions)
+                {
+                    string funcUri = ResolveOriginUri(requestingUri, func.OriginFile);
+                    CollectFieldAccessRefsInBlock(func.Body, name, parentName, funcUri, locations);
+                }
+            }
+            // DX5: enum member references
+            else if (kind == SymbolKindTag.EnumMember && parentName != null)
+            {
+                foreach (var en in ast.Enums)
+                {
+                    if (en.Name == parentName)
+                    {
+                        string targetUri = ResolveOriginUri(requestingUri, en.OriginFile);
+                        foreach (var member in en.Members)
+                        {
+                            if (member.Name == name)
+                                locations.Add(MakeLocation(targetUri, member.Line, member.Column, name.Length));
+                        }
                     }
                 }
             }
@@ -2690,6 +2833,410 @@ namespace FFVM.Debug
             }
             else if (stmt is DeferStmt ds) CollectTypeRefsInBlock(ds.Body, typeName, uri, locations);
             else if (stmt is UsingStmt us) CollectTypeRefsInBlock(us.Body, typeName, uri, locations);
+        }
+
+        // ============================================================
+        // DX5: Include file helpers
+        // ============================================================
+
+        /// <summary>
+        /// DX5: Resolve an include path to a file:// URI for navigation.
+        /// </summary>
+        private string ResolveIncludeFileUri(string requestingUri, string includePath)
+        {
+            if (includePath == null) return null;
+
+            // Try with .ffs extension first, then without
+            string[] candidates = includePath.EndsWith(".ffs", StringComparison.OrdinalIgnoreCase)
+                ? new[] { includePath }
+                : new[] { includePath + ".ffs", includePath };
+
+            if (_rootPath != null)
+            {
+                foreach (var candidate in candidates)
+                {
+                    string absPath = Path.GetFullPath(Path.Combine(_rootPath, candidate));
+                    if (File.Exists(absPath))
+                        return PathToFileUri(absPath);
+                }
+                // Try via project file resolver paths
+                if (_projectFile != null)
+                {
+                    foreach (var incPath in _projectFile.IncludePaths)
+                    {
+                        string basePath = Path.IsPathRooted(incPath) ? incPath : Path.Combine(_rootPath, incPath);
+                        foreach (var candidate in candidates)
+                        {
+                            string absPath = Path.GetFullPath(Path.Combine(basePath, candidate));
+                            if (File.Exists(absPath))
+                                return PathToFileUri(absPath);
+                        }
+                    }
+                }
+            }
+
+            // Fallback: try FilePathToUri
+            string uri = FilePathToUri(includePath, _rootPath);
+            return uri;
+        }
+
+        /// <summary>
+        /// DX5: Collect all include declarations referencing the same module path.
+        /// </summary>
+        private static void CollectIncludeReferences(ModuleNode ast, string modulePath, string uri, List<object> locations)
+        {
+            foreach (var imp in ast.Imports)
+            {
+                if (imp.ModulePath == modulePath)
+                {
+                    int pathStart = imp.Column + "include".Length + 2; // 'include "' prefix
+                    locations.Add(MakeLocation(uri, imp.Line, pathStart, modulePath.Length));
+                }
+            }
+        }
+
+        /// <summary>
+        /// DX5: Collect references to a struct field (field access expressions in function bodies).
+        /// </summary>
+        private static void CollectFieldAccessRefsInBlock(BlockStmt block, string fieldName, string structName, string uri, List<object> locations)
+        {
+            if (block == null) return;
+            foreach (var stmt in block.Statements)
+                CollectFieldAccessRefsInStmt(stmt, fieldName, structName, uri, locations);
+        }
+
+        private static void CollectFieldAccessRefsInStmt(Stmt stmt, string fieldName, string structName, string uri, List<object> locations)
+        {
+            if (stmt == null) return;
+            if (stmt is ExprStmt es) CollectFieldAccessRefsInExpr(es.Expression, fieldName, uri, locations);
+            else if (stmt is BlockStmt bs) CollectFieldAccessRefsInBlock(bs, fieldName, structName, uri, locations);
+            else if (stmt is VarDeclStmt vd && vd.Initializer != null) CollectFieldAccessRefsInExpr(vd.Initializer, fieldName, uri, locations);
+            else if (stmt is IfStmt ifs)
+            {
+                CollectFieldAccessRefsInExpr(ifs.Condition, fieldName, uri, locations);
+                CollectFieldAccessRefsInStmt(ifs.ThenBranch, fieldName, structName, uri, locations);
+                CollectFieldAccessRefsInStmt(ifs.ElseBranch, fieldName, structName, uri, locations);
+            }
+            else if (stmt is WhileStmt ws)
+            {
+                CollectFieldAccessRefsInExpr(ws.Condition, fieldName, uri, locations);
+                CollectFieldAccessRefsInStmt(ws.Body, fieldName, structName, uri, locations);
+            }
+            else if (stmt is ForStmt fs)
+            {
+                CollectFieldAccessRefsInStmt(fs.Initializer, fieldName, structName, uri, locations);
+                CollectFieldAccessRefsInExpr(fs.Condition, fieldName, uri, locations);
+                CollectFieldAccessRefsInExpr(fs.Increment, fieldName, uri, locations);
+                CollectFieldAccessRefsInStmt(fs.Body, fieldName, structName, uri, locations);
+            }
+            else if (stmt is ReturnStmt rs && rs.Value != null) CollectFieldAccessRefsInExpr(rs.Value, fieldName, uri, locations);
+            else if (stmt is DeferStmt ds) CollectFieldAccessRefsInBlock(ds.Body, fieldName, structName, uri, locations);
+            else if (stmt is UsingStmt us)
+            {
+                foreach (var arg in us.Arguments) CollectFieldAccessRefsInExpr(arg, fieldName, uri, locations);
+                CollectFieldAccessRefsInBlock(us.Body, fieldName, structName, uri, locations);
+            }
+        }
+
+        private static void CollectFieldAccessRefsInExpr(Expr expr, string fieldName, string uri, List<object> locations)
+        {
+            if (expr == null) return;
+            if (expr is FieldAccessExpr fa)
+            {
+                // Note: FieldAccessExpr.Column points to the target expression start, not the field name.
+                // We cannot reliably compute the field name column without source text, so we skip
+                // field access usage sites. Declaration-site references (from struct definition)
+                // and struct literal field references are still collected.
+                CollectFieldAccessRefsInExpr(fa.Target, fieldName, uri, locations);
+            }
+            else if (expr is BinaryExpr bin)
+            {
+                CollectFieldAccessRefsInExpr(bin.Left, fieldName, uri, locations);
+                CollectFieldAccessRefsInExpr(bin.Right, fieldName, uri, locations);
+            }
+            else if (expr is UnaryExpr un) CollectFieldAccessRefsInExpr(un.Operand, fieldName, uri, locations);
+            else if (expr is AssignExpr assign)
+            {
+                CollectFieldAccessRefsInExpr(assign.Target, fieldName, uri, locations);
+                CollectFieldAccessRefsInExpr(assign.Value, fieldName, uri, locations);
+            }
+            else if (expr is CallExpr call)
+            {
+                foreach (var arg in call.Arguments) CollectFieldAccessRefsInExpr(arg, fieldName, uri, locations);
+            }
+            else if (expr is StructLiteralExpr sl)
+            {
+                foreach (var f in sl.Fields)
+                {
+                    if (f.FieldName == fieldName)
+                        locations.Add(MakeLocation(uri, sl.Line, sl.Column, fieldName.Length));
+                    CollectFieldAccessRefsInExpr(f.Value, fieldName, uri, locations);
+                }
+            }
+        }
+
+        // ============================================================
+        // DX5: Rename support
+        // ============================================================
+
+        /// <summary>
+        /// DX5: Prepare rename — validate that the position is on a renamable symbol
+        /// and return the range + placeholder text.
+        /// </summary>
+        private JsonObject HandlePrepareRename(JsonObject parameters)
+        {
+            string uri = GetDocumentUri(parameters);
+            var ast = GetCachedAst(uri);
+            if (ast == null) return null;
+
+            var position = parameters?.GetObject("position");
+            if (position == null) return null;
+
+            int astLine = position.GetInt("line") + 1;
+            int astCol = position.GetInt("character") + 1;
+
+            var target = FindSymbolAtPosition(ast, astLine, astCol);
+            if (target == null) return null;
+
+            // Include files are not renamable via text rename (file system operation)
+            if (target.Value.kind == SymbolKindTag.IncludeFile) return null;
+
+            // Find the definition location to get precise range
+            var mergedAst = GetMergedAst(uri);
+            var defLoc = FindDefinitionLocation(mergedAst, target.Value.name, target.Value.kind, target.Value.scopeFunc, target.Value.parentName);
+
+            // Return range at cursor position with the symbol name as placeholder
+            int lspLine = position.GetInt("line");
+            int lspChar = position.GetInt("character");
+
+            // Calculate the actual start of the symbol name at cursor
+            int nameLen = target.Value.name.Length;
+            // Find the start column by backing up from cursor to the start of the name
+            int nameStartCol = FindNameStartCol(ast, target.Value, astLine, astCol);
+            int lspStartChar = Math.Max(0, nameStartCol - 1);
+
+            var result = new JsonObject();
+            result.Set("range", MakeRange(lspLine, lspStartChar, lspLine, lspStartChar + nameLen));
+            result.Set("placeholder", target.Value.name);
+            return result;
+        }
+
+        /// <summary>
+        /// DX5: Find the 1-based start column of a symbol name at the given position.
+        /// </summary>
+        private static int FindNameStartCol(ModuleNode ast, SymbolAtPosition target, int line, int col)
+        {
+            if (target.kind == SymbolKindTag.Function)
+            {
+                foreach (var func in ast.Functions)
+                {
+                    int nameStart = func.Column + "func".Length + 1;
+                    if (func.Line == line && func.Name == target.name && ColMatches(nameStart, func.Name.Length, col))
+                        return nameStart;
+                }
+                // Could be a call site — check expressions
+            }
+            else if (target.kind == SymbolKindTag.Struct)
+            {
+                foreach (var st in ast.Structs)
+                {
+                    int nameStart = st.Column + "struct".Length + 1;
+                    if (st.Line == line && st.Name == target.name && ColMatches(nameStart, st.Name.Length, col))
+                        return nameStart;
+                }
+            }
+            else if (target.kind == SymbolKindTag.Enum)
+            {
+                foreach (var en in ast.Enums)
+                {
+                    int nameStart = en.Column + "enum".Length + 1;
+                    if (en.Line == line && en.Name == target.name && ColMatches(nameStart, en.Name.Length, col))
+                        return nameStart;
+                }
+            }
+            else if (target.kind == SymbolKindTag.StructField)
+            {
+                foreach (var st in ast.Structs)
+                    foreach (var f in st.Fields)
+                        if (f.Line == line && f.Name == target.name && ColMatches(f.Column, f.Name.Length, col))
+                            return f.Column;
+            }
+            else if (target.kind == SymbolKindTag.EnumMember)
+            {
+                foreach (var en in ast.Enums)
+                    foreach (var m in en.Members)
+                        if (m.Line == line && m.Name == target.name && ColMatches(m.Column, m.Name.Length, col))
+                            return m.Column;
+            }
+            // Fallback: col points somewhere in the name, back up to find start
+            return Math.Max(1, col - target.name.Length + 1);
+        }
+
+        /// <summary>
+        /// DX5: Handle rename — find all references and generate text edits.
+        /// </summary>
+        private JsonObject HandleRename(JsonObject parameters)
+        {
+            string uri = GetDocumentUri(parameters);
+            var ast = GetCachedAst(uri);
+            if (ast == null) return null;
+
+            var position = parameters?.GetObject("position");
+            if (position == null) return null;
+
+            string newName = parameters.GetString("newName");
+            if (string.IsNullOrEmpty(newName)) return null;
+
+            int astLine = position.GetInt("line") + 1;
+            int astCol = position.GetInt("character") + 1;
+
+            var target = FindSymbolAtPosition(ast, astLine, astCol);
+            if (target == null) return null;
+
+            // Include files are not renamable
+            if (target.Value.kind == SymbolKindTag.IncludeFile) return null;
+
+            // Collect all reference locations
+            var mergedAst = GetMergedAst(uri);
+            var locations = new List<object>();
+            CollectReferencesWithOrigin(mergedAst, target.Value.name, target.Value.kind, uri, locations, target.Value.parentName);
+
+            // Group locations by URI → text edits
+            var editsByUri = new Dictionary<string, List<object>>();
+            foreach (var locObj in locations)
+            {
+                var loc = locObj as JsonObject;
+                if (loc == null) continue;
+                string locUri = loc.GetString("uri") ?? uri;
+                var range = loc.GetObject("range");
+                if (range == null) continue;
+
+                if (!editsByUri.TryGetValue(locUri, out var edits))
+                {
+                    edits = new List<object>();
+                    editsByUri[locUri] = edits;
+                }
+                var textEdit = new JsonObject();
+                textEdit.Set("range", range);
+                textEdit.Set("newText", newName);
+                edits.Add(textEdit);
+            }
+
+            // Build WorkspaceEdit
+            var changes = new JsonObject();
+            foreach (var kv in editsByUri)
+                changes.Set(kv.Key, kv.Value);
+
+            var workspaceEdit = new JsonObject();
+            workspaceEdit.Set("changes", changes);
+            return workspaceEdit;
+        }
+
+        // ============================================================
+        // DX5: Semantic tokens
+        // ============================================================
+
+        /// <summary>
+        /// DX5: Produce semantic tokens for struct/enum type coloring.
+        /// Token types legend: type(0), struct(1), enum(2), enumMember(3), property(4),
+        ///                     variable(5), function(6), parameter(7), string(8)
+        /// Each token is encoded as 5 ints: deltaLine, deltaStartChar, length, tokenType, tokenModifiers.
+        /// </summary>
+        private JsonObject HandleSemanticTokensFull(JsonObject parameters)
+        {
+            string uri = GetDocumentUri(parameters);
+            var ast = GetCachedAst(uri);
+            if (ast == null)
+            {
+                var empty = new JsonObject();
+                empty.Set("data", new List<object>());
+                return empty;
+            }
+
+            // Build sets of known names for lookup
+            var mergedAst = GetMergedAst(uri);
+            var structNames = new HashSet<string>();
+            var enumNames = new HashSet<string>();
+            if (mergedAst != null)
+            {
+                foreach (var st in mergedAst.Structs) structNames.Add(st.Name);
+                foreach (var en in mergedAst.Enums) enumNames.Add(en.Name);
+            }
+
+            // Collect semantic tokens as (line, col, length, tokenType, modifiers)
+            var rawTokens = new List<(int line, int col, int len, int type, int mod)>();
+
+            // 1. Struct declarations (name token)
+            foreach (var st in ast.Structs)
+            {
+                int nameStart = st.Column + "struct".Length + 1;
+                rawTokens.Add((st.Line, nameStart, st.Name.Length, 1 /* struct */, 1 /* declaration */));
+                // Struct field declarations — property tokens
+                foreach (var field in st.Fields)
+                {
+                    rawTokens.Add((field.Line, field.Column, field.Name.Length, 4 /* property */, 1 /* declaration */));
+                }
+            }
+
+            // 2. Enum declarations (name token + member tokens)
+            foreach (var en in ast.Enums)
+            {
+                int nameStart = en.Column + "enum".Length + 1;
+                rawTokens.Add((en.Line, nameStart, en.Name.Length, 2 /* enum */, 1 /* declaration */));
+                foreach (var member in en.Members)
+                {
+                    rawTokens.Add((member.Line, member.Column, member.Name.Length, 3 /* enumMember */, 1 /* declaration */));
+                }
+            }
+
+            // 3. Struct/Enum type usage in variable declarations (type annotation)
+            foreach (var func in ast.Functions)
+            {
+                CollectTypeUsageTokens(func.Body, structNames, enumNames, rawTokens);
+            }
+
+            // Sort by (line, col) for delta encoding
+            rawTokens.Sort((a, b) =>
+            {
+                int cmp = a.line.CompareTo(b.line);
+                return cmp != 0 ? cmp : a.col.CompareTo(b.col);
+            });
+
+            // Delta-encode: convert absolute (line, col) to (deltaLine, deltaStartChar)
+            var data = new List<object>();
+            int prevLine = 0;
+            int prevCol = 0;
+            foreach (var tok in rawTokens)
+            {
+                int lspLine = tok.line - 1; // AST is 1-based, LSP is 0-based
+                int lspCol = tok.col - 1;
+                int deltaLine = lspLine - prevLine;
+                int deltaCol = deltaLine == 0 ? lspCol - prevCol : lspCol;
+                data.Add(deltaLine);
+                data.Add(deltaCol);
+                data.Add(tok.len);
+                data.Add(tok.type);
+                data.Add(tok.mod);
+                prevLine = lspLine;
+                prevCol = lspCol;
+            }
+
+            var result = new JsonObject();
+            result.Set("data", data);
+            return result;
+        }
+
+        /// <summary>
+        /// DX5: Walk a block to find type annotations that reference struct/enum types.
+        /// Note: VarDeclStmt.Column points to 'var'/'const' keyword, not the type annotation.
+        /// We skip type usage tokens here since we cannot compute precise positions.
+        /// Struct/enum declarations and their fields/members are still properly tokenized.
+        /// </summary>
+        private static void CollectTypeUsageTokens(BlockStmt block, HashSet<string> structNames, HashSet<string> enumNames,
+            List<(int line, int col, int len, int type, int mod)> tokens)
+        {
+            // Intentionally empty: type annotation positions not available in current AST.
+            // The TextMate grammar provides fallback coloring for type annotations via regex patterns.
         }
 
         // ============================================================

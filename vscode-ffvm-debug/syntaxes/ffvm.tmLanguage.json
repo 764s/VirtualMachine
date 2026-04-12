@@ -19,6 +19,12 @@
             "include": "#keywords"
         },
         {
+            "include": "#struct-declaration"
+        },
+        {
+            "include": "#enum-declaration"
+        },
+        {
             "include": "#types"
         },
         {
@@ -29,6 +35,9 @@
         },
         {
             "include": "#operators"
+        },
+        {
+            "include": "#type-annotations"
         }
     ],
     "repository": {
@@ -84,6 +93,55 @@
                 {
                     "name": "constant.language.ffvm",
                     "match": "\\b(true|false)\\b"
+                }
+            ]
+        },
+        "struct-declaration": {
+            "patterns": [
+                {
+                    "comment": "Struct name in declaration: struct Name {",
+                    "match": "\\b(struct)\\s+([A-Z][a-zA-Z0-9_]*)",
+                    "captures": {
+                        "1": { "name": "keyword.declaration.ffvm" },
+                        "2": { "name": "entity.name.type.struct.ffvm" }
+                    }
+                }
+            ]
+        },
+        "enum-declaration": {
+            "patterns": [
+                {
+                    "comment": "Enum name in declaration: enum Name {",
+                    "match": "\\b(enum)\\s+([A-Z][a-zA-Z0-9_]*)",
+                    "captures": {
+                        "1": { "name": "keyword.declaration.ffvm" },
+                        "2": { "name": "entity.name.type.enum.ffvm" }
+                    }
+                }
+            ]
+        },
+        "type-annotations": {
+            "patterns": [
+                {
+                    "comment": "Type annotation after colon: var x: TypeName",
+                    "match": ":\\s*([A-Z][a-zA-Z0-9_]*)\\b",
+                    "captures": {
+                        "1": { "name": "entity.name.type.ffvm" }
+                    }
+                },
+                {
+                    "comment": "Type name before dot-access: TypeName.member",
+                    "match": "\\b([A-Z][a-zA-Z0-9_]*)\\s*\\.",
+                    "captures": {
+                        "1": { "name": "entity.name.type.ffvm" }
+                    }
+                },
+                {
+                    "comment": "Type name in struct literal: TypeName {",
+                    "match": "\\b([A-Z][a-zA-Z0-9_]*)\\s*\\{",
+                    "captures": {
+                        "1": { "name": "entity.name.type.ffvm" }
+                    }
                 }
             ]
         },

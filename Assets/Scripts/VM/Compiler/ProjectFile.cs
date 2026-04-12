@@ -69,6 +69,9 @@ namespace FFVM.Compiler
         {
             if (string.IsNullOrEmpty(json)) return null;
 
+            // DX5: Strip // line comments to allow annotated .ffproj files
+            json = StripLineComments(json);
+
             var root = JsonObject.Parse(json);
             if (root == null) return null;
 
@@ -240,6 +243,40 @@ namespace FFVM.Compiler
         }
 
         /// <summary>
+        /// DX5: Strip // line comments from a JSON-like string.
+        /// Respects string literals (does not strip // inside "...").
+        /// </summary>
+        internal static string StripLineComments(string input)
+        {
+            if (string.IsNullOrEmpty(input)) return input;
+            var sb = new System.Text.StringBuilder(input.Length);
+            bool inString = false;
+            for (int i = 0; i < input.Length; i++)
+            {
+                char c = input[i];
+                if (inString)
+                {
+                    sb.Append(c);
+                    if (c == '\\' && i + 1 < input.Length) { sb.Append(input[++i]); continue; }
+                    if (c == '"') inString = false;
+                }
+                else
+                {
+                    if (c == '"') { inString = true; sb.Append(c); }
+                    else if (c == '/' && i + 1 < input.Length && input[i + 1] == '/')
+                    {
+                        // Skip rest of line (comment)
+                        while (i < input.Length && input[i] != '\n') i++;
+                        // i now points to '\n' or past end; let the outer loop handle '\n'
+                        if (i < input.Length) i--; // back up so the outer for-loop increments to '\n'
+                    }
+                    else sb.Append(c);
+                }
+            }
+            return sb.ToString();
+        }
+
+        /// <summary>
         /// DX4-P2: Generate a .ffproj JSON template string.
         /// Optionally fills hostDeclarations with a preset path.
         /// </summary>
@@ -255,10 +292,22 @@ namespace FFVM.Compiler
                 hostDeclarationsValue = "[\"" + declFile + "\"]";
             }
 
+            // DX5: Generate a fully documented template with all fields explained
             return "{\n"
+                 + "  // include 搜索路径（相对于 .ffproj 所在目录）\n"
+                 + "  // Include search paths (relative to .ffproj directory)\n"
                  + "  \"includePaths\": [\".\"],\n"
+                 + "\n"
+                 + "  // 宿主声明文件（syscall 签名 + service 定义）\n"
+                 + "  // Host declaration files (syscall signatures + service definitions)\n"
                  + "  \"hostDeclarations\": " + hostDeclarationsValue + ",\n"
+                 + "\n"
+                 + "  // 入口脚本（可选，用于 compile 命令）\n"
+                 + "  // Entry script (optional, used by compile command)\n"
                  + "  \"entry\": null,\n"
+                 + "\n"
+                 + "  // 编译选项（可选，覆盖默认值）\n"
+                 + "  // Compile options (optional, overrides defaults)\n"
                  + "  \"compileOptions\": {}\n"
                  + "}\n";
         }
