@@ -1279,6 +1279,16 @@ namespace FFVM.Debug
             }
             if (expr is StructLiteralExpr sl)
             {
+                // US: Hover on struct literal name → show struct definition with doc comment
+                if (sl.Line == line && sl.TypeName != null && ColMatches(sl.Column, sl.TypeName.Length, col))
+                {
+                    foreach (var st in ast.Structs)
+                    {
+                        if (st.Name == sl.TypeName)
+                            return FormatStructHover(st);
+                    }
+                    return $"struct {sl.TypeName}";
+                }
                 foreach (var f in sl.Fields)
                 {
                     string r = FindHoverInExpr(ast, currentFunc, f.Value, line, col);
@@ -1472,12 +1482,11 @@ namespace FFVM.Debug
             int astLine = position.GetInt("line") + 1;
             int astCol = position.GetInt("character") + 1;
 
-            // Find what symbol is at this position (using per-file AST for position matching)
+            // US: Check include declarations using per-file AST first (merged AST strips Imports)
             var target = FindSymbolAtPosition(ast, astLine, astCol);
-            if (target == null) return null;
 
             // DX5: Include file navigation — resolve to target file URI
-            if (target.Value.kind == SymbolKindTag.IncludeFile)
+            if (target != null && target.Value.kind == SymbolKindTag.IncludeFile)
             {
                 string includeUri = ResolveIncludeFileUri(uri, target.Value.name);
                 if (includeUri != null)
@@ -1485,8 +1494,18 @@ namespace FFVM.Debug
                 return null;
             }
 
-            // DX4-P3: Use merged AST to find definition (may be in included file)
+            // US: Re-identify using merged AST if per-file AST couldn't resolve the symbol
+            // correctly (e.g. cross-file struct/enum type annotations or enum members)
             var mergedAst = GetMergedAst(uri);
+            if (target == null || target.Value.kind == SymbolKindTag.Variable
+                || (target.Value.kind == SymbolKindTag.StructField && target.Value.parentName == null))
+            {
+                var mergedTarget = FindSymbolAtPosition(mergedAst, astLine, astCol);
+                if (mergedTarget != null) target = mergedTarget;
+            }
+            if (target == null) return null;
+
+            // DX4-P3: Use merged AST to find definition (may be in included file)
             var defLoc = FindDefinitionLocation(mergedAst, target.Value.name, target.Value.kind, target.Value.scopeFunc, target.Value.parentName);
             if (defLoc == null) return null;
 
@@ -1544,19 +1563,29 @@ namespace FFVM.Debug
             int astLine = position.GetInt("line") + 1;
             int astCol = position.GetInt("character") + 1;
 
+            // US: Check include declarations using per-file AST first (merged AST strips Imports)
             var target = FindSymbolAtPosition(ast, astLine, astCol);
-            if (target == null) return MakeArrayResult(new List<object>());
 
             // DX5: Include file references — find all includes of the same path
-            if (target.Value.kind == SymbolKindTag.IncludeFile)
+            if (target != null && target.Value.kind == SymbolKindTag.IncludeFile)
             {
                 var locations = new List<object>();
                 CollectIncludeReferences(ast, target.Value.name, uri, locations);
                 return MakeArrayResult(locations);
             }
 
-            // DX4-P3: Use merged AST for cross-file reference collection
+            // US: Re-identify using merged AST if per-file AST couldn't resolve the symbol
+            // correctly (e.g. cross-file struct/enum type annotations or enum members)
             var mergedAst = GetMergedAst(uri);
+            if (target == null || target.Value.kind == SymbolKindTag.Variable
+                || (target.Value.kind == SymbolKindTag.StructField && target.Value.parentName == null))
+            {
+                var mergedTarget = FindSymbolAtPosition(mergedAst, astLine, astCol);
+                if (mergedTarget != null) target = mergedTarget;
+            }
+            if (target == null) return MakeArrayResult(new List<object>());
+
+            // DX4-P3: Use merged AST for cross-file reference collection
             var locs = new List<object>();
             CollectReferencesWithOrigin(mergedAst, target.Value.name, target.Value.kind, uri, locs, target.Value.parentName);
             return MakeArrayResult(locs);
@@ -2256,25 +2285,25 @@ namespace FFVM.Debug
             // Walk function bodies
             foreach (var func in ast.Functions)
             {
-                var result = FindSymbolInBlock(func, func.Body, line, col);
+                var result = FindSymbolInBlock(ast, func, func.Body, line, col);
                 if (result != null) return result;
             }
 
             return null;
         }
 
-        private static SymbolAtPosition? FindSymbolInBlock(FuncDecl func, BlockStmt block, int line, int col)
+        private static SymbolAtPosition? FindSymbolInBlock(ModuleNode ast, FuncDecl func, BlockStmt block, int line, int col)
         {
             if (block == null) return null;
             foreach (var stmt in block.Statements)
             {
-                var r = FindSymbolInStmt(func, stmt, line, col);
+                var r = FindSymbolInStmt(ast, func, stmt, line, col);
                 if (r != null) return r;
             }
             return null;
         }
 
-        private static SymbolAtPosition? FindSymbolInStmt(FuncDecl func, Stmt stmt, int line, int col)
+        private static SymbolAtPosition? FindSymbolInStmt(ModuleNode ast, FuncDecl func, Stmt stmt, int line, int col)
         {
             if (stmt == null) return null;
 
@@ -2282,65 +2311,97 @@ namespace FFVM.Debug
             {
                 if (vd.Initializer != null)
                 {
-                    var r = FindSymbolInExpr(func, vd.Initializer, line, col);
+                    var r = FindSymbolInExpr(ast, func, vd.Initializer, line, col);
                     if (r != null) return r;
+                }
+                // US: Check type annotation — if cursor is on the type name, resolve as Struct or Enum
+                if (vd.TypeNameLine > 0 && vd.TypeNameLine == line && vd.TypeName != null
+                    && ColMatches(vd.TypeNameColumn, vd.TypeName.Length, col))
+                {
+                    string baseName = GetBaseTypeName(vd.TypeName);
+                    foreach (var st in ast.Structs)
+                    {
+                        if (st.Name == baseName)
+                            return new SymbolAtPosition { name = baseName, kind = SymbolKindTag.Struct };
+                    }
+                    foreach (var en in ast.Enums)
+                    {
+                        if (en.Name == baseName)
+                            return new SymbolAtPosition { name = baseName, kind = SymbolKindTag.Enum };
+                    }
                 }
                 // Match the variable name itself in the declaration
                 if (vd.Line == line)
-                    return new SymbolAtPosition { name = vd.Name, kind = SymbolKindTag.Variable, scopeFunc = func.Name };
+                {
+                    int nameStart = vd.Column + (vd.IsConst ? "const".Length : "var".Length) + 1;
+                    if (ColMatches(nameStart, vd.Name.Length, col))
+                        return new SymbolAtPosition { name = vd.Name, kind = SymbolKindTag.Variable, scopeFunc = func.Name };
+                }
             }
             else if (stmt is ExprStmt es)
-                return FindSymbolInExpr(func, es.Expression, line, col);
+                return FindSymbolInExpr(ast, func, es.Expression, line, col);
             else if (stmt is BlockStmt bs)
-                return FindSymbolInBlock(func, bs, line, col);
+                return FindSymbolInBlock(ast, func, bs, line, col);
             else if (stmt is IfStmt ifs)
             {
-                var r = FindSymbolInExpr(func, ifs.Condition, line, col);
+                var r = FindSymbolInExpr(ast, func, ifs.Condition, line, col);
                 if (r != null) return r;
-                r = FindSymbolInStmt(func, ifs.ThenBranch, line, col);
+                r = FindSymbolInStmt(ast, func, ifs.ThenBranch, line, col);
                 if (r != null) return r;
-                return FindSymbolInStmt(func, ifs.ElseBranch, line, col);
+                return FindSymbolInStmt(ast, func, ifs.ElseBranch, line, col);
             }
             else if (stmt is WhileStmt ws)
             {
-                var r = FindSymbolInExpr(func, ws.Condition, line, col);
+                var r = FindSymbolInExpr(ast, func, ws.Condition, line, col);
                 if (r != null) return r;
-                return FindSymbolInStmt(func, ws.Body, line, col);
+                return FindSymbolInStmt(ast, func, ws.Body, line, col);
             }
             else if (stmt is ForStmt fs)
             {
-                var r = FindSymbolInStmt(func, fs.Initializer, line, col);
+                var r = FindSymbolInStmt(ast, func, fs.Initializer, line, col);
                 if (r != null) return r;
-                r = FindSymbolInExpr(func, fs.Condition, line, col);
+                r = FindSymbolInExpr(ast, func, fs.Condition, line, col);
                 if (r != null) return r;
-                r = FindSymbolInExpr(func, fs.Increment, line, col);
+                r = FindSymbolInExpr(ast, func, fs.Increment, line, col);
                 if (r != null) return r;
-                return FindSymbolInStmt(func, fs.Body, line, col);
+                return FindSymbolInStmt(ast, func, fs.Body, line, col);
             }
             else if (stmt is ReturnStmt rs && rs.Value != null)
-                return FindSymbolInExpr(func, rs.Value, line, col);
+                return FindSymbolInExpr(ast, func, rs.Value, line, col);
             else if (stmt is WaitStmt wst)
-                return FindSymbolInExpr(func, wst.FrameCount, line, col);
+                return FindSymbolInExpr(ast, func, wst.FrameCount, line, col);
             else if (stmt is DeferStmt ds)
-                return FindSymbolInBlock(func, ds.Body, line, col);
+                return FindSymbolInBlock(ast, func, ds.Body, line, col);
             else if (stmt is UsingStmt us)
             {
                 foreach (var arg in us.Arguments)
                 {
-                    var r = FindSymbolInExpr(func, arg, line, col);
+                    var r = FindSymbolInExpr(ast, func, arg, line, col);
                     if (r != null) return r;
                 }
-                return FindSymbolInBlock(func, us.Body, line, col);
+                return FindSymbolInBlock(ast, func, us.Body, line, col);
             }
             return null;
         }
 
-        private static SymbolAtPosition? FindSymbolInExpr(FuncDecl func, Expr expr, int line, int col)
+        private static SymbolAtPosition? FindSymbolInExpr(ModuleNode ast, FuncDecl func, Expr expr, int line, int col)
         {
             if (expr == null) return null;
 
             if (expr is IdentifierExpr id && id.Line == line && ColMatches(id.Column, id.Name.Length, col))
             {
+                // US: Check if identifier is an enum name (e.g., "Color" in "Color.RED")
+                foreach (var en in ast.Enums)
+                {
+                    if (en.Name == id.Name)
+                        return new SymbolAtPosition { name = id.Name, kind = SymbolKindTag.Enum };
+                }
+                // US: Check if identifier is a struct name (e.g., struct literal or type ref)
+                foreach (var st in ast.Structs)
+                {
+                    if (st.Name == id.Name)
+                        return new SymbolAtPosition { name = id.Name, kind = SymbolKindTag.Struct };
+                }
                 // Determine if it's a parameter or variable
                 foreach (var p in func.Parameters)
                 {
@@ -2358,23 +2419,23 @@ namespace FFVM.Debug
             // Recurse
             if (expr is BinaryExpr bin)
             {
-                var r = FindSymbolInExpr(func, bin.Left, line, col);
+                var r = FindSymbolInExpr(ast, func, bin.Left, line, col);
                 if (r != null) return r;
-                return FindSymbolInExpr(func, bin.Right, line, col);
+                return FindSymbolInExpr(ast, func, bin.Right, line, col);
             }
             if (expr is UnaryExpr un)
-                return FindSymbolInExpr(func, un.Operand, line, col);
+                return FindSymbolInExpr(ast, func, un.Operand, line, col);
             if (expr is AssignExpr assign)
             {
-                var r = FindSymbolInExpr(func, assign.Target, line, col);
+                var r = FindSymbolInExpr(ast, func, assign.Target, line, col);
                 if (r != null) return r;
-                return FindSymbolInExpr(func, assign.Value, line, col);
+                return FindSymbolInExpr(ast, func, assign.Value, line, col);
             }
             if (expr is CallExpr call2)
             {
                 foreach (var arg in call2.Arguments)
                 {
-                    var r = FindSymbolInExpr(func, arg, line, col);
+                    var r = FindSymbolInExpr(ast, func, arg, line, col);
                     if (r != null) return r;
                 }
             }
@@ -2383,11 +2444,20 @@ namespace FFVM.Debug
                 // DX7: Check if cursor is on the field name token (after '.')
                 if (fa.FieldNameLine == line && fa.FieldNameLine > 0 && ColMatches(fa.FieldNameColumn, fa.FieldName.Length, col))
                 {
+                    // US: Check if target is an enum → return EnumMember instead of StructField
+                    if (fa.Target is IdentifierExpr faId)
+                    {
+                        foreach (var en in ast.Enums)
+                        {
+                            if (en.Name == faId.Name)
+                                return new SymbolAtPosition { name = fa.FieldName, kind = SymbolKindTag.EnumMember, parentName = en.Name };
+                        }
+                    }
                     // Parent struct cannot always be resolved from AST alone (no type inference);
                     // callers handle parentName=null by searching all structs.
                     return new SymbolAtPosition { name = fa.FieldName, kind = SymbolKindTag.StructField, parentName = null };
                 }
-                return FindSymbolInExpr(func, fa.Target, line, col);
+                return FindSymbolInExpr(ast, func, fa.Target, line, col);
             }
 
             return null;
@@ -2877,8 +2947,18 @@ namespace FFVM.Debug
         private static void CollectTypeRefsInStmt(Stmt stmt, string typeName, string uri, List<object> locations)
         {
             if (stmt == null) return;
-            if (stmt is VarDeclStmt vd && vd.TypeName == typeName)
-                locations.Add(MakeLocation(uri, vd.Line, vd.Column, typeName.Length));
+            if (stmt is VarDeclStmt vd && vd.TypeName != null)
+            {
+                string baseName = GetBaseTypeName(vd.TypeName);
+                if (baseName == typeName)
+                {
+                    // US: Use precise TypeNameLine/TypeNameColumn when available
+                    if (vd.TypeNameLine > 0)
+                        locations.Add(MakeLocation(uri, vd.TypeNameLine, vd.TypeNameColumn, typeName.Length));
+                    else
+                        locations.Add(MakeLocation(uri, vd.Line, vd.Column, typeName.Length));
+                }
+            }
             else if (stmt is BlockStmt bs) CollectTypeRefsInBlock(bs, typeName, uri, locations);
             else if (stmt is IfStmt ifs)
             {
@@ -3263,14 +3343,23 @@ namespace FFVM.Debug
             int astLine = position.GetInt("line") + 1;
             int astCol = position.GetInt("character") + 1;
 
+            // US: Check include declarations using per-file AST first (merged AST strips Imports)
             var target = FindSymbolAtPosition(ast, astLine, astCol);
-            if (target == null) return null;
 
             // Include files are not renamable via text rename (file system operation)
-            if (target.Value.kind == SymbolKindTag.IncludeFile) return null;
+            if (target != null && target.Value.kind == SymbolKindTag.IncludeFile) return null;
+
+            // US: Re-identify using merged AST if per-file AST couldn't resolve correctly
+            var mergedAst = GetMergedAst(uri);
+            if (target == null || target.Value.kind == SymbolKindTag.Variable
+                || (target.Value.kind == SymbolKindTag.StructField && target.Value.parentName == null))
+            {
+                var mergedTarget = FindSymbolAtPosition(mergedAst, astLine, astCol);
+                if (mergedTarget != null) target = mergedTarget;
+            }
+            if (target == null) return null;
 
             // Find the definition location to get precise range
-            var mergedAst = GetMergedAst(uri);
             var defLoc = FindDefinitionLocation(mergedAst, target.Value.name, target.Value.kind, target.Value.scopeFunc, target.Value.parentName);
 
             // Return range at cursor position with the symbol name as placeholder
@@ -3358,14 +3447,23 @@ namespace FFVM.Debug
             int astLine = position.GetInt("line") + 1;
             int astCol = position.GetInt("character") + 1;
 
+            // US: Check include declarations using per-file AST first (merged AST strips Imports)
             var target = FindSymbolAtPosition(ast, astLine, astCol);
-            if (target == null) return null;
 
             // Include files are not renamable
-            if (target.Value.kind == SymbolKindTag.IncludeFile) return null;
+            if (target != null && target.Value.kind == SymbolKindTag.IncludeFile) return null;
+
+            // US: Re-identify using merged AST if per-file AST couldn't resolve correctly
+            var mergedAst = GetMergedAst(uri);
+            if (target == null || target.Value.kind == SymbolKindTag.Variable
+                || (target.Value.kind == SymbolKindTag.StructField && target.Value.parentName == null))
+            {
+                var mergedTarget = FindSymbolAtPosition(mergedAst, astLine, astCol);
+                if (mergedTarget != null) target = mergedTarget;
+            }
+            if (target == null) return null;
 
             // Collect all reference locations
-            var mergedAst = GetMergedAst(uri);
             var locations = new List<object>();
             CollectReferencesWithOrigin(mergedAst, target.Value.name, target.Value.kind, uri, locations, target.Value.parentName);
 
