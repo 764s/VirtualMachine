@@ -1106,7 +1106,9 @@ namespace FFVM.Compiler
                 Advance();
 
                 // Struct literal: TypeName { field: expr, ... }
-                if (Check(TokenType.LBrace) && _structNames.Contains(tok.Text))
+                // _structNames covers same-file structs; IsStructLiteralLookahead()
+                // covers cross-file structs from includes (same heuristic as Lang-17 aliased literals).
+                if (Check(TokenType.LBrace) && (_structNames.Contains(tok.Text) || IsStructLiteralLookahead()))
                 {
                     return ParseStructLiteral(tok);
                 }

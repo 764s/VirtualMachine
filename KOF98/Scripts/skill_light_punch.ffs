@@ -9,12 +9,12 @@
 include "common/skill_base.ffs"
 
 // ── Skill Configuration (overrides only) ────────────────────
-@export const totalFrames: int = 20
-@export const priority: int = 3
-@export const tags: int = TagBit.ATTACK
-@export const isLooping: int = 0
-@export const activationPriority: int = 200
-@export const interruptPriority: int = 200
+override @export const totalFrames: int = 20
+override @export const priority: int = 3
+override @export const tags: int = TagBit.ATTACK
+override @export const isLooping: int = 0
+override @export const activationPriority: int = 200
+override @export const interruptPriority: int = 200
 @export const requireGrounded: int = 1
 @export const requireInputPressed: int = InputBit.LP
 
