@@ -146,6 +146,18 @@ namespace FFVM.Compiler
                 {
                     module.Functions.Add(ParseFuncDecl());
                 }
+                else if (Check(TokenType.External))
+                {
+                    // DX8: external func declaration — host-provided function with parameter metadata
+                    Advance(); // consume 'external'
+                    if (Check(TokenType.Func))
+                        module.Functions.Add(ParseExternalFuncDecl());
+                    else
+                    {
+                        Error($"Expected 'func' after 'external', got '{Current().Text}'");
+                        Advance();
+                    }
+                }
                 else if (Check(TokenType.Struct))
                 {
                     module.Structs.Add(ParseStructDecl());
@@ -164,7 +176,7 @@ namespace FFVM.Compiler
                 }
                 else
                 {
-                    Error($"Expected 'func', 'struct', 'enum', 'var', 'const', '@export', '@inline', 'private', 'public', 'override' or 'include', got '{Current().Text}'");
+                    Error($"Expected 'func', 'struct', 'enum', 'var', 'const', '@export', '@inline', 'private', 'public', 'override', 'external' or 'include', got '{Current().Text}'");
                     Advance();
                 }
             }
@@ -388,6 +400,48 @@ namespace FFVM.Compiler
             var body = ParseBlock();
             var decl = new FuncDecl(name, parameters, returnType, body, isPrivate, isExported, isInline, isOverride);
             decl.AliasTarget = aliasTarget;
+            decl.Line = line;
+            decl.Column = col;
+            AttachDocComment(decl, line);
+            return decl;
+        }
+
+        /// <summary>
+        /// DX8: Parse an external function declaration (no body).
+        /// Syntax: external func Name(param1: type1, param2: type2): returnType
+        /// </summary>
+        private FuncDecl ParseExternalFuncDecl()
+        {
+            int line = Current().Line, col = Current().Column;
+            Expect(TokenType.Func, "");
+            string name = Expect(TokenType.Identifier, "after 'external func'").Text ?? "?";
+            Expect(TokenType.LParen, "after function name");
+
+            var parameters = new List<ParamDecl>();
+            if (!Check(TokenType.RParen))
+            {
+                do
+                {
+                    string pName = Expect(TokenType.Identifier, "in parameter list").Text ?? "?";
+                    Expect(TokenType.Colon, "after parameter name");
+                    var pTypeToken = Expect(TokenType.Identifier, "for parameter type");
+                    string pType = pTypeToken.Text ?? "int";
+                    var param = new ParamDecl(pName, pType);
+                    param.TypeNameLine = pTypeToken.Line;
+                    param.TypeNameColumn = pTypeToken.Column;
+                    parameters.Add(param);
+                } while (Match(TokenType.Comma));
+            }
+            Expect(TokenType.RParen, "after parameters");
+
+            string returnType = null;
+            if (Match(TokenType.Colon))
+            {
+                returnType = Expect(TokenType.Identifier, "for return type").Text;
+            }
+
+            // No body — external functions are host-provided
+            var decl = new FuncDecl(name, parameters, returnType, null, false, false, false, false, isExternal: true);
             decl.Line = line;
             decl.Column = col;
             AttachDocComment(decl, line);
