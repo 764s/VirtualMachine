@@ -12301,6 +12301,278 @@ func main() {
             Assert(values.Count == 1 && values[0] == 50, $"OA10: expected 50, got {(values.Count > 0 ? values[0].ToString() : "none")}");
         }
 
+        // ================================================================
+        // L. DX4-P2: CLI Project Compilation Integration Tests
+        // ================================================================
+
+        // DX4-P2-01: GenerateTemplate — default (no host preset)
+        {
+            string json = FFVM.Compiler.ProjectFile.GenerateTemplate(null);
+            Assert(json != null && json.Contains("\"includePaths\""), "DX4-P2-01: template contains includePaths");
+            Assert(json.Contains("\"hostDeclarations\": []"), "DX4-P2-01: empty hostDeclarations");
+            Assert(json.Contains("\"entry\": null"), "DX4-P2-01: entry is null");
+            Assert(json.Contains("\"compileOptions\": {}"), "DX4-P2-01: empty compileOptions");
+            // Verify the generated template is valid JSON parseable by ProjectFile
+            var pf = FFVM.Compiler.ProjectFile.Parse(json, "/test");
+            Assert(pf != null, "DX4-P2-01: template is valid JSON");
+            Assert(pf.IncludePaths.Length == 1 && pf.IncludePaths[0] == ".", "DX4-P2-01: default includePath is '.'");
+        }
+
+        // DX4-P2-02: GenerateTemplate — with host preset
+        {
+            string json = FFVM.Compiler.ProjectFile.GenerateTemplate("skill");
+            Assert(json.Contains("host/skill.ffvm.d.json"), "DX4-P2-02: host preset fills hostDeclarations");
+            var pf = FFVM.Compiler.ProjectFile.Parse(json, "/test");
+            Assert(pf != null, "DX4-P2-02: template with preset is valid JSON");
+            Assert(pf.HostDeclarations.Length == 1, "DX4-P2-02: 1 host declaration");
+            Assert(pf.HostDeclarations[0] == "host/skill.ffvm.d.json", "DX4-P2-02: correct declaration path");
+        }
+
+        // DX4-P2-03: MergeDeclarationJson — basic syscall merging
+        {
+            string declJson = "{ \"syscalls\": [ { \"name\": \"Foo\", \"slot\": 50 }, { \"name\": \"Bar\", \"slot\": 51 } ] }";
+            var syscalls = new Dictionary<string, int>();
+            FFVM.Compiler.ProjectFile.MergeDeclarationJson(declJson, syscalls);
+            Assert(syscalls.Count == 2, "DX4-P2-03: 2 syscalls merged");
+            Assert(syscalls.ContainsKey("Foo") && syscalls["Foo"] == 50, "DX4-P2-03: Foo=50");
+            Assert(syscalls.ContainsKey("Bar") && syscalls["Bar"] == 51, "DX4-P2-03: Bar=51");
+        }
+
+        // DX4-P2-04: MergeDeclarationJson — null/empty input → no crash
+        {
+            var syscalls = new Dictionary<string, int> { { "Existing", 1 } };
+            FFVM.Compiler.ProjectFile.MergeDeclarationJson(null, syscalls);
+            FFVM.Compiler.ProjectFile.MergeDeclarationJson("", syscalls);
+            FFVM.Compiler.ProjectFile.MergeDeclarationJson("{}", syscalls);
+            Assert(syscalls.Count == 1, "DX4-P2-04: existing syscalls unchanged after null/empty/no-syscalls");
+        }
+
+        // DX4-P2-05: MergeDeclarationJson — skips invalid entries
+        {
+            string declJson = "{ \"syscalls\": [ { \"name\": \"Good\", \"slot\": 10 }, { \"name\": \"\", \"slot\": 11 }, { \"slot\": 12 }, { \"name\": \"NoSlot\" } ] }";
+            var syscalls = new Dictionary<string, int>();
+            FFVM.Compiler.ProjectFile.MergeDeclarationJson(declJson, syscalls);
+            Assert(syscalls.Count == 1, "DX4-P2-05: only valid entry merged, got " + syscalls.Count);
+            Assert(syscalls.ContainsKey("Good"), "DX4-P2-05: Good is present");
+        }
+
+        // DX4-P2-06: LoadHostDeclarations — loads from filesystem
+        {
+            string tmpDir = System.IO.Path.Combine(System.IO.Path.GetTempPath(), "dx4p2_test_" + System.Guid.NewGuid().ToString("N").Substring(0, 8));
+            System.IO.Directory.CreateDirectory(tmpDir);
+            string hostDir = System.IO.Path.Combine(tmpDir, "host");
+            System.IO.Directory.CreateDirectory(hostDir);
+            try
+            {
+                string declJson = "{ \"syscalls\": [ { \"name\": \"HostFunc\", \"slot\": 99 } ] }";
+                System.IO.File.WriteAllText(System.IO.Path.Combine(hostDir, "test.ffvm.d.json"), declJson);
+
+                var pf = new FFVM.Compiler.ProjectFile();
+                pf.ProjectDir = tmpDir;
+                pf.HostDeclarations = new[] { "host/test.ffvm.d.json" };
+
+                var syscalls = new Dictionary<string, int>();
+                pf.LoadHostDeclarations(syscalls);
+                Assert(syscalls.Count == 1, "DX4-P2-06: 1 syscall loaded from file");
+                Assert(syscalls.ContainsKey("HostFunc") && syscalls["HostFunc"] == 99, "DX4-P2-06: HostFunc=99");
+            }
+            finally
+            {
+                try { System.IO.Directory.Delete(tmpDir, true); } catch { }
+            }
+        }
+
+        // DX4-P2-07: LoadHostDeclarations — missing file → no crash, empty result
+        {
+            var pf = new FFVM.Compiler.ProjectFile();
+            pf.ProjectDir = "/nonexistent/path";
+            pf.HostDeclarations = new[] { "missing.ffvm.d.json" };
+
+            var syscalls = new Dictionary<string, int>();
+            pf.LoadHostDeclarations(syscalls);
+            Assert(syscalls.Count == 0, "DX4-P2-07: missing file → 0 syscalls, no crash");
+        }
+
+        // DX4-P2-08: compile with .ffproj → hostDeclarations syscall recognized
+        {
+            string tmpDir = System.IO.Path.Combine(System.IO.Path.GetTempPath(), "dx4p2_test_" + System.Guid.NewGuid().ToString("N").Substring(0, 8));
+            System.IO.Directory.CreateDirectory(tmpDir);
+            string hostDir = System.IO.Path.Combine(tmpDir, "host");
+            System.IO.Directory.CreateDirectory(hostDir);
+            try
+            {
+                // Write host declaration
+                string declJson = "{ \"syscalls\": [ { \"name\": \"ProjectCall\", \"slot\": 88 } ] }";
+                System.IO.File.WriteAllText(System.IO.Path.Combine(hostDir, "skill.ffvm.d.json"), declJson);
+                // Write .ffproj
+                System.IO.File.WriteAllText(System.IO.Path.Combine(tmpDir, "project.ffproj"),
+                    "{ \"hostDeclarations\": [\"host/skill.ffvm.d.json\"] }");
+                // Write script that uses the project syscall
+                string scriptPath = System.IO.Path.Combine(tmpDir, "main.ffs");
+                System.IO.File.WriteAllText(scriptPath, "func main() { ProjectCall() }");
+
+                // Load project and build compile context
+                string projPath = System.IO.Path.Combine(tmpDir, "project.ffproj");
+                string projJson = System.IO.File.ReadAllText(projPath);
+                var project = FFVM.Compiler.ProjectFile.Parse(projJson, tmpDir);
+                Assert(project != null, "DX4-P2-08: project parsed");
+
+                var syscalls = new Dictionary<string, int>();
+                project.LoadHostDeclarations(syscalls);
+                Assert(syscalls.ContainsKey("ProjectCall"), "DX4-P2-08: ProjectCall in syscall map");
+
+                var compiler2 = new BytecodeCompiler();
+                string source = System.IO.File.ReadAllText(scriptPath);
+                var fileResolver = project.BuildFileResolver();
+                var result = compiler2.Compile(source, "main", syscalls, null, fileResolver, "main.ffs");
+                Assert(result.Success, "DX4-P2-08: compile success with project syscall, errors: " + (result.Errors != null && result.Errors.Count > 0 ? result.Errors[0] : "none"));
+            }
+            finally
+            {
+                try { System.IO.Directory.Delete(tmpDir, true); } catch { }
+            }
+        }
+
+        // DX4-P2-09: compile with .ffproj → includePaths enable cross-directory includes
+        {
+            string tmpDir = System.IO.Path.Combine(System.IO.Path.GetTempPath(), "dx4p2_test_" + System.Guid.NewGuid().ToString("N").Substring(0, 8));
+            System.IO.Directory.CreateDirectory(tmpDir);
+            string libDir = System.IO.Path.Combine(tmpDir, "lib");
+            System.IO.Directory.CreateDirectory(libDir);
+            try
+            {
+                // Write .ffproj with includePaths
+                System.IO.File.WriteAllText(System.IO.Path.Combine(tmpDir, "project.ffproj"),
+                    "{ \"includePaths\": [\".\", \"lib\"] }");
+                // Write a library file
+                System.IO.File.WriteAllText(System.IO.Path.Combine(libDir, "helpers.ffs"),
+                    "func helper(): int { return 42 }");
+                // Write main script
+                string scriptPath = System.IO.Path.Combine(tmpDir, "main.ffs");
+                System.IO.File.WriteAllText(scriptPath, "include \"helpers\"\nfunc main() { var x: int = helper() }");
+
+                string projJson = System.IO.File.ReadAllText(System.IO.Path.Combine(tmpDir, "project.ffproj"));
+                var project = FFVM.Compiler.ProjectFile.Parse(projJson, tmpDir);
+                var fileResolver = project.BuildFileResolver();
+                var syscalls = new Dictionary<string, int>();
+
+                var compiler2 = new BytecodeCompiler();
+                string source = System.IO.File.ReadAllText(scriptPath);
+                var result = compiler2.Compile(source, "main", syscalls, null, fileResolver, "main.ffs");
+                Assert(result.Success, "DX4-P2-09: compile with include via .ffproj includePaths, errors: " + (result.Errors != null && result.Errors.Count > 0 ? result.Errors[0] : "none"));
+            }
+            finally
+            {
+                try { System.IO.Directory.Delete(tmpDir, true); } catch { }
+            }
+        }
+
+        // DX4-P2-10: compile with .ffproj → compileOptions applied (inlineThreshold)
+        {
+            string projJson = "{ \"compileOptions\": { \"inlineThreshold\": 0, \"diagnosticsEnabled\": false } }";
+            var project = FFVM.Compiler.ProjectFile.Parse(projJson, "/test");
+            Assert(project != null, "DX4-P2-10: project parsed");
+            Assert(project.CompileOptions != null, "DX4-P2-10: compileOptions present");
+            Assert(project.CompileOptions.InlineThreshold == 0, "DX4-P2-10: inlineThreshold=0 (disables inlining)");
+
+            // Compile a script with an inlinable function — with threshold=0, it should still compile
+            // (just not inline), verifying options are forwarded correctly
+            string source = "func add(a: int, b: int): int { return a + b }\nfunc main() { var x: int = add(1, 2) }";
+            var compiler2 = new BytecodeCompiler();
+            var result = compiler2.Compile(source, "main", new Dictionary<string, int>(), null, null, null, null, project.CompileOptions);
+            Assert(result.Success, "DX4-P2-10: compile with inlineThreshold=0 succeeds");
+        }
+
+        // DX4-P2-11: compile with .ffproj entry field → resolves script path
+        {
+            string tmpDir = System.IO.Path.Combine(System.IO.Path.GetTempPath(), "dx4p2_test_" + System.Guid.NewGuid().ToString("N").Substring(0, 8));
+            System.IO.Directory.CreateDirectory(tmpDir);
+            string scriptsDir = System.IO.Path.Combine(tmpDir, "scripts");
+            System.IO.Directory.CreateDirectory(scriptsDir);
+            try
+            {
+                System.IO.File.WriteAllText(System.IO.Path.Combine(tmpDir, "project.ffproj"),
+                    "{ \"entry\": \"scripts/app.ffs\" }");
+                System.IO.File.WriteAllText(System.IO.Path.Combine(scriptsDir, "app.ffs"),
+                    "func main() { var x: int = 1 }");
+
+                string projJson = System.IO.File.ReadAllText(System.IO.Path.Combine(tmpDir, "project.ffproj"));
+                var project = FFVM.Compiler.ProjectFile.Parse(projJson, tmpDir);
+                string resolvedEntry = project.ResolvePath(project.Entry);
+                Assert(System.IO.File.Exists(resolvedEntry), "DX4-P2-11: resolved entry path exists: " + resolvedEntry);
+
+                string source = System.IO.File.ReadAllText(resolvedEntry);
+                var compiler2 = new BytecodeCompiler();
+                var result = compiler2.Compile(source, "main", new Dictionary<string, int>());
+                Assert(result.Success, "DX4-P2-11: compile via project entry succeeds");
+            }
+            finally
+            {
+                try { System.IO.Directory.Delete(tmpDir, true); } catch { }
+            }
+        }
+
+        // DX4-P2-12: GenerateTemplate → round-trip parse → valid defaults
+        {
+            string json = FFVM.Compiler.ProjectFile.GenerateTemplate(null);
+            var pf = FFVM.Compiler.ProjectFile.Parse(json, "/test/proj");
+            Assert(pf != null, "DX4-P2-12: round-trip parse succeeds");
+            Assert(pf.IncludePaths.Length == 1, "DX4-P2-12: 1 default include path");
+            Assert(pf.HostDeclarations.Length == 0, "DX4-P2-12: 0 host declarations");
+            Assert(pf.Entry == null, "DX4-P2-12: entry is null");
+            // compileOptions is {} which parses to non-null but with all defaults
+            // (empty object → CompileOptions with defaults since no keys matched)
+
+            string json2 = FFVM.Compiler.ProjectFile.GenerateTemplate("ai");
+            var pf2 = FFVM.Compiler.ProjectFile.Parse(json2, "/test/proj");
+            Assert(pf2 != null, "DX4-P2-12: round-trip with preset succeeds");
+            Assert(pf2.HostDeclarations.Length == 1, "DX4-P2-12: 1 host declaration with preset");
+            Assert(pf2.HostDeclarations[0] == "host/ai.ffvm.d.json", "DX4-P2-12: preset path correct");
+        }
+
+        // DX4-P2-13: full integration — .ffproj with includePaths + hostDeclarations + compileOptions
+        {
+            string tmpDir = System.IO.Path.Combine(System.IO.Path.GetTempPath(), "dx4p2_test_" + System.Guid.NewGuid().ToString("N").Substring(0, 8));
+            System.IO.Directory.CreateDirectory(tmpDir);
+            string libDir = System.IO.Path.Combine(tmpDir, "lib");
+            System.IO.Directory.CreateDirectory(libDir);
+            string hostDir = System.IO.Path.Combine(tmpDir, "host");
+            System.IO.Directory.CreateDirectory(hostDir);
+            try
+            {
+                // Host declaration
+                System.IO.File.WriteAllText(System.IO.Path.Combine(hostDir, "game.ffvm.d.json"),
+                    "{ \"syscalls\": [ { \"name\": \"Render\", \"slot\": 60 } ] }");
+                // Library module
+                System.IO.File.WriteAllText(System.IO.Path.Combine(libDir, "math.ffs"),
+                    "func double(x: int): int { return x * 2 }");
+                // Project file
+                System.IO.File.WriteAllText(System.IO.Path.Combine(tmpDir, "project.ffproj"),
+                    "{ \"includePaths\": [\".\", \"lib\"], \"hostDeclarations\": [\"host/game.ffvm.d.json\"], \"entry\": \"main.ffs\", \"compileOptions\": { \"inlineThreshold\": 32 } }");
+                // Entry script
+                System.IO.File.WriteAllText(System.IO.Path.Combine(tmpDir, "main.ffs"),
+                    "include \"math\"\nfunc main() {\n  var x: int = double(5)\n  Render()\n}");
+
+                string projJson = System.IO.File.ReadAllText(System.IO.Path.Combine(tmpDir, "project.ffproj"));
+                var project = FFVM.Compiler.ProjectFile.Parse(projJson, tmpDir);
+                var fileResolver = project.BuildFileResolver();
+                var syscalls = new Dictionary<string, int>();
+                project.LoadHostDeclarations(syscalls);
+                Assert(syscalls.ContainsKey("Render"), "DX4-P2-13: host syscall loaded");
+
+                string entryPath = project.ResolvePath(project.Entry);
+                string source = System.IO.File.ReadAllText(entryPath);
+                var compiler2 = new BytecodeCompiler();
+                var result = compiler2.Compile(source, "main", syscalls, null, fileResolver, "main.ffs", null, project.CompileOptions);
+                Assert(result.Success, "DX4-P2-13: full integration compile succeeds, errors: " + (result.Errors != null && result.Errors.Count > 0 ? result.Errors[0] : "none"));
+                Assert(project.CompileOptions != null && project.CompileOptions.InlineThreshold == 32, "DX4-P2-13: compileOptions.inlineThreshold=32");
+            }
+            finally
+            {
+                try { System.IO.Directory.Delete(tmpDir, true); } catch { }
+            }
+        }
+
         // ===== Summary =====
         Debug.Log($"========================================");
         Debug.Log($"Compiler Tests: {passed} passed, {failed} failed");
