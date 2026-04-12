@@ -862,9 +862,12 @@ Gate 3: Unity Editor 内嵌 DAP（可选）             ← DBG7 Phase C
 | **DX4-P1** | `.ffproj` 项目描述文件 | ✅ 完成 | ProjectFile 解析类 + CompositeFileResolver 多路径 include + LSP 自動発見 .ffproj + includePaths/hostDeclarations/entry/compileOptions 全字段支持。DX4-P1-01~16 全通过，1834 测试総計。讨论来源 → [D_Usability_ModuleScope.md](../Discussion/D_Usability_ModuleScope.md) | DX4-P0 ✅ |
 | **DX4-P2** | CLI 项目编译集成 | ✅ 完成 | `ffvm-cli init` 脚手架（支持 `--host` 预设）+ `compile/run --project` 读取 .ffproj（FileResolver + LoadHostDeclarations + CompileOptions 转发）+ 共享逻辑 ProjectFile.GenerateTemplate/LoadHostDeclarations/MergeDeclarationJson。DX4-P2-01~13 全通过，1873 测试总计。讨论来源 → [D_Usability_ModuleScope.md](../Discussion/D_Usability_ModuleScope.md) §6.5 | DX4-P1 ✅ |
 | **DX4-P3** | 跨文件符号查询 | ✅ 完成 | 合并 AST 缓存（_mergedAsts via Preprocessor）+ FilePathToUri（OriginFile→URI）+ ResolveOriginUri（跨文件/同文件判定）+ HandleDefinition/HandleReferences/HandleHover/HandleCompletion/HandleSignatureHelp 全部切换到合并 AST。DX4-P3-01~13 全通过，1901 测试总计。讨论来源 → [D_Usability_ModuleScope.md](../Discussion/D_Usability_ModuleScope.md) | DX4-P1 ✅ |
-| **DX4-P4** | LSP 辅助创建 `.ffproj` | ⏳ 待执行 | LSP 启动时检测 workspace 内有 `.ffs` 文件但无 `.ffproj` → `window/showMessageRequest` 提示用户创建 → 点击后 `workspace/applyEdit` 生成模板文件。讨论来源 → [D_Usability_ModuleScope.md](../Discussion/D_Usability_ModuleScope.md) §6.5 Layer 2 | DX4-P2 ✅ |
+| **DX4-P4** | LSP 辅助创建 `.ffproj` | ✅ 完成 | LSP 启动时检测 workspace 内有 `.ffs` 文件但无 `.ffproj` → `window/showMessageRequest` 提示用户创建 → 点击后 `workspace/applyEdit` 生成模板文件。DX4-P4-01~13 全通过，1915 测试总计。讨论来源 → [D_Usability_ModuleScope.md](../Discussion/D_Usability_ModuleScope.md) §6.5 Layer 2 | DX4-P2 ✅ |
+| **DX5** | LSP 重命名 + 语义染色 + Include 导航 + 成员符号 | ✅ 完成 | `textDocument/rename` + `prepareRename`（函数/变量/结构体/枚举重命名，跨引用 WorkspaceEdit）。`textDocument/semanticTokens/full`（struct/enum/field/member 声明处语义染色）。Include 路径 go-to-definition（`ResolveIncludeFileUri`）+ find-references。StructField/EnumMember 新 SymbolKindTag + definition/references。`.ffproj` 自动创建使用文件夹名 + GenerateTemplate 带注释模板 + StripLineComments。TextMate grammar 增强。DX5-01~20（38 asserts）全通过，1953 测试总计 | DX4 ✅ |
+| **DX6** | Include 文件重命名自动更新引用 | ⏳ 待执行 | LSP `workspace/willRenameFiles` 事件处理：用户在文件管理器中重命名 `.ffs` 文件时，自动扫描 workspace 内所有 `include "old_path"` → 批量更新为 `include "new_path"`。覆盖：普通 include + `include as` 别名 + 跨 includePaths 搜索路径解析。返回 WorkspaceEdit | DX5 ✅ |
+| **DX7** | AST 精确位置追踪（字段访问 + 类型注解） | ⏳ 待执行 | R2: FieldAccessExpr 新增 FieldNameLine/FieldNameColumn（`.fieldName` token 精确位置），使 rename/references 覆盖 `v.x` 使用处。R3: VarDeclStmt/ParamDecl/StructField 新增 TypeNameLine/TypeNameColumn（类型名 token 位置），使 semantic tokens 覆盖类型注解使用处。纯 additive AST + Parser 改动，BytecodeCompiler 零变更 | DX5 ✅ |
 
-> Lang-18 ✅ 完成。DX4-P0 ✅ 完成。DX4-P1 ✅ 完成。DX4-P2 ✅ 完成。DX4-P3 ✅ 完成。当前位置 → DX4-P4 ⏳。1901 测试总计。
+> Lang-18 ✅ 完成。DX4-P0 ✅ 完成。DX4-P1 ✅ 完成。DX4-P2 ✅ 完成。DX4-P3 ✅ 完成。DX4-P4 ✅ 完成。DX5 ✅ 完成。当前位置 → DX6 ⏳。1953 测试总计。
 
 #### 宿主集成侧（C 区间 — 生产必经路径）
 
