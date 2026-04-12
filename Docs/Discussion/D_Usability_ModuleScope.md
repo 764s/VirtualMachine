@@ -362,6 +362,7 @@ ffvm-cli init --host skill       # 生成 + 预填技能系统 host 声明路径
 | **DX4-P1** | `.ffproj` 项目描述文件：格式定义 + 解析 + LSP 加载 + includePaths + hostDeclarations | DX4-P0 | ⭐⭐⭐ |
 | **DX4-P2** | CLI 集成：`ffvm-cli init` 脚手架生成 `.ffproj` 模板 + `ffvm-cli compile --project x.ffproj` 读取项目配置编译 | DX4-P1 | ⭐⭐ |
 | **DX4-P3** | 跨文件符号查询：合并 AST 缓存 + 跨文件 definition/references/hover + OriginFile→URI 映射 | DX4-P1 | ⭐⭐⭐ |
+| **DX4-P4** | LSP 辅助创建 `.ffproj`：workspace 内有 `.ffs` 无 `.ffproj` → `window/showMessageRequest` 提示 → `workspace/applyEdit` 生成模板（§6.5 Layer 2） | DX4-P2 | ⭐⭐ |
 
 ---
 
