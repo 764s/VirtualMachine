@@ -2107,12 +2107,9 @@ namespace FFVM.Debug
         }
 
         /// <summary>
-        /// Find the definition location for a named symbol.
-        /// Returns (line, col, nameLen) in AST coordinates (1-based).
-        /// </summary>
-        /// <summary>
         /// DX4-P3: Find the definition location with OriginFile for cross-file navigation.
         /// Returns (line, col, nameLen, originFile) where originFile may differ from the requesting file.
+        /// Returns null if no symbol found. Coordinates are 1-based (AST convention).
         /// </summary>
         private static (int line, int col, int nameLen, string originFile)? FindDefinitionLocation(
             ModuleNode ast, string name, SymbolKindTag kind, string scopeFunc)
