@@ -407,6 +407,6 @@ DX4 系列完成后，DX5 补充了以下 LSP 易用性功能：
 
 | 编号 | 遗留项 | 根本原因 | 串行计划编号 |
 |------|--------|---------|-------------|
-| R1 | Include 文件重命名时自动更新所有 `include` 引用 | LSP rename 无法操作文件系统；需 `workspace/willRenameFiles` | **DX6** ⏳ |
-| R2 | 结构体字段使用处（`v.x`）精确 references/rename | `FieldAccessExpr` 缺少 `FieldNameLine`/`FieldNameColumn` | **DX7** ⏳ |
-| R3 | 类型注解使用处（`var v: Vec2`）精确语义染色 | `VarDeclStmt`/`ParamDecl` 缺少 `TypeNameLine`/`TypeNameColumn` | **DX7** ⏳ |
+| R1 | Include 文件重命名时自动更新所有 `include` 引用 | LSP rename 无法操作文件系统；需 `workspace/willRenameFiles` | **DX6** ✅ |
+| R2 | 结构体字段使用处（`v.x`）精确 references/rename | `FieldAccessExpr` 缺少 `FieldNameLine`/`FieldNameColumn` | **DX7** ✅ |
+| R3 | 类型注解使用处（`var v: Vec2`）精确语义染色 | `VarDeclStmt`/`ParamDecl` 缺少 `TypeNameLine`/`TypeNameColumn` | **DX7** ✅ |

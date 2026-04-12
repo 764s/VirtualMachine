@@ -93,7 +93,7 @@
 | **H1** | Handle64 批处理协议 | 最晚于真实多目标业务接入前 | [§七 推进顺序](../VM_Summary.md#七推进顺序串行计划)（VM_Tracer_Bullet §十二 第 4 项） |
 | **BB1** | 黑板 Key 编译期自动分配 ID + 静态映射表 | 编译器成熟后 | [§六 决策妥协表](../VM_Summary.md#六决策妥协表为什么当前这样将来如何补全) |
 | **PR1** | Paired Syscall 支持带参反向调用 | 需要带参释放场景时 | [§六 决策妥协表](../VM_Summary.md#六决策妥协表为什么当前这样将来如何补全) |
-| **FIX1** | Fix64 模式 (`USE_FIXPOINT`) 独立构建验证 | 正式测试前 | [§11.2 T5](../VM_Summary.md#112-测试缺口) |
+| **FIX1** | ~~Fix64 模式 (`USE_FIXPOINT`) 独立构建验证~~ | ✅ 已由 GR1 CI 构建矩阵覆盖 | [§11.2 T5](../VM_Summary.md#112-测试缺口) |
 | **DM1** | VM 编排表现脚本（双轨模式：部分实例不参与快照） | 需要复杂镜头/特效序列时 | [§3.4](../VM_Summary.md#34-全程-fix64表现走-syscall) |
 | **B1** | Unity Editor DAP（EditorApplication.update 轮询模式 + DR5） | 可选，需要编辑器内调试时 | 原 B-δ6，转入展望 |
 | **Pε-F1** | while 循环 FORLOOP 识别 | while 循环是主要循环形式时 | [B-ε](Step_B_Epsilon_Perf.md) |
