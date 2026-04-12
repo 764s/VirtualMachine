@@ -52,6 +52,10 @@ namespace FFVM.Debug
         private ProjectFile _projectFile;
         private CompileOptions _projectCompileOptions;
 
+        // --- DX4-P4: Server-initiated requests (window/showMessageRequest, workspace/applyEdit) ---
+        private int _nextServerRequestId = 900001;
+        private readonly Dictionary<int, string> _pendingServerRequests = new Dictionary<int, string>();
+
         /// <summary>
         /// Exposed for testing: all diagnostics published since last clear.
         /// Key = URI, Value = list of diagnostic objects.
@@ -155,10 +159,15 @@ namespace FFVM.Debug
                 string method = message.GetString("method");
                 bool hasId = message.ContainsKey("id");
 
-                if (hasId)
+                if (hasId && method != null)
                 {
                     // Request — needs a response
                     HandleRequest(message, method);
+                }
+                else if (hasId && method == null)
+                {
+                    // DX4-P4: Response to a server-initiated request
+                    HandleServerResponse(message);
                 }
                 else
                 {
@@ -231,7 +240,8 @@ namespace FFVM.Debug
             switch (method)
             {
                 case "initialized":
-                    // Client confirms initialization — nothing to do
+                    // Client confirms initialization — DX4-P4: check if .ffproj creation should be offered
+                    CheckAndOfferFfprojCreation();
                     break;
                 case "exit":
                     _running = false;
@@ -408,8 +418,183 @@ namespace FFVM.Debug
             }
         }
 
+        // ============================================================
+        // DX4-P4: LSP-assisted .ffproj creation
+        // ============================================================
+
         /// <summary>
-        /// DX4-P0: Convert a document URI to a relative file path from workspace root.
+        /// DX4-P4: Send a server-to-client request and track its ID for response handling.
+        /// Returns the assigned request ID.
+        /// </summary>
+        private int SendRequest(string method, JsonObject parameters)
+        {
+            int id = _nextServerRequestId++;
+            _pendingServerRequests[id] = method;
+
+            var request = new JsonObject();
+            request.Set("jsonrpc", "2.0");
+            request.Set("id", id);
+            request.Set("method", method);
+            if (parameters != null)
+                request.Set("params", parameters);
+
+            ContentLengthStream.WriteMessage(_output, request.ToJson());
+            return id;
+        }
+
+        /// <summary>
+        /// DX4-P4: Handle a response from the client to a server-initiated request.
+        /// </summary>
+        private void HandleServerResponse(JsonObject message)
+        {
+            int id = message.GetInt("id");
+            if (!_pendingServerRequests.TryGetValue(id, out string method))
+                return; // unknown response — ignore
+            _pendingServerRequests.Remove(id);
+
+            var result = message.GetObject("result");
+
+            switch (method)
+            {
+                case "window/showMessageRequest":
+                    HandleShowMessageResponse(result);
+                    break;
+                case "workspace/applyEdit":
+                    // No action needed — just acknowledge
+                    break;
+            }
+        }
+
+        /// <summary>
+        /// DX4-P4: After initialized, check if workspace has .ffs files but no .ffproj.
+        /// If so, send window/showMessageRequest to prompt the user.
+        /// </summary>
+        private void CheckAndOfferFfprojCreation()
+        {
+            // Only check if we have a workspace root and no project file was discovered
+            if (_rootPath == null || _projectFile != null) return;
+
+            try
+            {
+                if (!Directory.Exists(_rootPath)) return;
+                string[] ffsFiles = Directory.GetFiles(_rootPath, "*.ffs", SearchOption.AllDirectories);
+                if (ffsFiles.Length == 0) return;
+            }
+            catch
+            {
+                return; // filesystem errors — don't crash LSP
+            }
+
+            // Has .ffs files but no .ffproj → prompt user
+            var parameters = new JsonObject();
+            parameters.Set("type", 3); // MessageType.Info = 3
+            parameters.Set("message", "Detected FFScript files but no project configuration. Create .ffproj?");
+
+            var actions = new List<object>();
+
+            var createAction = new JsonObject();
+            createAction.Set("title", "Create");
+            actions.Add(createAction);
+
+            var ignoreAction = new JsonObject();
+            ignoreAction.Set("title", "Ignore");
+            actions.Add(ignoreAction);
+
+            var neverAction = new JsonObject();
+            neverAction.Set("title", "Don't ask again");
+            actions.Add(neverAction);
+
+            parameters.Set("actions", actions);
+
+            SendRequest("window/showMessageRequest", parameters);
+        }
+
+        /// <summary>
+        /// DX4-P4: Handle the user's response to the .ffproj creation prompt.
+        /// </summary>
+        private void HandleShowMessageResponse(JsonObject result)
+        {
+            // null result means user dismissed the dialog (e.g. pressed Escape)
+            if (result == null) return;
+            string title = result.GetString("title");
+            if (title == "Create")
+            {
+                CreateFfprojViaApplyEdit();
+            }
+            // "Ignore" or "Don't ask again" → do nothing
+        }
+
+        /// <summary>
+        /// DX4-P4: Send workspace/applyEdit to create a .ffproj template file.
+        /// Uses documentChanges with CreateFile + TextDocumentEdit.
+        /// </summary>
+        private void CreateFfprojViaApplyEdit()
+        {
+            if (_rootPath == null) return;
+
+            string ffprojPath = Path.Combine(_rootPath, ".ffproj");
+            string ffprojUri = PathToFileUri(ffprojPath);
+            string template = ProjectFile.GenerateTemplate(null);
+
+            var parameters = new JsonObject();
+            var edit = new JsonObject();
+
+            var documentChanges = new List<object>();
+
+            // 1. CreateFile resource operation
+            var createFile = new JsonObject();
+            createFile.Set("kind", "create");
+            createFile.Set("uri", ffprojUri);
+            var createOptions = new JsonObject();
+            createOptions.Set("overwrite", false);
+            createOptions.Set("ignoreIfExists", true);
+            createFile.Set("options", createOptions);
+            documentChanges.Add(createFile);
+
+            // 2. TextDocumentEdit to insert template content
+            var textDocEdit = new JsonObject();
+            var textDoc = new JsonObject();
+            textDoc.Set("uri", ffprojUri);
+            textDoc.Set("version", null); // null = document not yet open
+            textDocEdit.Set("textDocument", textDoc);
+
+            var edits = new List<object>();
+            var textEdit = new JsonObject();
+            var range = new JsonObject();
+            var start = new JsonObject();
+            start.Set("line", 0);
+            start.Set("character", 0);
+            var end = new JsonObject();
+            end.Set("line", 0);
+            end.Set("character", 0);
+            range.Set("start", start);
+            range.Set("end", end);
+            textEdit.Set("range", range);
+            textEdit.Set("newText", template);
+            edits.Add(textEdit);
+
+            textDocEdit.Set("edits", edits);
+            documentChanges.Add(textDocEdit);
+
+            edit.Set("documentChanges", documentChanges);
+            parameters.Set("edit", edit);
+
+            SendRequest("workspace/applyEdit", parameters);
+        }
+
+        /// <summary>
+        /// DX4-P4: Convert a local filesystem path to a file:// URI.
+        /// </summary>
+        internal static string PathToFileUri(string path)
+        {
+            if (path == null) return null;
+            path = path.Replace('\\', '/');
+            // Windows path: C:/... → file:///C:/...
+            if (path.Length >= 2 && path[1] == ':')
+                return "file:///" + path;
+            // Unix path: /home/... → file:///home/...
+            return "file:///" + path.TrimStart('/');
+        }
         /// Used as filePath parameter for include cycle detection and diagnostics.
         /// Returns the relative path if under rootPath, otherwise returns the absolute path as fallback.
         /// Returns null only if the URI itself cannot be parsed.

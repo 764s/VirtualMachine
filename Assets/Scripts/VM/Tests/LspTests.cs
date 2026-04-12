@@ -2662,6 +2662,243 @@ public static class LspTests
             Assert(foundHelper, "DX4-P3-13b: completion includes same-file helper without workspace");
         }
 
+        // ================================================================
+        // N. DX4-P4: LSP-Assisted .ffproj Creation Tests
+        // ================================================================
+
+        // DX4-P4-01: workspace with .ffs but no .ffproj → server sends window/showMessageRequest
+        // DX4-P4-02: showMessageRequest message text is correct
+        // DX4-P4-03: showMessageRequest has 3 actions (Create, Ignore, Don't ask again)
+        {
+            string tmpDir = Path.Combine(Path.GetTempPath(), "dx4p4_test_" + Guid.NewGuid().ToString("N").Substring(0, 8));
+            try
+            {
+                Directory.CreateDirectory(tmpDir);
+                File.WriteAllText(Path.Combine(tmpDir, "main.ffs"), "func main() { var x: int = 1 }");
+
+                string rootUri = "file:///" + tmpDir.Replace('\\', '/').TrimStart('/');
+                var session = new LspBatchSession();
+                session.AddInitializeWithRootUri(rootUri);
+                session.AddInitialized();
+                // Pre-queue response to the server's showMessageRequest (id=900001) — user clicks "Ignore"
+                var ignoreResult = new JsonObject();
+                ignoreResult.Set("title", "Ignore");
+                session.AddResponse(900001, ignoreResult);
+                session.AddShutdown();
+                session.AddExit();
+                session.Run();
+
+                var showMsgReq = session.FindRequest("window/showMessageRequest");
+                Assert(showMsgReq != null, "DX4-P4-01: showMessageRequest sent when .ffs exists without .ffproj");
+
+                var msgParams = showMsgReq?.GetObject("params");
+                string message = msgParams?.GetString("message");
+                Assert(message != null && message.Contains(".ffproj"), "DX4-P4-02: message mentions .ffproj, got '" + (message ?? "null") + "'");
+
+                var actions = msgParams?.GetArray("actions");
+                bool hasCreate = false, hasIgnore = false, hasNever = false;
+                if (actions != null)
+                {
+                    foreach (var a in actions)
+                    {
+                        var aObj = a as JsonObject;
+                        string title = aObj?.GetString("title");
+                        if (title == "Create") hasCreate = true;
+                        if (title == "Ignore") hasIgnore = true;
+                        if (title == "Don't ask again") hasNever = true;
+                    }
+                }
+                Assert(hasCreate && hasIgnore && hasNever,
+                    "DX4-P4-03: 3 actions present (Create=" + hasCreate + ", Ignore=" + hasIgnore + ", Don't ask again=" + hasNever + ")");
+
+                // "Ignore" was chosen → no applyEdit should be sent
+                var applyEditReq = session.FindRequest("workspace/applyEdit");
+                Assert(applyEditReq == null, "DX4-P4-04: Ignore → no workspace/applyEdit sent");
+            }
+            finally
+            {
+                try { Directory.Delete(tmpDir, true); } catch { }
+            }
+        }
+
+        // DX4-P4-05: user clicks "Create" → workspace/applyEdit sent with CreateFile + TextDocumentEdit
+        // DX4-P4-06: applyEdit URI points to .ffproj in workspace root
+        // DX4-P4-07: applyEdit template matches ProjectFile.GenerateTemplate(null)
+        {
+            string tmpDir = Path.Combine(Path.GetTempPath(), "dx4p4_test_" + Guid.NewGuid().ToString("N").Substring(0, 8));
+            try
+            {
+                Directory.CreateDirectory(tmpDir);
+                File.WriteAllText(Path.Combine(tmpDir, "main.ffs"), "func main() { var x: int = 1 }");
+
+                string rootUri = "file:///" + tmpDir.Replace('\\', '/').TrimStart('/');
+                var session = new LspBatchSession();
+                session.AddInitializeWithRootUri(rootUri);
+                session.AddInitialized();
+                // User clicks "Create" → response to showMessageRequest
+                var createResult = new JsonObject();
+                createResult.Set("title", "Create");
+                session.AddResponse(900001, createResult);
+                // Response to workspace/applyEdit
+                var applyResult = new JsonObject();
+                applyResult.Set("applied", true);
+                session.AddResponse(900002, applyResult);
+                session.AddShutdown();
+                session.AddExit();
+                session.Run();
+
+                var applyEditReq = session.FindRequest("workspace/applyEdit");
+                Assert(applyEditReq != null, "DX4-P4-05: Create → workspace/applyEdit sent");
+
+                // Check the applyEdit content
+                var editParams = applyEditReq?.GetObject("params");
+                var edit = editParams?.GetObject("edit");
+                var docChanges = edit?.GetArray("documentChanges");
+
+                // First element: CreateFile
+                bool hasCreateFile = false;
+                bool uriPointsToFfproj = false;
+                string templateContent = null;
+
+                if (docChanges != null && docChanges.Count >= 2)
+                {
+                    var cf = docChanges[0] as JsonObject;
+                    hasCreateFile = cf?.GetString("kind") == "create";
+                    string cfUri = cf?.GetString("uri");
+                    uriPointsToFfproj = cfUri != null && cfUri.EndsWith(".ffproj");
+
+                    // Second element: TextDocumentEdit
+                    var tde = docChanges[1] as JsonObject;
+                    var edits = tde?.GetArray("edits");
+                    if (edits != null && edits.Count > 0)
+                    {
+                        var te = edits[0] as JsonObject;
+                        templateContent = te?.GetString("newText");
+                    }
+
+                    Assert(uriPointsToFfproj, "DX4-P4-06: applyEdit URI ends with .ffproj, got '" + (cfUri ?? "null") + "'");
+                }
+                else
+                {
+                    Assert(false, "DX4-P4-06: applyEdit URI ends with .ffproj (documentChanges missing or incomplete)");
+                }
+
+                Assert(hasCreateFile, "DX4-P4-05b: first documentChange is CreateFile");
+
+                string expectedTemplate = FFVM.Compiler.ProjectFile.GenerateTemplate(null);
+                Assert(templateContent == expectedTemplate,
+                    "DX4-P4-07: template content matches GenerateTemplate(null)");
+            }
+            finally
+            {
+                try { Directory.Delete(tmpDir, true); } catch { }
+            }
+        }
+
+        // DX4-P4-08: user dismisses dialog (null result) → no applyEdit
+        {
+            string tmpDir = Path.Combine(Path.GetTempPath(), "dx4p4_test_" + Guid.NewGuid().ToString("N").Substring(0, 8));
+            try
+            {
+                Directory.CreateDirectory(tmpDir);
+                File.WriteAllText(Path.Combine(tmpDir, "main.ffs"), "func main() { var x: int = 1 }");
+
+                string rootUri = "file:///" + tmpDir.Replace('\\', '/').TrimStart('/');
+                var session = new LspBatchSession();
+                session.AddInitializeWithRootUri(rootUri);
+                session.AddInitialized();
+                // User dismisses dialog → null result
+                session.AddResponse(900001, null);
+                session.AddShutdown();
+                session.AddExit();
+                session.Run();
+
+                var applyEditReq = session.FindRequest("workspace/applyEdit");
+                Assert(applyEditReq == null, "DX4-P4-08: dismissed dialog → no workspace/applyEdit sent");
+            }
+            finally
+            {
+                try { Directory.Delete(tmpDir, true); } catch { }
+            }
+        }
+
+        // DX4-P4-09: workspace with .ffproj → no showMessageRequest
+        {
+            string tmpDir = Path.Combine(Path.GetTempPath(), "dx4p4_test_" + Guid.NewGuid().ToString("N").Substring(0, 8));
+            try
+            {
+                Directory.CreateDirectory(tmpDir);
+                File.WriteAllText(Path.Combine(tmpDir, "main.ffs"), "func main() { var x: int = 1 }");
+                File.WriteAllText(Path.Combine(tmpDir, ".ffproj"), "{\"includePaths\":[\".\"],\"hostDeclarations\":[],\"entry\":null,\"compileOptions\":{}}");
+
+                string rootUri = "file:///" + tmpDir.Replace('\\', '/').TrimStart('/');
+                var session = new LspBatchSession();
+                session.AddInitializeWithRootUri(rootUri);
+                session.AddInitialized();
+                session.AddShutdown();
+                session.AddExit();
+                session.Run();
+
+                var showMsgReq = session.FindRequest("window/showMessageRequest");
+                Assert(showMsgReq == null, "DX4-P4-09: .ffproj exists → no showMessageRequest sent");
+            }
+            finally
+            {
+                try { Directory.Delete(tmpDir, true); } catch { }
+            }
+        }
+
+        // DX4-P4-10: workspace with no .ffs files → no showMessageRequest
+        {
+            string tmpDir = Path.Combine(Path.GetTempPath(), "dx4p4_test_" + Guid.NewGuid().ToString("N").Substring(0, 8));
+            try
+            {
+                Directory.CreateDirectory(tmpDir);
+                // Create a non-.ffs file
+                File.WriteAllText(Path.Combine(tmpDir, "readme.txt"), "hello");
+
+                string rootUri = "file:///" + tmpDir.Replace('\\', '/').TrimStart('/');
+                var session = new LspBatchSession();
+                session.AddInitializeWithRootUri(rootUri);
+                session.AddInitialized();
+                session.AddShutdown();
+                session.AddExit();
+                session.Run();
+
+                var showMsgReq = session.FindRequest("window/showMessageRequest");
+                Assert(showMsgReq == null, "DX4-P4-10: no .ffs files → no showMessageRequest sent");
+            }
+            finally
+            {
+                try { Directory.Delete(tmpDir, true); } catch { }
+            }
+        }
+
+        // DX4-P4-11: no rootUri → no showMessageRequest
+        {
+            var session = new LspBatchSession();
+            session.AddInitialize(); // no rootUri
+            session.AddInitialized();
+            session.AddShutdown();
+            session.AddExit();
+            session.Run();
+
+            var showMsgReq = session.FindRequest("window/showMessageRequest");
+            Assert(showMsgReq == null, "DX4-P4-11: no rootUri → no showMessageRequest sent");
+        }
+
+        // DX4-P4-12: PathToFileUri converts Unix path correctly
+        {
+            string uri = LspServer.PathToFileUri("/home/user/project/.ffproj");
+            Assert(uri == "file:///home/user/project/.ffproj", "DX4-P4-12: Unix path to URI, got '" + (uri ?? "null") + "'");
+        }
+
+        // DX4-P4-13: PathToFileUri handles null
+        {
+            string uri = LspServer.PathToFileUri(null);
+            Assert(uri == null, "DX4-P4-13: null path → null URI");
+        }
+
         Debug.Log($"\n===== LspTests: {passed} passed, {failed} failed =====");
     }
 
@@ -2932,6 +3169,48 @@ public static class LspTests
             foreach (var msg in _messages)
             {
                 if (msg.GetString("method") == method)
+                    result.Add(msg);
+            }
+            return result;
+        }
+
+        /// <summary>
+        /// DX4-P4: Queue a client response to a server-initiated request.
+        /// </summary>
+        public void AddResponse(int id, JsonObject result)
+        {
+            var resp = new JsonObject();
+            resp.Set("jsonrpc", "2.0");
+            resp.Set("id", id);
+            resp.Set("result", result != null ? (object)result : null);
+            ContentLengthStream.WriteMessage(_inputMs, resp.ToJson());
+        }
+
+        /// <summary>
+        /// DX4-P4: Find a server-sent request by method name in output messages.
+        /// Returns the first matching request (has id + method).
+        /// </summary>
+        public JsonObject FindRequest(string method)
+        {
+            if (_messages == null) return null;
+            foreach (var msg in _messages)
+            {
+                if (msg.ContainsKey("id") && msg.GetString("method") == method)
+                    return msg;
+            }
+            return null;
+        }
+
+        /// <summary>
+        /// DX4-P4: Find all server-sent requests by method name in output messages.
+        /// </summary>
+        public List<JsonObject> FindAllRequests(string method)
+        {
+            var result = new List<JsonObject>();
+            if (_messages == null) return result;
+            foreach (var msg in _messages)
+            {
+                if (msg.ContainsKey("id") && msg.GetString("method") == method)
                     result.Add(msg);
             }
             return result;
