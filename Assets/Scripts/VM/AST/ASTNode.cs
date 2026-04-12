@@ -263,6 +263,10 @@ namespace FFVM.AST
         public int TypeNameLine { get; set; }
         /// <summary>DX7: 1-based column of the type name token in the type annotation.</summary>
         public int TypeNameColumn { get; set; }
+        /// <summary>DX9: 1-based line of the variable name token.</summary>
+        public int NameLine { get; set; }
+        /// <summary>DX9: 1-based column of the variable name token.</summary>
+        public int NameColumn { get; set; }
         public VarDeclStmt(string name, string typeName, Expr initializer, bool isConst = false, bool isExported = false, bool isPrivate = false, bool isOverride = false) : base(NodeKind.VarDecl)
         {
             Name = name;
@@ -391,6 +395,10 @@ namespace FFVM.AST
         public int TypeNameLine { get; set; }
         /// <summary>DX7: 1-based column of the type name token in parameter type annotation.</summary>
         public int TypeNameColumn { get; set; }
+        /// <summary>DX9: 1-based line of the parameter name token.</summary>
+        public int NameLine { get; set; }
+        /// <summary>DX9: 1-based column of the parameter name token.</summary>
+        public int NameColumn { get; set; }
         public ParamDecl(string name, string typeName, Expr defaultValue = null)
         {
             Name = name;
@@ -411,6 +419,10 @@ namespace FFVM.AST
         public bool IsOverride { get; }
         /// <summary>DX8: External function declaration — declares a host-provided syscall with parameter metadata. Body is null.</summary>
         public bool IsExternal { get; }
+        /// <summary>DX9: 1-based line of the 'external' keyword token. 0 if not external.</summary>
+        public int ExternalLine { get; set; }
+        /// <summary>DX9: 1-based column of the 'external' keyword token. 0 if not external.</summary>
+        public int ExternalColumn { get; set; }
         /// <summary>Lang-18: Target alias for override alias declarations (e.g. "Alias" in "override func Alias.Do()"). Null for normal declarations.</summary>
         public string AliasTarget { get; set; }
         public string DocComment { get; set; }

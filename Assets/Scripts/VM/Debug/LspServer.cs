@@ -357,9 +357,9 @@ namespace FFVM.Debug
             semanticTokensProvider.Set("full", true);
             var legend = new JsonObject();
             // tokenTypes: type(0), struct(1), enum(2), enumMember(3), property(4), variable(5),
-            //             function(6), parameter(7), string(8)
+            //             function(6), parameter(7), string(8), keyword(9)
             var tokenTypes = new List<object> { "type", "struct", "enum", "enumMember", "property",
-                                                 "variable", "function", "parameter", "string" };
+                                                 "variable", "function", "parameter", "string", "keyword" };
             legend.Set("tokenTypes", tokenTypes);
             legend.Set("tokenModifiers", new List<object> { "declaration", "definition" });
             semanticTokensProvider.Set("legend", legend);
@@ -3569,10 +3569,12 @@ namespace FFVM.Debug
             var mergedAst = GetMergedAst(uri);
             var structNames = new HashSet<string>();
             var enumNames = new HashSet<string>();
+            var funcNames = new HashSet<string>();
             if (mergedAst != null)
             {
                 foreach (var st in mergedAst.Structs) structNames.Add(st.Name);
                 foreach (var en in mergedAst.Enums) enumNames.Add(en.Name);
+                foreach (var fn in mergedAst.Functions) funcNames.Add(fn.Name);
             }
 
             // Collect semantic tokens as (line, col, length, tokenType, modifiers)
@@ -3610,12 +3612,20 @@ namespace FFVM.Debug
                 }
             }
 
-            // 3. Function parameter type annotations + local variable type annotations
+            // 3. Function declarations: external keyword, parameter names + type annotations, local variable tokens
             foreach (var func in ast.Functions)
             {
-                // DX7: parameter type annotations
+                // DX9: 'external' keyword token
+                if (func.IsExternal && func.ExternalLine > 0)
+                    rawTokens.Add((func.ExternalLine, func.ExternalColumn, "external".Length, 9 /* keyword */, 0));
+
+                // DX9: parameter name tokens
                 foreach (var param in func.Parameters)
                 {
+                    if (param.NameLine > 0)
+                        rawTokens.Add((param.NameLine, param.NameColumn, param.Name.Length, 7 /* parameter */, 1 /* declaration */));
+
+                    // DX7: parameter type annotations
                     if (param.TypeNameLine > 0)
                     {
                         string baseType = GetBaseTypeName(param.TypeName);
@@ -3625,14 +3635,21 @@ namespace FFVM.Debug
                             rawTokens.Add((param.TypeNameLine, param.TypeNameColumn, baseType.Length, 2 /* enum */, 0));
                     }
                 }
-                // DX7: local variable type annotations (skip for external funcs — no body)
+                // DX7: local variable type annotations + DX9: local variable name tokens (skip for external funcs — no body)
                 if (func.Body != null)
+                {
                     CollectTypeUsageTokens(func.Body, structNames, enumNames, rawTokens);
+                    CollectVarNameTokens(func.Body, rawTokens);
+                }
             }
 
-            // DX7: module-level variable type annotations
+            // DX7: module-level variable type annotations + DX9: module-level variable name tokens
             foreach (var mv in ast.ModuleVariables)
             {
+                // DX9: variable name token
+                if (mv.NameLine > 0)
+                    rawTokens.Add((mv.NameLine, mv.NameColumn, mv.Name.Length, 5 /* variable */, 1 /* declaration */));
+
                 if (mv.TypeNameLine > 0)
                 {
                     string baseType = GetBaseTypeName(mv.TypeName);
@@ -3653,18 +3670,18 @@ namespace FFVM.Debug
                         enumMemberNames.Add(en.Name + "." + m.Name);
             }
 
-            // 4. Walk expressions in function bodies for enum references and field access
+            // 4. Walk expressions in function bodies for enum references, field access, and variable references
             foreach (var func in ast.Functions)
             {
                 if (func.Body != null)
-                    CollectExprSemanticTokens(func.Body, enumNames, enumMemberNames, structNames, rawTokens);
+                    CollectExprSemanticTokens(func.Body, enumNames, enumMemberNames, structNames, funcNames, rawTokens);
             }
 
-            // 5. Walk module-level variable initializers for enum references
+            // 5. Walk module-level variable initializers for enum references and variable references
             foreach (var mv in ast.ModuleVariables)
             {
                 if (mv.Initializer != null)
-                    CollectExprSemanticTokensFromExpr(mv.Initializer, enumNames, enumMemberNames, structNames, rawTokens);
+                    CollectExprSemanticTokensFromExpr(mv.Initializer, enumNames, enumMemberNames, structNames, funcNames, rawTokens);
             }
 
             // Sort by (line, col) for delta encoding
@@ -3748,6 +3765,39 @@ namespace FFVM.Debug
             else if (stmt is UsingStmt us) CollectTypeUsageTokens(us.Body, structNames, enumNames, tokens);
         }
 
+        /// <summary>
+        /// DX9: Walk a block to emit variable(5) tokens for local variable/constant names.
+        /// </summary>
+        private static void CollectVarNameTokens(BlockStmt block,
+            List<(int line, int col, int len, int type, int mod)> tokens)
+        {
+            if (block == null) return;
+            foreach (var stmt in block.Statements)
+                CollectVarNameTokensInStmt(stmt, tokens);
+        }
+
+        private static void CollectVarNameTokensInStmt(Stmt stmt,
+            List<(int line, int col, int len, int type, int mod)> tokens)
+        {
+            if (stmt == null) return;
+            if (stmt is VarDeclStmt vd && vd.NameLine > 0)
+                tokens.Add((vd.NameLine, vd.NameColumn, vd.Name.Length, 5 /* variable */, 1 /* declaration */));
+            if (stmt is BlockStmt bs) CollectVarNameTokens(bs, tokens);
+            else if (stmt is IfStmt ifs)
+            {
+                CollectVarNameTokensInStmt(ifs.ThenBranch, tokens);
+                CollectVarNameTokensInStmt(ifs.ElseBranch, tokens);
+            }
+            else if (stmt is WhileStmt ws) CollectVarNameTokensInStmt(ws.Body, tokens);
+            else if (stmt is ForStmt fs)
+            {
+                CollectVarNameTokensInStmt(fs.Initializer, tokens);
+                CollectVarNameTokensInStmt(fs.Body, tokens);
+            }
+            else if (stmt is DeferStmt ds) CollectVarNameTokens(ds.Body, tokens);
+            else if (stmt is UsingStmt us) CollectVarNameTokens(us.Body, tokens);
+        }
+
         // ============================================================
         // DX8: Expression-based semantic tokens
         // ============================================================
@@ -3755,69 +3805,70 @@ namespace FFVM.Debug
         /// <summary>
         /// DX8: Walk a block to collect semantic tokens from expressions.
         /// Handles: enum type references (EnumName), enum member access (EnumName.MEMBER),
-        /// struct type references in struct literals, and field access on structs.
+        /// struct type references in struct literals, field access on structs, and variable references.
         /// </summary>
         private static void CollectExprSemanticTokens(BlockStmt block,
             HashSet<string> enumNames, HashSet<string> enumMemberNames,
-            HashSet<string> structNames,
+            HashSet<string> structNames, HashSet<string> funcNames,
             List<(int line, int col, int len, int type, int mod)> tokens)
         {
             if (block == null) return;
             foreach (var stmt in block.Statements)
-                CollectExprSemanticTokensFromStmt(stmt, enumNames, enumMemberNames, structNames, tokens);
+                CollectExprSemanticTokensFromStmt(stmt, enumNames, enumMemberNames, structNames, funcNames, tokens);
         }
 
         private static void CollectExprSemanticTokensFromStmt(Stmt stmt,
             HashSet<string> enumNames, HashSet<string> enumMemberNames,
-            HashSet<string> structNames,
+            HashSet<string> structNames, HashSet<string> funcNames,
             List<(int line, int col, int len, int type, int mod)> tokens)
         {
             if (stmt == null) return;
             if (stmt is ExprStmt es)
-                CollectExprSemanticTokensFromExpr(es.Expression, enumNames, enumMemberNames, structNames, tokens);
+                CollectExprSemanticTokensFromExpr(es.Expression, enumNames, enumMemberNames, structNames, funcNames, tokens);
             else if (stmt is VarDeclStmt vd && vd.Initializer != null)
-                CollectExprSemanticTokensFromExpr(vd.Initializer, enumNames, enumMemberNames, structNames, tokens);
+                CollectExprSemanticTokensFromExpr(vd.Initializer, enumNames, enumMemberNames, structNames, funcNames, tokens);
             else if (stmt is BlockStmt bs)
-                CollectExprSemanticTokens(bs, enumNames, enumMemberNames, structNames, tokens);
+                CollectExprSemanticTokens(bs, enumNames, enumMemberNames, structNames, funcNames, tokens);
             else if (stmt is IfStmt ifs)
             {
-                CollectExprSemanticTokensFromExpr(ifs.Condition, enumNames, enumMemberNames, structNames, tokens);
-                CollectExprSemanticTokensFromStmt(ifs.ThenBranch, enumNames, enumMemberNames, structNames, tokens);
-                CollectExprSemanticTokensFromStmt(ifs.ElseBranch, enumNames, enumMemberNames, structNames, tokens);
+                CollectExprSemanticTokensFromExpr(ifs.Condition, enumNames, enumMemberNames, structNames, funcNames, tokens);
+                CollectExprSemanticTokensFromStmt(ifs.ThenBranch, enumNames, enumMemberNames, structNames, funcNames, tokens);
+                CollectExprSemanticTokensFromStmt(ifs.ElseBranch, enumNames, enumMemberNames, structNames, funcNames, tokens);
             }
             else if (stmt is WhileStmt ws)
             {
-                CollectExprSemanticTokensFromExpr(ws.Condition, enumNames, enumMemberNames, structNames, tokens);
-                CollectExprSemanticTokensFromStmt(ws.Body, enumNames, enumMemberNames, structNames, tokens);
+                CollectExprSemanticTokensFromExpr(ws.Condition, enumNames, enumMemberNames, structNames, funcNames, tokens);
+                CollectExprSemanticTokensFromStmt(ws.Body, enumNames, enumMemberNames, structNames, funcNames, tokens);
             }
             else if (stmt is ForStmt fs)
             {
-                CollectExprSemanticTokensFromStmt(fs.Initializer, enumNames, enumMemberNames, structNames, tokens);
-                CollectExprSemanticTokensFromExpr(fs.Condition, enumNames, enumMemberNames, structNames, tokens);
-                CollectExprSemanticTokensFromExpr(fs.Increment, enumNames, enumMemberNames, structNames, tokens);
-                CollectExprSemanticTokensFromStmt(fs.Body, enumNames, enumMemberNames, structNames, tokens);
+                CollectExprSemanticTokensFromStmt(fs.Initializer, enumNames, enumMemberNames, structNames, funcNames, tokens);
+                CollectExprSemanticTokensFromExpr(fs.Condition, enumNames, enumMemberNames, structNames, funcNames, tokens);
+                CollectExprSemanticTokensFromExpr(fs.Increment, enumNames, enumMemberNames, structNames, funcNames, tokens);
+                CollectExprSemanticTokensFromStmt(fs.Body, enumNames, enumMemberNames, structNames, funcNames, tokens);
             }
             else if (stmt is ReturnStmt rs && rs.Value != null)
-                CollectExprSemanticTokensFromExpr(rs.Value, enumNames, enumMemberNames, structNames, tokens);
+                CollectExprSemanticTokensFromExpr(rs.Value, enumNames, enumMemberNames, structNames, funcNames, tokens);
             else if (stmt is DeferStmt ds)
-                CollectExprSemanticTokens(ds.Body, enumNames, enumMemberNames, structNames, tokens);
+                CollectExprSemanticTokens(ds.Body, enumNames, enumMemberNames, structNames, funcNames, tokens);
             else if (stmt is UsingStmt us)
             {
                 foreach (var arg in us.Arguments)
-                    CollectExprSemanticTokensFromExpr(arg, enumNames, enumMemberNames, structNames, tokens);
-                CollectExprSemanticTokens(us.Body, enumNames, enumMemberNames, structNames, tokens);
+                    CollectExprSemanticTokensFromExpr(arg, enumNames, enumMemberNames, structNames, funcNames, tokens);
+                CollectExprSemanticTokens(us.Body, enumNames, enumMemberNames, structNames, funcNames, tokens);
             }
         }
 
         /// <summary>
         /// DX8: Extract semantic tokens from an expression.
         /// - FieldAccess where target is enum name → enum(target) + enumMember(field)
-        /// - FieldAccess where target is struct var → property(field)
+        /// - FieldAccess where target is struct var → property(field) + variable(target)
         /// - StructLiteral → struct(typeName)
+        /// - Identifier → variable(name) for variable/parameter references
         /// </summary>
         private static void CollectExprSemanticTokensFromExpr(Expr expr,
             HashSet<string> enumNames, HashSet<string> enumMemberNames,
-            HashSet<string> structNames,
+            HashSet<string> structNames, HashSet<string> funcNames,
             List<(int line, int col, int len, int type, int mod)> tokens)
         {
             if (expr == null) return;
@@ -3840,7 +3891,7 @@ namespace FFVM.Debug
                     if (fa.FieldNameLine > 0)
                         tokens.Add((fa.FieldNameLine, fa.FieldNameColumn, fa.FieldName.Length, 4 /* property */, 0));
                     // Recurse into target for nested access (a.b.c)
-                    CollectExprSemanticTokensFromExpr(fa.Target, enumNames, enumMemberNames, structNames, tokens);
+                    CollectExprSemanticTokensFromExpr(fa.Target, enumNames, enumMemberNames, structNames, funcNames, tokens);
                 }
                 return;
             }
@@ -3852,32 +3903,42 @@ namespace FFVM.Debug
                     tokens.Add((sl.Line, sl.Column, sl.TypeName.Length, 1 /* struct */, 0));
                 // Recurse into field value expressions
                 foreach (var fv in sl.Fields)
-                    CollectExprSemanticTokensFromExpr(fv.Value, enumNames, enumMemberNames, structNames, tokens);
+                    CollectExprSemanticTokensFromExpr(fv.Value, enumNames, enumMemberNames, structNames, funcNames, tokens);
+                return;
+            }
+
+            // DX9: Identifier → variable token for variable/parameter references
+            // Skip struct names, enum names, and function names (they have their own token types)
+            if (expr is IdentifierExpr ident)
+            {
+                if (ident.Line > 0 && !structNames.Contains(ident.Name)
+                    && !enumNames.Contains(ident.Name) && !funcNames.Contains(ident.Name))
+                    tokens.Add((ident.Line, ident.Column, ident.Name.Length, 5 /* variable */, 0));
                 return;
             }
 
             // Recurse into sub-expressions
             if (expr is BinaryExpr bin)
             {
-                CollectExprSemanticTokensFromExpr(bin.Left, enumNames, enumMemberNames, structNames, tokens);
-                CollectExprSemanticTokensFromExpr(bin.Right, enumNames, enumMemberNames, structNames, tokens);
+                CollectExprSemanticTokensFromExpr(bin.Left, enumNames, enumMemberNames, structNames, funcNames, tokens);
+                CollectExprSemanticTokensFromExpr(bin.Right, enumNames, enumMemberNames, structNames, funcNames, tokens);
             }
             else if (expr is UnaryExpr un)
-                CollectExprSemanticTokensFromExpr(un.Operand, enumNames, enumMemberNames, structNames, tokens);
+                CollectExprSemanticTokensFromExpr(un.Operand, enumNames, enumMemberNames, structNames, funcNames, tokens);
             else if (expr is AssignExpr ae)
             {
-                CollectExprSemanticTokensFromExpr(ae.Target, enumNames, enumMemberNames, structNames, tokens);
-                CollectExprSemanticTokensFromExpr(ae.Value, enumNames, enumMemberNames, structNames, tokens);
+                CollectExprSemanticTokensFromExpr(ae.Target, enumNames, enumMemberNames, structNames, funcNames, tokens);
+                CollectExprSemanticTokensFromExpr(ae.Value, enumNames, enumMemberNames, structNames, funcNames, tokens);
             }
             else if (expr is CallExpr call)
             {
                 foreach (var arg in call.Arguments)
-                    CollectExprSemanticTokensFromExpr(arg, enumNames, enumMemberNames, structNames, tokens);
+                    CollectExprSemanticTokensFromExpr(arg, enumNames, enumMemberNames, structNames, funcNames, tokens);
             }
             else if (expr is MemberCallExpr mc)
             {
                 foreach (var arg in mc.Arguments)
-                    CollectExprSemanticTokensFromExpr(arg, enumNames, enumMemberNames, structNames, tokens);
+                    CollectExprSemanticTokensFromExpr(arg, enumNames, enumMemberNames, structNames, funcNames, tokens);
             }
         }
 

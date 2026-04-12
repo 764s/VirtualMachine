@@ -149,9 +149,14 @@ namespace FFVM.Compiler
                 else if (Check(TokenType.External))
                 {
                     // DX8: external func declaration — host-provided function with parameter metadata
-                    Advance(); // consume 'external'
+                    var extTok = Advance(); // consume 'external'
                     if (Check(TokenType.Func))
-                        module.Functions.Add(ParseExternalFuncDecl());
+                    {
+                        var fd = ParseExternalFuncDecl();
+                        fd.ExternalLine = extTok.Line;
+                        fd.ExternalColumn = extTok.Column;
+                        module.Functions.Add(fd);
+                    }
                     else
                     {
                         Error($"Expected 'func' after 'external', got '{Current().Text}'");
@@ -367,7 +372,8 @@ namespace FFVM.Compiler
             {
                 do
                 {
-                    string pName = Expect(TokenType.Identifier, "in parameter list").Text ?? "?";
+                    var pNameToken = Expect(TokenType.Identifier, "in parameter list");
+                    string pName = pNameToken.Text ?? "?";
                     Expect(TokenType.Colon, "after parameter name");
                     var pTypeToken = Expect(TokenType.Identifier, "for parameter type");
                     string pType = pTypeToken.Text ?? "int";
@@ -386,6 +392,9 @@ namespace FFVM.Compiler
                     // DX7: track precise position of parameter type name token
                     param.TypeNameLine = pTypeToken.Line;
                     param.TypeNameColumn = pTypeToken.Column;
+                    // DX9: track precise position of parameter name token
+                    param.NameLine = pNameToken.Line;
+                    param.NameColumn = pNameToken.Column;
                     parameters.Add(param);
                 } while (Match(TokenType.Comma));
             }
@@ -422,13 +431,17 @@ namespace FFVM.Compiler
             {
                 do
                 {
-                    string pName = Expect(TokenType.Identifier, "in parameter list").Text ?? "?";
+                    var pNameToken = Expect(TokenType.Identifier, "in parameter list");
+                    string pName = pNameToken.Text ?? "?";
                     Expect(TokenType.Colon, "after parameter name");
                     var pTypeToken = Expect(TokenType.Identifier, "for parameter type");
                     string pType = pTypeToken.Text ?? "int";
                     var param = new ParamDecl(pName, pType);
                     param.TypeNameLine = pTypeToken.Line;
                     param.TypeNameColumn = pTypeToken.Column;
+                    // DX9: track precise position of parameter name token
+                    param.NameLine = pNameToken.Line;
+                    param.NameColumn = pNameToken.Column;
                     parameters.Add(param);
                 } while (Match(TokenType.Comma));
             }
@@ -657,7 +670,9 @@ namespace FFVM.Compiler
         {
             int line = Current().Line, col = Current().Column;
             Advance(); // consume 'var' or 'const'
-            string name = Expect(TokenType.Identifier, isConst ? "after 'const'" : "after 'var'").Text ?? "?";
+            var nameToken = Expect(TokenType.Identifier, isConst ? "after 'const'" : "after 'var'");
+            string name = nameToken.Text ?? "?";
+            int nameLine = nameToken.Line, nameCol = nameToken.Column;
             // Lang-18: support dotted name for aliased override (override const Alias.Name: type = value)
             string aliasTarget = null;
             if (Check(TokenType.Dot) && isOverride)
@@ -696,6 +711,9 @@ namespace FFVM.Compiler
             // DX7: track precise position of type name token
             stmt.TypeNameLine = typeNameLine;
             stmt.TypeNameColumn = typeNameCol;
+            // DX9: track precise position of variable name token
+            stmt.NameLine = nameLine;
+            stmt.NameColumn = nameCol;
             return stmt;
         }
 
