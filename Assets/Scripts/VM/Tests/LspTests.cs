@@ -3367,6 +3367,413 @@ public static class LspTests
                 $"DX5-20: ≥10 data ints for struct decl + field, got {data?.Count ?? 0}");
         }
 
+        // ============================================================
+        // DX6: Include file rename — workspace/willRenameFiles
+        // ============================================================
+
+        // DX6-01: Basic rename — single include reference updated
+        {
+            string tmpDir = Path.Combine(Path.GetTempPath(), "dx6_basic_" + Guid.NewGuid().ToString("N").Substring(0, 8));
+            try
+            {
+                Directory.CreateDirectory(tmpDir);
+                File.WriteAllText(Path.Combine(tmpDir, "utils.ffs"), "func add(a: int, b: int): int { return a + b }");
+                string mainSource = "include \"utils\"\nfunc main() {\n  var r: int = add(1, 2)\n  wait r\n}";
+                File.WriteAllText(Path.Combine(tmpDir, "main.ffs"), mainSource);
+                File.WriteAllText(Path.Combine(tmpDir, "test.ffproj"), "{ \"includePaths\": [\".\"] }");
+
+                string rootUri = "file:///" + tmpDir.Replace('\\', '/').TrimStart('/');
+                string mainUri = rootUri + "/main.ffs";
+                string oldFileUri = rootUri + "/utils.ffs";
+                string newFileUri = rootUri + "/helpers.ffs";
+
+                var session = new LspBatchSession();
+                session.AddInitializeWithRootUri(rootUri);
+                session.AddInitialized();
+                session.AddDidOpen(mainUri, mainSource);
+                session.AddWillRenameFiles(oldFileUri, newFileUri);
+                session.AddShutdown();
+                session.AddExit();
+                session.Run();
+
+                session.ExpectResponse(0); // initialize
+                var renResp = session.ExpectResponse(1); // willRenameFiles
+                var wsEdit = renResp?.GetObject("result");
+                var changes = wsEdit?.GetObject("changes");
+                Assert(changes != null, "DX6-01: WorkspaceEdit has changes");
+                if (changes != null)
+                {
+                    var edits = changes.GetArray(mainUri);
+                    Assert(edits != null && edits.Count == 1,
+                        $"DX6-01: 1 text edit for renamed include, got {edits?.Count ?? 0}");
+                    if (edits != null && edits.Count > 0)
+                    {
+                        var edit = edits[0] as JsonObject;
+                        string newText = edit?.GetString("newText");
+                        Assert(newText == "helpers",
+                            $"DX6-01: newText='helpers', got '{newText}'");
+                    }
+                }
+            }
+            finally
+            {
+                try { Directory.Delete(tmpDir, true); } catch { }
+            }
+        }
+
+        // DX6-02: Rename with include-as alias — include path updated, alias preserved
+        {
+            string tmpDir = Path.Combine(Path.GetTempPath(), "dx6_alias_" + Guid.NewGuid().ToString("N").Substring(0, 8));
+            try
+            {
+                Directory.CreateDirectory(tmpDir);
+                File.WriteAllText(Path.Combine(tmpDir, "math.ffs"), "func square(n: int): int { return n * n }");
+                string mainSource = "include \"math\" as Math\nfunc main() {\n  var r: int = Math.square(3)\n  wait r\n}";
+                File.WriteAllText(Path.Combine(tmpDir, "main.ffs"), mainSource);
+                File.WriteAllText(Path.Combine(tmpDir, "test.ffproj"), "{ \"includePaths\": [\".\"] }");
+
+                string rootUri = "file:///" + tmpDir.Replace('\\', '/').TrimStart('/');
+                string mainUri = rootUri + "/main.ffs";
+
+                var session = new LspBatchSession();
+                session.AddInitializeWithRootUri(rootUri);
+                session.AddInitialized();
+                session.AddDidOpen(mainUri, mainSource);
+                session.AddWillRenameFiles(rootUri + "/math.ffs", rootUri + "/arithmetic.ffs");
+                session.AddShutdown();
+                session.AddExit();
+                session.Run();
+
+                session.ExpectResponse(0);
+                var renResp = session.ExpectResponse(1);
+                var changes = renResp?.GetObject("result")?.GetObject("changes");
+                Assert(changes != null, "DX6-02: WorkspaceEdit has changes");
+                if (changes != null)
+                {
+                    var edits = changes.GetArray(mainUri);
+                    Assert(edits != null && edits.Count == 1,
+                        $"DX6-02: 1 text edit for include-as rename, got {edits?.Count ?? 0}");
+                    if (edits != null && edits.Count > 0)
+                    {
+                        var edit = edits[0] as JsonObject;
+                        string newText = edit?.GetString("newText");
+                        Assert(newText == "arithmetic",
+                            $"DX6-02: newText='arithmetic', got '{newText}'");
+                    }
+                }
+            }
+            finally
+            {
+                try { Directory.Delete(tmpDir, true); } catch { }
+            }
+        }
+
+        // DX6-03: No-op — rename a file not referenced by any include
+        {
+            string tmpDir = Path.Combine(Path.GetTempPath(), "dx6_noop_" + Guid.NewGuid().ToString("N").Substring(0, 8));
+            try
+            {
+                Directory.CreateDirectory(tmpDir);
+                File.WriteAllText(Path.Combine(tmpDir, "unused.ffs"), "func noop(): int { return 0 }");
+                string mainSource = "func main() {\n  wait 1\n}";
+                File.WriteAllText(Path.Combine(tmpDir, "main.ffs"), mainSource);
+                File.WriteAllText(Path.Combine(tmpDir, "test.ffproj"), "{ \"includePaths\": [\".\"] }");
+
+                string rootUri = "file:///" + tmpDir.Replace('\\', '/').TrimStart('/');
+                string mainUri = rootUri + "/main.ffs";
+
+                var session = new LspBatchSession();
+                session.AddInitializeWithRootUri(rootUri);
+                session.AddInitialized();
+                session.AddDidOpen(mainUri, mainSource);
+                session.AddWillRenameFiles(rootUri + "/unused.ffs", rootUri + "/still_unused.ffs");
+                session.AddShutdown();
+                session.AddExit();
+                session.Run();
+
+                session.ExpectResponse(0);
+                var renResp = session.ExpectResponse(1);
+                var wsEdit = renResp?.GetObject("result");
+                // Should return empty object (no changes needed)
+                var changes = wsEdit?.GetObject("changes");
+                bool isEmpty = changes == null;
+                Assert(isEmpty, "DX6-03: no changes for unreferenced file rename");
+            }
+            finally
+            {
+                try { Directory.Delete(tmpDir, true); } catch { }
+            }
+        }
+
+        // DX6-04: Multiple includes in same file — both updated
+        {
+            string tmpDir = Path.Combine(Path.GetTempPath(), "dx6_multi_" + Guid.NewGuid().ToString("N").Substring(0, 8));
+            try
+            {
+                Directory.CreateDirectory(tmpDir);
+                File.WriteAllText(Path.Combine(tmpDir, "lib.ffs"), "func helper(): int { return 42 }");
+                string mainSource = "include \"lib\"\ninclude \"lib\"\nfunc main() {\n  wait helper()\n}";
+                File.WriteAllText(Path.Combine(tmpDir, "main.ffs"), mainSource);
+                File.WriteAllText(Path.Combine(tmpDir, "test.ffproj"), "{ \"includePaths\": [\".\"] }");
+
+                string rootUri = "file:///" + tmpDir.Replace('\\', '/').TrimStart('/');
+                string mainUri = rootUri + "/main.ffs";
+
+                var session = new LspBatchSession();
+                session.AddInitializeWithRootUri(rootUri);
+                session.AddInitialized();
+                session.AddDidOpen(mainUri, mainSource);
+                session.AddWillRenameFiles(rootUri + "/lib.ffs", rootUri + "/library.ffs");
+                session.AddShutdown();
+                session.AddExit();
+                session.Run();
+
+                session.ExpectResponse(0);
+                var renResp = session.ExpectResponse(1);
+                var changes = renResp?.GetObject("result")?.GetObject("changes");
+                Assert(changes != null, "DX6-04: WorkspaceEdit has changes");
+                if (changes != null)
+                {
+                    var edits = changes.GetArray(mainUri);
+                    Assert(edits != null && edits.Count == 2,
+                        $"DX6-04: 2 text edits for duplicate includes, got {edits?.Count ?? 0}");
+                }
+            }
+            finally
+            {
+                try { Directory.Delete(tmpDir, true); } catch { }
+            }
+        }
+
+        // DX6-05: Cross-file — rename updates includes in multiple files
+        {
+            string tmpDir = Path.Combine(Path.GetTempPath(), "dx6_cross_" + Guid.NewGuid().ToString("N").Substring(0, 8));
+            try
+            {
+                Directory.CreateDirectory(tmpDir);
+                File.WriteAllText(Path.Combine(tmpDir, "shared.ffs"), "func common(): int { return 1 }");
+                string mainSource = "include \"shared\"\nfunc main() {\n  wait common()\n}";
+                string otherSource = "include \"shared\"\nfunc other(): int { return common() + 1 }";
+                File.WriteAllText(Path.Combine(tmpDir, "main.ffs"), mainSource);
+                File.WriteAllText(Path.Combine(tmpDir, "other.ffs"), otherSource);
+                File.WriteAllText(Path.Combine(tmpDir, "test.ffproj"), "{ \"includePaths\": [\".\"] }");
+
+                string rootUri = "file:///" + tmpDir.Replace('\\', '/').TrimStart('/');
+                string mainUri = rootUri + "/main.ffs";
+
+                var session = new LspBatchSession();
+                session.AddInitializeWithRootUri(rootUri);
+                session.AddInitialized();
+                session.AddDidOpen(mainUri, mainSource);
+                session.AddWillRenameFiles(rootUri + "/shared.ffs", rootUri + "/base.ffs");
+                session.AddShutdown();
+                session.AddExit();
+                session.Run();
+
+                session.ExpectResponse(0);
+                var renResp = session.ExpectResponse(1);
+                var changes = renResp?.GetObject("result")?.GetObject("changes");
+                Assert(changes != null, "DX6-05: WorkspaceEdit has changes");
+                if (changes != null)
+                {
+                    // Both main.ffs and other.ffs should have edits
+                    var mainEdits = changes.GetArray(mainUri);
+                    string otherUri = rootUri + "/other.ffs";
+                    var otherUriNormalized = LspServer.PathToFileUri(Path.Combine(tmpDir, "other.ffs"));
+                    var otherEdits = changes.GetArray(otherUriNormalized);
+                    int totalEdits = (mainEdits?.Count ?? 0) + (otherEdits?.Count ?? 0);
+                    Assert(totalEdits == 2,
+                        $"DX6-05: 2 total edits across files, got {totalEdits}");
+                }
+            }
+            finally
+            {
+                try { Directory.Delete(tmpDir, true); } catch { }
+            }
+        }
+
+        // DX6-06: Subdirectory rename — include "sub/module" updated correctly
+        {
+            string tmpDir = Path.Combine(Path.GetTempPath(), "dx6_subdir_" + Guid.NewGuid().ToString("N").Substring(0, 8));
+            try
+            {
+                string subDir = Path.Combine(tmpDir, "sub");
+                Directory.CreateDirectory(subDir);
+                File.WriteAllText(Path.Combine(subDir, "module.ffs"), "func subFunc(): int { return 7 }");
+                string mainSource = "include \"sub/module\"\nfunc main() {\n  wait subFunc()\n}";
+                File.WriteAllText(Path.Combine(tmpDir, "main.ffs"), mainSource);
+                File.WriteAllText(Path.Combine(tmpDir, "test.ffproj"), "{ \"includePaths\": [\".\"] }");
+
+                string rootUri = "file:///" + tmpDir.Replace('\\', '/').TrimStart('/');
+                string mainUri = rootUri + "/main.ffs";
+                string oldFileUri = rootUri + "/sub/module.ffs";
+                string newFileUri = rootUri + "/sub/component.ffs";
+
+                var session = new LspBatchSession();
+                session.AddInitializeWithRootUri(rootUri);
+                session.AddInitialized();
+                session.AddDidOpen(mainUri, mainSource);
+                session.AddWillRenameFiles(oldFileUri, newFileUri);
+                session.AddShutdown();
+                session.AddExit();
+                session.Run();
+
+                session.ExpectResponse(0);
+                var renResp = session.ExpectResponse(1);
+                var changes = renResp?.GetObject("result")?.GetObject("changes");
+                Assert(changes != null, "DX6-06: WorkspaceEdit has changes for subdir rename");
+                if (changes != null)
+                {
+                    var edits = changes.GetArray(mainUri);
+                    Assert(edits != null && edits.Count == 1,
+                        $"DX6-06: 1 edit for subdir include, got {edits?.Count ?? 0}");
+                    if (edits != null && edits.Count > 0)
+                    {
+                        var edit = edits[0] as JsonObject;
+                        string newText = edit?.GetString("newText");
+                        Assert(newText == "sub/component",
+                            $"DX6-06: newText='sub/component', got '{newText}'");
+                    }
+                }
+            }
+            finally
+            {
+                try { Directory.Delete(tmpDir, true); } catch { }
+            }
+        }
+
+        // DX6-07: Explicit .ffs extension in include — include "utils.ffs" → "helpers.ffs"
+        {
+            string tmpDir = Path.Combine(Path.GetTempPath(), "dx6_ext_" + Guid.NewGuid().ToString("N").Substring(0, 8));
+            try
+            {
+                Directory.CreateDirectory(tmpDir);
+                File.WriteAllText(Path.Combine(tmpDir, "utils.ffs"), "func tool(): int { return 5 }");
+                string mainSource = "include \"utils.ffs\"\nfunc main() {\n  wait tool()\n}";
+                File.WriteAllText(Path.Combine(tmpDir, "main.ffs"), mainSource);
+                File.WriteAllText(Path.Combine(tmpDir, "test.ffproj"), "{ \"includePaths\": [\".\"] }");
+
+                string rootUri = "file:///" + tmpDir.Replace('\\', '/').TrimStart('/');
+                string mainUri = rootUri + "/main.ffs";
+
+                var session = new LspBatchSession();
+                session.AddInitializeWithRootUri(rootUri);
+                session.AddInitialized();
+                session.AddDidOpen(mainUri, mainSource);
+                session.AddWillRenameFiles(rootUri + "/utils.ffs", rootUri + "/helpers.ffs");
+                session.AddShutdown();
+                session.AddExit();
+                session.Run();
+
+                session.ExpectResponse(0);
+                var renResp = session.ExpectResponse(1);
+                var changes = renResp?.GetObject("result")?.GetObject("changes");
+                Assert(changes != null, "DX6-07: changes for .ffs extension include");
+                if (changes != null)
+                {
+                    var edits = changes.GetArray(mainUri);
+                    Assert(edits != null && edits.Count == 1,
+                        $"DX6-07: 1 edit for explicit .ffs include, got {edits?.Count ?? 0}");
+                    if (edits != null && edits.Count > 0)
+                    {
+                        var edit = edits[0] as JsonObject;
+                        string newText = edit?.GetString("newText");
+                        Assert(newText == "helpers.ffs",
+                            $"DX6-07: newText='helpers.ffs', got '{newText}'");
+                    }
+                }
+            }
+            finally
+            {
+                try { Directory.Delete(tmpDir, true); } catch { }
+            }
+        }
+
+        // DX6-08: No rootPath — returns empty (graceful fallback)
+        {
+            var session = new LspBatchSession();
+            session.AddInitialize(); // no rootUri
+            session.AddInitialized();
+            session.AddWillRenameFiles("file:///old.ffs", "file:///new.ffs");
+            session.AddShutdown();
+            session.AddExit();
+            session.Run();
+
+            session.ExpectResponse(0);
+            var renResp = session.ExpectResponse(1);
+            var wsEdit = renResp?.GetObject("result");
+            var changes = wsEdit?.GetObject("changes");
+            Assert(changes == null, "DX6-08: no changes without rootPath");
+        }
+
+        // DX6-09: Text edit range — verify line/character positions are correct
+        {
+            string tmpDir = Path.Combine(Path.GetTempPath(), "dx6_range_" + Guid.NewGuid().ToString("N").Substring(0, 8));
+            try
+            {
+                Directory.CreateDirectory(tmpDir);
+                File.WriteAllText(Path.Combine(tmpDir, "old.ffs"), "func f(): int { return 1 }");
+                // include on line 1 (0-indexed), with leading code on line 0
+                string mainSource = "func setup(): int { return 0 }\ninclude \"old\"\nfunc main() {\n  wait f()\n}";
+                File.WriteAllText(Path.Combine(tmpDir, "main.ffs"), mainSource);
+                File.WriteAllText(Path.Combine(tmpDir, "test.ffproj"), "{ \"includePaths\": [\".\"] }");
+
+                string rootUri = "file:///" + tmpDir.Replace('\\', '/').TrimStart('/');
+                string mainUri = rootUri + "/main.ffs";
+
+                var session = new LspBatchSession();
+                session.AddInitializeWithRootUri(rootUri);
+                session.AddInitialized();
+                session.AddDidOpen(mainUri, mainSource);
+                session.AddWillRenameFiles(rootUri + "/old.ffs", rootUri + "/fresh.ffs");
+                session.AddShutdown();
+                session.AddExit();
+                session.Run();
+
+                session.ExpectResponse(0);
+                var renResp = session.ExpectResponse(1);
+                var changes = renResp?.GetObject("result")?.GetObject("changes");
+                Assert(changes != null, "DX6-09: changes present");
+                if (changes != null)
+                {
+                    var edits = changes.GetArray(mainUri);
+                    Assert(edits != null && edits.Count == 1, "DX6-09: 1 edit");
+                    if (edits != null && edits.Count > 0)
+                    {
+                        var edit = edits[0] as JsonObject;
+                        var range = edit?.GetObject("range");
+                        var start = range?.GetObject("start");
+                        int line = start?.GetInt("line") ?? -1;
+                        int character = start?.GetInt("character") ?? -1;
+                        // include "old" on line 1, col 0: 'include "' = 9 chars → path starts at col 9
+                        Assert(line == 1 && character == 9,
+                            $"DX6-09: edit at line=1, char=9, got line={line}, char={character}");
+                    }
+                }
+            }
+            finally
+            {
+                try { Directory.Delete(tmpDir, true); } catch { }
+            }
+        }
+
+        // DX6-10: Capability advertised — initialize response includes workspace.fileOperations.willRename
+        {
+            var session = new LspBatchSession();
+            session.AddInitialize();
+            session.AddInitialized();
+            session.AddShutdown();
+            session.AddExit();
+            session.Run();
+
+            var initResp = session.ExpectResponse(0);
+            var caps = initResp?.GetObject("result")?.GetObject("capabilities");
+            var ws = caps?.GetObject("workspace");
+            var fileOps = ws?.GetObject("fileOperations");
+            var willRename = fileOps?.GetObject("willRename");
+            Assert(willRename != null, "DX6-10: workspace.fileOperations.willRename capability advertised");
+        }
+
         Debug.Log($"\n===== LspTests: {passed} passed, {failed} failed =====");
     }
 
@@ -3595,6 +4002,38 @@ public static class LspTests
             textDoc.Set("uri", uri);
             parameters.Set("textDocument", textDoc);
             AddRequest("textDocument/semanticTokens/full", parameters);
+        }
+
+        /// <summary>
+        /// DX6: Add a workspace/willRenameFiles request with one file rename.
+        /// </summary>
+        public void AddWillRenameFiles(string oldUri, string newUri)
+        {
+            var parameters = new JsonObject();
+            var fileRename = new JsonObject();
+            fileRename.Set("oldUri", oldUri);
+            fileRename.Set("newUri", newUri);
+            var files = new List<object> { fileRename };
+            parameters.Set("files", files);
+            AddRequest("workspace/willRenameFiles", parameters);
+        }
+
+        /// <summary>
+        /// DX6: Add a workspace/willRenameFiles request with multiple file renames.
+        /// </summary>
+        public void AddWillRenameFilesMulti(List<(string oldUri, string newUri)> renames)
+        {
+            var parameters = new JsonObject();
+            var files = new List<object>();
+            foreach (var (oldUri, newUri) in renames)
+            {
+                var fileRename = new JsonObject();
+                fileRename.Set("oldUri", oldUri);
+                fileRename.Set("newUri", newUri);
+                files.Add(fileRename);
+            }
+            parameters.Set("files", files);
+            AddRequest("workspace/willRenameFiles", parameters);
         }
 
         /// <summary>

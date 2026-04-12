@@ -208,7 +208,12 @@ function activate(context) {
         };
 
         const clientOptions = {
-            documentSelector: [{ scheme: "file", language: "ffvm" }]
+            documentSelector: [{ scheme: "file", language: "ffvm" }],
+            middleware: {
+                workspace: {
+                    willRenameFiles: (params, next) => next(params)
+                }
+            }
         };
 
         client = new LanguageClient(
