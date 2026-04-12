@@ -1552,17 +1552,30 @@ namespace FFVM.Debug
         /// DX4-P3: Resolve the target URI for a definition or reference location.
         /// If the symbol's OriginFile matches the current file's path, returns the requesting URI.
         /// Otherwise, converts OriginFile to a file:// URI for cross-file navigation.
+        /// When OriginFile is a relative module name (not an absolute path), uses
+        /// the workspace file resolver's include paths to locate the actual file.
         /// </summary>
         private string ResolveOriginUri(string requestingUri, string originFile)
         {
             if (originFile == null) return requestingUri;
+
+            // If originFile is a relative path, try resolving via file resolver's include paths first.
+            // This handles cases where OriginFile is a module name (e.g. "common/constants")
+            // rather than an absolute filesystem path.
+            string resolvedOriginFile = originFile;
+            if (_fileResolver != null && !Path.IsPathRooted(originFile))
+            {
+                string resolved = _fileResolver.ResolveFilePath(originFile);
+                if (resolved != null)
+                    resolvedOriginFile = resolved;
+            }
 
             // Check if originFile matches the requesting document's path
             string requestingPath = _rootPath != null ? UriToFilePath(requestingUri, _rootPath) : null;
             if (requestingPath != null)
             {
                 // Normalize both for comparison
-                string normOrigin = originFile.Replace('\\', '/');
+                string normOrigin = resolvedOriginFile.Replace('\\', '/');
                 string normReq = requestingPath.Replace('\\', '/');
                 if (string.Equals(normOrigin, normReq, StringComparison.OrdinalIgnoreCase))
                     return requestingUri;
@@ -1571,14 +1584,14 @@ namespace FFVM.Debug
             string requestingAbsPath = UriToPath(requestingUri);
             if (requestingAbsPath != null)
             {
-                string normOriginAbs = originFile.Replace('\\', '/');
+                string normOriginAbs = resolvedOriginFile.Replace('\\', '/');
                 string normAbsReq = requestingAbsPath.Replace('\\', '/');
                 if (string.Equals(normOriginAbs, normAbsReq, StringComparison.OrdinalIgnoreCase))
                     return requestingUri;
             }
 
             // Cross-file: convert OriginFile to URI
-            string crossUri = FilePathToUri(originFile, _rootPath);
+            string crossUri = FilePathToUri(resolvedOriginFile, _rootPath);
             return crossUri ?? requestingUri;
         }
 
