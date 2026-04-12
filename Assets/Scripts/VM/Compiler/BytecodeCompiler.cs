@@ -84,6 +84,7 @@ namespace FFVM.Compiler
         // Multi-function support
         private Dictionary<string, int> _functionTable;  // funcName → entryIP (-1 = not yet compiled)
         private Dictionary<string, FuncDecl> _funcDecls; // funcName → AST for param count lookup
+        private Dictionary<string, FuncDecl> _externalFuncs; // DX8: external func name → declaration (host-provided)
         private bool _isEntryFunction;                   // true when compiling the entry func
         private bool _isLeafFunction;                    // FO1: true when compiling a leaf func
         private int _callerWindowSize;                   // localVarCount for current function
@@ -104,6 +105,9 @@ namespace FFVM.Compiler
 
         // Deferred cleanup blocks (emitted after main body)
         private const int NoReleaseSyscall = -1;
+        // DX8: Placeholder syscall slot offset for external funcs in diagnostics-only mode.
+        // Chosen to be far above any realistic host syscall slot count to avoid collisions.
+        private const int ExternalFuncSlotBase = 90000;
         private struct DeferredCleanup
         {
             public int PushCleanupIP;
@@ -150,6 +154,7 @@ namespace FFVM.Compiler
 
         // Lang-15: origin-aware symbol lookup for public/private visibility
         private string _currentOriginFile;         // OriginFile of the function currently being compiled
+        private string _mainFilePath;              // DX8: main file path (for cross-file error tagging)
 
         // F4: Register lifecycle analysis
         private struct LiveRange
@@ -169,6 +174,19 @@ namespace FFVM.Compiler
         private Dictionary<string, HashSet<string>> _inlinedCalleesPerFunc;
 
         // ===== Lang-15: origin-aware symbol lookup helpers =====
+
+        /// <summary>
+        /// DX8: Add an error message tagged with origin file info when it differs from the main file.
+        /// Format: "[origin.ffs] message" for cross-file errors, plain "message" for same-file errors.
+        /// This lets the LSP identify and properly route cross-file diagnostics.
+        /// </summary>
+        private void AddError(string message)
+        {
+            if (_currentOriginFile != null && _mainFilePath != null && _currentOriginFile != _mainFilePath)
+                _errors.Add($"[{_currentOriginFile}] {message}");
+            else
+                _errors.Add(message);
+        }
 
         /// <summary>
         /// Returns the internal dictionary key for a FuncDecl.
@@ -398,6 +416,7 @@ namespace FFVM.Compiler
             _jumpTables = new List<int[]>();
             _syscalls = syscalls ?? new Dictionary<string, int>();
             _syscallTable = syscallTable;
+            _mainFilePath = module.FilePath; // DX8: track main file for cross-file error tagging
             _errors = new List<string>();
             _warnings = new List<string>();
             _pendingCalls = new List<PendingCall>();
@@ -467,11 +486,21 @@ namespace FFVM.Compiler
             // Lang-15: private functions use qualified key "name\0originFile"
             _functionTable = new Dictionary<string, int>();
             _funcDecls = new Dictionary<string, FuncDecl>();
+            _externalFuncs = new Dictionary<string, FuncDecl>();
             FuncDecl entryDecl = null;
 
             for (int i = 0; i < module.Functions.Count; i++)
             {
                 var f = module.Functions[i];
+                // DX8: external func declarations → register as known syscall, skip function table
+                if (f.IsExternal)
+                {
+                    _externalFuncs[f.Name] = f;
+                    // Register in syscalls if not already present (auto-assign slot)
+                    if (!_syscalls.ContainsKey(f.Name))
+                        _syscalls[f.Name] = _syscalls.Count + ExternalFuncSlotBase; // placeholder slot for diagnostics-only
+                    continue;
+                }
                 string key = FuncKey(f);
                 _functionTable[key] = -1; // placeholder
                 _funcDecls[key] = f;
@@ -523,6 +552,7 @@ namespace FFVM.Compiler
             {
                 var f = module.Functions[i];
                 if (f == entryDecl) continue;
+                if (f.IsExternal) continue; // DX8: external funcs have no body to compile
 
                 string fKey = FuncKey(f);
                 bool isLeaf = _leafFunctions.TryGetValue(fKey, out bool lf) && lf;
@@ -3581,8 +3611,19 @@ namespace FFVM.Compiler
         {
             if (!_syscalls.TryGetValue(call.FunctionName, out int slot))
             {
-                _errors.Add($"Unknown function '{call.FunctionName}' (line {call.Line})");
+                AddError($"Unknown function '{call.FunctionName}' (line {call.Line})");
                 return TempRegBase;
+            }
+
+            // DX8: parameter count validation for external func declarations
+            FuncDecl extDecl;
+            if (_externalFuncs != null && _externalFuncs.TryGetValue(call.FunctionName, out extDecl))
+            {
+                if (call.Arguments.Count != extDecl.Parameters.Count)
+                {
+                    AddError($"External function '{call.FunctionName}' expects {extDecl.Parameters.Count} arguments but got {call.Arguments.Count} (line {call.Line})");
+                    return TempRegBase;
+                }
             }
 
             // C4: requires_cleanup check — only 'using' wrapped calls are exempt (they don't go through this path)
@@ -3619,6 +3660,17 @@ namespace FFVM.Compiler
         private void CompileSyscallVoid(CallExpr call)
         {
             int slot = _syscalls[call.FunctionName];
+
+            // DX8: parameter count validation for external func declarations
+            FuncDecl extDecl;
+            if (_externalFuncs != null && _externalFuncs.TryGetValue(call.FunctionName, out extDecl))
+            {
+                if (call.Arguments.Count != extDecl.Parameters.Count)
+                {
+                    AddError($"External function '{call.FunctionName}' expects {extDecl.Parameters.Count} arguments but got {call.Arguments.Count} (line {call.Line})");
+                    return;
+                }
+            }
 
             // C4: requires_cleanup check — only 'using' wrapped calls are exempt (they don't go through this path)
             if (_syscallTable != null && _syscallTable.RequiresCleanup(slot))
@@ -4112,6 +4164,7 @@ namespace FFVM.Compiler
             for (int i = 0; i < module.Functions.Count; i++)
             {
                 var func = module.Functions[i];
+                if (func.IsExternal) continue; // DX8: external funcs have no body
                 string fKey = FuncKey(func);
                 if (entryFunc != null && func.Name == entryFunc && !func.IsPrivate)
                 {
@@ -4428,6 +4481,7 @@ namespace FFVM.Compiler
             for (int i = 0; i < module.Functions.Count; i++)
             {
                 var f = module.Functions[i];
+                if (f.IsExternal) continue; // DX8: external funcs have no body
                 mayYield[f.Name] = ContainsYieldOrWait(f.Body);
             }
 
@@ -4436,6 +4490,7 @@ namespace FFVM.Compiler
             for (int i = 0; i < module.Functions.Count; i++)
             {
                 var f = module.Functions[i];
+                if (f.IsExternal) continue; // DX8: external funcs have no body
                 var calls = new List<string>();
                 CollectCallees(f.Body, calls);
                 callees[f.Name] = calls;

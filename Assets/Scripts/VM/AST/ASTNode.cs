@@ -409,6 +409,8 @@ namespace FFVM.AST
         public bool IsExported { get; }
         public bool IsInline { get; }
         public bool IsOverride { get; }
+        /// <summary>DX8: External function declaration — declares a host-provided syscall with parameter metadata. Body is null.</summary>
+        public bool IsExternal { get; }
         /// <summary>Lang-18: Target alias for override alias declarations (e.g. "Alias" in "override func Alias.Do()"). Null for normal declarations.</summary>
         public string AliasTarget { get; set; }
         public string DocComment { get; set; }
@@ -416,7 +418,7 @@ namespace FFVM.AST
         /// <summary>Lang-15: Source file this declaration originated from. Set by Preprocessor during merge.</summary>
         public string OriginFile { get; set; }
 
-        public FuncDecl(string name, List<ParamDecl> parameters, string returnType, BlockStmt body, bool isPrivate, bool isExported = false, bool isInline = false, bool isOverride = false)
+        public FuncDecl(string name, List<ParamDecl> parameters, string returnType, BlockStmt body, bool isPrivate, bool isExported = false, bool isInline = false, bool isOverride = false, bool isExternal = false)
             : base(NodeKind.FuncDecl)
         {
             Name = name;
@@ -427,6 +429,7 @@ namespace FFVM.AST
             IsExported = isExported;
             IsInline = isInline;
             IsOverride = isOverride;
+            IsExternal = isExternal;
         }
     }
 

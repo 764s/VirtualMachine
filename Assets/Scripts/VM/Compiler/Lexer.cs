@@ -18,7 +18,7 @@ namespace FFVM.Compiler
         Wait, WaitFor, Yield, Defer, Using,
         True, False, Struct, Include, Export, Inline,
         Enum,
-        Public, Private, Override,
+        Public, Private, Override, External,
 
         // Operators
         Plus, Minus, Star, Slash, Percent,
@@ -87,6 +87,7 @@ namespace FFVM.Compiler
             { "public",   TokenType.Public },
             { "private",  TokenType.Private },
             { "override", TokenType.Override },
+            { "external", TokenType.External },
         };
 
         public Lexer(string source)

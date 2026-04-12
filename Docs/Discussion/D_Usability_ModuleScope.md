@@ -1,8 +1,8 @@
 # 易用性补充：语法信息来源范围 × 编译方式
 
-> **状态**：✅ 已完成讨论 → VM_Summary.md §七 Lang 串行计划（DX4 系列 ✅ 全部完成；DX5 ✅ 已完成）
+> **状态**：✅ 已完成讨论 → VM_Summary.md §七 Lang 串行计划（DX4~DX8 全系列完成）
 > **来源**：DX4 — 模块化编译与宿主集成易用性
-> **日期**：2026-04-11
+> **日期**：2026-04-11（DX4~DX5）/ 2026-04-12（DX6~DX8）
 
 ---
 
@@ -410,3 +410,164 @@ DX4 系列完成后，DX5 补充了以下 LSP 易用性功能：
 | R1 | Include 文件重命名时自动更新所有 `include` 引用 | LSP rename 无法操作文件系统；需 `workspace/willRenameFiles` | **DX6** ✅ |
 | R2 | 结构体字段使用处（`v.x`）精确 references/rename | `FieldAccessExpr` 缺少 `FieldNameLine`/`FieldNameColumn` | **DX7** ✅ |
 | R3 | 类型注解使用处（`var v: Vec2`）精确语义染色 | `VarDeclStmt`/`ParamDecl` 缺少 `TypeNameLine`/`TypeNameColumn` | **DX7** ✅ |
+
+---
+
+## 十二、DX8：external func 语法 + 跨文件报错修正 + 表达式级语义染色
+
+> **状态**：✅ 已完成 — DX8 系列（2026-04-12）
+
+DX7 完成后，三项实际使用中的易用性问题浮出水面，统一归入 DX8：
+
+### 12.1 问题概述
+
+| # | 问题 | 来源 | 严重度 |
+|---|------|------|--------|
+| **D1** | 宿主函数无脚本侧签名声明——LSP 无法提供补全/hover/参数校验 | §二 Host 模块 + .ffvm.d.json 仅走 JSON 声明旁路 | 中 |
+| **D2** | 跨文件 include 后，被包含文件中的编译错误行号映射到主文件的不相关行 | DX4-P3 合并 AST 后 OriginFile 信息未传递到错误消息 | 高 |
+| **D3** | DX5/DX7 语义染色仅覆盖声明处（struct/enum 定义、类型注解）；表达式中的枚举引用（`Color.RED`）、字段访问（`v.x`）、结构体字面量均无语义 token | CollectTypeUsageTokens 只递归 block 内声明语句 | 中 |
+
+### 12.2 决定项回复
+
+#### D1: `external func` 语法 ✅
+
+**决定**：在脚本语言层新增 `external func` 声明——仅签名、无函数体——作为 §二 宿主声明的第三条途径（补充 .ffvm.d.json + 编译期 syscalls Dict 之外的脚本内声明）。
+
+**语法**：
+
+```ffs
+external func SetHitbox(id: int, x: int, y: int, w: int, h: int)
+external func GetHealth(): int
+```
+
+**实现摘要**：
+
+| 层 | 变更 | 关键代码 |
+|----|------|----------|
+| **Lexer** | 新增 `TokenType.External` 关键字 | `Lexer.cs` |
+| **Parser** | `ParseExternalFuncDecl()`：解析签名，不期望 `{}`，生成 `FuncDecl(isExternal: true, body: null)` | `Parser.cs:406~453` |
+| **AST** | `FuncDecl.IsExternal` 布尔属性 | `ASTNode.cs:411` |
+| **Compiler** | 跳过 function table 注册，存入 `_externalFuncs` dict；若宿主未预注册 syscall slot → 自动分配占位 slot（`ExternalFuncSlotBase=90000`，诊断专用模式）；`CompileSyscallExpr`/`CompileSyscallVoid` 增加参数数量校验 | `BytecodeCompiler.cs:486~500, 3611~3675` |
+| **LSP** | completion detail 显示 `external func`；hover 签名前缀 `external func`；signatureHelp 参数正常展示 | `LspServer.cs:1417` |
+
+**典型场景**（对应 §三 场景 2~3）：
+
+```ffs
+// host_decl.ffs — 放在公共 include 目录
+external func PlayAnimation(id: int, speed: int)
+external func ApplyDamage(target: int, amount: int): int
+external func SpawnEffect(effectId: int, x: int, y: int)
+
+// skill_ctrl.ffs
+include "host_decl.ffs"
+func main() {
+    PlayAnimation(1, 100)         // ← LSP: 补全 + hover + 参数校验
+    var dmg: int = ApplyDamage(target, 50)
+}
+```
+
+**与现有宿主声明机制的关系**：
+
+| 途径 | 适用场景 | external func 替代？ |
+|------|---------|---------------------|
+| `.ffvm.d.json` | 自动化声明导出（宿主 C# → JSON） | 否，互补：JSON 给工具链，external func 给脚本作者 |
+| `syscalls` Dict 编译期注入 | 宿主嵌入运行（Unity 内编译） | 否，external func 为独立编辑器编译提供类型信息 |
+| `external func` | 脚本内声明——编辑器补全/诊断无需宿主运行 | 是 §二 "缺失"行的直接解决方案 |
+
+**测试**：EF01~EF07（8 asserts），DX8-01~04（11 asserts）。
+
+#### D2: 跨文件报错行号修正 ✅
+
+**决定**：编译器错误消息增加 `[origin.ffs]` 来源标签；LSP 根据标签过滤跨文件错误（不在主文件的诊断面板显示来自 include 文件的错误）。
+
+**实现摘要**：
+
+| 层 | 变更 |
+|----|------|
+| **BytecodeCompiler** | 新增 `AddError(message)` 方法：当 `_currentOriginFile != _mainFilePath` 时，自动加 `[origin.ffs]` 前缀 |
+| **LspServer** | `IsCrossFileError(error, currentFilePath)` 检测前缀标签 → `PublishDiagnosticsForDocument` 跳过跨文件错误 |
+| **ErrorToDiagnostic** | 解析前先剥离 `[origin.ffs]` 前缀再提取行号 |
+
+**修正效果**：
+
+```
+修正前：main.ffs 编辑器显示 "Unknown function 'Foo' (line 3)"
+         → line 3 是 main.ffs 的 @export const 行，完全无关
+修正后：错误只在 lib.ffs 打开时显示，main.ffs 面板干净
+```
+
+**测试**：DX8-05（1 assert），DX8-08a~c（3 asserts，IsCrossFileError 单元测试）。
+
+#### D3: 表达式级语义染色 ✅
+
+**决定**：在 DX5/DX7 的声明处染色基础上，递归遍历函数体和模块级变量初始值中的所有表达式，为以下 pattern 发射语义 token：
+
+| 表达式 Pattern | Token Type | 示例 |
+|---------------|-----------|------|
+| `EnumName.MEMBER` 的 `EnumName` | `enum` (type=2) | `Color` in `Color.RED` |
+| `EnumName.MEMBER` 的 `MEMBER` | `enumMember` (type=3) | `RED` in `Color.RED` |
+| `expr.field` 的 `field` | `property` (type=4) | `x` in `v.x` |
+| `StructType { ... }` 的 `StructType` | `struct` (type=1) | `Vec2` in `Vec2 { x: 1 }` |
+
+**实现摘要**：
+
+| 方法 | 职责 |
+|------|------|
+| `CollectExprSemanticTokens(block)` | 递归遍历 block 内所有语句 |
+| `CollectExprSemanticTokensFromStmt(stmt)` | 分发各语句类型（if/while/for/return/defer/using/var decl/expr stmt） |
+| `CollectExprSemanticTokensFromExpr(expr)` | 核心：FieldAccessExpr 判定 enum vs struct 字段；StructLiteralExpr 发射 struct token；递归 BinaryExpr/UnaryExpr/AssignExpr/CallExpr/MemberCallExpr |
+
+**覆盖完整性**：模块级变量初始值 + 函数体内所有嵌套表达式（含 if/while/for/defer/using）。
+
+**测试**：DX8-06a~c（3 asserts，enum member 染色），DX8-07a~c（3 asserts，field access 染色）。
+
+### 12.3 DX8 测试汇总
+
+| 测试组 | ID 范围 | Assert 数 | 覆盖内容 |
+|--------|---------|-----------|----------|
+| Compiler | EF01~EF07 | 8 | 解析/编译/参数校验/include/诊断模式/parser 错误 |
+| LSP | DX8-01~DX8-04 | 11 | completion/hover/signatureHelp/诊断过滤 |
+| LSP | DX8-05 | 1 | 跨文件错误不显示在主文件 |
+| LSP | DX8-06~DX8-07 | 6 | enum member + field access 语义 token |
+| LSP | DX8-08 | 3 | IsCrossFileError 单元测试 |
+| **总计** | | **29** | |
+
+测试总计：2071（含 DX8 新增 30 tests = 8 Compiler + 22 LSP）。
+
+### 12.4 §二 表格更新
+
+DX8 实现后，§2.2 Host 模块的"缺失"行已解决：
+
+| 途径 | 说明 | 现有机制 |
+|------|------|----------|
+| **编译期注入** | 宿主 C# 代码传递 `syscalls` Dict + `ServiceBinding[]` | ✅ `BytecodeCompiler.Compile()` |
+| **声明文件** | `.ffvm.d.json` 描述 syscall 签名元数据 | ✅ `LspServer.LoadDeclarationJson()` |
+| **运行时动态** | 宿主在运行时注册/注销 syscall | ✅ `SyscallTable` 动态注册 |
+| ~~**缺失**~~ | ~~独立编译时无宿主信息~~ | ✅ **DX8 `external func` 声明** |
+| **配置文件指定** | 项目描述文件指向 Host 声明 | ✅ `.ffproj` hostDeclarations（DX4-P1） |
+
+### 12.5 展望：DX8 后续可能方向
+
+以下为 DX8 实现过程中识别但**不急于实施**的展望项，业务驱动时可激活：
+
+| ID | 展望 | 触发条件 | 备注 |
+|----|------|---------|------|
+| DX8-F1 | `external func` 参数**类型**校验（当前仅校验参数数量） | 类型系统成熟后 | 需要编译器类型推导能力 |
+| DX8-F2 | `external func` 与 `.ffvm.d.json` 自动对齐校验 | 多途径声明并存时确保一致性 | 编译器比对 JSON 声明与脚本声明 |
+| DX8-F3 | 跨文件错误**路由**到正确文件的诊断面板（而非仅过滤） | LSP 能在 include 文件未打开时也推送诊断 | 需要 LSP 端主动为未 open 文件发 publishDiagnostics |
+| DX8-F4 | 表达式语义 token 支持 `include as` 别名前缀（`Alias.EnumName.MEMBER`） | 别名模块内枚举值实际使用 | 当前 CollectExprSemanticTokensFromExpr 仅检查 IdentifierExpr 直接匹配 enumNames |
+
+---
+
+## 十三、结论（持续更新）
+
+**DX4~DX8 全系列完成。** 脚本引擎侧的易用性补充已覆盖：
+
+- ✅ 项目描述文件（`.ffproj`）+ CLI 脚手架 + LSP 自动创建
+- ✅ 跨文件符号导航（definition/references/hover/completion/signatureHelp）
+- ✅ LSP 重命名 + 语义染色（声明处 + 类型注解 + 表达式级）
+- ✅ Include 文件导航 + 重命名自动更新
+- ✅ AST 精确位置追踪（字段访问 + 类型注解）
+- ✅ 宿主函数脚本侧声明（`external func`）+ 跨文件报错隔离
+
+**当前位置 → C 区间**（宿主集成侧，待宿主 ECS 就绪）。

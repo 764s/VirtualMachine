@@ -12573,6 +12573,74 @@ func main() {
             }
         }
 
+        // ===== DX8: external func — compiler tests =====
+        // EF01: external func parses correctly
+        {
+            string ef01src = "external func SetHitbox(id: int, x: int, y: int, w: int, h: int)\nfunc main() { SetHitbox(1, 2, 3, 4, 5) }";
+            var ef01c = new BytecodeCompiler();
+            var ef01sc = new Dictionary<string, int> { { "SetHitbox", 42 } };
+            var ef01r = ef01c.Compile(ef01src, "main", ef01sc, null, null, "test.ffs", null, null);
+            Assert(ef01r.Success, "EF01: external func compiles successfully, errors: " + (ef01r.Errors != null && ef01r.Errors.Count > 0 ? ef01r.Errors[0] : "none"));
+        }
+
+        // EF02: external func with return type
+        {
+            string ef02src = "external func GetHealth(): int\nfunc main() { var h: int = GetHealth() }";
+            var ef02c = new BytecodeCompiler();
+            var ef02sc = new Dictionary<string, int> { { "GetHealth", 10 } };
+            var ef02r = ef02c.Compile(ef02src, "main", ef02sc, null, null, "test.ffs", null, null);
+            Assert(ef02r.Success, "EF02: external func with return type compiles, errors: " + (ef02r.Errors != null && ef02r.Errors.Count > 0 ? ef02r.Errors[0] : "none"));
+        }
+
+        // EF03: external func wrong argument count → error
+        {
+            string ef03src = "external func SetHitbox(id: int, x: int, y: int)\nfunc main() { SetHitbox(1) }";
+            var ef03c = new BytecodeCompiler();
+            var ef03sc = new Dictionary<string, int> { { "SetHitbox", 42 } };
+            var ef03r = ef03c.Compile(ef03src, "main", ef03sc, null, null, "test.ffs", null, null);
+            Assert(!ef03r.Success, "EF03: external func wrong arg count fails");
+            Assert(ef03r.Errors != null && ef03r.Errors.Count > 0 && ef03r.Errors[0].Contains("expects 3 arguments"), "EF03: error mentions expected count");
+        }
+
+        // EF04: external func auto-assigns syscall slot in diagnostic-only mode
+        {
+            string ef04src = "external func Ping()\nfunc entry() { Ping() }";
+            var ef04c = new BytecodeCompiler();
+            var ef04sc = new Dictionary<string, int>(); // no host-registered syscalls
+            var ef04r = ef04c.Compile(ef04src, null, ef04sc, null, null, "test.ffs", null, null);
+            Assert(ef04r.Success, "EF04: external func auto-assigns slot in diagnostic mode, errors: " + (ef04r.Errors != null && ef04r.Errors.Count > 0 ? ef04r.Errors[0] : "none"));
+        }
+
+        // EF05: external func via include file
+        {
+            string ef05main = "include \"host.ffs\"\nfunc main() { PlayAnim(1, 2) }";
+            string ef05host = "external func PlayAnim(id: int, speed: int)";
+            var ef05files = new Dictionary<string, string> { { "host.ffs", ef05host } };
+            var ef05fr = new DictionaryFileResolver(ef05files);
+            var ef05c = new BytecodeCompiler();
+            var ef05sc = new Dictionary<string, int> { { "PlayAnim", 5 } };
+            var ef05r = ef05c.Compile(ef05main, "main", ef05sc, null, ef05fr, "main.ffs", null, null);
+            Assert(ef05r.Success, "EF05: external func via include compiles, errors: " + (ef05r.Errors != null && ef05r.Errors.Count > 0 ? ef05r.Errors[0] : "none"));
+        }
+
+        // EF06: parser error for 'external' without 'func'
+        {
+            string ef06src = "external var x: int = 5\nfunc main() { }";
+            var ef06p = new Parser();
+            List<string> ef06errs;
+            ef06p.Parse(ef06src, out ef06errs);
+            Assert(ef06errs != null && ef06errs.Count > 0 && ef06errs[0].Contains("Expected 'func' after 'external'"), "EF06: parser rejects 'external var'");
+        }
+
+        // EF07: external func no body (no braces)
+        {
+            string ef07src = "external func DoSomething()\nfunc main() { DoSomething() }";
+            var ef07c = new BytecodeCompiler();
+            var ef07sc = new Dictionary<string, int> { { "DoSomething", 1 } };
+            var ef07r = ef07c.Compile(ef07src, "main", ef07sc, null, null, "test.ffs", null, null);
+            Assert(ef07r.Success, "EF07: external func with no body compiles");
+        }
+
         // ===== Summary =====
         Debug.Log($"========================================");
         Debug.Log($"Compiler Tests: {passed} passed, {failed} failed");

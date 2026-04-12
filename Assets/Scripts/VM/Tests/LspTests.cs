@@ -790,8 +790,8 @@ public static class LspTests
                 Assert(items != null, "LSP5-T04: result is array");
                 if (items != null)
                 {
-                    // Should have keywords (21) only — includes 'include', 'public', 'private', 'override' keywords
-                    Assert(items.Count == 21, $"LSP5-T04: 21 keyword items for empty file, got {items.Count}");
+                    // Should have keywords (22) only — includes 'include', 'public', 'private', 'override', 'external' keywords
+                    Assert(items.Count == 22, $"LSP5-T04: 22 keyword items for empty file, got {items.Count}");
                     // All should be kind=14 (Keyword)
                     bool allKeywords = true;
                     foreach (var obj in items)
@@ -4729,6 +4729,273 @@ public static class LspTests
             {
                 try { Directory.Delete(tmpDir, true); } catch { }
             }
+        }
+
+        // ===== DX8: external func LSP tests =====
+
+        // DX8-01: external func completion
+        {
+            string source = "external func SetHitbox(id: int, x: int, y: int, w: int, h: int)\nfunc entry() {\n  Set\n}";
+            var session = new LspBatchSession();
+            session.AddInitialize();
+            session.AddInitialized();
+            session.AddDidOpen("file:///test.ffs", source);
+            session.AddCompletion("file:///test.ffs", 2, 5); // cursor after "Set"
+            session.AddShutdown();
+            session.AddExit();
+            session.Run();
+
+            session.ExpectResponse(0); // initialize
+            var compResp = session.ExpectResponse(1); // completion
+            Assert(compResp != null, "DX8-01a: completion response received");
+            if (compResp != null)
+            {
+                var items = compResp.GetArray("result");
+                bool foundSetHitbox = false;
+                if (items != null)
+                {
+                    foreach (var obj in items)
+                    {
+                        var item = obj as JsonObject;
+                        if (item?.GetString("label") == "SetHitbox")
+                        {
+                            foundSetHitbox = true;
+                            string detail = item.GetString("detail") ?? "";
+                            Assert(detail.Contains("external func"), $"DX8-01b: completion detail shows 'external func', got '{detail}'");
+                            break;
+                        }
+                    }
+                }
+                Assert(foundSetHitbox, "DX8-01c: SetHitbox appears in completion");
+            }
+        }
+
+        // DX8-02: external func hover
+        {
+            string source = "external func SetHitbox(id: int, x: int, y: int, w: int, h: int): int";
+            var session = new LspBatchSession();
+            session.AddInitialize();
+            session.AddInitialized();
+            session.AddDidOpen("file:///test.ffs", source);
+            session.AddHover("file:///test.ffs", 0, 20); // hover over function name "SetHitbox"
+            session.AddShutdown();
+            session.AddExit();
+            session.Run();
+
+            session.ExpectResponse(0); // initialize
+            var hoverResp = session.ExpectResponse(1); // hover
+            Assert(hoverResp != null, "DX8-02a: hover response received");
+            if (hoverResp != null)
+            {
+                var result = hoverResp.GetObject("result");
+                if (result != null)
+                {
+                    var contents = result.GetObject("contents");
+                    string value = contents?.GetString("value") ?? "";
+                    Assert(value.Contains("external func"), $"DX8-02b: hover shows 'external func', got '{value}'");
+                    Assert(value.Contains("SetHitbox"), $"DX8-02c: hover shows 'SetHitbox', got '{value}'");
+                    Assert(value.Contains("id: int"), $"DX8-02d: hover shows params, got '{value}'");
+                }
+            }
+        }
+
+        // DX8-03: external func signature help
+        {
+            string source = "external func SetHitbox(id: int, x: int, y: int)\nfunc entry() {\n  SetHitbox(\n}";
+            var session = new LspBatchSession();
+            session.AddInitialize();
+            session.AddInitialized();
+            session.AddDidOpen("file:///test.ffs", source);
+            session.AddSignatureHelp("file:///test.ffs", 2, 12); // cursor inside SetHitbox(
+            session.AddShutdown();
+            session.AddExit();
+            session.Run();
+
+            session.ExpectResponse(0); // initialize
+            var sigResp = session.ExpectResponse(1); // signature help
+            Assert(sigResp != null, "DX8-03a: signature help response received");
+            if (sigResp != null)
+            {
+                var result = sigResp.GetObject("result");
+                Assert(result != null, "DX8-03b: signature help result not null");
+                if (result != null)
+                {
+                    var sigs = result.GetArray("signatures");
+                    Assert(sigs != null && sigs.Count > 0, "DX8-03c: has signature");
+                    if (sigs != null && sigs.Count > 0)
+                    {
+                        var sig = sigs[0] as JsonObject;
+                        string label = sig?.GetString("label") ?? "";
+                        Assert(label.Contains("id: int"), $"DX8-03d: signature shows params, got '{label}'");
+                    }
+                }
+            }
+        }
+
+        // DX8-04: external func no diagnostic for calls (diagnostic-only mode)
+        {
+            string source = "external func PlayAnim(id: int)\nfunc entry() {\n  PlayAnim(1)\n}";
+            var session = new LspBatchSession();
+            session.AddInitialize();
+            session.AddInitialized();
+            session.AddDidOpen("file:///test.ffs", source);
+            session.AddShutdown();
+            session.AddExit();
+            session.Run();
+
+            session.ExpectResponse(0); // initialize
+            // Check no diagnostics about "Unknown function"
+            var diags = session.FindAllNotifications("textDocument/publishDiagnostics");
+            bool hasUnknown = false;
+            foreach (var diag in diags)
+            {
+                var diagParams = diag.GetObject("params");
+                var diagArr = diagParams?.GetArray("diagnostics");
+                if (diagArr != null)
+                {
+                    foreach (var d in diagArr)
+                    {
+                        var dObj = d as JsonObject;
+                        string msg = dObj?.GetString("message") ?? "";
+                        if (msg.Contains("Unknown function") && msg.Contains("PlayAnim"))
+                            hasUnknown = true;
+                    }
+                }
+            }
+            Assert(!hasUnknown, "DX8-04: no 'Unknown function' diagnostic for external func");
+        }
+
+        // DX8-05: cross-file error line fix
+        {
+            string tmpDir = Path.Combine(Path.GetTempPath(), "dx8_test_" + Guid.NewGuid().ToString("N").Substring(0, 8));
+            Directory.CreateDirectory(tmpDir);
+            try
+            {
+                // lib.ffs references a non-existent function at line 2
+                File.WriteAllText(Path.Combine(tmpDir, "lib.ffs"),
+                    "func helper() {\n  NonExistentFunc()\n}");
+                // main.ffs includes lib.ffs — error is in lib.ffs, not main.ffs
+                File.WriteAllText(Path.Combine(tmpDir, "main.ffs"),
+                    "include \"lib.ffs\"\nfunc entry() {\n  helper()\n}");
+
+                string rootUri = "file:///" + tmpDir.Replace("\\", "/");
+                string mainUri = rootUri + "/main.ffs";
+                string mainSource = File.ReadAllText(Path.Combine(tmpDir, "main.ffs"));
+
+                var session = new LspBatchSession();
+                session.AddInitializeWithRootUri(rootUri);
+                session.AddInitialized();
+                session.AddDidOpen(mainUri, mainSource);
+                session.AddShutdown();
+                session.AddExit();
+                session.Run();
+
+                session.ExpectResponse(0); // initialize
+                // Check that the "Unknown function" error from lib.ffs is not shown in main.ffs
+                var diags = session.FindAllNotifications("textDocument/publishDiagnostics");
+                bool hasNonExistent = false;
+                foreach (var diag in diags)
+                {
+                    var diagParams = diag.GetObject("params");
+                    string diagUri = diagParams?.GetString("uri") ?? "";
+                    if (!diagUri.Contains("main.ffs")) continue;
+                    var diagArr = diagParams?.GetArray("diagnostics");
+                    if (diagArr != null)
+                    {
+                        foreach (var d in diagArr)
+                        {
+                            var dObj = d as JsonObject;
+                            string msg = dObj?.GetString("message") ?? "";
+                            if (msg.Contains("NonExistentFunc"))
+                                hasNonExistent = true;
+                        }
+                    }
+                }
+                Assert(!hasNonExistent, "DX8-05: cross-file error is not shown in main.ffs diagnostics");
+            }
+            finally
+            {
+                try { Directory.Delete(tmpDir, true); } catch { }
+            }
+        }
+
+        // DX8-06: semantic tokens for enum member access
+        {
+            string source = "enum Color { RED, GREEN, BLUE }\nfunc entry() {\n  var c: int = Color.RED\n}";
+            var session = new LspBatchSession();
+            session.AddInitialize();
+            session.AddInitialized();
+            session.AddDidOpen("file:///test.ffs", source);
+            session.AddSemanticTokensFull("file:///test.ffs");
+            session.AddShutdown();
+            session.AddExit();
+            session.Run();
+
+            session.ExpectResponse(0); // initialize
+            var semResp = session.ExpectResponse(1); // semantic tokens
+            Assert(semResp != null, "DX8-06a: semantic tokens response received");
+            if (semResp != null)
+            {
+                var result = semResp.GetObject("result");
+                var data = result?.GetArray("data");
+                Assert(data != null && data.Count > 0, "DX8-06b: semantic tokens has data");
+                // Look for enum member token (type=3) in the data
+                bool hasEnumMemberToken = false;
+                if (data != null)
+                {
+                    for (int i = 0; i + 4 < data.Count; i += 5)
+                    {
+                        int tokenType = Convert.ToInt32(data[i + 3]);
+                        if (tokenType == 3) { hasEnumMemberToken = true; break; }
+                    }
+                }
+                Assert(hasEnumMemberToken, "DX8-06c: semantic tokens include enumMember token for Color.RED");
+            }
+        }
+
+        // DX8-07: semantic tokens for field access
+        {
+            string source = "struct Vec2 { x: int; y: int }\nfunc entry() {\n  var v: Vec2 = Vec2 { x: 1, y: 2 }\n  var a: int = v.x\n}";
+            var session = new LspBatchSession();
+            session.AddInitialize();
+            session.AddInitialized();
+            session.AddDidOpen("file:///test.ffs", source);
+            session.AddSemanticTokensFull("file:///test.ffs");
+            session.AddShutdown();
+            session.AddExit();
+            session.Run();
+
+            session.ExpectResponse(0); // initialize
+            var semResp = session.ExpectResponse(1); // semantic tokens
+            Assert(semResp != null, "DX8-07a: semantic tokens response received");
+            if (semResp != null)
+            {
+                var result = semResp.GetObject("result");
+                var data = result?.GetArray("data");
+                Assert(data != null && data.Count > 0, "DX8-07b: semantic tokens has data");
+                // Look for property token (type=4) for field access
+                int propertyCount = 0;
+                if (data != null)
+                {
+                    for (int i = 0; i + 4 < data.Count; i += 5)
+                    {
+                        int tokenType = Convert.ToInt32(data[i + 3]);
+                        if (tokenType == 4) propertyCount++;
+                    }
+                }
+                // At least 3 property tokens: x, y in struct decl + x in v.x field access
+                Assert(propertyCount >= 3, $"DX8-07c: ≥3 property tokens (struct fields + field access), got {propertyCount}");
+            }
+        }
+
+        // DX8-08: IsCrossFileError unit test
+        {
+            Assert(LspServer.IsCrossFileError("[lib.ffs] Unknown function 'Foo' (line 5)", "main.ffs"),
+                "DX8-08a: cross-file error detected");
+            Assert(!LspServer.IsCrossFileError("[main.ffs] Unknown function 'Foo' (line 5)", "main.ffs"),
+                "DX8-08b: same-file error not filtered");
+            Assert(!LspServer.IsCrossFileError("Unknown function 'Foo' (line 5)", "main.ffs"),
+                "DX8-08c: untagged error not filtered");
         }
 
         Debug.Log($"\n===== LspTests: {passed} passed, {failed} failed =====");
