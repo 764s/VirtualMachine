@@ -151,6 +151,7 @@ namespace FFVM.Compiler
 
         // Lang-15: origin-aware symbol lookup for public/private visibility
         private string _currentOriginFile;         // OriginFile of the function currently being compiled
+        private string _mainFilePath;              // DX8: main file path (for cross-file error tagging)
 
         // F4: Register lifecycle analysis
         private struct LiveRange
@@ -170,6 +171,19 @@ namespace FFVM.Compiler
         private Dictionary<string, HashSet<string>> _inlinedCalleesPerFunc;
 
         // ===== Lang-15: origin-aware symbol lookup helpers =====
+
+        /// <summary>
+        /// DX8: Add an error message tagged with origin file info when it differs from the main file.
+        /// Format: "[origin.ffs] message" for cross-file errors, plain "message" for same-file errors.
+        /// This lets the LSP identify and properly route cross-file diagnostics.
+        /// </summary>
+        private void AddError(string message)
+        {
+            if (_currentOriginFile != null && _mainFilePath != null && _currentOriginFile != _mainFilePath)
+                _errors.Add($"[{_currentOriginFile}] {message}");
+            else
+                _errors.Add(message);
+        }
 
         /// <summary>
         /// Returns the internal dictionary key for a FuncDecl.
@@ -399,6 +413,7 @@ namespace FFVM.Compiler
             _jumpTables = new List<int[]>();
             _syscalls = syscalls ?? new Dictionary<string, int>();
             _syscallTable = syscallTable;
+            _mainFilePath = module.FilePath; // DX8: track main file for cross-file error tagging
             _errors = new List<string>();
             _warnings = new List<string>();
             _pendingCalls = new List<PendingCall>();
@@ -3593,7 +3608,7 @@ namespace FFVM.Compiler
         {
             if (!_syscalls.TryGetValue(call.FunctionName, out int slot))
             {
-                _errors.Add($"Unknown function '{call.FunctionName}' (line {call.Line})");
+                AddError($"Unknown function '{call.FunctionName}' (line {call.Line})");
                 return TempRegBase;
             }
 
@@ -3603,7 +3618,7 @@ namespace FFVM.Compiler
             {
                 if (call.Arguments.Count != extDecl.Parameters.Count)
                 {
-                    _errors.Add($"External function '{call.FunctionName}' expects {extDecl.Parameters.Count} arguments but got {call.Arguments.Count} (line {call.Line})");
+                    AddError($"External function '{call.FunctionName}' expects {extDecl.Parameters.Count} arguments but got {call.Arguments.Count} (line {call.Line})");
                     return TempRegBase;
                 }
             }
