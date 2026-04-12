@@ -1,0 +1,17 @@
+{
+  // include 搜索路径（相对于 .ffproj 所在目录）
+  // Include search paths (relative to .ffproj directory)
+  "includePaths": [".", "KOF98/Scripts"],
+
+  // 宿主声明文件（syscall 签名 + service 定义）
+  // Host declaration files (syscall signatures + service definitions)
+  "hostDeclarations": [],
+
+  // 入口脚本（可选，用于 compile 命令）
+  // Entry script (optional, used by compile command)
+  "entry": null,
+
+  // 编译选项（可选，覆盖默认值）
+  // Compile options (optional, overrides defaults)
+  "compileOptions": {}
+}
