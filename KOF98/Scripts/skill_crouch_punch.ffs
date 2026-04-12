@@ -50,7 +50,7 @@ func main() {
             var target: int = CheckAttackHit(hitPhase.groupId)
             if target > 0 {
                 ApplyDamage(target, 1.2, DamageType.NORMAL_LOWER)
-                ApplyHitstun(target, 0, 10, 0, 0)
+                ApplyHitstun(target, 0, 10)
                 SpawnEffectHit(FxId.LIGHT_HIT, FxDuration.LIGHT_HIT)
                 hitDone = 1
             }

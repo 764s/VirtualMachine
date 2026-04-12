@@ -1,0 +1,310 @@
+// ============================================================
+// KOF98 Host Syscall Declarations
+// ============================================================
+// External function declarations for all KOF98 game syscalls.
+// Provides compile-time parameter validation + LSP hover/completion.
+//
+// Usage:  include "common/kof98_syscalls.ffs"
+//         (automatically included via constants.ffs → skill_base.ffs)
+//
+// Generated from GameSyscalls.cs + GameVMBridge management syscalls.
+// Keep in sync with GameSyscalls.GetSyscallMap() and GameConstants.SYS_*.
+// ============================================================
+
+// ═════════════════════════════════════════════════════════════
+// Action Management (slots 0–19)
+// ═════════════════════════════════════════════════════════════
+
+/// Begin a skill action. Registers total frame count with the host.
+/// @param actionId   Unique action identifier (used for collision grouping)
+/// @param totalFrames   Total duration of this action in frames
+external func BeginAction(actionId: int, totalFrames: int)
+
+/// End the current action. Clears all hitboxes and hurtboxes on the owner.
+external func EndAction()
+
+/// Get the current frame index of the active skill.
+/// @return Current frame number (0-based)
+external func GetFrame(): int
+
+// ═════════════════════════════════════════════════════════════
+// Collision Detection (slots 20–39)
+// ═════════════════════════════════════════════════════════════
+
+/// Check if an attack hitbox hits any opponent's hurtbox.
+/// @param groupId   Hitbox group to check (matches SetHitbox groupId)
+/// @return Target character ID (1-based) if hit, 0 if no hit
+external func CheckAttackHit(groupId: int): int
+
+/// Check if an attack hitbox is blocked by an opponent's blockbox.
+/// @param groupId   Hitbox group to check
+/// @return Target character ID (1-based) if blocked, 0 if not blocked
+external func CheckAttackBlocked(groupId: int): int
+
+/// Check if a target character has a specific tag active.
+/// @param targetId   Target character ID (1-based)
+/// @param tagBit   Tag bitmask to check (from TagBit enum)
+/// @return 1 if target has the tag, 0 otherwise
+external func HasTargetTag(targetId: int, tagBit: int): int
+
+// ═════════════════════════════════════════════════════════════
+// Damage and Effects (slots 40–59)
+// ═════════════════════════════════════════════════════════════
+
+/// Apply damage to a target character. Enqueues a HitEvent.
+/// Energy coefficient is consumed from the last SetEnergyCoeff call (default 1.0).
+/// @param targetId   Target character ID (1-based)
+/// @param coeff   Damage coefficient multiplier
+/// @param dmgType   Damage type (from DamageType enum)
+external func ApplyDamage(targetId: int, coeff: float, dmgType: int)
+
+/// Set the energy coefficient for the next ApplyDamage call.
+/// Resets to 1.0 after each ApplyDamage.
+/// @param coeff   Energy coefficient multiplier
+external func SetEnergyCoeff(coeff: float)
+
+/// Apply hitstun frames to a target character.
+/// @param targetId   Target character ID (1-based)
+/// @param unused   Reserved parameter (pass 0)
+/// @param durF   Hitstun duration in frames
+external func ApplyHitstun(targetId: int, unused: int, durF: int)
+
+/// Apply horizontal knockback by distance to a target.
+/// @param targetId   Target character ID (1-based)
+/// @param dist   Knockback distance
+/// @param durF   Duration in frames
+external func ApplyHorizKB_Dist(targetId: int, dist: float, durF: int)
+
+/// Apply horizontal knockback by speed to a target.
+/// @param targetId   Target character ID (1-based)
+/// @param speed   Knockback speed
+external func ApplyHorizKB_Speed(targetId: int, speed: float)
+
+/// Apply vertical knockback to a target.
+/// @param targetId   Target character ID (1-based)
+/// @param speed   Vertical knockback speed
+/// @param durF   Duration in frames
+external func ApplyVertKB(targetId: int, speed: float, durF: int)
+
+/// Apply corner knockback to self (pushback on hit).
+/// @param dist   Knockback distance
+/// @param durF   Duration in frames
+external func ApplyCornerKBSelf(dist: float, durF: int)
+
+/// Apply hitstun to self (attacker recovery frames).
+/// @param unused   Reserved parameter (pass 0)
+/// @param durF   Hitstun duration in frames
+external func ApplySelfHitstun(unused: int, durF: int)
+
+/// Apply horizontal knockback to self.
+/// Speed is calculated as dist/durF, applied in facing direction.
+/// @param dist   Knockback distance
+/// @param durF   Duration in frames
+external func ApplySelfHorizKB(dist: float, durF: int)
+
+/// Apply vertical knockback to self. Sets velocity and acceleration,
+/// marks character as airborne.
+/// @param speed   Initial vertical speed
+/// @param accel   Vertical acceleration (gravity)
+external func ApplySelfVertKB(speed: float, accel: float)
+
+// ═════════════════════════════════════════════════════════════
+// Visual Effects (slots 60–79)
+// ═════════════════════════════════════════════════════════════
+
+/// Spawn a visual effect at the hit location (owner's position).
+/// @param effectId   Effect type ID (from FxId enum)
+/// @param durF   Effect duration in frames
+external func SpawnEffectHit(effectId: int, durF: int)
+
+/// Spawn a visual effect at the owner's position.
+/// @param effectId   Effect type ID (from FxId enum)
+/// @param durF   Effect duration in frames
+external func SpawnEffectSelf(effectId: int, durF: int)
+
+// ═════════════════════════════════════════════════════════════
+// Character Queries (slots 80–99)
+// ═════════════════════════════════════════════════════════════
+
+/// Get the script owner's character ID (1-based).
+/// @return Character ID (1-based)
+external func GetSelfId(): int
+
+/// Get the owner's X position.
+/// @return X position in world units
+external func GetPosX(): float
+
+/// Get the owner's Y position.
+/// @return Y position in world units
+external func GetPosY(): float
+
+/// Get the owner's facing direction.
+/// @return +1 for right, -1 for left
+external func GetFacing(): int
+
+/// Get the owner's current HP.
+/// @return Current hit points
+external func GetHP(): float
+
+/// Get the owner's current power meter.
+/// @return Current power value
+external func GetPower(): float
+
+/// Check if the owner is grounded.
+/// @return 1 if grounded, 0 if airborne
+external func IsGrounded(): int
+
+/// Get the nearest opponent's character ID.
+/// @return Opponent character ID (1-based), 0 if none
+external func GetOpponentId(): int
+
+/// Get the horizontal distance to the nearest opponent.
+/// @return Distance in world units (999.0 if no opponent)
+external func GetDistance(): float
+
+// ═════════════════════════════════════════════════════════════
+// Character Control (slots 100–119)
+// ═════════════════════════════════════════════════════════════
+
+/// Set the owner's velocity.
+/// @param vx   Horizontal velocity
+/// @param vy   Vertical velocity
+external func SetVelocity(vx: float, vy: float)
+
+/// Set the owner's facing direction.
+/// @param dir   Direction: >= 0 for right, < 0 for left
+external func SetFacing(dir: int)
+
+/// Add power to the owner's meter (clamped to max).
+/// @param amount   Power amount to add
+external func AddPower(amount: float)
+
+// ═════════════════════════════════════════════════════════════
+// Input Queries (slots 120–139)
+// ═════════════════════════════════════════════════════════════
+
+/// Get the raw held input bitmask for the owner.
+/// @return Input bitmask (InputButton flags)
+external func GetInput(): int
+
+/// Get the facing-relative forward direction from input.
+/// @return +1 forward, -1 backward, 0 neutral
+external func GetInputDir(): int
+
+/// Check if a button was just pressed this frame (edge trigger).
+/// @param buttonId   Button index: 0=Up, 1=Down, 2=Left, 3=Right, 4=LP, 5=HP, 6=LK, 7=HK, 8=Start
+/// @return 1 if pressed this frame, 0 otherwise
+external func IsInputPressed(buttonId: int): int
+
+/// Check if a button is currently held down.
+/// @param buttonId   Button index: 0=Up, 1=Down, 2=Left, 3=Right, 4=LP, 5=HP, 6=LK, 7=HK, 8=Start
+/// @return 1 if held, 0 otherwise
+external func IsInputHeld(buttonId: int): int
+
+// ═════════════════════════════════════════════════════════════
+// AI (slots 140–159)
+// ═════════════════════════════════════════════════════════════
+
+/// Find the nearest enemy character.
+/// @return Enemy character ID (1-based), 0 if none
+external func FindNearestEnemy(): int
+
+/// Get the distance to a specific character.
+/// @param targetId   Target character ID (1-based)
+/// @return Distance in world units
+external func GetDistanceTo(targetId: int): float
+
+/// Move toward a target character.
+/// @param targetId   Target character ID (1-based)
+/// @param speed   Movement speed
+external func MoveToward(targetId: int, speed: float)
+
+// ═════════════════════════════════════════════════════════════
+// VM Instance Management (slots 160–179)
+// ═════════════════════════════════════════════════════════════
+
+/// Spawn a new VM instance from a loaded module.
+/// The new instance inherits the owner of the calling instance.
+/// @param moduleSlot   Module slot index (from LoadScript)
+/// @param entryIP   Entry instruction pointer (usually 0)
+/// @return New instance ID, or -1 on failure
+external func SpawnScript(moduleSlot: int, entryIP: int): int
+
+/// Kill a running VM instance.
+/// @param instanceId   Instance ID to terminate
+external func KillInstance(instanceId: int)
+
+// ═════════════════════════════════════════════════════════════
+// Blackboard (slots 180–199)
+// ═════════════════════════════════════════════════════════════
+
+/// Set a blackboard value on a character.
+/// @param entityId   Character ID (1-based)
+/// @param key   Blackboard key (integer identifier)
+/// @param value   Value to store
+external func SetBlackboard(entityId: int, key: int, value: float)
+
+/// Get a blackboard value from a character.
+/// @param entityId   Character ID (1-based)
+/// @param key   Blackboard key (integer identifier)
+/// @return Stored value, or 0.0 if not set
+external func GetBlackboard(entityId: int, key: int): float
+
+// ═════════════════════════════════════════════════════════════
+// Utility (slots 200–219)
+// ═════════════════════════════════════════════════════════════
+
+/// Print a numeric value to the console (debug output).
+/// @param value   Value to print
+external func print(value: float)
+
+/// Generate a random integer in [0, upper).
+/// @param upper   Exclusive upper bound
+/// @return Random integer
+external func random(upper: int): int
+
+/// Return the absolute value of a number.
+/// @param value   Input value
+/// @return Absolute value
+external func abs(value: float): float
+
+/// Return the smaller of two numbers.
+/// @param a   First value
+/// @param b   Second value
+/// @return Minimum of a and b
+external func min(a: float, b: float): float
+
+/// Return the larger of two numbers.
+/// @param a   First value
+/// @param b   Second value
+/// @return Maximum of a and b
+external func max(a: float, b: float): float
+
+// ═════════════════════════════════════════════════════════════
+// Collision Box Management (slots 220–239)
+// ═════════════════════════════════════════════════════════════
+
+/// Push a hitbox to the owner's hitbox list for this frame.
+/// @param groupId   Hitbox group ID (for hit detection matching)
+/// @param ox   Center X offset from character origin
+/// @param oy   Center Y offset from character origin
+/// @param hw   Half-width of the box
+/// @param hh   Half-height of the box
+external func SetHitbox(groupId: int, ox: float, oy: float, hw: float, hh: float)
+
+/// Push a hurtbox to the owner's hurtbox list for this frame.
+/// @param ox   Center X offset from character origin
+/// @param oy   Center Y offset from character origin
+/// @param hw   Half-width of the box
+/// @param hh   Half-height of the box
+external func SetHurtbox(ox: float, oy: float, hw: float, hh: float)
+
+/// Clear all hitboxes on the owner character.
+external func ClearHitbox()
+
+/// Set the owner's pushbox (replaces current).
+/// @param ox   Center X offset from character origin
+/// @param oy   Center Y offset from character origin
+/// @param hw   Half-width of the box
+/// @param hh   Half-height of the box
+external func SetPushBox(ox: float, oy: float, hw: float, hh: float)

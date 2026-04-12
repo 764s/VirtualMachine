@@ -6,6 +6,7 @@
 // Usage:  include "common/constants.ffs"
 //
 // Categories:
+//   - Host syscall declarations (via kof98_syscalls.ffs)
 //   - Damage types: enum DamageType (Lang-13)
 //   - Effect / SFX IDs: enum FxId (Lang-13)
 //   - Effect durations: enum FxDuration (Lang-13)
@@ -13,6 +14,8 @@
 //   - Tag IDs (TAG_*)
 //   - Movement parameters (WALK_SPEED, etc.)
 // ============================================================
+
+include "common/kof98_syscalls.ffs"
 
 // ── Damage Types (Lang-13 enum) ──────────────────────────────
 enum DamageType {
