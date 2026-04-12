@@ -202,18 +202,12 @@ call code --install-extension "vscode-ffvm-debug\ffvm-debug.vsix" --force >nul 2
 
 :: Verify installation succeeded (check extension directory exists with node_modules)
 set "EXT_DIR=%USERPROFILE%\.vscode\extensions\ffvm.ffvm-debug-0.2.0"
-if not exist "%EXT_DIR%\node_modules" (
-    echo        CLI install incomplete, extracting VSIX manually...
-    if not exist "%EXT_DIR%" mkdir "%EXT_DIR%"
-    powershell -NoProfile -Command ^
-        "Add-Type -A System.IO.Compression.FileSystem; ^
-         $z=[IO.Compression.ZipFile]::OpenRead('vscode-ffvm-debug\ffvm-debug.vsix'); ^
-         $m=$z.GetEntry('extension.vsixmanifest'); ^
-         [IO.Compression.ZipFileExtensions]::ExtractToFile($m,\"$env:USERPROFILE\.vscode\extensions\ffvm.ffvm-debug-0.2.0\.vsixmanifest\",$true); ^
-         foreach($e in $z.Entries){if($e.FullName.StartsWith('extension/') -and -not $e.FullName.EndsWith('/')){$r=$e.FullName.Substring(10);$t=Join-Path $env:USERPROFILE\.vscode\extensions\ffvm.ffvm-debug-0.2.0 $r;$d=Split-Path $t;if(!(Test-Path $d)){md $d -Force|Out-Null};[IO.Compression.ZipFileExtensions]::ExtractToFile($e,$t,$true)}}; ^
-         $z.Dispose()" >nul 2>&1
-)
+if exist "%EXT_DIR%\node_modules" goto :ext_verify
+echo        CLI install incomplete, extracting VSIX manually...
+if not exist "%EXT_DIR%" mkdir "%EXT_DIR%"
+powershell -NoProfile -Command "Add-Type -A System.IO.Compression.FileSystem; $z=[IO.Compression.ZipFile]::OpenRead('vscode-ffvm-debug\ffvm-debug.vsix'); $m=$z.GetEntry('extension.vsixmanifest'); [IO.Compression.ZipFileExtensions]::ExtractToFile($m,\"$env:USERPROFILE\.vscode\extensions\ffvm.ffvm-debug-0.2.0\.vsixmanifest\",$true); foreach($e in $z.Entries){if($e.FullName.StartsWith('extension/') -and -not $e.FullName.EndsWith('/')){$r=$e.FullName.Substring(10);$t=Join-Path $env:USERPROFILE\.vscode\extensions\ffvm.ffvm-debug-0.2.0 $r;$d=Split-Path $t;if(!(Test-Path $d)){md $d -Force|Out-Null};[IO.Compression.ZipFileExtensions]::ExtractToFile($e,$t,$true)}}; $z.Dispose()" >nul 2>&1
 
+:ext_verify
 if exist "%EXT_DIR%\node_modules" (
     echo [OK] VS Code extension installed successfully.
 ) else (
