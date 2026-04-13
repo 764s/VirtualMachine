@@ -109,10 +109,17 @@ namespace FFVM.Compiler
         private readonly IFileResolver _fileResolver;
         private readonly List<string> _errors;
 
+        /// <summary>
+        /// DX10: All resolved file paths loaded during the last Resolve() call.
+        /// Includes the main file path and all transitively included file paths.
+        /// </summary>
+        public List<string> ResolvedFilePaths { get; private set; }
+
         public Preprocessor(IFileResolver fileResolver)
         {
             _fileResolver = fileResolver;
             _errors = new List<string>();
+            ResolvedFilePaths = new List<string>();
         }
 
         /// <summary>
@@ -125,6 +132,7 @@ namespace FFVM.Compiler
         public ModuleNode Resolve(string source, string filePath, out List<string> errors)
         {
             _errors.Clear();
+            ResolvedFilePaths = new List<string>();
             var stack = new List<string>();
             var result = ResolveRecursive(source, filePath, stack);
             errors = new List<string>(_errors);
@@ -226,6 +234,7 @@ namespace FFVM.Compiler
 
                 // Resolve to actual filesystem path for accurate OriginFile (cross-file navigation)
                 string resolvedImportPath = _fileResolver.ResolveFilePath(importPath) ?? importPath;
+                ResolvedFilePaths.Add(resolvedImportPath); // DX10: track all loaded file paths
                 var importModule = ResolveRecursive(importSource, resolvedImportPath, stack);
                 if (_errors.Count > 0) continue;
 

@@ -1,6 +1,6 @@
 # LSP 架构演进：全项目诊断、状态管理与增量更新
 
-> **状态**：💬 讨论中
+> **状态**：🔨 部分实施（DX10 ✅ 完成，DX11/DX12 ⚪ 待激活）
 > **来源**：E003 — 枚举引用修复与 didClose 缺失暴露的架构性问题
 > **日期**：2026-04-13
 
@@ -137,12 +137,15 @@ DX8 已实现 `IsCrossFileError` 过滤跨文件错误，这为错误隔离提�
 
 ## 七、实施路线建议
 
-### 阶段 1 — DX10：依赖图 + 全项目诊断基础
+### 阶段 1 — DX10：依赖图 + 全项目诊断基础 ✅ 已完成
 
-- 实现 Include 依赖图数据结构（`_includeDependents`）
-- didOpen/didChange 时解析 import 列表更新依赖图
-- 变更时通过依赖图找到受影响文件，重新编译并推送诊断
-- 实现 `workspace/didChangeWatchedFiles` 处理器
+- ✅ Include 依赖图数据结构（`_includeDependents` + `_includeForward` 双向图）
+- ✅ `Preprocessor.ResolvedFilePaths` 追踪传递性依赖（含间接 include）
+- ✅ `OverlayFileResolver` 使级联重编译可见打开文档的内存内容
+- ✅ `RecompileDependents()` 按依赖图传播 + visited 防环 + snapshot 安全
+- ✅ didOpen/didChange 触发级联重编译受影响文件
+- ✅ `workspace/didChangeWatchedFiles` 处理外部磁盘变更
+- ✅ DX10-01~08 测试覆盖（14 asserts），2127 测试总计（501 LSP）
 
 ### 阶段 2 — DX11：VFS + Rename 状态更新
 

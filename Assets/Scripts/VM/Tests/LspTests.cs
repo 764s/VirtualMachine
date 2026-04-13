@@ -5627,6 +5627,416 @@ public static class LspTests
             Assert(foundEmptyDiag, "E003-06: didClose publishes empty diagnostics for closed file");
         }
 
+        // ============================================================
+        // DX10: Include dependency graph + project-wide diagnostic propagation
+        // ============================================================
+
+        // DX10-01: Editing an included file propagates diagnostics to the including file.
+        // Scenario: main.ffs includes base.ffs. base.ffs is edited to introduce an error
+        // that breaks main.ffs's usage. main.ffs should get updated diagnostics.
+        {
+            string tmpDir = Path.Combine(Path.GetTempPath(), "dx10_test_" + Guid.NewGuid().ToString("N").Substring(0, 8));
+            Directory.CreateDirectory(tmpDir);
+            try
+            {
+                // base.ffs provides a helper function
+                File.WriteAllText(Path.Combine(tmpDir, "base.ffs"), "func helper(): int { return 42 }");
+
+                string rootUri = "file:///" + tmpDir.TrimStart('/').Replace("\\", "/");
+                string mainUri = rootUri + "/main.ffs";
+                string baseUri = rootUri + "/base.ffs";
+
+                // main.ffs includes base.ffs and calls helper
+                string mainSource = "include \"base\"\nfunc main() { var x: int = helper() }";
+
+                var session = new LspBatchSession();
+                session.AddInitializeWithRootUri(rootUri);
+                session.AddInitialized();
+                // Open both files
+                session.AddDidOpen(mainUri, mainSource);
+                session.AddDidOpen(baseUri, "func helper(): int { return 42 }");
+                // Now edit base.ffs: remove the helper function → main.ffs should get error
+                session.AddDidChange(baseUri, "func other(): int { return 99 }");
+                session.AddShutdown();
+                session.AddExit();
+                session.Run();
+
+                // Find all diagnostics published for main.ffs
+                var allDiags = session.FindAllNotifications("textDocument/publishDiagnostics");
+                // After the change to base.ffs, main.ffs should be recompiled and get diagnostics
+                // about the missing helper function.
+                int mainDiagCount = 0;
+                bool lastMainHasErrors = false;
+                foreach (var notif in allDiags)
+                {
+                    var p = notif.GetObject("params");
+                    if (p == null) continue;
+                    string notifUri = p.GetString("uri");
+                    if (notifUri == mainUri)
+                    {
+                        mainDiagCount++;
+                        var diags = p.GetArray("diagnostics");
+                        lastMainHasErrors = diags != null && diags.Count > 0;
+                    }
+                }
+                // main.ffs should have received at least 2 diagnostic pushes:
+                // 1st: clean (after initial open), 2nd: with error (after base.ffs change)
+                Assert(mainDiagCount >= 2, $"DX10-01a: main.ffs received ≥2 diagnostic pushes, got {mainDiagCount}");
+                Assert(lastMainHasErrors, "DX10-01b: main.ffs last diagnostics has errors after base.ffs broke helper");
+            }
+            finally
+            {
+                try { Directory.Delete(tmpDir, true); } catch { }
+            }
+        }
+
+        // DX10-02: Editing an included file that fixes an error clears diagnostics in dependents.
+        {
+            string tmpDir = Path.Combine(Path.GetTempPath(), "dx10_test_" + Guid.NewGuid().ToString("N").Substring(0, 8));
+            Directory.CreateDirectory(tmpDir);
+            try
+            {
+                // Initially base.ffs has a function with wrong return type (no helper)
+                File.WriteAllText(Path.Combine(tmpDir, "base.ffs"), "func other(): int { return 99 }");
+
+                string rootUri = "file:///" + tmpDir.TrimStart('/').Replace("\\", "/");
+                string mainUri = rootUri + "/main.ffs";
+                string baseUri = rootUri + "/base.ffs";
+
+                string mainSource = "include \"base\"\nfunc main() { var x: int = helper() }";
+
+                var session = new LspBatchSession();
+                session.AddInitializeWithRootUri(rootUri);
+                session.AddInitialized();
+                session.AddDidOpen(mainUri, mainSource);
+                session.AddDidOpen(baseUri, "func other(): int { return 99 }");
+                // Fix: add helper function back
+                session.AddDidChange(baseUri, "func helper(): int { return 42 }");
+                session.AddShutdown();
+                session.AddExit();
+                session.Run();
+
+                var allDiags = session.FindAllNotifications("textDocument/publishDiagnostics");
+                int mainDiagCount = 0;
+                bool lastMainClean = false;
+                foreach (var notif in allDiags)
+                {
+                    var p = notif.GetObject("params");
+                    if (p == null) continue;
+                    string notifUri = p.GetString("uri");
+                    if (notifUri == mainUri)
+                    {
+                        mainDiagCount++;
+                        var diags = p.GetArray("diagnostics");
+                        lastMainClean = diags == null || diags.Count == 0;
+                    }
+                }
+                Assert(mainDiagCount >= 2, $"DX10-02a: main.ffs received ≥2 diagnostic pushes, got {mainDiagCount}");
+                Assert(lastMainClean, "DX10-02b: main.ffs last diagnostics is clean after base.ffs fixed");
+            }
+            finally
+            {
+                try { Directory.Delete(tmpDir, true); } catch { }
+            }
+        }
+
+        // DX10-03: Diamond dependency — A includes B, B includes D.
+        // Editing D should cascade to A. A uses a function from D directly (merged via include chain).
+        {
+            string tmpDir = Path.Combine(Path.GetTempPath(), "dx10_test_" + Guid.NewGuid().ToString("N").Substring(0, 8));
+            Directory.CreateDirectory(tmpDir);
+            try
+            {
+                File.WriteAllText(Path.Combine(tmpDir, "d.ffs"), "func shared(): int { return 1 }");
+                File.WriteAllText(Path.Combine(tmpDir, "b.ffs"), "include \"d\"\nfunc fromB(): int { return shared() }");
+
+                string rootUri = "file:///" + tmpDir.TrimStart('/').Replace("\\", "/");
+                string aUri = rootUri + "/a.ffs";
+                string dUri = rootUri + "/d.ffs";
+
+                // a.ffs includes b.ffs and calls shared() directly (provided by d.ffs via b.ffs)
+                string aSource = "include \"b\"\nfunc main() { var x: int = shared() }";
+
+                var session = new LspBatchSession();
+                session.AddInitializeWithRootUri(rootUri);
+                session.AddInitialized();
+                session.AddDidOpen(aUri, aSource);
+                session.AddDidOpen(dUri, "func shared(): int { return 1 }");
+                // Rename shared → a.ffs calls shared() but d.ffs no longer provides it
+                session.AddDidChange(dUri, "func renamed(): int { return 1 }");
+                session.AddShutdown();
+                session.AddExit();
+                session.Run();
+
+                var allDiags = session.FindAllNotifications("textDocument/publishDiagnostics");
+                int aDiagCount = 0;
+                bool lastAHasErrors = false;
+                foreach (var notif in allDiags)
+                {
+                    var p = notif.GetObject("params");
+                    if (p == null) continue;
+                    string notifUri = p.GetString("uri");
+                    if (notifUri == aUri)
+                    {
+                        aDiagCount++;
+                        var diags = p.GetArray("diagnostics");
+                        lastAHasErrors = diags != null && diags.Count > 0;
+                    }
+                }
+                // a.ffs depends on d.ffs transitively via b.ffs.
+                // After d.ffs removes shared(), a.ffs's own call to shared() should error.
+                Assert(aDiagCount >= 2, $"DX10-03a: a.ffs received ≥2 diagnostic pushes, got {aDiagCount}");
+                Assert(lastAHasErrors, "DX10-03b: a.ffs has errors after d.ffs broke shared()");
+            }
+            finally
+            {
+                try { Directory.Delete(tmpDir, true); } catch { }
+            }
+        }
+
+        // DX10-04: Dependency graph updates when imports change.
+        // main.ffs initially includes A, then changes to include B.
+        // Editing A should NOT cascade to main.ffs after the import change.
+        {
+            string tmpDir = Path.Combine(Path.GetTempPath(), "dx10_test_" + Guid.NewGuid().ToString("N").Substring(0, 8));
+            Directory.CreateDirectory(tmpDir);
+            try
+            {
+                File.WriteAllText(Path.Combine(tmpDir, "a.ffs"), "func fromA(): int { return 1 }");
+                File.WriteAllText(Path.Combine(tmpDir, "b.ffs"), "func fromB(): int { return 2 }");
+
+                string rootUri = "file:///" + tmpDir.TrimStart('/').Replace("\\", "/");
+                string mainUri = rootUri + "/main.ffs";
+                string aUri = rootUri + "/a.ffs";
+
+                var session = new LspBatchSession();
+                session.AddInitializeWithRootUri(rootUri);
+                session.AddInitialized();
+                // Initially include a.ffs
+                session.AddDidOpen(mainUri, "include \"a\"\nfunc main() { var x: int = fromA() }");
+                session.AddDidOpen(aUri, "func fromA(): int { return 1 }");
+                // Change main to include b.ffs instead
+                session.AddDidChange(mainUri, "include \"b\"\nfunc main() { var x: int = fromB() }");
+                // Now edit a.ffs — should NOT trigger re-diagnosis of main.ffs since main no longer includes a
+                session.AddDidChange(aUri, "func broken(): int { return }");
+                session.AddShutdown();
+                session.AddExit();
+                session.Run();
+
+                var allDiags = session.FindAllNotifications("textDocument/publishDiagnostics");
+                int mainDiagCount = 0;
+                bool lastMainClean = false;
+                foreach (var notif in allDiags)
+                {
+                    var p = notif.GetObject("params");
+                    if (p == null) continue;
+                    string notifUri = p.GetString("uri");
+                    if (notifUri == mainUri)
+                    {
+                        mainDiagCount++;
+                        var diags = p.GetArray("diagnostics");
+                        lastMainClean = diags == null || diags.Count == 0;
+                    }
+                }
+                // main.ffs should be clean (no errors from a.ffs change since it no longer includes a)
+                Assert(lastMainClean, "DX10-04: main.ffs has no errors after switching from a.ffs to b.ffs");
+            }
+            finally
+            {
+                try { Directory.Delete(tmpDir, true); } catch { }
+            }
+        }
+
+        // DX10-05: workspace/didChangeWatchedFiles — disk change to included file triggers cascade.
+        {
+            string tmpDir = Path.Combine(Path.GetTempPath(), "dx10_test_" + Guid.NewGuid().ToString("N").Substring(0, 8));
+            Directory.CreateDirectory(tmpDir);
+            try
+            {
+                File.WriteAllText(Path.Combine(tmpDir, "lib.ffs"), "func libfunc(): int { return 10 }");
+
+                string rootUri = "file:///" + tmpDir.TrimStart('/').Replace("\\", "/");
+                string mainUri = rootUri + "/main.ffs";
+                string libUri = rootUri + "/lib.ffs";
+
+                string mainSource = "include \"lib\"\nfunc main() { var x: int = libfunc() }";
+
+                var session = new LspBatchSession();
+                session.AddInitializeWithRootUri(rootUri);
+                session.AddInitialized();
+                session.AddDidOpen(mainUri, mainSource);
+                // Simulate lib.ffs changing on disk (e.g., git checkout) — not opened in editor
+                // First, actually change the file on disk so recompile picks up the new content
+                File.WriteAllText(Path.Combine(tmpDir, "lib.ffs"), "func renamed(): int { return 10 }");
+                // Send didChangeWatchedFiles notification
+                session.AddDidChangeWatchedFiles(new List<(string, int)> { (libUri, 2) }); // 2=Changed
+                session.AddShutdown();
+                session.AddExit();
+                session.Run();
+
+                var allDiags = session.FindAllNotifications("textDocument/publishDiagnostics");
+                int mainDiagCount = 0;
+                bool lastMainHasErrors = false;
+                foreach (var notif in allDiags)
+                {
+                    var p = notif.GetObject("params");
+                    if (p == null) continue;
+                    string notifUri = p.GetString("uri");
+                    if (notifUri == mainUri)
+                    {
+                        mainDiagCount++;
+                        var diags = p.GetArray("diagnostics");
+                        lastMainHasErrors = diags != null && diags.Count > 0;
+                    }
+                }
+                Assert(mainDiagCount >= 2, $"DX10-05a: main.ffs received ≥2 diagnostic pushes, got {mainDiagCount}");
+                Assert(lastMainHasErrors, "DX10-05b: main.ffs has errors after lib.ffs disk change removed libfunc");
+            }
+            finally
+            {
+                try { Directory.Delete(tmpDir, true); } catch { }
+            }
+        }
+
+        // DX10-06: No cascade for files without dependents (isolated file change).
+        {
+            string tmpDir = Path.Combine(Path.GetTempPath(), "dx10_test_" + Guid.NewGuid().ToString("N").Substring(0, 8));
+            Directory.CreateDirectory(tmpDir);
+            try
+            {
+                string rootUri = "file:///" + tmpDir.TrimStart('/').Replace("\\", "/");
+                string fileAUri = rootUri + "/a.ffs";
+                string fileBUri = rootUri + "/b.ffs";
+
+                var session = new LspBatchSession();
+                session.AddInitializeWithRootUri(rootUri);
+                session.AddInitialized();
+                // Two independent files — no include relationship
+                session.AddDidOpen(fileAUri, "func fa(): int { return 1 }");
+                session.AddDidOpen(fileBUri, "func fb(): int { return 2 }");
+                // Edit file A — should NOT trigger diagnostics for file B
+                session.AddDidChange(fileAUri, "func fa(): int { return 99 }");
+                session.AddShutdown();
+                session.AddExit();
+                session.Run();
+
+                var allDiags = session.FindAllNotifications("textDocument/publishDiagnostics");
+                int bDiagCount = 0;
+                foreach (var notif in allDiags)
+                {
+                    var p = notif.GetObject("params");
+                    if (p == null) continue;
+                    string notifUri = p.GetString("uri");
+                    if (notifUri == fileBUri)
+                        bDiagCount++;
+                }
+                // b.ffs should only get 1 diagnostic push (from initial didOpen), not from a.ffs change
+                Assert(bDiagCount == 1, $"DX10-06: b.ffs only gets 1 diagnostic push (from open), got {bDiagCount}");
+            }
+            finally
+            {
+                try { Directory.Delete(tmpDir, true); } catch { }
+            }
+        }
+
+        // DX10-07: Multiple dependents — editing shared file cascades to all.
+        {
+            string tmpDir = Path.Combine(Path.GetTempPath(), "dx10_test_" + Guid.NewGuid().ToString("N").Substring(0, 8));
+            Directory.CreateDirectory(tmpDir);
+            try
+            {
+                File.WriteAllText(Path.Combine(tmpDir, "shared.ffs"), "func sharedFunc(): int { return 1 }");
+
+                string rootUri = "file:///" + tmpDir.TrimStart('/').Replace("\\", "/");
+                string file1Uri = rootUri + "/f1.ffs";
+                string file2Uri = rootUri + "/f2.ffs";
+                string sharedUri = rootUri + "/shared.ffs";
+
+                var session = new LspBatchSession();
+                session.AddInitializeWithRootUri(rootUri);
+                session.AddInitialized();
+                session.AddDidOpen(file1Uri, "include \"shared\"\nfunc m1() { var x: int = sharedFunc() }");
+                session.AddDidOpen(file2Uri, "include \"shared\"\nfunc m2() { var y: int = sharedFunc() }");
+                session.AddDidOpen(sharedUri, "func sharedFunc(): int { return 1 }");
+                // Break shared
+                session.AddDidChange(sharedUri, "func broken(): int { return 1 }");
+                session.AddShutdown();
+                session.AddExit();
+                session.Run();
+
+                var allDiags = session.FindAllNotifications("textDocument/publishDiagnostics");
+                bool f1HasErrors = false;
+                bool f2HasErrors = false;
+                // Find last diagnostics for each file
+                foreach (var notif in allDiags)
+                {
+                    var p = notif.GetObject("params");
+                    if (p == null) continue;
+                    string notifUri = p.GetString("uri");
+                    var diags = p.GetArray("diagnostics");
+                    bool hasErrs = diags != null && diags.Count > 0;
+                    if (notifUri == file1Uri) f1HasErrors = hasErrs;
+                    if (notifUri == file2Uri) f2HasErrors = hasErrs;
+                }
+                Assert(f1HasErrors, "DX10-07a: f1.ffs has errors after shared.ffs change");
+                Assert(f2HasErrors, "DX10-07b: f2.ffs has errors after shared.ffs change");
+            }
+            finally
+            {
+                try { Directory.Delete(tmpDir, true); } catch { }
+            }
+        }
+
+        // DX10-08: include-as alias dependency tracking.
+        {
+            string tmpDir = Path.Combine(Path.GetTempPath(), "dx10_test_" + Guid.NewGuid().ToString("N").Substring(0, 8));
+            Directory.CreateDirectory(tmpDir);
+            try
+            {
+                File.WriteAllText(Path.Combine(tmpDir, "lib.ffs"), "func libfn(): int { return 5 }");
+
+                string rootUri = "file:///" + tmpDir.TrimStart('/').Replace("\\", "/");
+                string mainUri = rootUri + "/main.ffs";
+                string libUri = rootUri + "/lib.ffs";
+
+                // Use 'include as' to import with alias
+                string mainSource = "include \"lib\" as Lib\nfunc main() { var x: int = Lib.libfn() }";
+
+                var session = new LspBatchSession();
+                session.AddInitializeWithRootUri(rootUri);
+                session.AddInitialized();
+                session.AddDidOpen(mainUri, mainSource);
+                session.AddDidOpen(libUri, "func libfn(): int { return 5 }");
+                // Break lib
+                session.AddDidChange(libUri, "func other(): int { return 5 }");
+                session.AddShutdown();
+                session.AddExit();
+                session.Run();
+
+                var allDiags = session.FindAllNotifications("textDocument/publishDiagnostics");
+                int mainDiagCount = 0;
+                bool lastMainHasErrors = false;
+                foreach (var notif in allDiags)
+                {
+                    var p = notif.GetObject("params");
+                    if (p == null) continue;
+                    string notifUri = p.GetString("uri");
+                    if (notifUri == mainUri)
+                    {
+                        mainDiagCount++;
+                        var diags = p.GetArray("diagnostics");
+                        lastMainHasErrors = diags != null && diags.Count > 0;
+                    }
+                }
+                Assert(mainDiagCount >= 2, $"DX10-08a: main.ffs received ≥2 diagnostic pushes, got {mainDiagCount}");
+                Assert(lastMainHasErrors, "DX10-08b: main.ffs has errors after lib.ffs broke Lib.libfn via include-as");
+            }
+            finally
+            {
+                try { Directory.Delete(tmpDir, true); } catch { }
+            }
+        }
+
         Debug.Log($"\n===== LspTests: {passed} passed, {failed} failed =====");
     }
 
@@ -5749,6 +6159,25 @@ public static class LspTests
             textDoc.Set("uri", uri);
             parameters.Set("textDocument", textDoc);
             AddNotification("textDocument/didClose", parameters);
+        }
+
+        /// <summary>
+        /// DX10: Send workspace/didChangeWatchedFiles notification.
+        /// FileChangeType: 1=Created, 2=Changed, 3=Deleted.
+        /// </summary>
+        public void AddDidChangeWatchedFiles(List<(string uri, int type)> fileChanges)
+        {
+            var parameters = new JsonObject();
+            var changes = new List<object>();
+            foreach (var (uri, changeType) in fileChanges)
+            {
+                var change = new JsonObject();
+                change.Set("uri", uri);
+                change.Set("type", changeType);
+                changes.Add(change);
+            }
+            parameters.Set("changes", changes);
+            AddNotification("workspace/didChangeWatchedFiles", parameters);
         }
 
         public void AddDocumentSymbol(string uri)
