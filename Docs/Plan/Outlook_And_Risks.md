@@ -869,11 +869,12 @@ Gate 3: Unity Editor 内嵌 DAP（可选）             ← DBG7 Phase C
 | **DX8** | external func 语法 + 跨文件错误 + 表达式语义染色 | ✅ 完成 | `external func Name(params): RetType` 无体声明 + 跨文件错误 AddError/IsCrossFileError + 表达式语义染色。DX8-01~08 全通过，2071 测试总计 | DX7 ✅ |
 | **DX9** | 语义染色改进（声明 + 引用 + 类型） | ✅ 完成 | Legend 扩展 10 token types + external/param/var/IdentifierExpr token emission。DX9-01~08 全通过，2104 测试总计 | DX8 ✅ |
 | **E003** | LSP 引用查找修复 + didClose | ✅ 完成 | 枚举类型引用添加 CollectTypeRefsInBlock + 枚举成员引用添加 CollectEnumMemberAccessRefs + textDocument/didClose 处理器。E003-01~06（9 asserts）全通过，2113 测试总计 | — |
-| **DX10** | 依赖图 + 全项目诊断 | ⚪ | Include 依赖图 + 变更影响传播 + `workspace/didChangeWatchedFiles`。讨论来源 → [D_LspArchitecture.md](../Discussion/D_LspArchitecture.md) | E003 ✅ |
+| **R1** | LSP 架构重构（AstWalker + 双 AST 统一 + DocumentStore） | ✅ 完成 | AstWalker 基类统一 13 组遍历三元组 + ResolveSymbolDualAst 统一双 AST 符号解析 + DocumentStore 封装三字典。4100→3780 行（−320 行，−8%），纯重构无功能变更，2113 测试全通过 | E003 ✅ |
+| **DX10** | 依赖图 + 全项目诊断 | ⚪ | Include 依赖图 + 变更影响传播 + `workspace/didChangeWatchedFiles`。讨论来源 → [D_LspArchitecture.md](../Discussion/D_LspArchitecture.md) | R1 ✅ |
 | **DX11** | VFS + Rename 状态更新 | ⚪ | 统一文件内容提供器 + rename 后缓存/URI/依赖图更新 → 修复连续重命名。讨论来源 → [D_LspArchitecture.md](../Discussion/D_LspArchitecture.md) | DX10 |
 | **DX12** | 后台编译调度 | ⚪ | debounce + 取消机制 + 编译结果缓存。讨论来源 → [D_LspArchitecture.md](../Discussion/D_LspArchitecture.md) | DX10 |
 
-> Lang-18 ✅ 完成。DX4-P0 ✅ 完成。DX4-P1 ✅ 完成。DX4-P2 ✅ 完成。DX4-P3 ✅ 完成。DX4-P4 ✅ 完成。DX5 ✅ 完成。DX6 ✅ 完成。DX7 ✅ 完成。DX8 ✅ 完成。DX9 ✅ 完成。E003 ✅ 完成。2113 测试总计。DX10~DX12 远期待激活。
+> Lang-18 ✅ 完成。DX4-P0 ✅ 完成。DX4-P1 ✅ 完成。DX4-P2 ✅ 完成。DX4-P3 ✅ 完成。DX4-P4 ✅ 完成。DX5 ✅ 完成。DX6 ✅ 完成。DX7 ✅ 完成。DX8 ✅ 完成。DX9 ✅ 完成。E003 ✅ 完成。R1 ✅ 完成。2113 测试总计。DX10~DX12 远期待激活。
 
 #### 宿主集成侧（C 区间 — 生产必经路径）
 
