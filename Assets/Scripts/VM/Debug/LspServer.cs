@@ -2878,184 +2878,82 @@ namespace FFVM.Debug
             }
         }
 
+        // R1: CallRefs — replaced hand-written Block/Stmt/Expr triad with AstWalker subclass.
         private static void CollectCallRefsInBlock(BlockStmt block, string funcName, string uri, List<object> locations)
         {
-            if (block == null) return;
-            foreach (var stmt in block.Statements)
-                CollectCallRefsInStmt(stmt, funcName, uri, locations);
+            var w = new CallRefsWalker(funcName, uri, locations);
+            w.WalkBlock(block);
         }
 
-        private static void CollectCallRefsInStmt(Stmt stmt, string funcName, string uri, List<object> locations)
+        private sealed class CallRefsWalker : AstWalker
         {
-            if (stmt == null) return;
-            if (stmt is ExprStmt es) CollectCallRefsInExpr(es.Expression, funcName, uri, locations);
-            else if (stmt is BlockStmt bs) CollectCallRefsInBlock(bs, funcName, uri, locations);
-            else if (stmt is VarDeclStmt vd && vd.Initializer != null) CollectCallRefsInExpr(vd.Initializer, funcName, uri, locations);
-            else if (stmt is IfStmt ifs)
+            private readonly string _funcName;
+            private readonly string _uri;
+            private readonly List<object> _locations;
+            public CallRefsWalker(string funcName, string uri, List<object> locations) { _funcName = funcName; _uri = uri; _locations = locations; }
+            protected override bool VisitExpr(Expr expr)
             {
-                CollectCallRefsInExpr(ifs.Condition, funcName, uri, locations);
-                CollectCallRefsInStmt(ifs.ThenBranch, funcName, uri, locations);
-                CollectCallRefsInStmt(ifs.ElseBranch, funcName, uri, locations);
-            }
-            else if (stmt is WhileStmt ws)
-            {
-                CollectCallRefsInExpr(ws.Condition, funcName, uri, locations);
-                CollectCallRefsInStmt(ws.Body, funcName, uri, locations);
-            }
-            else if (stmt is ForStmt fs)
-            {
-                CollectCallRefsInStmt(fs.Initializer, funcName, uri, locations);
-                CollectCallRefsInExpr(fs.Condition, funcName, uri, locations);
-                CollectCallRefsInExpr(fs.Increment, funcName, uri, locations);
-                CollectCallRefsInStmt(fs.Body, funcName, uri, locations);
-            }
-            else if (stmt is ReturnStmt rs && rs.Value != null) CollectCallRefsInExpr(rs.Value, funcName, uri, locations);
-            else if (stmt is WaitStmt wst) CollectCallRefsInExpr(wst.FrameCount, funcName, uri, locations);
-            else if (stmt is DeferStmt ds) CollectCallRefsInBlock(ds.Body, funcName, uri, locations);
-            else if (stmt is UsingStmt us)
-            {
-                foreach (var arg in us.Arguments) CollectCallRefsInExpr(arg, funcName, uri, locations);
-                CollectCallRefsInBlock(us.Body, funcName, uri, locations);
+                if (expr is CallExpr call && call.FunctionName == _funcName)
+                    _locations.Add(MakeLocation(_uri, call.Line, call.Column, _funcName.Length));
+                return false; // continue walking children
             }
         }
 
-        private static void CollectCallRefsInExpr(Expr expr, string funcName, string uri, List<object> locations)
-        {
-            if (expr == null) return;
-            if (expr is CallExpr call)
-            {
-                if (call.FunctionName == funcName)
-                    locations.Add(MakeLocation(uri, call.Line, call.Column, funcName.Length));
-                foreach (var arg in call.Arguments) CollectCallRefsInExpr(arg, funcName, uri, locations);
-            }
-            else if (expr is BinaryExpr bin)
-            {
-                CollectCallRefsInExpr(bin.Left, funcName, uri, locations);
-                CollectCallRefsInExpr(bin.Right, funcName, uri, locations);
-            }
-            else if (expr is UnaryExpr un) CollectCallRefsInExpr(un.Operand, funcName, uri, locations);
-            else if (expr is AssignExpr assign)
-            {
-                CollectCallRefsInExpr(assign.Target, funcName, uri, locations);
-                CollectCallRefsInExpr(assign.Value, funcName, uri, locations);
-            }
-            else if (expr is FieldAccessExpr fa) CollectCallRefsInExpr(fa.Target, funcName, uri, locations);
-            else if (expr is StructLiteralExpr sl)
-            {
-                foreach (var f in sl.Fields) CollectCallRefsInExpr(f.Value, funcName, uri, locations);
-            }
-        }
-
+        // R1: IdentRefs — replaced hand-written Block/Stmt/Expr triad with AstWalker subclass.
         private static void CollectIdentRefsInBlock(BlockStmt block, string varName, string uri, List<object> locations)
         {
-            if (block == null) return;
-            foreach (var stmt in block.Statements)
-                CollectIdentRefsInStmt(stmt, varName, uri, locations);
+            var w = new IdentRefsWalker(varName, uri, locations);
+            w.WalkBlock(block);
         }
 
-        private static void CollectIdentRefsInStmt(Stmt stmt, string varName, string uri, List<object> locations)
+        private sealed class IdentRefsWalker : AstWalker
         {
-            if (stmt == null) return;
-            if (stmt is VarDeclStmt vd)
+            private readonly string _varName;
+            private readonly string _uri;
+            private readonly List<object> _locations;
+            public IdentRefsWalker(string varName, string uri, List<object> locations) { _varName = varName; _uri = uri; _locations = locations; }
+            protected override void VisitVarDecl(VarDeclStmt vd)
             {
                 // Include the declaration itself as a reference
-                if (vd.Name == varName)
-                    locations.Add(MakeLocation(uri, vd.Line, vd.Column, varName.Length));
-                if (vd.Initializer != null) CollectIdentRefsInExpr(vd.Initializer, varName, uri, locations);
+                if (vd.Name == _varName)
+                    _locations.Add(MakeLocation(_uri, vd.Line, vd.Column, _varName.Length));
             }
-            else if (stmt is ExprStmt es) CollectIdentRefsInExpr(es.Expression, varName, uri, locations);
-            else if (stmt is BlockStmt bs) CollectIdentRefsInBlock(bs, varName, uri, locations);
-            else if (stmt is IfStmt ifs)
+            protected override bool VisitExpr(Expr expr)
             {
-                CollectIdentRefsInExpr(ifs.Condition, varName, uri, locations);
-                CollectIdentRefsInStmt(ifs.ThenBranch, varName, uri, locations);
-                CollectIdentRefsInStmt(ifs.ElseBranch, varName, uri, locations);
-            }
-            else if (stmt is WhileStmt ws)
-            {
-                CollectIdentRefsInExpr(ws.Condition, varName, uri, locations);
-                CollectIdentRefsInStmt(ws.Body, varName, uri, locations);
-            }
-            else if (stmt is ForStmt fs)
-            {
-                CollectIdentRefsInStmt(fs.Initializer, varName, uri, locations);
-                CollectIdentRefsInExpr(fs.Condition, varName, uri, locations);
-                CollectIdentRefsInExpr(fs.Increment, varName, uri, locations);
-                CollectIdentRefsInStmt(fs.Body, varName, uri, locations);
-            }
-            else if (stmt is ReturnStmt rs && rs.Value != null) CollectIdentRefsInExpr(rs.Value, varName, uri, locations);
-            else if (stmt is WaitStmt wst) CollectIdentRefsInExpr(wst.FrameCount, varName, uri, locations);
-            else if (stmt is DeferStmt ds) CollectIdentRefsInBlock(ds.Body, varName, uri, locations);
-            else if (stmt is UsingStmt us)
-            {
-                foreach (var arg in us.Arguments) CollectIdentRefsInExpr(arg, varName, uri, locations);
-                CollectIdentRefsInBlock(us.Body, varName, uri, locations);
+                if (expr is IdentifierExpr id && id.Name == _varName)
+                    _locations.Add(MakeLocation(_uri, id.Line, id.Column, _varName.Length));
+                return false;
             }
         }
 
-        private static void CollectIdentRefsInExpr(Expr expr, string varName, string uri, List<object> locations)
-        {
-            if (expr == null) return;
-            if (expr is IdentifierExpr id && id.Name == varName)
-                locations.Add(MakeLocation(uri, id.Line, id.Column, varName.Length));
-            else if (expr is BinaryExpr bin)
-            {
-                CollectIdentRefsInExpr(bin.Left, varName, uri, locations);
-                CollectIdentRefsInExpr(bin.Right, varName, uri, locations);
-            }
-            else if (expr is UnaryExpr un) CollectIdentRefsInExpr(un.Operand, varName, uri, locations);
-            else if (expr is AssignExpr assign)
-            {
-                CollectIdentRefsInExpr(assign.Target, varName, uri, locations);
-                CollectIdentRefsInExpr(assign.Value, varName, uri, locations);
-            }
-            else if (expr is CallExpr call)
-            {
-                foreach (var arg in call.Arguments) CollectIdentRefsInExpr(arg, varName, uri, locations);
-            }
-            else if (expr is FieldAccessExpr fa) CollectIdentRefsInExpr(fa.Target, varName, uri, locations);
-            else if (expr is StructLiteralExpr sl)
-            {
-                foreach (var f in sl.Fields) CollectIdentRefsInExpr(f.Value, varName, uri, locations);
-            }
-        }
-
+        // R1: TypeRefs — replaced hand-written Block/Stmt triad with AstWalker subclass.
         private static void CollectTypeRefsInBlock(BlockStmt block, string typeName, string uri, List<object> locations)
         {
-            if (block == null) return;
-            foreach (var stmt in block.Statements)
-                CollectTypeRefsInStmt(stmt, typeName, uri, locations);
+            var w = new TypeRefsWalker(typeName, uri, locations);
+            w.WalkBlock(block);
         }
 
-        private static void CollectTypeRefsInStmt(Stmt stmt, string typeName, string uri, List<object> locations)
+        private sealed class TypeRefsWalker : AstWalker
         {
-            if (stmt == null) return;
-            if (stmt is VarDeclStmt vd && vd.TypeName != null)
+            private readonly string _typeName;
+            private readonly string _uri;
+            private readonly List<object> _locations;
+            public TypeRefsWalker(string typeName, string uri, List<object> locations) { _typeName = typeName; _uri = uri; _locations = locations; }
+            protected override void VisitVarDecl(VarDeclStmt vd)
             {
-                string baseName = GetBaseTypeName(vd.TypeName);
-                if (baseName == typeName)
+                if (vd.TypeName != null)
                 {
-                    // US: Use precise TypeNameLine/TypeNameColumn when available
-                    if (vd.TypeNameLine > 0)
-                        locations.Add(MakeLocation(uri, vd.TypeNameLine, vd.TypeNameColumn, typeName.Length));
-                    else
-                        locations.Add(MakeLocation(uri, vd.Line, vd.Column, typeName.Length));
+                    string baseName = GetBaseTypeName(vd.TypeName);
+                    if (baseName == _typeName)
+                    {
+                        // US: Use precise TypeNameLine/TypeNameColumn when available
+                        if (vd.TypeNameLine > 0)
+                            _locations.Add(MakeLocation(_uri, vd.TypeNameLine, vd.TypeNameColumn, _typeName.Length));
+                        else
+                            _locations.Add(MakeLocation(_uri, vd.Line, vd.Column, _typeName.Length));
+                    }
                 }
             }
-            else if (stmt is BlockStmt bs) CollectTypeRefsInBlock(bs, typeName, uri, locations);
-            else if (stmt is IfStmt ifs)
-            {
-                CollectTypeRefsInStmt(ifs.ThenBranch, typeName, uri, locations);
-                CollectTypeRefsInStmt(ifs.ElseBranch, typeName, uri, locations);
-            }
-            else if (stmt is WhileStmt ws) CollectTypeRefsInStmt(ws.Body, typeName, uri, locations);
-            else if (stmt is ForStmt fs)
-            {
-                CollectTypeRefsInStmt(fs.Initializer, typeName, uri, locations);
-                CollectTypeRefsInStmt(fs.Body, typeName, uri, locations);
-            }
-            else if (stmt is DeferStmt ds) CollectTypeRefsInBlock(ds.Body, typeName, uri, locations);
-            else if (stmt is UsingStmt us) CollectTypeRefsInBlock(us.Body, typeName, uri, locations);
         }
 
         // ============================================================
@@ -3327,82 +3225,36 @@ namespace FFVM.Debug
         /// <summary>
         /// DX5: Collect references to a struct field (field access expressions in function bodies).
         /// </summary>
+        // R1: FieldAccessRefs — replaced hand-written Block/Stmt/Expr triad with AstWalker subclass.
         private static void CollectFieldAccessRefsInBlock(BlockStmt block, string fieldName, string structName, string uri, List<object> locations)
         {
-            if (block == null) return;
-            foreach (var stmt in block.Statements)
-                CollectFieldAccessRefsInStmt(stmt, fieldName, structName, uri, locations);
+            var w = new FieldAccessRefsWalker(fieldName, uri, locations);
+            w.WalkBlock(block);
         }
 
-        private static void CollectFieldAccessRefsInStmt(Stmt stmt, string fieldName, string structName, string uri, List<object> locations)
+        private sealed class FieldAccessRefsWalker : AstWalker
         {
-            if (stmt == null) return;
-            if (stmt is ExprStmt es) CollectFieldAccessRefsInExpr(es.Expression, fieldName, uri, locations);
-            else if (stmt is BlockStmt bs) CollectFieldAccessRefsInBlock(bs, fieldName, structName, uri, locations);
-            else if (stmt is VarDeclStmt vd && vd.Initializer != null) CollectFieldAccessRefsInExpr(vd.Initializer, fieldName, uri, locations);
-            else if (stmt is IfStmt ifs)
+            private readonly string _fieldName;
+            private readonly string _uri;
+            private readonly List<object> _locations;
+            public FieldAccessRefsWalker(string fieldName, string uri, List<object> locations) { _fieldName = fieldName; _uri = uri; _locations = locations; }
+            protected override bool VisitExpr(Expr expr)
             {
-                CollectFieldAccessRefsInExpr(ifs.Condition, fieldName, uri, locations);
-                CollectFieldAccessRefsInStmt(ifs.ThenBranch, fieldName, structName, uri, locations);
-                CollectFieldAccessRefsInStmt(ifs.ElseBranch, fieldName, structName, uri, locations);
-            }
-            else if (stmt is WhileStmt ws)
-            {
-                CollectFieldAccessRefsInExpr(ws.Condition, fieldName, uri, locations);
-                CollectFieldAccessRefsInStmt(ws.Body, fieldName, structName, uri, locations);
-            }
-            else if (stmt is ForStmt fs)
-            {
-                CollectFieldAccessRefsInStmt(fs.Initializer, fieldName, structName, uri, locations);
-                CollectFieldAccessRefsInExpr(fs.Condition, fieldName, uri, locations);
-                CollectFieldAccessRefsInExpr(fs.Increment, fieldName, uri, locations);
-                CollectFieldAccessRefsInStmt(fs.Body, fieldName, structName, uri, locations);
-            }
-            else if (stmt is ReturnStmt rs && rs.Value != null) CollectFieldAccessRefsInExpr(rs.Value, fieldName, uri, locations);
-            else if (stmt is DeferStmt ds) CollectFieldAccessRefsInBlock(ds.Body, fieldName, structName, uri, locations);
-            else if (stmt is UsingStmt us)
-            {
-                foreach (var arg in us.Arguments) CollectFieldAccessRefsInExpr(arg, fieldName, uri, locations);
-                CollectFieldAccessRefsInBlock(us.Body, fieldName, structName, uri, locations);
-            }
-            else if (stmt is WaitStmt wst) CollectFieldAccessRefsInExpr(wst.FrameCount, fieldName, uri, locations);
-        }
-
-        private static void CollectFieldAccessRefsInExpr(Expr expr, string fieldName, string uri, List<object> locations)
-        {
-            if (expr == null) return;
-            if (expr is FieldAccessExpr fa)
-            {
-                // DX7: FieldNameLine/FieldNameColumn now tracks precise field name position
-                if (fa.FieldName == fieldName && fa.FieldNameLine > 0)
+                if (expr is FieldAccessExpr fa)
                 {
-                    locations.Add(MakeLocation(uri, fa.FieldNameLine, fa.FieldNameColumn, fieldName.Length));
+                    // DX7: FieldNameLine/FieldNameColumn now tracks precise field name position
+                    if (fa.FieldName == _fieldName && fa.FieldNameLine > 0)
+                        _locations.Add(MakeLocation(_uri, fa.FieldNameLine, fa.FieldNameColumn, _fieldName.Length));
                 }
-                CollectFieldAccessRefsInExpr(fa.Target, fieldName, uri, locations);
-            }
-            else if (expr is BinaryExpr bin)
-            {
-                CollectFieldAccessRefsInExpr(bin.Left, fieldName, uri, locations);
-                CollectFieldAccessRefsInExpr(bin.Right, fieldName, uri, locations);
-            }
-            else if (expr is UnaryExpr un) CollectFieldAccessRefsInExpr(un.Operand, fieldName, uri, locations);
-            else if (expr is AssignExpr assign)
-            {
-                CollectFieldAccessRefsInExpr(assign.Target, fieldName, uri, locations);
-                CollectFieldAccessRefsInExpr(assign.Value, fieldName, uri, locations);
-            }
-            else if (expr is CallExpr call)
-            {
-                foreach (var arg in call.Arguments) CollectFieldAccessRefsInExpr(arg, fieldName, uri, locations);
-            }
-            else if (expr is StructLiteralExpr sl)
-            {
-                foreach (var f in sl.Fields)
+                else if (expr is StructLiteralExpr sl)
                 {
-                    if (f.FieldName == fieldName)
-                        locations.Add(MakeLocation(uri, sl.Line, sl.Column, fieldName.Length));
-                    CollectFieldAccessRefsInExpr(f.Value, fieldName, uri, locations);
+                    foreach (var f in sl.Fields)
+                    {
+                        if (f.FieldName == _fieldName)
+                            _locations.Add(MakeLocation(_uri, sl.Line, sl.Column, _fieldName.Length));
+                    }
                 }
+                return false; // continue walking children
             }
         }
 
@@ -3412,74 +3264,32 @@ namespace FFVM.Debug
         // Target is IdentifierExpr matching the enum name).
         // ============================================================
 
+        // R1: EnumMemberAccessRefs — replaced hand-written Block/Stmt/Expr triad with AstWalker subclass.
         private static void CollectEnumMemberAccessRefsInBlock(BlockStmt block, string memberName, string enumName, string uri, List<object> locations)
         {
-            if (block == null) return;
-            foreach (var stmt in block.Statements)
-                CollectEnumMemberAccessRefsInStmt(stmt, memberName, enumName, uri, locations);
+            var w = new EnumMemberAccessRefsWalker(memberName, enumName, uri, locations);
+            w.WalkBlock(block);
         }
 
-        private static void CollectEnumMemberAccessRefsInStmt(Stmt stmt, string memberName, string enumName, string uri, List<object> locations)
+        private sealed class EnumMemberAccessRefsWalker : AstWalker
         {
-            if (stmt == null) return;
-            if (stmt is ExprStmt es) CollectEnumMemberAccessRefsInExpr(es.Expression, memberName, enumName, uri, locations);
-            else if (stmt is BlockStmt bs) CollectEnumMemberAccessRefsInBlock(bs, memberName, enumName, uri, locations);
-            else if (stmt is VarDeclStmt vd && vd.Initializer != null) CollectEnumMemberAccessRefsInExpr(vd.Initializer, memberName, enumName, uri, locations);
-            else if (stmt is IfStmt ifs)
+            private readonly string _memberName;
+            private readonly string _enumName;
+            private readonly string _uri;
+            private readonly List<object> _locations;
+            public EnumMemberAccessRefsWalker(string memberName, string enumName, string uri, List<object> locations) { _memberName = memberName; _enumName = enumName; _uri = uri; _locations = locations; }
+            protected override bool VisitExpr(Expr expr)
             {
-                CollectEnumMemberAccessRefsInExpr(ifs.Condition, memberName, enumName, uri, locations);
-                CollectEnumMemberAccessRefsInStmt(ifs.ThenBranch, memberName, enumName, uri, locations);
-                CollectEnumMemberAccessRefsInStmt(ifs.ElseBranch, memberName, enumName, uri, locations);
-            }
-            else if (stmt is WhileStmt ws)
-            {
-                CollectEnumMemberAccessRefsInExpr(ws.Condition, memberName, enumName, uri, locations);
-                CollectEnumMemberAccessRefsInStmt(ws.Body, memberName, enumName, uri, locations);
-            }
-            else if (stmt is ForStmt fs)
-            {
-                CollectEnumMemberAccessRefsInStmt(fs.Initializer, memberName, enumName, uri, locations);
-                CollectEnumMemberAccessRefsInExpr(fs.Condition, memberName, enumName, uri, locations);
-                CollectEnumMemberAccessRefsInExpr(fs.Increment, memberName, enumName, uri, locations);
-                CollectEnumMemberAccessRefsInStmt(fs.Body, memberName, enumName, uri, locations);
-            }
-            else if (stmt is ReturnStmt rs && rs.Value != null) CollectEnumMemberAccessRefsInExpr(rs.Value, memberName, enumName, uri, locations);
-            else if (stmt is DeferStmt ds) CollectEnumMemberAccessRefsInBlock(ds.Body, memberName, enumName, uri, locations);
-            else if (stmt is UsingStmt us)
-            {
-                foreach (var arg in us.Arguments) CollectEnumMemberAccessRefsInExpr(arg, memberName, enumName, uri, locations);
-                CollectEnumMemberAccessRefsInBlock(us.Body, memberName, enumName, uri, locations);
-            }
-            else if (stmt is WaitStmt wst) CollectEnumMemberAccessRefsInExpr(wst.FrameCount, memberName, enumName, uri, locations);
-        }
-
-        private static void CollectEnumMemberAccessRefsInExpr(Expr expr, string memberName, string enumName, string uri, List<object> locations)
-        {
-            if (expr == null) return;
-            // Match EnumName.MEMBER pattern: FieldAccessExpr where Target is IdentifierExpr(enumName) and FieldName matches
-            if (expr is FieldAccessExpr fa)
-            {
-                if (fa.FieldName == memberName && fa.FieldNameLine > 0
-                    && fa.Target is IdentifierExpr id && id.Name == enumName)
+                // Match EnumName.MEMBER pattern: FieldAccessExpr where Target is IdentifierExpr(enumName) and FieldName matches
+                if (expr is FieldAccessExpr fa)
                 {
-                    locations.Add(MakeLocation(uri, fa.FieldNameLine, fa.FieldNameColumn, memberName.Length));
+                    if (fa.FieldName == _memberName && fa.FieldNameLine > 0
+                        && fa.Target is IdentifierExpr id && id.Name == _enumName)
+                    {
+                        _locations.Add(MakeLocation(_uri, fa.FieldNameLine, fa.FieldNameColumn, _memberName.Length));
+                    }
                 }
-                CollectEnumMemberAccessRefsInExpr(fa.Target, memberName, enumName, uri, locations);
-            }
-            else if (expr is BinaryExpr bin)
-            {
-                CollectEnumMemberAccessRefsInExpr(bin.Left, memberName, enumName, uri, locations);
-                CollectEnumMemberAccessRefsInExpr(bin.Right, memberName, enumName, uri, locations);
-            }
-            else if (expr is UnaryExpr un) CollectEnumMemberAccessRefsInExpr(un.Operand, memberName, enumName, uri, locations);
-            else if (expr is AssignExpr assign)
-            {
-                CollectEnumMemberAccessRefsInExpr(assign.Target, memberName, enumName, uri, locations);
-                CollectEnumMemberAccessRefsInExpr(assign.Value, memberName, enumName, uri, locations);
-            }
-            else if (expr is CallExpr call)
-            {
-                foreach (var arg in call.Arguments) CollectEnumMemberAccessRefsInExpr(arg, memberName, enumName, uri, locations);
+                return false;
             }
         }
 
@@ -3794,7 +3604,10 @@ namespace FFVM.Debug
             foreach (var mv in ast.ModuleVariables)
             {
                 if (mv.Initializer != null)
-                    CollectExprSemanticTokensFromExpr(mv.Initializer, enumNames, enumMemberNames, structNames, funcNames, rawTokens);
+                {
+                    var w = new ExprSemanticTokensWalker(enumNames, enumMemberNames, structNames, funcNames, rawTokens);
+                    w.WalkExpr(mv.Initializer);
+                }
             }
 
             // Sort by (line, col) for delta encoding
@@ -3832,13 +3645,6 @@ namespace FFVM.Debug
         /// DX7: Walk a block to find type annotations in local variable declarations
         /// that reference struct/enum types, and emit semantic tokens for them.
         /// </summary>
-        private static void CollectTypeUsageTokens(BlockStmt block, HashSet<string> structNames, HashSet<string> enumNames,
-            List<(int line, int col, int len, int type, int mod)> tokens)
-        {
-            if (block == null) return;
-            foreach (var stmt in block.Statements)
-                CollectTypeUsageTokensInStmt(stmt, structNames, enumNames, tokens);
-        }
 
         /// <summary>
         /// DX7: Extract the base type name from a potentially dotted type (e.g. "Alias.Struct" → "Alias").
@@ -3850,209 +3656,247 @@ namespace FFVM.Debug
             return dotIndex >= 0 ? typeName.Substring(0, dotIndex) : typeName;
         }
 
-        private static void CollectTypeUsageTokensInStmt(Stmt stmt, HashSet<string> structNames, HashSet<string> enumNames,
+        // R1: TypeUsageTokens — replaced hand-written Block/Stmt triad with AstWalker subclass.
+        private static void CollectTypeUsageTokens(BlockStmt block, HashSet<string> structNames, HashSet<string> enumNames,
             List<(int line, int col, int len, int type, int mod)> tokens)
         {
-            if (stmt == null) return;
-            if (stmt is VarDeclStmt vd && vd.TypeNameLine > 0)
-            {
-                string baseType = GetBaseTypeName(vd.TypeName);
-                if (structNames.Contains(baseType))
-                    tokens.Add((vd.TypeNameLine, vd.TypeNameColumn, baseType.Length, 1 /* struct */, 0));
-                else if (enumNames.Contains(baseType))
-                    tokens.Add((vd.TypeNameLine, vd.TypeNameColumn, baseType.Length, 2 /* enum */, 0));
-            }
-            else if (stmt is BlockStmt bs) CollectTypeUsageTokens(bs, structNames, enumNames, tokens);
-            else if (stmt is IfStmt ifs)
-            {
-                CollectTypeUsageTokensInStmt(ifs.ThenBranch, structNames, enumNames, tokens);
-                CollectTypeUsageTokensInStmt(ifs.ElseBranch, structNames, enumNames, tokens);
-            }
-            else if (stmt is WhileStmt ws) CollectTypeUsageTokensInStmt(ws.Body, structNames, enumNames, tokens);
-            else if (stmt is ForStmt fs)
-            {
-                CollectTypeUsageTokensInStmt(fs.Initializer, structNames, enumNames, tokens);
-                CollectTypeUsageTokensInStmt(fs.Body, structNames, enumNames, tokens);
-            }
-            else if (stmt is DeferStmt ds) CollectTypeUsageTokens(ds.Body, structNames, enumNames, tokens);
-            else if (stmt is UsingStmt us) CollectTypeUsageTokens(us.Body, structNames, enumNames, tokens);
+            var w = new TypeUsageTokensWalker(structNames, enumNames, tokens);
+            w.WalkBlock(block);
         }
 
-        /// <summary>
-        /// DX9: Walk a block to emit variable(5) tokens for local variable/constant names.
-        /// </summary>
+        private sealed class TypeUsageTokensWalker : AstWalker
+        {
+            private readonly HashSet<string> _structNames;
+            private readonly HashSet<string> _enumNames;
+            private readonly List<(int line, int col, int len, int type, int mod)> _tokens;
+            public TypeUsageTokensWalker(HashSet<string> structNames, HashSet<string> enumNames, List<(int line, int col, int len, int type, int mod)> tokens) { _structNames = structNames; _enumNames = enumNames; _tokens = tokens; }
+            protected override void VisitVarDecl(VarDeclStmt vd)
+            {
+                if (vd.TypeNameLine > 0)
+                {
+                    string baseType = GetBaseTypeName(vd.TypeName);
+                    if (_structNames.Contains(baseType))
+                        _tokens.Add((vd.TypeNameLine, vd.TypeNameColumn, baseType.Length, 1 /* struct */, 0));
+                    else if (_enumNames.Contains(baseType))
+                        _tokens.Add((vd.TypeNameLine, vd.TypeNameColumn, baseType.Length, 2 /* enum */, 0));
+                }
+            }
+        }
+
+        // R1: VarNameTokens — replaced hand-written Block/Stmt triad with AstWalker subclass.
         private static void CollectVarNameTokens(BlockStmt block,
             List<(int line, int col, int len, int type, int mod)> tokens)
         {
-            if (block == null) return;
-            foreach (var stmt in block.Statements)
-                CollectVarNameTokensInStmt(stmt, tokens);
+            var w = new VarNameTokensWalker(tokens);
+            w.WalkBlock(block);
         }
 
-        private static void CollectVarNameTokensInStmt(Stmt stmt,
-            List<(int line, int col, int len, int type, int mod)> tokens)
+        private sealed class VarNameTokensWalker : AstWalker
         {
-            if (stmt == null) return;
-            if (stmt is VarDeclStmt vd && vd.NameLine > 0)
-                tokens.Add((vd.NameLine, vd.NameColumn, vd.Name.Length, 5 /* variable */, 1 /* declaration */));
-            if (stmt is BlockStmt bs) CollectVarNameTokens(bs, tokens);
-            else if (stmt is IfStmt ifs)
+            private readonly List<(int line, int col, int len, int type, int mod)> _tokens;
+            public VarNameTokensWalker(List<(int line, int col, int len, int type, int mod)> tokens) { _tokens = tokens; }
+            protected override void VisitVarDecl(VarDeclStmt vd)
             {
-                CollectVarNameTokensInStmt(ifs.ThenBranch, tokens);
-                CollectVarNameTokensInStmt(ifs.ElseBranch, tokens);
+                if (vd.NameLine > 0)
+                    _tokens.Add((vd.NameLine, vd.NameColumn, vd.Name.Length, 5 /* variable */, 1 /* declaration */));
             }
-            else if (stmt is WhileStmt ws) CollectVarNameTokensInStmt(ws.Body, tokens);
-            else if (stmt is ForStmt fs)
-            {
-                CollectVarNameTokensInStmt(fs.Initializer, tokens);
-                CollectVarNameTokensInStmt(fs.Body, tokens);
-            }
-            else if (stmt is DeferStmt ds) CollectVarNameTokens(ds.Body, tokens);
-            else if (stmt is UsingStmt us) CollectVarNameTokens(us.Body, tokens);
         }
 
         // ============================================================
         // DX8: Expression-based semantic tokens
         // ============================================================
 
-        /// <summary>
-        /// DX8: Walk a block to collect semantic tokens from expressions.
-        /// Handles: enum type references (EnumName), enum member access (EnumName.MEMBER),
-        /// struct type references in struct literals, field access on structs, and variable references.
-        /// </summary>
+        // R1: ExprSemanticTokens — replaced hand-written Block/Stmt/Expr triad with AstWalker subclass.
         private static void CollectExprSemanticTokens(BlockStmt block,
             HashSet<string> enumNames, HashSet<string> enumMemberNames,
             HashSet<string> structNames, HashSet<string> funcNames,
             List<(int line, int col, int len, int type, int mod)> tokens)
         {
-            if (block == null) return;
-            foreach (var stmt in block.Statements)
-                CollectExprSemanticTokensFromStmt(stmt, enumNames, enumMemberNames, structNames, funcNames, tokens);
+            var w = new ExprSemanticTokensWalker(enumNames, enumMemberNames, structNames, funcNames, tokens);
+            w.WalkBlock(block);
         }
 
-        private static void CollectExprSemanticTokensFromStmt(Stmt stmt,
-            HashSet<string> enumNames, HashSet<string> enumMemberNames,
-            HashSet<string> structNames, HashSet<string> funcNames,
-            List<(int line, int col, int len, int type, int mod)> tokens)
+        private sealed class ExprSemanticTokensWalker : AstWalker
         {
-            if (stmt == null) return;
-            if (stmt is ExprStmt es)
-                CollectExprSemanticTokensFromExpr(es.Expression, enumNames, enumMemberNames, structNames, funcNames, tokens);
-            else if (stmt is VarDeclStmt vd && vd.Initializer != null)
-                CollectExprSemanticTokensFromExpr(vd.Initializer, enumNames, enumMemberNames, structNames, funcNames, tokens);
-            else if (stmt is BlockStmt bs)
-                CollectExprSemanticTokens(bs, enumNames, enumMemberNames, structNames, funcNames, tokens);
-            else if (stmt is IfStmt ifs)
+            private readonly HashSet<string> _enumNames;
+            private readonly HashSet<string> _enumMemberNames;
+            private readonly HashSet<string> _structNames;
+            private readonly HashSet<string> _funcNames;
+            private readonly List<(int line, int col, int len, int type, int mod)> _tokens;
+            public ExprSemanticTokensWalker(HashSet<string> enumNames, HashSet<string> enumMemberNames, HashSet<string> structNames, HashSet<string> funcNames, List<(int line, int col, int len, int type, int mod)> tokens) { _enumNames = enumNames; _enumMemberNames = enumMemberNames; _structNames = structNames; _funcNames = funcNames; _tokens = tokens; }
+
+            protected override bool VisitExpr(Expr expr)
             {
-                CollectExprSemanticTokensFromExpr(ifs.Condition, enumNames, enumMemberNames, structNames, funcNames, tokens);
-                CollectExprSemanticTokensFromStmt(ifs.ThenBranch, enumNames, enumMemberNames, structNames, funcNames, tokens);
-                CollectExprSemanticTokensFromStmt(ifs.ElseBranch, enumNames, enumMemberNames, structNames, funcNames, tokens);
-            }
-            else if (stmt is WhileStmt ws)
-            {
-                CollectExprSemanticTokensFromExpr(ws.Condition, enumNames, enumMemberNames, structNames, funcNames, tokens);
-                CollectExprSemanticTokensFromStmt(ws.Body, enumNames, enumMemberNames, structNames, funcNames, tokens);
-            }
-            else if (stmt is ForStmt fs)
-            {
-                CollectExprSemanticTokensFromStmt(fs.Initializer, enumNames, enumMemberNames, structNames, funcNames, tokens);
-                CollectExprSemanticTokensFromExpr(fs.Condition, enumNames, enumMemberNames, structNames, funcNames, tokens);
-                CollectExprSemanticTokensFromExpr(fs.Increment, enumNames, enumMemberNames, structNames, funcNames, tokens);
-                CollectExprSemanticTokensFromStmt(fs.Body, enumNames, enumMemberNames, structNames, funcNames, tokens);
-            }
-            else if (stmt is ReturnStmt rs && rs.Value != null)
-                CollectExprSemanticTokensFromExpr(rs.Value, enumNames, enumMemberNames, structNames, funcNames, tokens);
-            else if (stmt is DeferStmt ds)
-                CollectExprSemanticTokens(ds.Body, enumNames, enumMemberNames, structNames, funcNames, tokens);
-            else if (stmt is UsingStmt us)
-            {
-                foreach (var arg in us.Arguments)
-                    CollectExprSemanticTokensFromExpr(arg, enumNames, enumMemberNames, structNames, funcNames, tokens);
-                CollectExprSemanticTokens(us.Body, enumNames, enumMemberNames, structNames, funcNames, tokens);
+                if (expr is FieldAccessExpr fa)
+                {
+                    // Check if this is EnumName.MEMBER access
+                    if (fa.Target is IdentifierExpr enumTarget && _enumNames.Contains(enumTarget.Name))
+                    {
+                        // Emit enum type token for the target
+                        if (enumTarget.Line > 0)
+                            _tokens.Add((enumTarget.Line, enumTarget.Column, enumTarget.Name.Length, 2 /* enum */, 0));
+                        // Emit enumMember token for the field
+                        if (fa.FieldNameLine > 0)
+                            _tokens.Add((fa.FieldNameLine, fa.FieldNameColumn, fa.FieldName.Length, 3 /* enumMember */, 0));
+                        return true; // skip children — we handled the target
+                    }
+                    else
+                    {
+                        // Struct field access → emit property token for the field name
+                        if (fa.FieldNameLine > 0)
+                            _tokens.Add((fa.FieldNameLine, fa.FieldNameColumn, fa.FieldName.Length, 4 /* property */, 0));
+                        return false; // continue into target for nested access (a.b.c)
+                    }
+                }
+
+                if (expr is StructLiteralExpr sl)
+                {
+                    // Struct literal type name → struct token
+                    if (_structNames.Contains(sl.TypeName) && sl.Line > 0)
+                        _tokens.Add((sl.Line, sl.Column, sl.TypeName.Length, 1 /* struct */, 0));
+                    return false; // continue into field value expressions
+                }
+
+                // DX9: Identifier → variable token for variable/parameter references
+                // Skip struct names, enum names, and function names (they have their own token types)
+                if (expr is IdentifierExpr ident)
+                {
+                    if (ident.Line > 0 && !_structNames.Contains(ident.Name)
+                        && !_enumNames.Contains(ident.Name) && !_funcNames.Contains(ident.Name))
+                        _tokens.Add((ident.Line, ident.Column, ident.Name.Length, 5 /* variable */, 0));
+                    return true; // leaf node
+                }
+
+                return false; // continue walking
             }
         }
+
+        // ============================================================
+        // R1: Unified AST Walker — single-point dispatch for all
+        // Block/Stmt/Expr traversal, eliminating duplicated switch
+        // logic across 40+ hand-written methods.
+        // ============================================================
 
         /// <summary>
-        /// DX8: Extract semantic tokens from an expression.
-        /// - FieldAccess where target is enum name → enum(target) + enumMember(field)
-        /// - FieldAccess where target is struct var → property(field) + variable(target)
-        /// - StructLiteral → struct(typeName)
-        /// - Identifier → variable(name) for variable/parameter references
+        /// Generic AST walker that dispatches all Stmt and Expr subtypes once.
+        /// Subclasses override only the hooks they care about.
+        ///
+        /// Walk methods are non-virtual and handle child dispatch uniformly.
+        /// Hook methods (Visit*) are virtual and called before child traversal.
+        /// If a Visit hook returns true, child traversal is skipped (early-out).
         /// </summary>
-        private static void CollectExprSemanticTokensFromExpr(Expr expr,
-            HashSet<string> enumNames, HashSet<string> enumMemberNames,
-            HashSet<string> structNames, HashSet<string> funcNames,
-            List<(int line, int col, int len, int type, int mod)> tokens)
+        private class AstWalker
         {
-            if (expr == null) return;
-
-            if (expr is FieldAccessExpr fa)
+            // ---- Block ----
+            public void WalkBlock(BlockStmt block)
             {
-                // Check if this is EnumName.MEMBER access
-                if (fa.Target is IdentifierExpr enumTarget && enumNames.Contains(enumTarget.Name))
+                if (block == null) return;
+                foreach (var stmt in block.Statements)
+                    WalkStmt(stmt);
+            }
+
+            // ---- Stmt dispatch ----
+            public void WalkStmt(Stmt stmt)
+            {
+                if (stmt == null) return;
+                if (VisitStmt(stmt)) return; // early-out
+
+                if (stmt is ExprStmt es)
+                    WalkExpr(es.Expression);
+                else if (stmt is BlockStmt bs)
+                    WalkBlock(bs);
+                else if (stmt is VarDeclStmt vd)
                 {
-                    // Emit enum type token for the target
-                    if (enumTarget.Line > 0)
-                        tokens.Add((enumTarget.Line, enumTarget.Column, enumTarget.Name.Length, 2 /* enum */, 0));
-                    // Emit enumMember token for the field
-                    if (fa.FieldNameLine > 0)
-                        tokens.Add((fa.FieldNameLine, fa.FieldNameColumn, fa.FieldName.Length, 3 /* enumMember */, 0));
+                    VisitVarDecl(vd);
+                    WalkExpr(vd.Initializer);
                 }
-                else
+                else if (stmt is IfStmt ifs)
                 {
-                    // Struct field access → emit property token for the field name
-                    if (fa.FieldNameLine > 0)
-                        tokens.Add((fa.FieldNameLine, fa.FieldNameColumn, fa.FieldName.Length, 4 /* property */, 0));
-                    // Recurse into target for nested access (a.b.c)
-                    CollectExprSemanticTokensFromExpr(fa.Target, enumNames, enumMemberNames, structNames, funcNames, tokens);
+                    WalkExpr(ifs.Condition);
+                    WalkStmt(ifs.ThenBranch);
+                    WalkStmt(ifs.ElseBranch);
                 }
-                return;
+                else if (stmt is WhileStmt ws)
+                {
+                    WalkExpr(ws.Condition);
+                    WalkStmt(ws.Body);
+                }
+                else if (stmt is ForStmt fs)
+                {
+                    WalkStmt(fs.Initializer);
+                    WalkExpr(fs.Condition);
+                    WalkExpr(fs.Increment);
+                    WalkStmt(fs.Body);
+                }
+                else if (stmt is ReturnStmt rs)
+                    WalkExpr(rs.Value);
+                else if (stmt is WaitStmt wst)
+                    WalkExpr(wst.FrameCount);
+                else if (stmt is DeferStmt ds)
+                    WalkBlock(ds.Body);
+                else if (stmt is UsingStmt us)
+                {
+                    foreach (var arg in us.Arguments)
+                        WalkExpr(arg);
+                    WalkBlock(us.Body);
+                }
+                // YieldStmt, WaitForStmt — no children to walk
             }
 
-            if (expr is StructLiteralExpr sl)
+            // ---- Expr dispatch ----
+            public void WalkExpr(Expr expr)
             {
-                // Struct literal type name → struct token
-                if (structNames.Contains(sl.TypeName) && sl.Line > 0)
-                    tokens.Add((sl.Line, sl.Column, sl.TypeName.Length, 1 /* struct */, 0));
-                // Recurse into field value expressions
-                foreach (var fv in sl.Fields)
-                    CollectExprSemanticTokensFromExpr(fv.Value, enumNames, enumMemberNames, structNames, funcNames, tokens);
-                return;
+                if (expr == null) return;
+                if (VisitExpr(expr)) return; // early-out
+
+                if (expr is BinaryExpr bin)
+                {
+                    WalkExpr(bin.Left);
+                    WalkExpr(bin.Right);
+                }
+                else if (expr is UnaryExpr un)
+                    WalkExpr(un.Operand);
+                else if (expr is AssignExpr assign)
+                {
+                    WalkExpr(assign.Target);
+                    WalkExpr(assign.Value);
+                }
+                else if (expr is CallExpr call)
+                {
+                    foreach (var arg in call.Arguments)
+                        WalkExpr(arg);
+                }
+                else if (expr is MemberCallExpr mc)
+                {
+                    foreach (var arg in mc.Arguments)
+                        WalkExpr(arg);
+                }
+                else if (expr is FieldAccessExpr fa)
+                    WalkExpr(fa.Target);
+                else if (expr is StructLiteralExpr sl)
+                {
+                    foreach (var f in sl.Fields)
+                        WalkExpr(f.Value);
+                }
+                else if (expr is SyscallExpr sc)
+                {
+                    foreach (var arg in sc.Arguments)
+                        WalkExpr(arg);
+                }
+                // Leaf nodes: IdentifierExpr, NumberLiteralExpr, IntLiteralExpr,
+                // BoolLiteralExpr, StringIdLiteralExpr, StringLiteralExpr — no children
             }
 
-            // DX9: Identifier → variable token for variable/parameter references
-            // Skip struct names, enum names, and function names (they have their own token types)
-            if (expr is IdentifierExpr ident)
-            {
-                if (ident.Line > 0 && !structNames.Contains(ident.Name)
-                    && !enumNames.Contains(ident.Name) && !funcNames.Contains(ident.Name))
-                    tokens.Add((ident.Line, ident.Column, ident.Name.Length, 5 /* variable */, 0));
-                return;
-            }
+            // ---- Hooks (override in subclasses) ----
 
-            // Recurse into sub-expressions
-            if (expr is BinaryExpr bin)
-            {
-                CollectExprSemanticTokensFromExpr(bin.Left, enumNames, enumMemberNames, structNames, funcNames, tokens);
-                CollectExprSemanticTokensFromExpr(bin.Right, enumNames, enumMemberNames, structNames, funcNames, tokens);
-            }
-            else if (expr is UnaryExpr un)
-                CollectExprSemanticTokensFromExpr(un.Operand, enumNames, enumMemberNames, structNames, funcNames, tokens);
-            else if (expr is AssignExpr ae)
-            {
-                CollectExprSemanticTokensFromExpr(ae.Target, enumNames, enumMemberNames, structNames, funcNames, tokens);
-                CollectExprSemanticTokensFromExpr(ae.Value, enumNames, enumMemberNames, structNames, funcNames, tokens);
-            }
-            else if (expr is CallExpr call)
-            {
-                foreach (var arg in call.Arguments)
-                    CollectExprSemanticTokensFromExpr(arg, enumNames, enumMemberNames, structNames, funcNames, tokens);
-            }
-            else if (expr is MemberCallExpr mc)
-            {
-                foreach (var arg in mc.Arguments)
-                    CollectExprSemanticTokensFromExpr(arg, enumNames, enumMemberNames, structNames, funcNames, tokens);
-            }
+            /// <summary>Called before dispatching a statement's children. Return true to skip children.</summary>
+            protected virtual bool VisitStmt(Stmt stmt) => false;
+
+            /// <summary>Called for VarDeclStmt specifically, before walking its initializer.</summary>
+            protected virtual void VisitVarDecl(VarDeclStmt vd) { }
+
+            /// <summary>Called before dispatching an expression's children. Return true to skip children.</summary>
+            protected virtual bool VisitExpr(Expr expr) => false;
         }
 
         // ============================================================
