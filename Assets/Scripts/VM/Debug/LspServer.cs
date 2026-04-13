@@ -1456,18 +1456,19 @@ namespace FFVM.Debug
         /// using per-file AST first (for include declarations), then falls back to merged AST
         /// for cross-file struct/enum type annotations and enum members.
         ///
-        /// Returns (perFileTarget, resolvedTarget, mergedAst):
+        /// Returns (perFileTarget, resolvedTarget, perFileAst, mergedAst):
         ///  - perFileTarget: result from per-file AST (null if not found; includes IncludeFile)
         ///  - resolvedTarget: result after merged-AST fallback (may differ from perFileTarget)
+        ///  - perFileAst: the per-file AST for this document
         ///  - mergedAst: the merged AST for this document
         ///
         /// Callers should check perFileTarget for IncludeFile before using resolvedTarget.
         /// </summary>
-        private (SymbolAtPosition? perFileTarget, SymbolAtPosition? resolvedTarget, ModuleNode mergedAst)
+        private (SymbolAtPosition? perFileTarget, SymbolAtPosition? resolvedTarget, ModuleNode perFileAst, ModuleNode mergedAst)
             ResolveSymbolDualAst(string uri, int astLine, int astCol)
         {
             var ast = GetCachedAst(uri);
-            if (ast == null) return (null, null, null);
+            if (ast == null) return (null, null, null, null);
 
             // US: Check include declarations using per-file AST first (merged AST strips Imports)
             var perFileTarget = FindSymbolAtPosition(ast, astLine, astCol);
@@ -1485,7 +1486,7 @@ namespace FFVM.Debug
                 if (mergedTarget != null) resolvedTarget = mergedTarget;
             }
 
-            return (perFileTarget, resolvedTarget, mergedAst);
+            return (perFileTarget, resolvedTarget, ast, mergedAst);
         }
 
         // --- definition ---
@@ -1500,9 +1501,7 @@ namespace FFVM.Debug
             int astCol = position.GetInt("character") + 1;
 
             // R1: Unified dual-AST symbol resolution
-            var (perFileTarget, target, mergedAst) = ResolveSymbolDualAst(uri, astLine, astCol);
-
-            // DX5: Include file navigation — resolve to target file URI
+            var (perFileTarget, target, _, mergedAst) = ResolveSymbolDualAst(uri, astLine, astCol);
             if (perFileTarget != null && perFileTarget.Value.kind == SymbolKindTag.IncludeFile)
             {
                 string includeUri = ResolveIncludeFileUri(uri, perFileTarget.Value.name);
@@ -1582,15 +1581,14 @@ namespace FFVM.Debug
             int astCol = position.GetInt("character") + 1;
 
             // R1: Unified dual-AST symbol resolution
-            var (perFileTarget, target, mergedAst) = ResolveSymbolDualAst(uri, astLine, astCol);
+            var (perFileTarget, target, perFileAst, mergedAst) = ResolveSymbolDualAst(uri, astLine, astCol);
 
             // DX5: Include file references — find all includes of the same path
             if (perFileTarget != null && perFileTarget.Value.kind == SymbolKindTag.IncludeFile)
             {
                 var locations = new List<object>();
-                var ast = GetCachedAst(uri);
-                if (ast != null)
-                    CollectIncludeReferences(ast, perFileTarget.Value.name, uri, locations);
+                if (perFileAst != null)
+                    CollectIncludeReferences(perFileAst, perFileTarget.Value.name, uri, locations);
                 return MakeArrayResult(locations);
             }
 
@@ -3147,7 +3145,7 @@ namespace FFVM.Debug
             int astCol = position.GetInt("character") + 1;
 
             // R1: Unified dual-AST symbol resolution
-            var (perFileTarget, target, mergedAst) = ResolveSymbolDualAst(uri, astLine, astCol);
+            var (perFileTarget, target, perFileAst, mergedAst) = ResolveSymbolDualAst(uri, astLine, astCol);
 
             // Include files are not renamable via text rename (file system operation)
             if (perFileTarget != null && perFileTarget.Value.kind == SymbolKindTag.IncludeFile) return null;
@@ -3161,8 +3159,7 @@ namespace FFVM.Debug
 
             // Calculate the actual start of the symbol name at cursor
             int nameLen = target.Value.name.Length;
-            var ast = GetCachedAst(uri);
-            int nameStartCol = FindNameStartCol(ast, target.Value, astLine, astCol);
+            int nameStartCol = FindNameStartCol(perFileAst, target.Value, astLine, astCol);
             int lspStartChar = Math.Max(0, nameStartCol - 1);
 
             var result = new JsonObject();
@@ -3238,7 +3235,7 @@ namespace FFVM.Debug
             int astCol = position.GetInt("character") + 1;
 
             // R1: Unified dual-AST symbol resolution
-            var (perFileTarget, target, mergedAst) = ResolveSymbolDualAst(uri, astLine, astCol);
+            var (perFileTarget, target, _, mergedAst) = ResolveSymbolDualAst(uri, astLine, astCol);
 
             // Include files are not renamable
             if (perFileTarget != null && perFileTarget.Value.kind == SymbolKindTag.IncludeFile) return null;
