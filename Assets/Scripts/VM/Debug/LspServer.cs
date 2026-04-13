@@ -34,12 +34,35 @@ namespace FFVM.Debug
         private bool _running;
         private bool _shutdownRequested;
 
-        // --- Document store (uri → content + cached AST) ---
-        private readonly Dictionary<string, string> _documents = new Dictionary<string, string>();
-        private readonly Dictionary<string, ModuleNode> _documentAsts = new Dictionary<string, ModuleNode>();
+        // --- R1: DocumentStore — encapsulates document content, per-file AST, and merged AST caches ---
+        private readonly DocumentStore _docStore = new DocumentStore();
 
-        // --- DX4-P3: Merged (preprocessor-resolved) AST cache for cross-file symbol queries ---
-        private readonly Dictionary<string, ModuleNode> _mergedAsts = new Dictionary<string, ModuleNode>();
+        /// <summary>
+        /// R1: Encapsulates document content and AST caches.
+        /// Provides a single point for Open/Change/Close/Get operations,
+        /// replacing scattered dictionary accesses across handlers.
+        /// </summary>
+        private class DocumentStore
+        {
+            private readonly Dictionary<string, string> _content = new Dictionary<string, string>();
+            private readonly Dictionary<string, ModuleNode> _asts = new Dictionary<string, ModuleNode>();
+            private readonly Dictionary<string, ModuleNode> _mergedAsts = new Dictionary<string, ModuleNode>();
+
+            public void SetContent(string uri, string text) => _content[uri] = text ?? "";
+            public bool TryGetContent(string uri, out string content) => _content.TryGetValue(uri, out content);
+            public bool HasContent(string uri) => _content.ContainsKey(uri);
+
+            public void SetAst(string uri, ModuleNode ast) => _asts[uri] = ast;
+            public bool HasAst(string uri) => _asts.ContainsKey(uri);
+            public ModuleNode GetAst(string uri) => uri != null && _asts.TryGetValue(uri, out var ast) ? ast : null;
+
+            public void SetMergedAst(string uri, ModuleNode ast) => _mergedAsts[uri] = ast;
+            public bool HasMergedAst(string uri) => _mergedAsts.ContainsKey(uri);
+            public ModuleNode GetMergedAst(string uri) => uri != null && _mergedAsts.TryGetValue(uri, out var ast) ? ast : null;
+
+            /// <summary>Remove all data for a closed document.</summary>
+            public void Remove(string uri) { _content.Remove(uri); _asts.Remove(uri); _mergedAsts.Remove(uri); }
+        }
 
         // --- Syscall table for compilation (stub, no real syscalls needed for diagnostics) ---
         private readonly Dictionary<string, int> _defaultSyscalls;
@@ -681,7 +704,7 @@ namespace FFVM.Debug
             string text = textDocument.GetString("text");
             if (uri == null) return;
 
-            _documents[uri] = text ?? "";
+            _docStore.SetContent(uri, text ?? "");
             CompileAndPublishDiagnostics(uri, text ?? "");
         }
 
@@ -702,7 +725,7 @@ namespace FFVM.Debug
                 if (lastChange != null)
                 {
                     string text = lastChange.GetString("text");
-                    _documents[uri] = text ?? "";
+                    _docStore.SetContent(uri, text ?? "");
                     CompileAndPublishDiagnostics(uri, text ?? "");
                 }
             }
@@ -722,9 +745,7 @@ namespace FFVM.Debug
             string uri = textDocument.GetString("uri");
             if (uri == null) return;
 
-            _documents.Remove(uri);
-            _documentAsts.Remove(uri);
-            _mergedAsts.Remove(uri);
+            _docStore.Remove(uri);
             // Clear diagnostics for the closed file
             PublishDiagnostics(uri, new List<object>());
         }
@@ -745,9 +766,9 @@ namespace FFVM.Debug
 
                 // Cache AST if parse succeeded (keep old AST on failure for continued symbol support)
                 if (parseErrors == null || parseErrors.Count == 0)
-                    _documentAsts[uri] = ast;
-                else if (!_documentAsts.ContainsKey(uri) && ast != null)
-                    _documentAsts[uri] = ast; // better than nothing on first open
+                    _docStore.SetAst(uri, ast);
+                else if (!_docStore.HasAst(uri) && ast != null)
+                    _docStore.SetAst(uri, ast); // better than nothing on first open
 
                 // DX4-P3: Build merged AST via Preprocessor for cross-file symbol queries.
                 // This includes all symbols from included files with OriginFile set.
@@ -758,15 +779,16 @@ namespace FFVM.Debug
                     var preprocessor = new Preprocessor(_fileResolver);
                     var mergedAst = preprocessor.Resolve(source, mergeFilePath ?? "main", out var ppErrors);
                     if (ppErrors == null || ppErrors.Count == 0)
-                        _mergedAsts[uri] = mergedAst;
-                    else if (!_mergedAsts.ContainsKey(uri) && mergedAst != null)
-                        _mergedAsts[uri] = mergedAst;
+                        _docStore.SetMergedAst(uri, mergedAst);
+                    else if (!_docStore.HasMergedAst(uri) && mergedAst != null)
+                        _docStore.SetMergedAst(uri, mergedAst);
                 }
                 else
                 {
                     // No file resolver — merged AST is same as per-file AST
-                    if (_documentAsts.ContainsKey(uri))
-                        _mergedAsts[uri] = _documentAsts[uri];
+                    var cachedAst = _docStore.GetAst(uri);
+                    if (cachedAst != null)
+                        _docStore.SetMergedAst(uri, cachedAst);
                 }
 
                 // DX4-P0: Compile for diagnostics with workspace file resolver support.
@@ -914,9 +936,7 @@ namespace FFVM.Debug
         /// </summary>
         private ModuleNode GetCachedAst(string uri)
         {
-            if (uri != null && _documentAsts.TryGetValue(uri, out var ast))
-                return ast;
-            return null;
+            return _docStore.GetAst(uri);
         }
 
         /// <summary>
@@ -926,9 +946,7 @@ namespace FFVM.Debug
         /// </summary>
         private ModuleNode GetMergedAst(string uri)
         {
-            if (uri != null && _mergedAsts.TryGetValue(uri, out var merged))
-                return merged;
-            return GetCachedAst(uri);
+            return _docStore.GetMergedAst(uri) ?? _docStore.GetAst(uri);
         }
 
         /// <summary>
@@ -1148,254 +1166,160 @@ namespace FFVM.Debug
             return null;
         }
 
+        // R1: FindHover — replaced hand-written Block/Stmt/Expr triad with AstWalker subclass.
         private static string FindHoverInBlock(ModuleNode ast, FuncDecl currentFunc, BlockStmt block, int line, int col)
         {
-            if (block == null) return null;
-            foreach (var stmt in block.Statements)
-            {
-                string result = FindHoverInStmt(ast, currentFunc, stmt, line, col);
-                if (result != null) return result;
-            }
-            return null;
+            var w = new FindHoverWalker(ast, currentFunc, line, col);
+            w.WalkBlock(block);
+            return w.Result;
         }
 
-        private static string FindHoverInStmt(ModuleNode ast, FuncDecl currentFunc, Stmt stmt, int line, int col)
+        private sealed class FindHoverWalker : AstWalker
         {
-            if (stmt == null) return null;
+            private readonly ModuleNode _ast;
+            private readonly FuncDecl _func;
+            private readonly int _line;
+            private readonly int _col;
+            public string Result;
 
-            if (stmt is VarDeclStmt vd)
+            public FindHoverWalker(ModuleNode ast, FuncDecl func, int line, int col) { _ast = ast; _func = func; _line = line; _col = col; }
+
+            private void SetResult(string r) { Result = r; _abort = true; }
+
+            protected override bool VisitStmt(Stmt stmt)
             {
-                // Check initializer FIRST (has precise column matching for calls, identifiers, etc.)
-                if (vd.Initializer != null)
+                if (stmt is VarDeclStmt vd)
                 {
-                    string result = FindHoverInExpr(ast, currentFunc, vd.Initializer, line, col);
-                    if (result != null) return result;
-                }
-                // Variable name hover — only when cursor is on the name itself
-                // VarDeclStmt.Column points to 'var'; name starts at Column + 4 ("var ")
-                if (vd.Line == line)
-                {
-                    int nameStart = vd.Column + 4; // skip "var "
-                    if (ColMatches(nameStart, vd.Name.Length, col))
+                    // Check initializer FIRST (has precise column matching for calls, identifiers, etc.)
+                    if (vd.Initializer != null)
                     {
-                        string typeStr = vd.TypeName ?? "int";
-                        return $"var {vd.Name}: {typeStr}";
+                        WalkExpr(vd.Initializer);
+                        if (Result != null) return true;
                     }
-                }
-            }
-            else if (stmt is IfStmt ifs)
-            {
-                string r = FindHoverInExpr(ast, currentFunc, ifs.Condition, line, col);
-                if (r != null) return r;
-                r = FindHoverInStmt(ast, currentFunc, ifs.ThenBranch, line, col);
-                if (r != null) return r;
-                r = FindHoverInStmt(ast, currentFunc, ifs.ElseBranch, line, col);
-                if (r != null) return r;
-            }
-            else if (stmt is WhileStmt ws)
-            {
-                string r = FindHoverInExpr(ast, currentFunc, ws.Condition, line, col);
-                if (r != null) return r;
-                r = FindHoverInStmt(ast, currentFunc, ws.Body, line, col);
-                if (r != null) return r;
-            }
-            else if (stmt is ForStmt fs)
-            {
-                string r = FindHoverInStmt(ast, currentFunc, fs.Initializer, line, col);
-                if (r != null) return r;
-                r = FindHoverInExpr(ast, currentFunc, fs.Condition, line, col);
-                if (r != null) return r;
-                r = FindHoverInExpr(ast, currentFunc, fs.Increment, line, col);
-                if (r != null) return r;
-                r = FindHoverInStmt(ast, currentFunc, fs.Body, line, col);
-                if (r != null) return r;
-            }
-            else if (stmt is BlockStmt bs)
-            {
-                return FindHoverInBlock(ast, currentFunc, bs, line, col);
-            }
-            else if (stmt is ExprStmt es)
-            {
-                return FindHoverInExpr(ast, currentFunc, es.Expression, line, col);
-            }
-            else if (stmt is ReturnStmt rs)
-            {
-                if (rs.Value != null)
-                    return FindHoverInExpr(ast, currentFunc, rs.Value, line, col);
-            }
-            else if (stmt is WaitStmt wst)
-            {
-                return FindHoverInExpr(ast, currentFunc, wst.FrameCount, line, col);
-            }
-            else if (stmt is DeferStmt ds)
-            {
-                return FindHoverInBlock(ast, currentFunc, ds.Body, line, col);
-            }
-            else if (stmt is UsingStmt us)
-            {
-                foreach (var arg in us.Arguments)
-                {
-                    string r = FindHoverInExpr(ast, currentFunc, arg, line, col);
-                    if (r != null) return r;
-                }
-                return FindHoverInBlock(ast, currentFunc, us.Body, line, col);
-            }
-
-            return null;
-        }
-
-        private static string FindHoverInExpr(ModuleNode ast, FuncDecl currentFunc, Expr expr, int line, int col)
-        {
-            if (expr == null) return null;
-
-            if (expr is IdentifierExpr id && id.Line == line && ColMatches(id.Column, id.Name.Length, col))
-            {
-                // Look up variable declaration in current function
-                string typeInfo = FindVarType(currentFunc, id.Name);
-                if (typeInfo != null)
-                    return $"var {id.Name}: {typeInfo}";
-                // Check if it's a parameter
-                foreach (var p in currentFunc.Parameters)
-                {
-                    if (p.Name == id.Name)
+                    // Variable name hover — only when cursor is on the name itself
+                    // VarDeclStmt.Column points to 'var'; name starts at Column + 4 ("var ")
+                    if (vd.Line == _line)
                     {
-                        string paramHover = $"(parameter) {FormatParamDecl(p)}";
-                        if (p.DocComment != null)
-                            paramHover += $"\n\n{p.DocComment}";
-                        return paramHover;
-                    }
-                }
-                return $"{id.Name}";
-            }
-
-            if (expr is CallExpr call && call.Line == line && ColMatches(call.Column, call.FunctionName.Length, col))
-            {
-                // Look up function declaration
-                foreach (var func in ast.Functions)
-                {
-                    if (func.Name == call.FunctionName)
-                        return FormatFuncHover(func);
-                }
-                return $"func {call.FunctionName}(...)";
-            }
-
-            if (expr is FieldAccessExpr fa && fa.Line == line)
-            {
-                // Lang-13: enum member hover — when target is an enum name, show member info
-                if (fa.Target is IdentifierExpr faEnumId)
-                {
-                    foreach (var en in ast.Enums)
-                    {
-                        if (en.Name == faEnumId.Name)
+                        int nameStart = vd.Column + 4; // skip "var "
+                        if (ColMatches(nameStart, vd.Name.Length, _col))
                         {
-                            // Cursor might be on the enum name itself or on the member name
-                            if (ColMatches(faEnumId.Column, faEnumId.Name.Length, col))
-                            {
-                                return FormatEnumHover(en);
-                            }
-                            // Check if cursor is on the member name (after the dot)
-                            foreach (var member in en.Members)
-                            {
-                                if (member.Name == fa.FieldName)
-                                {
-                                    return $"(enum member) {en.Name}.{member.Name}";
-                                }
-                            }
-                            return null;
+                            string typeStr = vd.TypeName ?? "int";
+                            SetResult($"var {vd.Name}: {typeStr}");
                         }
                     }
+                    return true; // handled all VarDeclStmt paths
                 }
-                return FindHoverInExpr(ast, currentFunc, fa.Target, line, col);
+                return false;
             }
 
-            // Recurse into sub-expressions
-            if (expr is BinaryExpr bin)
+            protected override bool VisitExpr(Expr expr)
             {
-                string r = FindHoverInExpr(ast, currentFunc, bin.Left, line, col);
-                if (r != null) return r;
-                return FindHoverInExpr(ast, currentFunc, bin.Right, line, col);
-            }
-            if (expr is UnaryExpr un)
-            {
-                return FindHoverInExpr(ast, currentFunc, un.Operand, line, col);
-            }
-            if (expr is AssignExpr assign)
-            {
-                string r = FindHoverInExpr(ast, currentFunc, assign.Target, line, col);
-                if (r != null) return r;
-                return FindHoverInExpr(ast, currentFunc, assign.Value, line, col);
-            }
-            if (expr is CallExpr call2)
-            {
-                foreach (var arg in call2.Arguments)
+                if (expr is IdentifierExpr id && id.Line == _line && ColMatches(id.Column, id.Name.Length, _col))
                 {
-                    string r = FindHoverInExpr(ast, currentFunc, arg, line, col);
-                    if (r != null) return r;
-                }
-            }
-            if (expr is StructLiteralExpr sl)
-            {
-                // US: Hover on struct literal name → show struct definition with doc comment
-                if (sl.Line == line && sl.TypeName != null && ColMatches(sl.Column, sl.TypeName.Length, col))
-                {
-                    foreach (var st in ast.Structs)
+                    // Look up variable declaration in current function
+                    string typeInfo = FindVarType(_func, id.Name);
+                    if (typeInfo != null)
+                    { SetResult($"var {id.Name}: {typeInfo}"); return true; }
+                    // Check if it's a parameter
+                    foreach (var p in _func.Parameters)
                     {
-                        if (st.Name == sl.TypeName)
-                            return FormatStructHover(st);
+                        if (p.Name == id.Name)
+                        {
+                            string paramHover = $"(parameter) {FormatParamDecl(p)}";
+                            if (p.DocComment != null)
+                                paramHover += $"\n\n{p.DocComment}";
+                            SetResult(paramHover);
+                            return true;
+                        }
                     }
-                    return $"struct {sl.TypeName}";
+                    SetResult($"{id.Name}");
+                    return true;
                 }
-                foreach (var f in sl.Fields)
-                {
-                    string r = FindHoverInExpr(ast, currentFunc, f.Value, line, col);
-                    if (r != null) return r;
-                }
-            }
 
-            return null;
+                if (expr is CallExpr call && call.Line == _line && ColMatches(call.Column, call.FunctionName.Length, _col))
+                {
+                    // Look up function declaration
+                    foreach (var func in _ast.Functions)
+                    {
+                        if (func.Name == call.FunctionName)
+                        { SetResult(FormatFuncHover(func)); return true; }
+                    }
+                    SetResult($"func {call.FunctionName}(...)");
+                    return true;
+                }
+
+                if (expr is FieldAccessExpr fa && fa.Line == _line)
+                {
+                    // Lang-13: enum member hover — when target is an enum name, show member info
+                    if (fa.Target is IdentifierExpr faEnumId)
+                    {
+                        foreach (var en in _ast.Enums)
+                        {
+                            if (en.Name == faEnumId.Name)
+                            {
+                                // Cursor might be on the enum name itself or on the member name
+                                if (ColMatches(faEnumId.Column, faEnumId.Name.Length, _col))
+                                { SetResult(FormatEnumHover(en)); return true; }
+                                // Check if cursor is on the member name (after the dot)
+                                foreach (var member in en.Members)
+                                {
+                                    if (member.Name == fa.FieldName)
+                                    { SetResult($"(enum member) {en.Name}.{member.Name}"); return true; }
+                                }
+                                return true; // matched enum, but no member hit — stop
+                            }
+                        }
+                    }
+                    // Not an enum — continue walking into target
+                    return false;
+                }
+
+                if (expr is StructLiteralExpr sl)
+                {
+                    // US: Hover on struct literal name → show struct definition with doc comment
+                    if (sl.Line == _line && sl.TypeName != null && ColMatches(sl.Column, sl.TypeName.Length, _col))
+                    {
+                        foreach (var st in _ast.Structs)
+                        {
+                            if (st.Name == sl.TypeName)
+                            { SetResult(FormatStructHover(st)); return true; }
+                        }
+                        SetResult($"struct {sl.TypeName}");
+                        return true;
+                    }
+                    // Continue into field values
+                    return false;
+                }
+
+                return false; // continue walking children
+            }
         }
 
         /// <summary>
         /// Find the type of a variable declared in a function's body.
         /// Walks statements looking for VarDeclStmt with matching name.
         /// </summary>
+        // R1: FindVarType — replaced hand-written Block/Stmt triad with AstWalker subclass.
         private static string FindVarType(FuncDecl func, string varName)
         {
-            return FindVarTypeInBlock(func.Body, varName);
+            var w = new FindVarTypeWalker(varName);
+            w.WalkBlock(func.Body);
+            return w.Result;
         }
 
-        private static string FindVarTypeInBlock(BlockStmt block, string varName)
+        private sealed class FindVarTypeWalker : AstWalker
         {
-            if (block == null) return null;
-            foreach (var stmt in block.Statements)
+            private readonly string _varName;
+            public string Result;
+            public FindVarTypeWalker(string varName) { _varName = varName; }
+            protected override void VisitVarDecl(VarDeclStmt vd)
             {
-                string r = FindVarTypeInStmt(stmt, varName);
-                if (r != null) return r;
+                if (vd.Name == _varName)
+                {
+                    Result = vd.TypeName ?? "int";
+                    _abort = true;
+                }
             }
-            return null;
-        }
-
-        private static string FindVarTypeInStmt(Stmt stmt, string varName)
-        {
-            if (stmt is VarDeclStmt vd && vd.Name == varName)
-                return vd.TypeName ?? "int";
-            if (stmt is BlockStmt bs) return FindVarTypeInBlock(bs, varName);
-            if (stmt is IfStmt ifs)
-            {
-                string r = FindVarTypeInStmt(ifs.ThenBranch, varName);
-                if (r != null) return r;
-                return FindVarTypeInStmt(ifs.ElseBranch, varName);
-            }
-            if (stmt is WhileStmt ws) return FindVarTypeInStmt(ws.Body, varName);
-            if (stmt is ForStmt fs)
-            {
-                string r = FindVarTypeInStmt(fs.Initializer, varName);
-                if (r != null) return r;
-                return FindVarTypeInStmt(fs.Body, varName);
-            }
-            if (stmt is DeferStmt ds) return FindVarTypeInBlock(ds.Body, varName);
-            if (stmt is UsingStmt us) return FindVarTypeInBlock(us.Body, varName);
-            return null;
         }
 
         /// <summary>
@@ -1525,41 +1449,67 @@ namespace FFVM.Debug
             return $"```ffvm\n{sig}\n```\n---\n{en.DocComment}";
         }
 
+        // --- symbol resolution helpers ---
+
+        /// <summary>
+        /// R1: Common dual-AST symbol resolution. Finds the symbol at a cursor position
+        /// using per-file AST first (for include declarations), then falls back to merged AST
+        /// for cross-file struct/enum type annotations and enum members.
+        ///
+        /// Returns (perFileTarget, resolvedTarget, perFileAst, mergedAst):
+        ///  - perFileTarget: result from per-file AST (null if not found; includes IncludeFile)
+        ///  - resolvedTarget: result after merged-AST fallback (may differ from perFileTarget)
+        ///  - perFileAst: the per-file AST for this document
+        ///  - mergedAst: the merged AST for this document
+        ///
+        /// Callers should check perFileTarget for IncludeFile before using resolvedTarget.
+        /// </summary>
+        private (SymbolAtPosition? perFileTarget, SymbolAtPosition? resolvedTarget, ModuleNode perFileAst, ModuleNode mergedAst)
+            ResolveSymbolDualAst(string uri, int astLine, int astCol)
+        {
+            var ast = GetCachedAst(uri);
+            if (ast == null) return (null, null, null, null);
+
+            // US: Check include declarations using per-file AST first (merged AST strips Imports)
+            var perFileTarget = FindSymbolAtPosition(ast, astLine, astCol);
+
+            // Get merged AST for cross-file resolution
+            var mergedAst = GetMergedAst(uri);
+
+            // Re-identify using merged AST if per-file AST couldn't resolve the symbol
+            // correctly (e.g. cross-file struct/enum type annotations or enum members)
+            var resolvedTarget = perFileTarget;
+            if (resolvedTarget == null || resolvedTarget.Value.kind == SymbolKindTag.Variable
+                || (resolvedTarget.Value.kind == SymbolKindTag.StructField && resolvedTarget.Value.parentName == null))
+            {
+                var mergedTarget = FindSymbolAtPosition(mergedAst, astLine, astCol);
+                if (mergedTarget != null) resolvedTarget = mergedTarget;
+            }
+
+            return (perFileTarget, resolvedTarget, ast, mergedAst);
+        }
+
         // --- definition ---
 
         private JsonObject HandleDefinition(JsonObject parameters)
         {
             string uri = GetDocumentUri(parameters);
-            var ast = GetCachedAst(uri);
-            if (ast == null) return null;
-
             var position = parameters?.GetObject("position");
-            if (position == null) return null;
+            if (uri == null || position == null) return null;
 
             int astLine = position.GetInt("line") + 1;
             int astCol = position.GetInt("character") + 1;
 
-            // US: Check include declarations using per-file AST first (merged AST strips Imports)
-            var target = FindSymbolAtPosition(ast, astLine, astCol);
-
-            // DX5: Include file navigation — resolve to target file URI
-            if (target != null && target.Value.kind == SymbolKindTag.IncludeFile)
+            // R1: Unified dual-AST symbol resolution
+            var (perFileTarget, target, _, mergedAst) = ResolveSymbolDualAst(uri, astLine, astCol);
+            if (perFileTarget != null && perFileTarget.Value.kind == SymbolKindTag.IncludeFile)
             {
-                string includeUri = ResolveIncludeFileUri(uri, target.Value.name);
+                string includeUri = ResolveIncludeFileUri(uri, perFileTarget.Value.name);
                 if (includeUri != null)
                     return MakeLocation(includeUri, 1, 1, 0);
                 return null;
             }
 
-            // US: Re-identify using merged AST if per-file AST couldn't resolve the symbol
-            // correctly (e.g. cross-file struct/enum type annotations or enum members)
-            var mergedAst = GetMergedAst(uri);
-            if (target == null || target.Value.kind == SymbolKindTag.Variable
-                || (target.Value.kind == SymbolKindTag.StructField && target.Value.parentName == null))
-            {
-                var mergedTarget = FindSymbolAtPosition(mergedAst, astLine, astCol);
-                if (mergedTarget != null) target = mergedTarget;
-            }
             if (target == null) return null;
 
             // DX4-P3: Use merged AST to find definition (may be in included file)
@@ -1624,35 +1574,24 @@ namespace FFVM.Debug
         private JsonObject HandleReferences(JsonObject parameters)
         {
             string uri = GetDocumentUri(parameters);
-            var ast = GetCachedAst(uri);
-            if (ast == null) return MakeArrayResult(new List<object>());
-
             var position = parameters?.GetObject("position");
-            if (position == null) return MakeArrayResult(new List<object>());
+            if (uri == null || position == null) return MakeArrayResult(new List<object>());
 
             int astLine = position.GetInt("line") + 1;
             int astCol = position.GetInt("character") + 1;
 
-            // US: Check include declarations using per-file AST first (merged AST strips Imports)
-            var target = FindSymbolAtPosition(ast, astLine, astCol);
+            // R1: Unified dual-AST symbol resolution
+            var (perFileTarget, target, perFileAst, mergedAst) = ResolveSymbolDualAst(uri, astLine, astCol);
 
             // DX5: Include file references — find all includes of the same path
-            if (target != null && target.Value.kind == SymbolKindTag.IncludeFile)
+            if (perFileTarget != null && perFileTarget.Value.kind == SymbolKindTag.IncludeFile)
             {
                 var locations = new List<object>();
-                CollectIncludeReferences(ast, target.Value.name, uri, locations);
+                if (perFileAst != null)
+                    CollectIncludeReferences(perFileAst, perFileTarget.Value.name, uri, locations);
                 return MakeArrayResult(locations);
             }
 
-            // US: Re-identify using merged AST if per-file AST couldn't resolve the symbol
-            // correctly (e.g. cross-file struct/enum type annotations or enum members)
-            var mergedAst = GetMergedAst(uri);
-            if (target == null || target.Value.kind == SymbolKindTag.Variable
-                || (target.Value.kind == SymbolKindTag.StructField && target.Value.parentName == null))
-            {
-                var mergedTarget = FindSymbolAtPosition(mergedAst, astLine, astCol);
-                if (mergedTarget != null) target = mergedTarget;
-            }
             if (target == null) return MakeArrayResult(new List<object>());
 
             // DX4-P3: Use merged AST for cross-file reference collection
@@ -1672,7 +1611,7 @@ namespace FFVM.Debug
             // DX4-P3: Use merged AST for symbol lists (includes cross-file symbols)
             var mergedAst = GetMergedAst(uri);
             string source = null;
-            if (uri != null) _documents.TryGetValue(uri, out source);
+            if (uri != null) _docStore.TryGetContent(uri, out source);
 
             var position = parameters?.GetObject("position");
             if (position == null) return MakeArrayResult(new List<object>());
@@ -1877,7 +1816,7 @@ namespace FFVM.Debug
         {
             string uri = GetDocumentUri(parameters);
             string source = null;
-            if (uri != null) _documents.TryGetValue(uri, out source);
+            if (uri != null) _docStore.TryGetContent(uri, out source);
             if (source == null) return null;
 
             var position = parameters?.GetObject("position");
@@ -2178,107 +2117,56 @@ namespace FFVM.Debug
             return null;
         }
 
+        // R1: FindVarStructType — replaced hand-written Block/Stmt triad with AstWalker subclass.
         private static string FindVarStructTypeInBlock(ModuleNode ast, BlockStmt block, string varName)
         {
-            if (block == null) return null;
-            foreach (var stmt in block.Statements)
+            var w = new FindVarStructTypeWalker(ast, varName);
+            w.WalkBlock(block);
+            return w.Result;
+        }
+
+        private sealed class FindVarStructTypeWalker : AstWalker
+        {
+            private readonly ModuleNode _ast;
+            private readonly string _varName;
+            public string Result;
+            public FindVarStructTypeWalker(ModuleNode ast, string varName) { _ast = ast; _varName = varName; }
+            protected override void VisitVarDecl(VarDeclStmt vd)
             {
-                if (stmt is VarDeclStmt vd && vd.Name == varName)
+                if (vd.Name == _varName)
                 {
                     if (vd.TypeName != null)
                     {
-                        foreach (var st in ast.Structs)
+                        foreach (var st in _ast.Structs)
                         {
                             if (st.Name == vd.TypeName)
-                                return vd.TypeName;
+                            { Result = vd.TypeName; break; }
                         }
                     }
-                    return null;
+                    _abort = true; // found the variable (whether struct-typed or not)
                 }
-                string r = null;
-                if (stmt is BlockStmt bs) r = FindVarStructTypeInBlock(ast, bs, varName);
-                else if (stmt is IfStmt ifs)
-                {
-                    r = FindVarStructTypeInStmt(ast, ifs.ThenBranch, varName);
-                    if (r == null) r = FindVarStructTypeInStmt(ast, ifs.ElseBranch, varName);
-                }
-                else if (stmt is WhileStmt ws) r = FindVarStructTypeInStmt(ast, ws.Body, varName);
-                else if (stmt is ForStmt fs)
-                {
-                    r = FindVarStructTypeInStmt(ast, fs.Initializer, varName);
-                    if (r == null) r = FindVarStructTypeInStmt(ast, fs.Body, varName);
-                }
-                else if (stmt is DeferStmt ds) r = FindVarStructTypeInBlock(ast, ds.Body, varName);
-                else if (stmt is UsingStmt us) r = FindVarStructTypeInBlock(ast, us.Body, varName);
-                if (r != null) return r;
             }
-            return null;
         }
 
-        private static string FindVarStructTypeInStmt(ModuleNode ast, Stmt stmt, string varName)
-        {
-            if (stmt is BlockStmt bs) return FindVarStructTypeInBlock(ast, bs, varName);
-            if (stmt is VarDeclStmt vd && vd.Name == varName)
-            {
-                if (vd.TypeName != null)
-                {
-                    foreach (var st in ast.Structs)
-                    {
-                        if (st.Name == vd.TypeName)
-                            return vd.TypeName;
-                    }
-                }
-                return null;
-            }
-            return null;
-        }
-
-        /// <summary>
-        /// Collect all variables declared in a block before the given AST line.
-        /// </summary>
+        // R1: CollectVariablesInScope — replaced hand-written Block/Stmt pair with AstWalker subclass.
         private static void CollectVariablesInScope(BlockStmt block, int beforeAstLine, List<object> items)
         {
-            if (block == null) return;
-            foreach (var stmt in block.Statements)
-            {
-                if (stmt is VarDeclStmt vd)
-                {
-                    if (vd.Line < beforeAstLine)
-                    {
-                        string typeStr = vd.TypeName ?? "int";
-                        items.Add(MakeCompletionItem(vd.Name, 6 /* Variable */,
-                            $"var {vd.Name}: {typeStr}"));
-                    }
-                }
-                // Recurse into nested blocks that contain the cursor
-                if (stmt is IfStmt ifs)
-                {
-                    CollectVariablesInStmt(ifs.ThenBranch, beforeAstLine, items);
-                    CollectVariablesInStmt(ifs.ElseBranch, beforeAstLine, items);
-                }
-                else if (stmt is WhileStmt ws)
-                    CollectVariablesInStmt(ws.Body, beforeAstLine, items);
-                else if (stmt is ForStmt fs)
-                {
-                    CollectVariablesInStmt(fs.Initializer, beforeAstLine, items);
-                    CollectVariablesInStmt(fs.Body, beforeAstLine, items);
-                }
-                else if (stmt is BlockStmt bs)
-                    CollectVariablesInScope(bs, beforeAstLine, items);
-                else if (stmt is DeferStmt ds)
-                    CollectVariablesInScope(ds.Body, beforeAstLine, items);
-                else if (stmt is UsingStmt us)
-                    CollectVariablesInScope(us.Body, beforeAstLine, items);
-            }
+            var w = new CollectVarsInScopeWalker(beforeAstLine, items);
+            w.WalkBlock(block);
         }
 
-        private static void CollectVariablesInStmt(Stmt stmt, int beforeAstLine, List<object> items)
+        private sealed class CollectVarsInScopeWalker : AstWalker
         {
-            if (stmt is BlockStmt bs) CollectVariablesInScope(bs, beforeAstLine, items);
-            else if (stmt is VarDeclStmt vd && vd.Line < beforeAstLine)
+            private readonly int _beforeAstLine;
+            private readonly List<object> _items;
+            public CollectVarsInScopeWalker(int beforeAstLine, List<object> items) { _beforeAstLine = beforeAstLine; _items = items; }
+            protected override void VisitVarDecl(VarDeclStmt vd)
             {
-                string typeStr = vd.TypeName ?? "int";
-                items.Add(MakeCompletionItem(vd.Name, 6 /* Variable */, $"var {vd.Name}: {typeStr}"));
+                if (vd.Line < _beforeAstLine)
+                {
+                    string typeStr = vd.TypeName ?? "int";
+                    _items.Add(MakeCompletionItem(vd.Name, 6 /* Variable */, $"var {vd.Name}: {typeStr}"));
+                }
             }
         }
 
@@ -2362,175 +2250,121 @@ namespace FFVM.Debug
             return null;
         }
 
+        // R1: FindSymbol — replaced hand-written Block/Stmt/Expr triad with AstWalker subclass.
         private static SymbolAtPosition? FindSymbolInBlock(ModuleNode ast, FuncDecl func, BlockStmt block, int line, int col)
         {
-            if (block == null) return null;
-            foreach (var stmt in block.Statements)
-            {
-                var r = FindSymbolInStmt(ast, func, stmt, line, col);
-                if (r != null) return r;
-            }
-            return null;
+            var w = new FindSymbolWalker(ast, func, line, col);
+            w.WalkBlock(block);
+            return w.Result;
         }
 
-        private static SymbolAtPosition? FindSymbolInStmt(ModuleNode ast, FuncDecl func, Stmt stmt, int line, int col)
+        private sealed class FindSymbolWalker : AstWalker
         {
-            if (stmt == null) return null;
+            private readonly ModuleNode _ast;
+            private readonly FuncDecl _func;
+            private readonly int _line;
+            private readonly int _col;
+            public SymbolAtPosition? Result;
 
-            if (stmt is VarDeclStmt vd)
+            public FindSymbolWalker(ModuleNode ast, FuncDecl func, int line, int col) { _ast = ast; _func = func; _line = line; _col = col; }
+
+            private void SetResult(SymbolAtPosition r) { Result = r; _abort = true; }
+
+            protected override bool VisitStmt(Stmt stmt)
             {
-                if (vd.Initializer != null)
+                if (stmt is VarDeclStmt vd)
                 {
-                    var r = FindSymbolInExpr(ast, func, vd.Initializer, line, col);
-                    if (r != null) return r;
-                }
-                // US: Check type annotation — if cursor is on the type name, resolve as Struct or Enum
-                if (vd.TypeNameLine > 0 && vd.TypeNameLine == line && vd.TypeName != null
-                    && ColMatches(vd.TypeNameColumn, vd.TypeName.Length, col))
-                {
-                    string baseName = GetBaseTypeName(vd.TypeName);
-                    foreach (var st in ast.Structs)
+                    // Walk initializer first (has precise column matching for calls, identifiers, etc.)
+                    if (vd.Initializer != null)
                     {
-                        if (st.Name == baseName)
-                            return new SymbolAtPosition { name = baseName, kind = SymbolKindTag.Struct };
+                        WalkExpr(vd.Initializer);
+                        if (Result != null) return true;
                     }
-                    foreach (var en in ast.Enums)
+                    // US: Check type annotation — if cursor is on the type name, resolve as Struct or Enum
+                    if (vd.TypeNameLine > 0 && vd.TypeNameLine == _line && vd.TypeName != null
+                        && ColMatches(vd.TypeNameColumn, vd.TypeName.Length, _col))
                     {
-                        if (en.Name == baseName)
-                            return new SymbolAtPosition { name = baseName, kind = SymbolKindTag.Enum };
-                    }
-                }
-                // Match the variable name itself in the declaration
-                if (vd.Line == line)
-                {
-                    int nameStart = vd.Column + (vd.IsConst ? "const".Length : "var".Length) + 1;
-                    if (ColMatches(nameStart, vd.Name.Length, col))
-                        return new SymbolAtPosition { name = vd.Name, kind = SymbolKindTag.Variable, scopeFunc = func.Name };
-                }
-            }
-            else if (stmt is ExprStmt es)
-                return FindSymbolInExpr(ast, func, es.Expression, line, col);
-            else if (stmt is BlockStmt bs)
-                return FindSymbolInBlock(ast, func, bs, line, col);
-            else if (stmt is IfStmt ifs)
-            {
-                var r = FindSymbolInExpr(ast, func, ifs.Condition, line, col);
-                if (r != null) return r;
-                r = FindSymbolInStmt(ast, func, ifs.ThenBranch, line, col);
-                if (r != null) return r;
-                return FindSymbolInStmt(ast, func, ifs.ElseBranch, line, col);
-            }
-            else if (stmt is WhileStmt ws)
-            {
-                var r = FindSymbolInExpr(ast, func, ws.Condition, line, col);
-                if (r != null) return r;
-                return FindSymbolInStmt(ast, func, ws.Body, line, col);
-            }
-            else if (stmt is ForStmt fs)
-            {
-                var r = FindSymbolInStmt(ast, func, fs.Initializer, line, col);
-                if (r != null) return r;
-                r = FindSymbolInExpr(ast, func, fs.Condition, line, col);
-                if (r != null) return r;
-                r = FindSymbolInExpr(ast, func, fs.Increment, line, col);
-                if (r != null) return r;
-                return FindSymbolInStmt(ast, func, fs.Body, line, col);
-            }
-            else if (stmt is ReturnStmt rs && rs.Value != null)
-                return FindSymbolInExpr(ast, func, rs.Value, line, col);
-            else if (stmt is WaitStmt wst)
-                return FindSymbolInExpr(ast, func, wst.FrameCount, line, col);
-            else if (stmt is DeferStmt ds)
-                return FindSymbolInBlock(ast, func, ds.Body, line, col);
-            else if (stmt is UsingStmt us)
-            {
-                foreach (var arg in us.Arguments)
-                {
-                    var r = FindSymbolInExpr(ast, func, arg, line, col);
-                    if (r != null) return r;
-                }
-                return FindSymbolInBlock(ast, func, us.Body, line, col);
-            }
-            return null;
-        }
-
-        private static SymbolAtPosition? FindSymbolInExpr(ModuleNode ast, FuncDecl func, Expr expr, int line, int col)
-        {
-            if (expr == null) return null;
-
-            if (expr is IdentifierExpr id && id.Line == line && ColMatches(id.Column, id.Name.Length, col))
-            {
-                // US: Check if identifier is an enum name (e.g., "Color" in "Color.RED")
-                foreach (var en in ast.Enums)
-                {
-                    if (en.Name == id.Name)
-                        return new SymbolAtPosition { name = id.Name, kind = SymbolKindTag.Enum };
-                }
-                // US: Check if identifier is a struct name (e.g., struct literal or type ref)
-                foreach (var st in ast.Structs)
-                {
-                    if (st.Name == id.Name)
-                        return new SymbolAtPosition { name = id.Name, kind = SymbolKindTag.Struct };
-                }
-                // Determine if it's a parameter or variable
-                foreach (var p in func.Parameters)
-                {
-                    if (p.Name == id.Name)
-                        return new SymbolAtPosition { name = id.Name, kind = SymbolKindTag.Parameter, scopeFunc = func.Name };
-                }
-                return new SymbolAtPosition { name = id.Name, kind = SymbolKindTag.Variable, scopeFunc = func.Name };
-            }
-
-            if (expr is CallExpr call && call.Line == line && ColMatches(call.Column, call.FunctionName.Length, col))
-            {
-                return new SymbolAtPosition { name = call.FunctionName, kind = SymbolKindTag.Function };
-            }
-
-            // Recurse
-            if (expr is BinaryExpr bin)
-            {
-                var r = FindSymbolInExpr(ast, func, bin.Left, line, col);
-                if (r != null) return r;
-                return FindSymbolInExpr(ast, func, bin.Right, line, col);
-            }
-            if (expr is UnaryExpr un)
-                return FindSymbolInExpr(ast, func, un.Operand, line, col);
-            if (expr is AssignExpr assign)
-            {
-                var r = FindSymbolInExpr(ast, func, assign.Target, line, col);
-                if (r != null) return r;
-                return FindSymbolInExpr(ast, func, assign.Value, line, col);
-            }
-            if (expr is CallExpr call2)
-            {
-                foreach (var arg in call2.Arguments)
-                {
-                    var r = FindSymbolInExpr(ast, func, arg, line, col);
-                    if (r != null) return r;
-                }
-            }
-            if (expr is FieldAccessExpr fa)
-            {
-                // DX7: Check if cursor is on the field name token (after '.')
-                if (fa.FieldNameLine == line && fa.FieldNameLine > 0 && ColMatches(fa.FieldNameColumn, fa.FieldName.Length, col))
-                {
-                    // US: Check if target is an enum → return EnumMember instead of StructField
-                    if (fa.Target is IdentifierExpr faId)
-                    {
-                        foreach (var en in ast.Enums)
+                        string baseName = GetBaseTypeName(vd.TypeName);
+                        foreach (var st in _ast.Structs)
                         {
-                            if (en.Name == faId.Name)
-                                return new SymbolAtPosition { name = fa.FieldName, kind = SymbolKindTag.EnumMember, parentName = en.Name };
+                            if (st.Name == baseName)
+                            { SetResult(new SymbolAtPosition { name = baseName, kind = SymbolKindTag.Struct }); return true; }
+                        }
+                        foreach (var en in _ast.Enums)
+                        {
+                            if (en.Name == baseName)
+                            { SetResult(new SymbolAtPosition { name = baseName, kind = SymbolKindTag.Enum }); return true; }
                         }
                     }
-                    // Parent struct cannot always be resolved from AST alone (no type inference);
-                    // callers handle parentName=null by searching all structs.
-                    return new SymbolAtPosition { name = fa.FieldName, kind = SymbolKindTag.StructField, parentName = null };
+                    // Match the variable name itself in the declaration
+                    if (vd.Line == _line)
+                    {
+                        int nameStart = vd.Column + (vd.IsConst ? "const".Length : "var".Length) + 1;
+                        if (ColMatches(nameStart, vd.Name.Length, _col))
+                        { SetResult(new SymbolAtPosition { name = vd.Name, kind = SymbolKindTag.Variable, scopeFunc = _func.Name }); return true; }
+                    }
+                    return true; // handled all VarDeclStmt paths (skip default dispatch which would re-walk initializer)
                 }
-                return FindSymbolInExpr(ast, func, fa.Target, line, col);
+                return false; // let AstWalker dispatch other statement types normally
             }
 
-            return null;
+            protected override bool VisitExpr(Expr expr)
+            {
+                if (expr is IdentifierExpr id && id.Line == _line && ColMatches(id.Column, id.Name.Length, _col))
+                {
+                    // US: Check if identifier is an enum name (e.g., "Color" in "Color.RED")
+                    foreach (var en in _ast.Enums)
+                    {
+                        if (en.Name == id.Name)
+                        { SetResult(new SymbolAtPosition { name = id.Name, kind = SymbolKindTag.Enum }); return true; }
+                    }
+                    // US: Check if identifier is a struct name (e.g., struct literal or type ref)
+                    foreach (var st in _ast.Structs)
+                    {
+                        if (st.Name == id.Name)
+                        { SetResult(new SymbolAtPosition { name = id.Name, kind = SymbolKindTag.Struct }); return true; }
+                    }
+                    // Determine if it's a parameter or variable
+                    foreach (var p in _func.Parameters)
+                    {
+                        if (p.Name == id.Name)
+                        { SetResult(new SymbolAtPosition { name = id.Name, kind = SymbolKindTag.Parameter, scopeFunc = _func.Name }); return true; }
+                    }
+                    SetResult(new SymbolAtPosition { name = id.Name, kind = SymbolKindTag.Variable, scopeFunc = _func.Name });
+                    return true;
+                }
+
+                if (expr is CallExpr call && call.Line == _line && ColMatches(call.Column, call.FunctionName.Length, _col))
+                {
+                    SetResult(new SymbolAtPosition { name = call.FunctionName, kind = SymbolKindTag.Function });
+                    return true;
+                }
+
+                if (expr is FieldAccessExpr fa)
+                {
+                    // DX7: Check if cursor is on the field name token (after '.')
+                    if (fa.FieldNameLine == _line && fa.FieldNameLine > 0 && ColMatches(fa.FieldNameColumn, fa.FieldName.Length, _col))
+                    {
+                        // US: Check if target is an enum → return EnumMember instead of StructField
+                        if (fa.Target is IdentifierExpr faId)
+                        {
+                            foreach (var en in _ast.Enums)
+                            {
+                                if (en.Name == faId.Name)
+                                { SetResult(new SymbolAtPosition { name = fa.FieldName, kind = SymbolKindTag.EnumMember, parentName = en.Name }); return true; }
+                            }
+                        }
+                        // Parent struct cannot always be resolved from AST alone (no type inference);
+                        // callers handle parentName=null by searching all structs.
+                        SetResult(new SymbolAtPosition { name = fa.FieldName, kind = SymbolKindTag.StructField, parentName = null });
+                        return true;
+                    }
+                    // Continue into target (don't skip children)
+                    return false;
+                }
+
+                return false; // continue walking children
+            }
         }
 
         /// <summary>
@@ -2878,184 +2712,82 @@ namespace FFVM.Debug
             }
         }
 
+        // R1: CallRefs — replaced hand-written Block/Stmt/Expr triad with AstWalker subclass.
         private static void CollectCallRefsInBlock(BlockStmt block, string funcName, string uri, List<object> locations)
         {
-            if (block == null) return;
-            foreach (var stmt in block.Statements)
-                CollectCallRefsInStmt(stmt, funcName, uri, locations);
+            var w = new CallRefsWalker(funcName, uri, locations);
+            w.WalkBlock(block);
         }
 
-        private static void CollectCallRefsInStmt(Stmt stmt, string funcName, string uri, List<object> locations)
+        private sealed class CallRefsWalker : AstWalker
         {
-            if (stmt == null) return;
-            if (stmt is ExprStmt es) CollectCallRefsInExpr(es.Expression, funcName, uri, locations);
-            else if (stmt is BlockStmt bs) CollectCallRefsInBlock(bs, funcName, uri, locations);
-            else if (stmt is VarDeclStmt vd && vd.Initializer != null) CollectCallRefsInExpr(vd.Initializer, funcName, uri, locations);
-            else if (stmt is IfStmt ifs)
+            private readonly string _funcName;
+            private readonly string _uri;
+            private readonly List<object> _locations;
+            public CallRefsWalker(string funcName, string uri, List<object> locations) { _funcName = funcName; _uri = uri; _locations = locations; }
+            protected override bool VisitExpr(Expr expr)
             {
-                CollectCallRefsInExpr(ifs.Condition, funcName, uri, locations);
-                CollectCallRefsInStmt(ifs.ThenBranch, funcName, uri, locations);
-                CollectCallRefsInStmt(ifs.ElseBranch, funcName, uri, locations);
-            }
-            else if (stmt is WhileStmt ws)
-            {
-                CollectCallRefsInExpr(ws.Condition, funcName, uri, locations);
-                CollectCallRefsInStmt(ws.Body, funcName, uri, locations);
-            }
-            else if (stmt is ForStmt fs)
-            {
-                CollectCallRefsInStmt(fs.Initializer, funcName, uri, locations);
-                CollectCallRefsInExpr(fs.Condition, funcName, uri, locations);
-                CollectCallRefsInExpr(fs.Increment, funcName, uri, locations);
-                CollectCallRefsInStmt(fs.Body, funcName, uri, locations);
-            }
-            else if (stmt is ReturnStmt rs && rs.Value != null) CollectCallRefsInExpr(rs.Value, funcName, uri, locations);
-            else if (stmt is WaitStmt wst) CollectCallRefsInExpr(wst.FrameCount, funcName, uri, locations);
-            else if (stmt is DeferStmt ds) CollectCallRefsInBlock(ds.Body, funcName, uri, locations);
-            else if (stmt is UsingStmt us)
-            {
-                foreach (var arg in us.Arguments) CollectCallRefsInExpr(arg, funcName, uri, locations);
-                CollectCallRefsInBlock(us.Body, funcName, uri, locations);
+                if (expr is CallExpr call && call.FunctionName == _funcName)
+                    _locations.Add(MakeLocation(_uri, call.Line, call.Column, _funcName.Length));
+                return false; // continue walking children
             }
         }
 
-        private static void CollectCallRefsInExpr(Expr expr, string funcName, string uri, List<object> locations)
-        {
-            if (expr == null) return;
-            if (expr is CallExpr call)
-            {
-                if (call.FunctionName == funcName)
-                    locations.Add(MakeLocation(uri, call.Line, call.Column, funcName.Length));
-                foreach (var arg in call.Arguments) CollectCallRefsInExpr(arg, funcName, uri, locations);
-            }
-            else if (expr is BinaryExpr bin)
-            {
-                CollectCallRefsInExpr(bin.Left, funcName, uri, locations);
-                CollectCallRefsInExpr(bin.Right, funcName, uri, locations);
-            }
-            else if (expr is UnaryExpr un) CollectCallRefsInExpr(un.Operand, funcName, uri, locations);
-            else if (expr is AssignExpr assign)
-            {
-                CollectCallRefsInExpr(assign.Target, funcName, uri, locations);
-                CollectCallRefsInExpr(assign.Value, funcName, uri, locations);
-            }
-            else if (expr is FieldAccessExpr fa) CollectCallRefsInExpr(fa.Target, funcName, uri, locations);
-            else if (expr is StructLiteralExpr sl)
-            {
-                foreach (var f in sl.Fields) CollectCallRefsInExpr(f.Value, funcName, uri, locations);
-            }
-        }
-
+        // R1: IdentRefs — replaced hand-written Block/Stmt/Expr triad with AstWalker subclass.
         private static void CollectIdentRefsInBlock(BlockStmt block, string varName, string uri, List<object> locations)
         {
-            if (block == null) return;
-            foreach (var stmt in block.Statements)
-                CollectIdentRefsInStmt(stmt, varName, uri, locations);
+            var w = new IdentRefsWalker(varName, uri, locations);
+            w.WalkBlock(block);
         }
 
-        private static void CollectIdentRefsInStmt(Stmt stmt, string varName, string uri, List<object> locations)
+        private sealed class IdentRefsWalker : AstWalker
         {
-            if (stmt == null) return;
-            if (stmt is VarDeclStmt vd)
+            private readonly string _varName;
+            private readonly string _uri;
+            private readonly List<object> _locations;
+            public IdentRefsWalker(string varName, string uri, List<object> locations) { _varName = varName; _uri = uri; _locations = locations; }
+            protected override void VisitVarDecl(VarDeclStmt vd)
             {
                 // Include the declaration itself as a reference
-                if (vd.Name == varName)
-                    locations.Add(MakeLocation(uri, vd.Line, vd.Column, varName.Length));
-                if (vd.Initializer != null) CollectIdentRefsInExpr(vd.Initializer, varName, uri, locations);
+                if (vd.Name == _varName)
+                    _locations.Add(MakeLocation(_uri, vd.Line, vd.Column, _varName.Length));
             }
-            else if (stmt is ExprStmt es) CollectIdentRefsInExpr(es.Expression, varName, uri, locations);
-            else if (stmt is BlockStmt bs) CollectIdentRefsInBlock(bs, varName, uri, locations);
-            else if (stmt is IfStmt ifs)
+            protected override bool VisitExpr(Expr expr)
             {
-                CollectIdentRefsInExpr(ifs.Condition, varName, uri, locations);
-                CollectIdentRefsInStmt(ifs.ThenBranch, varName, uri, locations);
-                CollectIdentRefsInStmt(ifs.ElseBranch, varName, uri, locations);
-            }
-            else if (stmt is WhileStmt ws)
-            {
-                CollectIdentRefsInExpr(ws.Condition, varName, uri, locations);
-                CollectIdentRefsInStmt(ws.Body, varName, uri, locations);
-            }
-            else if (stmt is ForStmt fs)
-            {
-                CollectIdentRefsInStmt(fs.Initializer, varName, uri, locations);
-                CollectIdentRefsInExpr(fs.Condition, varName, uri, locations);
-                CollectIdentRefsInExpr(fs.Increment, varName, uri, locations);
-                CollectIdentRefsInStmt(fs.Body, varName, uri, locations);
-            }
-            else if (stmt is ReturnStmt rs && rs.Value != null) CollectIdentRefsInExpr(rs.Value, varName, uri, locations);
-            else if (stmt is WaitStmt wst) CollectIdentRefsInExpr(wst.FrameCount, varName, uri, locations);
-            else if (stmt is DeferStmt ds) CollectIdentRefsInBlock(ds.Body, varName, uri, locations);
-            else if (stmt is UsingStmt us)
-            {
-                foreach (var arg in us.Arguments) CollectIdentRefsInExpr(arg, varName, uri, locations);
-                CollectIdentRefsInBlock(us.Body, varName, uri, locations);
+                if (expr is IdentifierExpr id && id.Name == _varName)
+                    _locations.Add(MakeLocation(_uri, id.Line, id.Column, _varName.Length));
+                return false;
             }
         }
 
-        private static void CollectIdentRefsInExpr(Expr expr, string varName, string uri, List<object> locations)
-        {
-            if (expr == null) return;
-            if (expr is IdentifierExpr id && id.Name == varName)
-                locations.Add(MakeLocation(uri, id.Line, id.Column, varName.Length));
-            else if (expr is BinaryExpr bin)
-            {
-                CollectIdentRefsInExpr(bin.Left, varName, uri, locations);
-                CollectIdentRefsInExpr(bin.Right, varName, uri, locations);
-            }
-            else if (expr is UnaryExpr un) CollectIdentRefsInExpr(un.Operand, varName, uri, locations);
-            else if (expr is AssignExpr assign)
-            {
-                CollectIdentRefsInExpr(assign.Target, varName, uri, locations);
-                CollectIdentRefsInExpr(assign.Value, varName, uri, locations);
-            }
-            else if (expr is CallExpr call)
-            {
-                foreach (var arg in call.Arguments) CollectIdentRefsInExpr(arg, varName, uri, locations);
-            }
-            else if (expr is FieldAccessExpr fa) CollectIdentRefsInExpr(fa.Target, varName, uri, locations);
-            else if (expr is StructLiteralExpr sl)
-            {
-                foreach (var f in sl.Fields) CollectIdentRefsInExpr(f.Value, varName, uri, locations);
-            }
-        }
-
+        // R1: TypeRefs — replaced hand-written Block/Stmt triad with AstWalker subclass.
         private static void CollectTypeRefsInBlock(BlockStmt block, string typeName, string uri, List<object> locations)
         {
-            if (block == null) return;
-            foreach (var stmt in block.Statements)
-                CollectTypeRefsInStmt(stmt, typeName, uri, locations);
+            var w = new TypeRefsWalker(typeName, uri, locations);
+            w.WalkBlock(block);
         }
 
-        private static void CollectTypeRefsInStmt(Stmt stmt, string typeName, string uri, List<object> locations)
+        private sealed class TypeRefsWalker : AstWalker
         {
-            if (stmt == null) return;
-            if (stmt is VarDeclStmt vd && vd.TypeName != null)
+            private readonly string _typeName;
+            private readonly string _uri;
+            private readonly List<object> _locations;
+            public TypeRefsWalker(string typeName, string uri, List<object> locations) { _typeName = typeName; _uri = uri; _locations = locations; }
+            protected override void VisitVarDecl(VarDeclStmt vd)
             {
-                string baseName = GetBaseTypeName(vd.TypeName);
-                if (baseName == typeName)
+                if (vd.TypeName != null)
                 {
-                    // US: Use precise TypeNameLine/TypeNameColumn when available
-                    if (vd.TypeNameLine > 0)
-                        locations.Add(MakeLocation(uri, vd.TypeNameLine, vd.TypeNameColumn, typeName.Length));
-                    else
-                        locations.Add(MakeLocation(uri, vd.Line, vd.Column, typeName.Length));
+                    string baseName = GetBaseTypeName(vd.TypeName);
+                    if (baseName == _typeName)
+                    {
+                        // US: Use precise TypeNameLine/TypeNameColumn when available
+                        if (vd.TypeNameLine > 0)
+                            _locations.Add(MakeLocation(_uri, vd.TypeNameLine, vd.TypeNameColumn, _typeName.Length));
+                        else
+                            _locations.Add(MakeLocation(_uri, vd.Line, vd.Column, _typeName.Length));
+                    }
                 }
             }
-            else if (stmt is BlockStmt bs) CollectTypeRefsInBlock(bs, typeName, uri, locations);
-            else if (stmt is IfStmt ifs)
-            {
-                CollectTypeRefsInStmt(ifs.ThenBranch, typeName, uri, locations);
-                CollectTypeRefsInStmt(ifs.ElseBranch, typeName, uri, locations);
-            }
-            else if (stmt is WhileStmt ws) CollectTypeRefsInStmt(ws.Body, typeName, uri, locations);
-            else if (stmt is ForStmt fs)
-            {
-                CollectTypeRefsInStmt(fs.Initializer, typeName, uri, locations);
-                CollectTypeRefsInStmt(fs.Body, typeName, uri, locations);
-            }
-            else if (stmt is DeferStmt ds) CollectTypeRefsInBlock(ds.Body, typeName, uri, locations);
-            else if (stmt is UsingStmt us) CollectTypeRefsInBlock(us.Body, typeName, uri, locations);
         }
 
         // ============================================================
@@ -3276,8 +3008,9 @@ namespace FFVM.Debug
 
                 // Check if this file is open in the editor (use cached content)
                 string fileUri = PathToFileUri(filePath);
-                if (_documents.ContainsKey(fileUri))
-                    source = _documents[fileUri];
+                string cached;
+                if (_docStore.TryGetContent(fileUri, out cached))
+                    source = cached;
 
                 var ast = parser.Parse(source, out var errors);
                 if (ast == null) continue;
@@ -3327,82 +3060,36 @@ namespace FFVM.Debug
         /// <summary>
         /// DX5: Collect references to a struct field (field access expressions in function bodies).
         /// </summary>
+        // R1: FieldAccessRefs — replaced hand-written Block/Stmt/Expr triad with AstWalker subclass.
         private static void CollectFieldAccessRefsInBlock(BlockStmt block, string fieldName, string structName, string uri, List<object> locations)
         {
-            if (block == null) return;
-            foreach (var stmt in block.Statements)
-                CollectFieldAccessRefsInStmt(stmt, fieldName, structName, uri, locations);
+            var w = new FieldAccessRefsWalker(fieldName, uri, locations);
+            w.WalkBlock(block);
         }
 
-        private static void CollectFieldAccessRefsInStmt(Stmt stmt, string fieldName, string structName, string uri, List<object> locations)
+        private sealed class FieldAccessRefsWalker : AstWalker
         {
-            if (stmt == null) return;
-            if (stmt is ExprStmt es) CollectFieldAccessRefsInExpr(es.Expression, fieldName, uri, locations);
-            else if (stmt is BlockStmt bs) CollectFieldAccessRefsInBlock(bs, fieldName, structName, uri, locations);
-            else if (stmt is VarDeclStmt vd && vd.Initializer != null) CollectFieldAccessRefsInExpr(vd.Initializer, fieldName, uri, locations);
-            else if (stmt is IfStmt ifs)
+            private readonly string _fieldName;
+            private readonly string _uri;
+            private readonly List<object> _locations;
+            public FieldAccessRefsWalker(string fieldName, string uri, List<object> locations) { _fieldName = fieldName; _uri = uri; _locations = locations; }
+            protected override bool VisitExpr(Expr expr)
             {
-                CollectFieldAccessRefsInExpr(ifs.Condition, fieldName, uri, locations);
-                CollectFieldAccessRefsInStmt(ifs.ThenBranch, fieldName, structName, uri, locations);
-                CollectFieldAccessRefsInStmt(ifs.ElseBranch, fieldName, structName, uri, locations);
-            }
-            else if (stmt is WhileStmt ws)
-            {
-                CollectFieldAccessRefsInExpr(ws.Condition, fieldName, uri, locations);
-                CollectFieldAccessRefsInStmt(ws.Body, fieldName, structName, uri, locations);
-            }
-            else if (stmt is ForStmt fs)
-            {
-                CollectFieldAccessRefsInStmt(fs.Initializer, fieldName, structName, uri, locations);
-                CollectFieldAccessRefsInExpr(fs.Condition, fieldName, uri, locations);
-                CollectFieldAccessRefsInExpr(fs.Increment, fieldName, uri, locations);
-                CollectFieldAccessRefsInStmt(fs.Body, fieldName, structName, uri, locations);
-            }
-            else if (stmt is ReturnStmt rs && rs.Value != null) CollectFieldAccessRefsInExpr(rs.Value, fieldName, uri, locations);
-            else if (stmt is DeferStmt ds) CollectFieldAccessRefsInBlock(ds.Body, fieldName, structName, uri, locations);
-            else if (stmt is UsingStmt us)
-            {
-                foreach (var arg in us.Arguments) CollectFieldAccessRefsInExpr(arg, fieldName, uri, locations);
-                CollectFieldAccessRefsInBlock(us.Body, fieldName, structName, uri, locations);
-            }
-            else if (stmt is WaitStmt wst) CollectFieldAccessRefsInExpr(wst.FrameCount, fieldName, uri, locations);
-        }
-
-        private static void CollectFieldAccessRefsInExpr(Expr expr, string fieldName, string uri, List<object> locations)
-        {
-            if (expr == null) return;
-            if (expr is FieldAccessExpr fa)
-            {
-                // DX7: FieldNameLine/FieldNameColumn now tracks precise field name position
-                if (fa.FieldName == fieldName && fa.FieldNameLine > 0)
+                if (expr is FieldAccessExpr fa)
                 {
-                    locations.Add(MakeLocation(uri, fa.FieldNameLine, fa.FieldNameColumn, fieldName.Length));
+                    // DX7: FieldNameLine/FieldNameColumn now tracks precise field name position
+                    if (fa.FieldName == _fieldName && fa.FieldNameLine > 0)
+                        _locations.Add(MakeLocation(_uri, fa.FieldNameLine, fa.FieldNameColumn, _fieldName.Length));
                 }
-                CollectFieldAccessRefsInExpr(fa.Target, fieldName, uri, locations);
-            }
-            else if (expr is BinaryExpr bin)
-            {
-                CollectFieldAccessRefsInExpr(bin.Left, fieldName, uri, locations);
-                CollectFieldAccessRefsInExpr(bin.Right, fieldName, uri, locations);
-            }
-            else if (expr is UnaryExpr un) CollectFieldAccessRefsInExpr(un.Operand, fieldName, uri, locations);
-            else if (expr is AssignExpr assign)
-            {
-                CollectFieldAccessRefsInExpr(assign.Target, fieldName, uri, locations);
-                CollectFieldAccessRefsInExpr(assign.Value, fieldName, uri, locations);
-            }
-            else if (expr is CallExpr call)
-            {
-                foreach (var arg in call.Arguments) CollectFieldAccessRefsInExpr(arg, fieldName, uri, locations);
-            }
-            else if (expr is StructLiteralExpr sl)
-            {
-                foreach (var f in sl.Fields)
+                else if (expr is StructLiteralExpr sl)
                 {
-                    if (f.FieldName == fieldName)
-                        locations.Add(MakeLocation(uri, sl.Line, sl.Column, fieldName.Length));
-                    CollectFieldAccessRefsInExpr(f.Value, fieldName, uri, locations);
+                    foreach (var f in sl.Fields)
+                    {
+                        if (f.FieldName == _fieldName)
+                            _locations.Add(MakeLocation(_uri, sl.Line, sl.Column, _fieldName.Length));
+                    }
                 }
+                return false; // continue walking children
             }
         }
 
@@ -3412,74 +3099,32 @@ namespace FFVM.Debug
         // Target is IdentifierExpr matching the enum name).
         // ============================================================
 
+        // R1: EnumMemberAccessRefs — replaced hand-written Block/Stmt/Expr triad with AstWalker subclass.
         private static void CollectEnumMemberAccessRefsInBlock(BlockStmt block, string memberName, string enumName, string uri, List<object> locations)
         {
-            if (block == null) return;
-            foreach (var stmt in block.Statements)
-                CollectEnumMemberAccessRefsInStmt(stmt, memberName, enumName, uri, locations);
+            var w = new EnumMemberAccessRefsWalker(memberName, enumName, uri, locations);
+            w.WalkBlock(block);
         }
 
-        private static void CollectEnumMemberAccessRefsInStmt(Stmt stmt, string memberName, string enumName, string uri, List<object> locations)
+        private sealed class EnumMemberAccessRefsWalker : AstWalker
         {
-            if (stmt == null) return;
-            if (stmt is ExprStmt es) CollectEnumMemberAccessRefsInExpr(es.Expression, memberName, enumName, uri, locations);
-            else if (stmt is BlockStmt bs) CollectEnumMemberAccessRefsInBlock(bs, memberName, enumName, uri, locations);
-            else if (stmt is VarDeclStmt vd && vd.Initializer != null) CollectEnumMemberAccessRefsInExpr(vd.Initializer, memberName, enumName, uri, locations);
-            else if (stmt is IfStmt ifs)
+            private readonly string _memberName;
+            private readonly string _enumName;
+            private readonly string _uri;
+            private readonly List<object> _locations;
+            public EnumMemberAccessRefsWalker(string memberName, string enumName, string uri, List<object> locations) { _memberName = memberName; _enumName = enumName; _uri = uri; _locations = locations; }
+            protected override bool VisitExpr(Expr expr)
             {
-                CollectEnumMemberAccessRefsInExpr(ifs.Condition, memberName, enumName, uri, locations);
-                CollectEnumMemberAccessRefsInStmt(ifs.ThenBranch, memberName, enumName, uri, locations);
-                CollectEnumMemberAccessRefsInStmt(ifs.ElseBranch, memberName, enumName, uri, locations);
-            }
-            else if (stmt is WhileStmt ws)
-            {
-                CollectEnumMemberAccessRefsInExpr(ws.Condition, memberName, enumName, uri, locations);
-                CollectEnumMemberAccessRefsInStmt(ws.Body, memberName, enumName, uri, locations);
-            }
-            else if (stmt is ForStmt fs)
-            {
-                CollectEnumMemberAccessRefsInStmt(fs.Initializer, memberName, enumName, uri, locations);
-                CollectEnumMemberAccessRefsInExpr(fs.Condition, memberName, enumName, uri, locations);
-                CollectEnumMemberAccessRefsInExpr(fs.Increment, memberName, enumName, uri, locations);
-                CollectEnumMemberAccessRefsInStmt(fs.Body, memberName, enumName, uri, locations);
-            }
-            else if (stmt is ReturnStmt rs && rs.Value != null) CollectEnumMemberAccessRefsInExpr(rs.Value, memberName, enumName, uri, locations);
-            else if (stmt is DeferStmt ds) CollectEnumMemberAccessRefsInBlock(ds.Body, memberName, enumName, uri, locations);
-            else if (stmt is UsingStmt us)
-            {
-                foreach (var arg in us.Arguments) CollectEnumMemberAccessRefsInExpr(arg, memberName, enumName, uri, locations);
-                CollectEnumMemberAccessRefsInBlock(us.Body, memberName, enumName, uri, locations);
-            }
-            else if (stmt is WaitStmt wst) CollectEnumMemberAccessRefsInExpr(wst.FrameCount, memberName, enumName, uri, locations);
-        }
-
-        private static void CollectEnumMemberAccessRefsInExpr(Expr expr, string memberName, string enumName, string uri, List<object> locations)
-        {
-            if (expr == null) return;
-            // Match EnumName.MEMBER pattern: FieldAccessExpr where Target is IdentifierExpr(enumName) and FieldName matches
-            if (expr is FieldAccessExpr fa)
-            {
-                if (fa.FieldName == memberName && fa.FieldNameLine > 0
-                    && fa.Target is IdentifierExpr id && id.Name == enumName)
+                // Match EnumName.MEMBER pattern: FieldAccessExpr where Target is IdentifierExpr(enumName) and FieldName matches
+                if (expr is FieldAccessExpr fa)
                 {
-                    locations.Add(MakeLocation(uri, fa.FieldNameLine, fa.FieldNameColumn, memberName.Length));
+                    if (fa.FieldName == _memberName && fa.FieldNameLine > 0
+                        && fa.Target is IdentifierExpr id && id.Name == _enumName)
+                    {
+                        _locations.Add(MakeLocation(_uri, fa.FieldNameLine, fa.FieldNameColumn, _memberName.Length));
+                    }
                 }
-                CollectEnumMemberAccessRefsInExpr(fa.Target, memberName, enumName, uri, locations);
-            }
-            else if (expr is BinaryExpr bin)
-            {
-                CollectEnumMemberAccessRefsInExpr(bin.Left, memberName, enumName, uri, locations);
-                CollectEnumMemberAccessRefsInExpr(bin.Right, memberName, enumName, uri, locations);
-            }
-            else if (expr is UnaryExpr un) CollectEnumMemberAccessRefsInExpr(un.Operand, memberName, enumName, uri, locations);
-            else if (expr is AssignExpr assign)
-            {
-                CollectEnumMemberAccessRefsInExpr(assign.Target, memberName, enumName, uri, locations);
-                CollectEnumMemberAccessRefsInExpr(assign.Value, memberName, enumName, uri, locations);
-            }
-            else if (expr is CallExpr call)
-            {
-                foreach (var arg in call.Arguments) CollectEnumMemberAccessRefsInExpr(arg, memberName, enumName, uri, locations);
+                return false;
             }
         }
 
@@ -3493,29 +3138,17 @@ namespace FFVM.Debug
         private JsonObject HandlePrepareRename(JsonObject parameters)
         {
             string uri = GetDocumentUri(parameters);
-            var ast = GetCachedAst(uri);
-            if (ast == null) return null;
-
             var position = parameters?.GetObject("position");
-            if (position == null) return null;
+            if (uri == null || position == null) return null;
 
             int astLine = position.GetInt("line") + 1;
             int astCol = position.GetInt("character") + 1;
 
-            // US: Check include declarations using per-file AST first (merged AST strips Imports)
-            var target = FindSymbolAtPosition(ast, astLine, astCol);
+            // R1: Unified dual-AST symbol resolution
+            var (perFileTarget, target, perFileAst, mergedAst) = ResolveSymbolDualAst(uri, astLine, astCol);
 
             // Include files are not renamable via text rename (file system operation)
-            if (target != null && target.Value.kind == SymbolKindTag.IncludeFile) return null;
-
-            // US: Re-identify using merged AST if per-file AST couldn't resolve correctly
-            var mergedAst = GetMergedAst(uri);
-            if (target == null || target.Value.kind == SymbolKindTag.Variable
-                || (target.Value.kind == SymbolKindTag.StructField && target.Value.parentName == null))
-            {
-                var mergedTarget = FindSymbolAtPosition(mergedAst, astLine, astCol);
-                if (mergedTarget != null) target = mergedTarget;
-            }
+            if (perFileTarget != null && perFileTarget.Value.kind == SymbolKindTag.IncludeFile) return null;
             if (target == null) return null;
 
             // Find the definition location to get precise range
@@ -3523,12 +3156,10 @@ namespace FFVM.Debug
 
             // Return range at cursor position with the symbol name as placeholder
             int lspLine = position.GetInt("line");
-            int lspChar = position.GetInt("character");
 
             // Calculate the actual start of the symbol name at cursor
             int nameLen = target.Value.name.Length;
-            // Find the start column by backing up from cursor to the start of the name
-            int nameStartCol = FindNameStartCol(ast, target.Value, astLine, astCol);
+            int nameStartCol = FindNameStartCol(perFileAst, target.Value, astLine, astCol);
             int lspStartChar = Math.Max(0, nameStartCol - 1);
 
             var result = new JsonObject();
@@ -3594,11 +3225,8 @@ namespace FFVM.Debug
         private JsonObject HandleRename(JsonObject parameters)
         {
             string uri = GetDocumentUri(parameters);
-            var ast = GetCachedAst(uri);
-            if (ast == null) return null;
-
             var position = parameters?.GetObject("position");
-            if (position == null) return null;
+            if (uri == null || position == null) return null;
 
             string newName = parameters.GetString("newName");
             if (string.IsNullOrEmpty(newName)) return null;
@@ -3606,20 +3234,11 @@ namespace FFVM.Debug
             int astLine = position.GetInt("line") + 1;
             int astCol = position.GetInt("character") + 1;
 
-            // US: Check include declarations using per-file AST first (merged AST strips Imports)
-            var target = FindSymbolAtPosition(ast, astLine, astCol);
+            // R1: Unified dual-AST symbol resolution
+            var (perFileTarget, target, _, mergedAst) = ResolveSymbolDualAst(uri, astLine, astCol);
 
             // Include files are not renamable
-            if (target != null && target.Value.kind == SymbolKindTag.IncludeFile) return null;
-
-            // US: Re-identify using merged AST if per-file AST couldn't resolve correctly
-            var mergedAst = GetMergedAst(uri);
-            if (target == null || target.Value.kind == SymbolKindTag.Variable
-                || (target.Value.kind == SymbolKindTag.StructField && target.Value.parentName == null))
-            {
-                var mergedTarget = FindSymbolAtPosition(mergedAst, astLine, astCol);
-                if (mergedTarget != null) target = mergedTarget;
-            }
+            if (perFileTarget != null && perFileTarget.Value.kind == SymbolKindTag.IncludeFile) return null;
             if (target == null) return null;
 
             // Collect all reference locations
@@ -3794,7 +3413,10 @@ namespace FFVM.Debug
             foreach (var mv in ast.ModuleVariables)
             {
                 if (mv.Initializer != null)
-                    CollectExprSemanticTokensFromExpr(mv.Initializer, enumNames, enumMemberNames, structNames, funcNames, rawTokens);
+                {
+                    var w = new ExprSemanticTokensWalker(enumNames, enumMemberNames, structNames, funcNames, rawTokens);
+                    w.WalkExpr(mv.Initializer);
+                }
             }
 
             // Sort by (line, col) for delta encoding
@@ -3832,13 +3454,6 @@ namespace FFVM.Debug
         /// DX7: Walk a block to find type annotations in local variable declarations
         /// that reference struct/enum types, and emit semantic tokens for them.
         /// </summary>
-        private static void CollectTypeUsageTokens(BlockStmt block, HashSet<string> structNames, HashSet<string> enumNames,
-            List<(int line, int col, int len, int type, int mod)> tokens)
-        {
-            if (block == null) return;
-            foreach (var stmt in block.Statements)
-                CollectTypeUsageTokensInStmt(stmt, structNames, enumNames, tokens);
-        }
 
         /// <summary>
         /// DX7: Extract the base type name from a potentially dotted type (e.g. "Alias.Struct" → "Alias").
@@ -3850,209 +3465,271 @@ namespace FFVM.Debug
             return dotIndex >= 0 ? typeName.Substring(0, dotIndex) : typeName;
         }
 
-        private static void CollectTypeUsageTokensInStmt(Stmt stmt, HashSet<string> structNames, HashSet<string> enumNames,
+        // R1: TypeUsageTokens — replaced hand-written Block/Stmt triad with AstWalker subclass.
+        private static void CollectTypeUsageTokens(BlockStmt block, HashSet<string> structNames, HashSet<string> enumNames,
             List<(int line, int col, int len, int type, int mod)> tokens)
         {
-            if (stmt == null) return;
-            if (stmt is VarDeclStmt vd && vd.TypeNameLine > 0)
-            {
-                string baseType = GetBaseTypeName(vd.TypeName);
-                if (structNames.Contains(baseType))
-                    tokens.Add((vd.TypeNameLine, vd.TypeNameColumn, baseType.Length, 1 /* struct */, 0));
-                else if (enumNames.Contains(baseType))
-                    tokens.Add((vd.TypeNameLine, vd.TypeNameColumn, baseType.Length, 2 /* enum */, 0));
-            }
-            else if (stmt is BlockStmt bs) CollectTypeUsageTokens(bs, structNames, enumNames, tokens);
-            else if (stmt is IfStmt ifs)
-            {
-                CollectTypeUsageTokensInStmt(ifs.ThenBranch, structNames, enumNames, tokens);
-                CollectTypeUsageTokensInStmt(ifs.ElseBranch, structNames, enumNames, tokens);
-            }
-            else if (stmt is WhileStmt ws) CollectTypeUsageTokensInStmt(ws.Body, structNames, enumNames, tokens);
-            else if (stmt is ForStmt fs)
-            {
-                CollectTypeUsageTokensInStmt(fs.Initializer, structNames, enumNames, tokens);
-                CollectTypeUsageTokensInStmt(fs.Body, structNames, enumNames, tokens);
-            }
-            else if (stmt is DeferStmt ds) CollectTypeUsageTokens(ds.Body, structNames, enumNames, tokens);
-            else if (stmt is UsingStmt us) CollectTypeUsageTokens(us.Body, structNames, enumNames, tokens);
+            var w = new TypeUsageTokensWalker(structNames, enumNames, tokens);
+            w.WalkBlock(block);
         }
 
-        /// <summary>
-        /// DX9: Walk a block to emit variable(5) tokens for local variable/constant names.
-        /// </summary>
+        private sealed class TypeUsageTokensWalker : AstWalker
+        {
+            private readonly HashSet<string> _structNames;
+            private readonly HashSet<string> _enumNames;
+            private readonly List<(int line, int col, int len, int type, int mod)> _tokens;
+            public TypeUsageTokensWalker(HashSet<string> structNames, HashSet<string> enumNames, List<(int line, int col, int len, int type, int mod)> tokens) { _structNames = structNames; _enumNames = enumNames; _tokens = tokens; }
+            protected override void VisitVarDecl(VarDeclStmt vd)
+            {
+                if (vd.TypeNameLine > 0)
+                {
+                    string baseType = GetBaseTypeName(vd.TypeName);
+                    if (_structNames.Contains(baseType))
+                        _tokens.Add((vd.TypeNameLine, vd.TypeNameColumn, baseType.Length, 1 /* struct */, 0));
+                    else if (_enumNames.Contains(baseType))
+                        _tokens.Add((vd.TypeNameLine, vd.TypeNameColumn, baseType.Length, 2 /* enum */, 0));
+                }
+            }
+        }
+
+        // R1: VarNameTokens — replaced hand-written Block/Stmt triad with AstWalker subclass.
         private static void CollectVarNameTokens(BlockStmt block,
             List<(int line, int col, int len, int type, int mod)> tokens)
         {
-            if (block == null) return;
-            foreach (var stmt in block.Statements)
-                CollectVarNameTokensInStmt(stmt, tokens);
+            var w = new VarNameTokensWalker(tokens);
+            w.WalkBlock(block);
         }
 
-        private static void CollectVarNameTokensInStmt(Stmt stmt,
-            List<(int line, int col, int len, int type, int mod)> tokens)
+        private sealed class VarNameTokensWalker : AstWalker
         {
-            if (stmt == null) return;
-            if (stmt is VarDeclStmt vd && vd.NameLine > 0)
-                tokens.Add((vd.NameLine, vd.NameColumn, vd.Name.Length, 5 /* variable */, 1 /* declaration */));
-            if (stmt is BlockStmt bs) CollectVarNameTokens(bs, tokens);
-            else if (stmt is IfStmt ifs)
+            private readonly List<(int line, int col, int len, int type, int mod)> _tokens;
+            public VarNameTokensWalker(List<(int line, int col, int len, int type, int mod)> tokens) { _tokens = tokens; }
+            protected override void VisitVarDecl(VarDeclStmt vd)
             {
-                CollectVarNameTokensInStmt(ifs.ThenBranch, tokens);
-                CollectVarNameTokensInStmt(ifs.ElseBranch, tokens);
+                if (vd.NameLine > 0)
+                    _tokens.Add((vd.NameLine, vd.NameColumn, vd.Name.Length, 5 /* variable */, 1 /* declaration */));
             }
-            else if (stmt is WhileStmt ws) CollectVarNameTokensInStmt(ws.Body, tokens);
-            else if (stmt is ForStmt fs)
-            {
-                CollectVarNameTokensInStmt(fs.Initializer, tokens);
-                CollectVarNameTokensInStmt(fs.Body, tokens);
-            }
-            else if (stmt is DeferStmt ds) CollectVarNameTokens(ds.Body, tokens);
-            else if (stmt is UsingStmt us) CollectVarNameTokens(us.Body, tokens);
         }
 
         // ============================================================
         // DX8: Expression-based semantic tokens
         // ============================================================
 
-        /// <summary>
-        /// DX8: Walk a block to collect semantic tokens from expressions.
-        /// Handles: enum type references (EnumName), enum member access (EnumName.MEMBER),
-        /// struct type references in struct literals, field access on structs, and variable references.
-        /// </summary>
+        // R1: ExprSemanticTokens — replaced hand-written Block/Stmt/Expr triad with AstWalker subclass.
         private static void CollectExprSemanticTokens(BlockStmt block,
             HashSet<string> enumNames, HashSet<string> enumMemberNames,
             HashSet<string> structNames, HashSet<string> funcNames,
             List<(int line, int col, int len, int type, int mod)> tokens)
         {
-            if (block == null) return;
-            foreach (var stmt in block.Statements)
-                CollectExprSemanticTokensFromStmt(stmt, enumNames, enumMemberNames, structNames, funcNames, tokens);
+            var w = new ExprSemanticTokensWalker(enumNames, enumMemberNames, structNames, funcNames, tokens);
+            w.WalkBlock(block);
         }
 
-        private static void CollectExprSemanticTokensFromStmt(Stmt stmt,
-            HashSet<string> enumNames, HashSet<string> enumMemberNames,
-            HashSet<string> structNames, HashSet<string> funcNames,
-            List<(int line, int col, int len, int type, int mod)> tokens)
+        private sealed class ExprSemanticTokensWalker : AstWalker
         {
-            if (stmt == null) return;
-            if (stmt is ExprStmt es)
-                CollectExprSemanticTokensFromExpr(es.Expression, enumNames, enumMemberNames, structNames, funcNames, tokens);
-            else if (stmt is VarDeclStmt vd && vd.Initializer != null)
-                CollectExprSemanticTokensFromExpr(vd.Initializer, enumNames, enumMemberNames, structNames, funcNames, tokens);
-            else if (stmt is BlockStmt bs)
-                CollectExprSemanticTokens(bs, enumNames, enumMemberNames, structNames, funcNames, tokens);
-            else if (stmt is IfStmt ifs)
+            private readonly HashSet<string> _enumNames;
+            private readonly HashSet<string> _enumMemberNames;
+            private readonly HashSet<string> _structNames;
+            private readonly HashSet<string> _funcNames;
+            private readonly List<(int line, int col, int len, int type, int mod)> _tokens;
+            public ExprSemanticTokensWalker(HashSet<string> enumNames, HashSet<string> enumMemberNames, HashSet<string> structNames, HashSet<string> funcNames, List<(int line, int col, int len, int type, int mod)> tokens) { _enumNames = enumNames; _enumMemberNames = enumMemberNames; _structNames = structNames; _funcNames = funcNames; _tokens = tokens; }
+
+            protected override bool VisitExpr(Expr expr)
             {
-                CollectExprSemanticTokensFromExpr(ifs.Condition, enumNames, enumMemberNames, structNames, funcNames, tokens);
-                CollectExprSemanticTokensFromStmt(ifs.ThenBranch, enumNames, enumMemberNames, structNames, funcNames, tokens);
-                CollectExprSemanticTokensFromStmt(ifs.ElseBranch, enumNames, enumMemberNames, structNames, funcNames, tokens);
-            }
-            else if (stmt is WhileStmt ws)
-            {
-                CollectExprSemanticTokensFromExpr(ws.Condition, enumNames, enumMemberNames, structNames, funcNames, tokens);
-                CollectExprSemanticTokensFromStmt(ws.Body, enumNames, enumMemberNames, structNames, funcNames, tokens);
-            }
-            else if (stmt is ForStmt fs)
-            {
-                CollectExprSemanticTokensFromStmt(fs.Initializer, enumNames, enumMemberNames, structNames, funcNames, tokens);
-                CollectExprSemanticTokensFromExpr(fs.Condition, enumNames, enumMemberNames, structNames, funcNames, tokens);
-                CollectExprSemanticTokensFromExpr(fs.Increment, enumNames, enumMemberNames, structNames, funcNames, tokens);
-                CollectExprSemanticTokensFromStmt(fs.Body, enumNames, enumMemberNames, structNames, funcNames, tokens);
-            }
-            else if (stmt is ReturnStmt rs && rs.Value != null)
-                CollectExprSemanticTokensFromExpr(rs.Value, enumNames, enumMemberNames, structNames, funcNames, tokens);
-            else if (stmt is DeferStmt ds)
-                CollectExprSemanticTokens(ds.Body, enumNames, enumMemberNames, structNames, funcNames, tokens);
-            else if (stmt is UsingStmt us)
-            {
-                foreach (var arg in us.Arguments)
-                    CollectExprSemanticTokensFromExpr(arg, enumNames, enumMemberNames, structNames, funcNames, tokens);
-                CollectExprSemanticTokens(us.Body, enumNames, enumMemberNames, structNames, funcNames, tokens);
+                if (expr is FieldAccessExpr fa)
+                {
+                    // Check if this is EnumName.MEMBER access
+                    if (fa.Target is IdentifierExpr enumTarget && _enumNames.Contains(enumTarget.Name))
+                    {
+                        // Emit enum type token for the target
+                        if (enumTarget.Line > 0)
+                            _tokens.Add((enumTarget.Line, enumTarget.Column, enumTarget.Name.Length, 2 /* enum */, 0));
+                        // Emit enumMember token for the field
+                        if (fa.FieldNameLine > 0)
+                            _tokens.Add((fa.FieldNameLine, fa.FieldNameColumn, fa.FieldName.Length, 3 /* enumMember */, 0));
+                        return true; // skip children — we handled the target
+                    }
+                    else
+                    {
+                        // Struct field access → emit property token for the field name
+                        if (fa.FieldNameLine > 0)
+                            _tokens.Add((fa.FieldNameLine, fa.FieldNameColumn, fa.FieldName.Length, 4 /* property */, 0));
+                        return false; // continue into target for nested access (a.b.c)
+                    }
+                }
+
+                if (expr is StructLiteralExpr sl)
+                {
+                    // Struct literal type name → struct token
+                    if (_structNames.Contains(sl.TypeName) && sl.Line > 0)
+                        _tokens.Add((sl.Line, sl.Column, sl.TypeName.Length, 1 /* struct */, 0));
+                    return false; // continue into field value expressions
+                }
+
+                // DX9: Identifier → variable token for variable/parameter references
+                // Skip struct names, enum names, and function names (they have their own token types)
+                if (expr is IdentifierExpr ident)
+                {
+                    if (ident.Line > 0 && !_structNames.Contains(ident.Name)
+                        && !_enumNames.Contains(ident.Name) && !_funcNames.Contains(ident.Name))
+                        _tokens.Add((ident.Line, ident.Column, ident.Name.Length, 5 /* variable */, 0));
+                    return true; // leaf node
+                }
+
+                return false; // continue walking
             }
         }
+
+        // ============================================================
+        // R1: Unified AST Walker — single-point dispatch for all
+        // Block/Stmt/Expr traversal, eliminating duplicated switch
+        // logic across 40+ hand-written methods.
+        // ============================================================
 
         /// <summary>
-        /// DX8: Extract semantic tokens from an expression.
-        /// - FieldAccess where target is enum name → enum(target) + enumMember(field)
-        /// - FieldAccess where target is struct var → property(field) + variable(target)
-        /// - StructLiteral → struct(typeName)
-        /// - Identifier → variable(name) for variable/parameter references
+        /// Generic AST walker that dispatches all Stmt and Expr subtypes once.
+        /// Subclasses override only the hooks they care about.
+        ///
+        /// Walk methods are non-virtual and handle child dispatch uniformly.
+        /// Hook methods (Visit*) are virtual and called before child traversal.
+        /// If a Visit hook returns true, child traversal is skipped (early-out).
         /// </summary>
-        private static void CollectExprSemanticTokensFromExpr(Expr expr,
-            HashSet<string> enumNames, HashSet<string> enumMemberNames,
-            HashSet<string> structNames, HashSet<string> funcNames,
-            List<(int line, int col, int len, int type, int mod)> tokens)
+        private class AstWalker
         {
-            if (expr == null) return;
+            /// <summary>
+            /// Set to true in any Visit hook to immediately stop the entire walk.
+            /// All Walk methods check this at entry and bail out.
+            /// </summary>
+            protected bool _abort;
 
-            if (expr is FieldAccessExpr fa)
+            // ---- Block ----
+            public void WalkBlock(BlockStmt block)
             {
-                // Check if this is EnumName.MEMBER access
-                if (fa.Target is IdentifierExpr enumTarget && enumNames.Contains(enumTarget.Name))
+                if (block == null) return;
+                foreach (var stmt in block.Statements)
                 {
-                    // Emit enum type token for the target
-                    if (enumTarget.Line > 0)
-                        tokens.Add((enumTarget.Line, enumTarget.Column, enumTarget.Name.Length, 2 /* enum */, 0));
-                    // Emit enumMember token for the field
-                    if (fa.FieldNameLine > 0)
-                        tokens.Add((fa.FieldNameLine, fa.FieldNameColumn, fa.FieldName.Length, 3 /* enumMember */, 0));
+                    if (_abort) return;
+                    WalkStmt(stmt);
                 }
-                else
+            }
+
+            // ---- Stmt dispatch ----
+            public void WalkStmt(Stmt stmt)
+            {
+                if (stmt == null || _abort) return;
+                if (VisitStmt(stmt)) return; // early-out (skip children)
+
+                if (stmt is ExprStmt es)
+                    WalkExpr(es.Expression);
+                else if (stmt is BlockStmt bs)
+                    WalkBlock(bs);
+                else if (stmt is VarDeclStmt vd)
                 {
-                    // Struct field access → emit property token for the field name
-                    if (fa.FieldNameLine > 0)
-                        tokens.Add((fa.FieldNameLine, fa.FieldNameColumn, fa.FieldName.Length, 4 /* property */, 0));
-                    // Recurse into target for nested access (a.b.c)
-                    CollectExprSemanticTokensFromExpr(fa.Target, enumNames, enumMemberNames, structNames, funcNames, tokens);
+                    VisitVarDecl(vd);
+                    WalkExpr(vd.Initializer);
                 }
-                return;
+                else if (stmt is IfStmt ifs)
+                {
+                    WalkExpr(ifs.Condition);
+                    WalkStmt(ifs.ThenBranch);
+                    WalkStmt(ifs.ElseBranch);
+                }
+                else if (stmt is WhileStmt ws)
+                {
+                    WalkExpr(ws.Condition);
+                    WalkStmt(ws.Body);
+                }
+                else if (stmt is ForStmt fs)
+                {
+                    WalkStmt(fs.Initializer);
+                    WalkExpr(fs.Condition);
+                    WalkExpr(fs.Increment);
+                    WalkStmt(fs.Body);
+                }
+                else if (stmt is ReturnStmt rs)
+                    WalkExpr(rs.Value);
+                else if (stmt is WaitStmt wst)
+                    WalkExpr(wst.FrameCount);
+                else if (stmt is DeferStmt ds)
+                    WalkBlock(ds.Body);
+                else if (stmt is UsingStmt us)
+                {
+                    foreach (var arg in us.Arguments)
+                    {
+                        if (_abort) return;
+                        WalkExpr(arg);
+                    }
+                    WalkBlock(us.Body);
+                }
+                // YieldStmt, WaitForStmt — no children to walk
             }
 
-            if (expr is StructLiteralExpr sl)
+            // ---- Expr dispatch ----
+            public void WalkExpr(Expr expr)
             {
-                // Struct literal type name → struct token
-                if (structNames.Contains(sl.TypeName) && sl.Line > 0)
-                    tokens.Add((sl.Line, sl.Column, sl.TypeName.Length, 1 /* struct */, 0));
-                // Recurse into field value expressions
-                foreach (var fv in sl.Fields)
-                    CollectExprSemanticTokensFromExpr(fv.Value, enumNames, enumMemberNames, structNames, funcNames, tokens);
-                return;
+                if (expr == null || _abort) return;
+                if (VisitExpr(expr)) return; // early-out (skip children)
+
+                if (expr is BinaryExpr bin)
+                {
+                    WalkExpr(bin.Left);
+                    WalkExpr(bin.Right);
+                }
+                else if (expr is UnaryExpr un)
+                    WalkExpr(un.Operand);
+                else if (expr is AssignExpr assign)
+                {
+                    WalkExpr(assign.Target);
+                    WalkExpr(assign.Value);
+                }
+                else if (expr is CallExpr call)
+                {
+                    foreach (var arg in call.Arguments)
+                    {
+                        if (_abort) return;
+                        WalkExpr(arg);
+                    }
+                }
+                else if (expr is MemberCallExpr mc)
+                {
+                    foreach (var arg in mc.Arguments)
+                    {
+                        if (_abort) return;
+                        WalkExpr(arg);
+                    }
+                }
+                else if (expr is FieldAccessExpr fa)
+                    WalkExpr(fa.Target);
+                else if (expr is StructLiteralExpr sl)
+                {
+                    foreach (var f in sl.Fields)
+                    {
+                        if (_abort) return;
+                        WalkExpr(f.Value);
+                    }
+                }
+                else if (expr is SyscallExpr sc)
+                {
+                    foreach (var arg in sc.Arguments)
+                    {
+                        if (_abort) return;
+                        WalkExpr(arg);
+                    }
+                }
+                // Leaf nodes: IdentifierExpr, NumberLiteralExpr, IntLiteralExpr,
+                // BoolLiteralExpr, StringIdLiteralExpr, StringLiteralExpr — no children
             }
 
-            // DX9: Identifier → variable token for variable/parameter references
-            // Skip struct names, enum names, and function names (they have their own token types)
-            if (expr is IdentifierExpr ident)
-            {
-                if (ident.Line > 0 && !structNames.Contains(ident.Name)
-                    && !enumNames.Contains(ident.Name) && !funcNames.Contains(ident.Name))
-                    tokens.Add((ident.Line, ident.Column, ident.Name.Length, 5 /* variable */, 0));
-                return;
-            }
+            // ---- Hooks (override in subclasses) ----
 
-            // Recurse into sub-expressions
-            if (expr is BinaryExpr bin)
-            {
-                CollectExprSemanticTokensFromExpr(bin.Left, enumNames, enumMemberNames, structNames, funcNames, tokens);
-                CollectExprSemanticTokensFromExpr(bin.Right, enumNames, enumMemberNames, structNames, funcNames, tokens);
-            }
-            else if (expr is UnaryExpr un)
-                CollectExprSemanticTokensFromExpr(un.Operand, enumNames, enumMemberNames, structNames, funcNames, tokens);
-            else if (expr is AssignExpr ae)
-            {
-                CollectExprSemanticTokensFromExpr(ae.Target, enumNames, enumMemberNames, structNames, funcNames, tokens);
-                CollectExprSemanticTokensFromExpr(ae.Value, enumNames, enumMemberNames, structNames, funcNames, tokens);
-            }
-            else if (expr is CallExpr call)
-            {
-                foreach (var arg in call.Arguments)
-                    CollectExprSemanticTokensFromExpr(arg, enumNames, enumMemberNames, structNames, funcNames, tokens);
-            }
-            else if (expr is MemberCallExpr mc)
-            {
-                foreach (var arg in mc.Arguments)
-                    CollectExprSemanticTokensFromExpr(arg, enumNames, enumMemberNames, structNames, funcNames, tokens);
-            }
+            /// <summary>Called before dispatching a statement's children. Return true to skip children.</summary>
+            protected virtual bool VisitStmt(Stmt stmt) => false;
+
+            /// <summary>Called for VarDeclStmt specifically, before walking its initializer.</summary>
+            protected virtual void VisitVarDecl(VarDeclStmt vd) { }
+
+            /// <summary>Called before dispatching an expression's children. Return true to skip children.</summary>
+            protected virtual bool VisitExpr(Expr expr) => false;
         }
 
         // ============================================================
