@@ -6037,6 +6037,305 @@ public static class LspTests
             }
         }
 
+        // ============================================================
+        // DX11: VFS + Rename state update — consecutive rename + state consistency
+        // ============================================================
+
+        // DX11-01: Consecutive file rename — second rename sees updated include references.
+        // Scenario: base.ffs exists, main.ffs includes "base".
+        // Rename base.ffs → renamed1.ffs → willRenameFiles returns edit updating main.ffs include.
+        // Then rename renamed1.ffs → renamed2.ffs → second willRenameFiles should also find the include.
+        {
+            string tmpDir = Path.Combine(Path.GetTempPath(), "dx11_test_" + Guid.NewGuid().ToString("N").Substring(0, 8));
+            Directory.CreateDirectory(tmpDir);
+            try
+            {
+                File.WriteAllText(Path.Combine(tmpDir, "base.ffs"), "func helper(): int { return 1 }");
+                File.WriteAllText(Path.Combine(tmpDir, "main.ffs"), "include \"base\"\nfunc entry() { var x: int = helper()\n  wait x }");
+
+                string rootUri = "file:///" + tmpDir.TrimStart('/').Replace("\\", "/");
+                string mainUri = rootUri + "/main.ffs";
+                string baseUri = rootUri + "/base.ffs";
+                string renamed1Uri = rootUri + "/renamed1.ffs";
+                string renamed2Uri = rootUri + "/renamed2.ffs";
+
+                var session = new LspBatchSession();
+                session.AddInitializeWithRootUri(rootUri);
+                session.AddInitialized();
+                // Open main.ffs so its content is cached in DocumentStore
+                session.AddDidOpen(mainUri, "include \"base\"\nfunc entry() { var x: int = helper()\n  wait x }");
+                // First rename: base.ffs → renamed1.ffs
+                session.AddWillRenameFiles(baseUri, renamed1Uri);
+                // Second rename: renamed1.ffs → renamed2.ffs
+                session.AddWillRenameFiles(renamed1Uri, renamed2Uri);
+                session.AddShutdown();
+                session.AddExit();
+                session.Run();
+
+                session.ExpectResponse(0); // initialize
+                var rename1Resp = session.ExpectResponse(1); // first willRenameFiles
+                var rename2Resp = session.ExpectResponse(2); // second willRenameFiles
+
+                // First rename should produce edits
+                var changes1 = rename1Resp?.GetObject("result")?.GetObject("changes");
+                Assert(changes1 != null, "DX11-01a: first rename produces WorkspaceEdit changes");
+
+                // Second rename should ALSO produce edits (this is the key fix!)
+                var changes2 = rename2Resp?.GetObject("result")?.GetObject("changes");
+                bool hasEdits2 = false;
+                if (changes2 != null)
+                {
+                    foreach (string key in changes2.Keys)
+                    {
+                        var edits = changes2.GetArray(key);
+                        if (edits != null && edits.Count > 0) { hasEdits2 = true; break; }
+                    }
+                }
+                Assert(hasEdits2, "DX11-01b: second consecutive rename also produces WorkspaceEdit changes");
+
+                // Verify second rename's edit changes include "renamed1" → "renamed2"
+                if (changes2 != null)
+                {
+                    bool foundCorrectEdit = false;
+                    foreach (string key in changes2.Keys)
+                    {
+                        var edits = changes2.GetArray(key);
+                        if (edits != null)
+                        {
+                            foreach (var edit in edits)
+                            {
+                                var editObj = edit as JsonObject;
+                                string newText = editObj?.GetString("newText");
+                                if (newText == "renamed2") foundCorrectEdit = true;
+                            }
+                        }
+                    }
+                    Assert(foundCorrectEdit, "DX11-01c: second rename edit changes include path to 'renamed2'");
+                }
+            }
+            finally
+            {
+                try { Directory.Delete(tmpDir, true); } catch { }
+            }
+        }
+
+        // DX11-02: Rename state update — after rename, DocumentStore has new URI, not old.
+        // Verify: after willRenameFiles, hover on the new URI works but old URI doesn't.
+        {
+            string tmpDir = Path.Combine(Path.GetTempPath(), "dx11_test_" + Guid.NewGuid().ToString("N").Substring(0, 8));
+            Directory.CreateDirectory(tmpDir);
+            try
+            {
+                File.WriteAllText(Path.Combine(tmpDir, "old.ffs"), "func helper(): int { return 42 }");
+
+                string rootUri = "file:///" + tmpDir.TrimStart('/').Replace("\\", "/");
+                string oldUri = rootUri + "/old.ffs";
+                string newUri = rootUri + "/new.ffs";
+
+                var session = new LspBatchSession();
+                session.AddInitializeWithRootUri(rootUri);
+                session.AddInitialized();
+                session.AddDidOpen(oldUri, "func helper(): int { return 42 }");
+                // Hover on old URI — should work
+                session.AddHover(oldUri, 0, 5);
+                // Rename old.ffs → new.ffs
+                session.AddWillRenameFiles(oldUri, newUri);
+                // Hover on new URI — should work after rename state migration
+                session.AddHover(newUri, 0, 5);
+                // Hover on old URI — should NOT work (content migrated away)
+                session.AddHover(oldUri, 0, 5);
+                session.AddShutdown();
+                session.AddExit();
+                session.Run();
+
+                session.ExpectResponse(0); // initialize
+                var hoverBefore = session.ExpectResponse(1); // hover old URI before rename
+                session.ExpectResponse(2); // willRenameFiles
+                var hoverNew = session.ExpectResponse(3); // hover new URI after rename
+                var hoverOld = session.ExpectResponse(4); // hover old URI after rename
+
+                // Hover before rename works
+                var contentBefore = hoverBefore?.GetObject("result")?.GetObject("contents");
+                Assert(contentBefore != null, "DX11-02a: hover works on old URI before rename");
+
+                // Hover on new URI after rename works
+                var contentNew = hoverNew?.GetObject("result")?.GetObject("contents");
+                Assert(contentNew != null, "DX11-02b: hover works on new URI after rename (state migrated)");
+
+                // Hover on old URI after rename returns null
+                var resultOld = hoverOld?.Get("result");
+                bool oldIsNull = resultOld == null || (resultOld is string s && s == "");
+                if (!oldIsNull && resultOld is JsonObject oldObj)
+                    oldIsNull = oldObj.GetObject("contents") == null;
+                Assert(oldIsNull, "DX11-02c: hover on old URI returns null after rename (state migrated away)");
+            }
+            finally
+            {
+                try { Directory.Delete(tmpDir, true); } catch { }
+            }
+        }
+
+        // DX11-03: Rename with include-as alias — consecutive rename preserves alias include path.
+        {
+            string tmpDir = Path.Combine(Path.GetTempPath(), "dx11_test_" + Guid.NewGuid().ToString("N").Substring(0, 8));
+            Directory.CreateDirectory(tmpDir);
+            try
+            {
+                File.WriteAllText(Path.Combine(tmpDir, "lib.ffs"), "func libfunc(): int { return 1 }");
+                File.WriteAllText(Path.Combine(tmpDir, "main.ffs"), "include \"lib\" as Lib\nfunc entry() { var x: int = Lib.libfunc()\n  wait x }");
+
+                string rootUri = "file:///" + tmpDir.TrimStart('/').Replace("\\", "/");
+                string mainUri = rootUri + "/main.ffs";
+                string libUri = rootUri + "/lib.ffs";
+                string lib2Uri = rootUri + "/lib2.ffs";
+                string lib3Uri = rootUri + "/lib3.ffs";
+
+                var session = new LspBatchSession();
+                session.AddInitializeWithRootUri(rootUri);
+                session.AddInitialized();
+                session.AddDidOpen(mainUri, "include \"lib\" as Lib\nfunc entry() { var x: int = Lib.libfunc()\n  wait x }");
+                // First rename: lib.ffs → lib2.ffs
+                session.AddWillRenameFiles(libUri, lib2Uri);
+                // Second rename: lib2.ffs → lib3.ffs
+                session.AddWillRenameFiles(lib2Uri, lib3Uri);
+                session.AddShutdown();
+                session.AddExit();
+                session.Run();
+
+                session.ExpectResponse(0); // initialize
+                var rename1 = session.ExpectResponse(1);
+                var rename2 = session.ExpectResponse(2);
+
+                // First rename should find the include "lib" as Lib and update to "lib2"
+                var changes1 = rename1?.GetObject("result")?.GetObject("changes");
+                Assert(changes1 != null, "DX11-03a: first include-as rename produces changes");
+
+                // Second rename should find the include "lib2" as Lib and update to "lib3"
+                var changes2 = rename2?.GetObject("result")?.GetObject("changes");
+                bool hasEdits2 = false;
+                if (changes2 != null)
+                {
+                    foreach (string key in changes2.Keys)
+                    {
+                        var edits = changes2.GetArray(key);
+                        if (edits != null && edits.Count > 0) { hasEdits2 = true; break; }
+                    }
+                }
+                Assert(hasEdits2, "DX11-03b: second consecutive include-as rename also produces changes");
+            }
+            finally
+            {
+                try { Directory.Delete(tmpDir, true); } catch { }
+            }
+        }
+
+        // DX11-04: After rename, didChange on the NEW URI works correctly.
+        {
+            string tmpDir = Path.Combine(Path.GetTempPath(), "dx11_test_" + Guid.NewGuid().ToString("N").Substring(0, 8));
+            Directory.CreateDirectory(tmpDir);
+            try
+            {
+                File.WriteAllText(Path.Combine(tmpDir, "orig.ffs"), "func myfunc(): int { return 1 }");
+
+                string rootUri = "file:///" + tmpDir.TrimStart('/').Replace("\\", "/");
+                string origUri = rootUri + "/orig.ffs";
+                string renamedUri = rootUri + "/renamed.ffs";
+
+                var session = new LspBatchSession();
+                session.AddInitializeWithRootUri(rootUri);
+                session.AddInitialized();
+                session.AddDidOpen(origUri, "func myfunc(): int { return 1 }");
+                // Rename orig.ffs → renamed.ffs
+                session.AddWillRenameFiles(origUri, renamedUri);
+                // VSCode will send didChange on the NEW URI after rename
+                session.AddDidChange(renamedUri, "func myfunc(): int { return 99 }");
+                // Hover on new URI should show updated function
+                session.AddHover(renamedUri, 0, 5);
+                session.AddShutdown();
+                session.AddExit();
+                session.Run();
+
+                session.ExpectResponse(0); // initialize
+                session.ExpectResponse(1); // willRenameFiles
+                var hoverResp = session.ExpectResponse(2); // hover
+
+                var content = hoverResp?.GetObject("result")?.GetObject("contents");
+                Assert(content != null, "DX11-04: hover on new URI after rename + didChange works");
+            }
+            finally
+            {
+                try { Directory.Delete(tmpDir, true); } catch { }
+            }
+        }
+
+        // DX11-05: Triple consecutive rename — all three produce correct edits.
+        {
+            string tmpDir = Path.Combine(Path.GetTempPath(), "dx11_test_" + Guid.NewGuid().ToString("N").Substring(0, 8));
+            Directory.CreateDirectory(tmpDir);
+            try
+            {
+                File.WriteAllText(Path.Combine(tmpDir, "a.ffs"), "func ahelper(): int { return 1 }");
+                File.WriteAllText(Path.Combine(tmpDir, "user.ffs"), "include \"a\"\nfunc entry() { var x: int = ahelper()\n  wait x }");
+
+                string rootUri = "file:///" + tmpDir.TrimStart('/').Replace("\\", "/");
+                string userUri = rootUri + "/user.ffs";
+                string aUri = rootUri + "/a.ffs";
+                string bUri = rootUri + "/b.ffs";
+                string cUri = rootUri + "/c.ffs";
+                string dUri = rootUri + "/d.ffs";
+
+                var session = new LspBatchSession();
+                session.AddInitializeWithRootUri(rootUri);
+                session.AddInitialized();
+                session.AddDidOpen(userUri, "include \"a\"\nfunc entry() { var x: int = ahelper()\n  wait x }");
+                session.AddWillRenameFiles(aUri, bUri); // a → b
+                session.AddWillRenameFiles(bUri, cUri); // b → c
+                session.AddWillRenameFiles(cUri, dUri); // c → d
+                session.AddShutdown();
+                session.AddExit();
+                session.Run();
+
+                session.ExpectResponse(0); // initialize
+                var r1 = session.ExpectResponse(1);
+                var r2 = session.ExpectResponse(2);
+                var r3 = session.ExpectResponse(3);
+
+                // All three renames should produce edits
+                var c1 = r1?.GetObject("result")?.GetObject("changes");
+                Assert(c1 != null, "DX11-05a: rename a→b produces changes");
+
+                var c2 = r2?.GetObject("result")?.GetObject("changes");
+                bool has2 = false;
+                if (c2 != null) { foreach (string k in c2.Keys) { var e = c2.GetArray(k); if (e != null && e.Count > 0) has2 = true; } }
+                Assert(has2, "DX11-05b: rename b→c produces changes");
+
+                var c3 = r3?.GetObject("result")?.GetObject("changes");
+                bool has3 = false;
+                if (c3 != null) { foreach (string k in c3.Keys) { var e = c3.GetArray(k); if (e != null && e.Count > 0) has3 = true; } }
+                Assert(has3, "DX11-05c: rename c→d produces changes");
+
+                // Verify final edit uses "d" as the new include path
+                if (c3 != null)
+                {
+                    bool foundD = false;
+                    foreach (string k in c3.Keys)
+                    {
+                        var edits = c3.GetArray(k);
+                        if (edits != null) foreach (var edit in edits)
+                        {
+                            var eo = edit as JsonObject;
+                            if (eo?.GetString("newText") == "d") foundD = true;
+                        }
+                    }
+                    Assert(foundD, "DX11-05d: third rename edit uses 'd' as new include path");
+                }
+            }
+            finally
+            {
+                try { Directory.Delete(tmpDir, true); } catch { }
+            }
+        }
+
         Debug.Log($"\n===== LspTests: {passed} passed, {failed} failed =====");
     }
 
