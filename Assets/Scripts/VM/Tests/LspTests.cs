@@ -5627,6 +5627,326 @@ public static class LspTests
             Assert(foundEmptyDiag, "E003-06: didClose publishes empty diagnostics for closed file");
         }
 
+        // ================================================================
+        // E004: Module-level symbol navigation
+        // ================================================================
+
+        // E004-01: Go-to-definition on enum type in module-level const initializer (TagBit in TagBit.WALK)
+        {
+            // Source: enum TagBit { IDLE = 1, WALK = 2 }
+            //         @export const tags: int = TagBit.WALK
+            // Cursor on "TagBit" in initializer → should jump to enum declaration
+            string source = "enum TagBit { IDLE = 1, WALK = 2 }\n@export const tags: int = TagBit.WALK\nfunc main() { wait 1 }";
+            var session = new LspBatchSession();
+            session.AddInitialize();
+            session.AddInitialized();
+            session.AddDidOpen("file:///e004_01.ffs", source);
+            // "TagBit" in "@export const tags: int = TagBit.WALK" — line 1, col 26
+            session.AddDefinition("file:///e004_01.ffs", 1, 26);
+            session.AddShutdown();
+            session.AddExit();
+            session.Run();
+
+            session.ExpectResponse(0);
+            var defResp = session.ExpectResponse(1);
+            var result = defResp?.GetObject("result");
+            Assert(result != null, "E004-01: go-to-def on enum type in module const initializer returns result");
+            if (result != null)
+            {
+                var range = result.GetObject("range");
+                var start = range?.GetObject("start");
+                Assert(start != null && start.GetInt("line") == 0,
+                    $"E004-01b: definition points to enum declaration (line 0), got line {start?.GetInt("line")}");
+            }
+        }
+
+        // E004-02: Go-to-definition on enum member in module-level const initializer (WALK in TagBit.WALK)
+        {
+            string source = "enum TagBit { IDLE = 1, WALK = 2 }\n@export const tags: int = TagBit.WALK\nfunc main() { wait 1 }";
+            var session = new LspBatchSession();
+            session.AddInitialize();
+            session.AddInitialized();
+            session.AddDidOpen("file:///e004_02.ffs", source);
+            // "WALK" in "TagBit.WALK" — line 1, col 33
+            session.AddDefinition("file:///e004_02.ffs", 1, 33);
+            session.AddShutdown();
+            session.AddExit();
+            session.Run();
+
+            session.ExpectResponse(0);
+            var defResp = session.ExpectResponse(1);
+            var result = defResp?.GetObject("result");
+            Assert(result != null, "E004-02: go-to-def on enum member in module const initializer returns result");
+            if (result != null)
+            {
+                var range = result.GetObject("range");
+                var start = range?.GetObject("start");
+                // WALK is at line 0 col 24 in "enum TagBit { IDLE = 1, WALK = 2 }"
+                Assert(start != null && start.GetInt("line") == 0,
+                    $"E004-02b: definition points to enum member (line 0), got line {start?.GetInt("line")}");
+            }
+        }
+
+        // E004-03: Find-references on enum type includes module-level const initializer usages
+        {
+            string source = "enum TagBit { IDLE = 1, WALK = 2 }\n@export const tags: int = TagBit.WALK\nfunc main() {\n    var x: int = TagBit.IDLE\n}";
+            var session = new LspBatchSession();
+            session.AddInitialize();
+            session.AddInitialized();
+            session.AddDidOpen("file:///e004_03.ffs", source);
+            // References on "TagBit" at enum declaration — line 0, col 5 (after "enum ")
+            session.AddReferences("file:///e004_03.ffs", 0, 5);
+            session.AddShutdown();
+            session.AddExit();
+            session.Run();
+
+            session.ExpectResponse(0);
+            var refsResp = session.ExpectResponse(1);
+            var refs = refsResp?.GetArray("result");
+            // Should find: (1) enum declaration, (2) TagBit in module const, (3) TagBit in function body
+            Assert(refs != null && refs.Count >= 3,
+                $"E004-03: enum type refs ≥3 (decl + module const + func body), got {refs?.Count ?? 0}");
+        }
+
+        // E004-04: Find-references on enum member includes module-level const initializer usages
+        {
+            string source = "enum TagBit { IDLE = 1, WALK = 2 }\n@export const tags: int = TagBit.WALK\nfunc main() {\n    var x: int = TagBit.WALK\n}";
+            var session = new LspBatchSession();
+            session.AddInitialize();
+            session.AddInitialized();
+            session.AddDidOpen("file:///e004_04.ffs", source);
+            // References on "WALK" in enum declaration — line 0, col 24
+            session.AddReferences("file:///e004_04.ffs", 0, 24);
+            session.AddShutdown();
+            session.AddExit();
+            session.Run();
+
+            session.ExpectResponse(0);
+            var refsResp = session.ExpectResponse(1);
+            var refs = refsResp?.GetArray("result");
+            // Should find: (1) WALK declaration in enum, (2) TagBit.WALK in module const, (3) TagBit.WALK in func body
+            Assert(refs != null && refs.Count >= 3,
+                $"E004-04: enum member refs ≥3 (decl + module const + func body), got {refs?.Count ?? 0}");
+        }
+
+        // E004-05: Go-to-definition on external function call (cross-file)
+        {
+            string tmpDir = Path.Combine(Path.GetTempPath(), "e004_test_" + Guid.NewGuid().ToString("N").Substring(0, 8));
+            Directory.CreateDirectory(tmpDir);
+            try
+            {
+                File.WriteAllText(Path.Combine(tmpDir, "syscalls.ffs"),
+                    "external func IsInputHeld(buttonId: int): int");
+                string rootUri = "file:///" + tmpDir.TrimStart('/').Replace("\\", "/");
+                string source = "include \"syscalls\"\nfunc main() {\n    var held: int = IsInputHeld(0)\n}";
+                string fileUri = rootUri + "/main.ffs";
+
+                var session = new LspBatchSession();
+                session.AddInitializeWithRootUri(rootUri);
+                session.AddInitialized();
+                session.AddDidOpen(fileUri, source);
+                // "IsInputHeld" at line 2, col 20 (in "var held: int = IsInputHeld(0)")
+                session.AddDefinition(fileUri, 2, 20);
+                session.AddShutdown();
+                session.AddExit();
+                session.Run();
+
+                session.ExpectResponse(0);
+                var defResp = session.ExpectResponse(1);
+                var result = defResp?.GetObject("result");
+                Assert(result != null, "E004-05: go-to-def on external func returns result");
+                if (result != null)
+                {
+                    string defUri = result.GetString("uri");
+                    Assert(defUri != null && defUri.Contains("syscalls.ffs"),
+                        $"E004-05b: definition URI points to syscalls.ffs, got '{defUri}'");
+                }
+            }
+            finally
+            {
+                try { Directory.Delete(tmpDir, true); } catch { }
+            }
+        }
+
+        // E004-06: Go-to-definition on regular cross-file function call
+        {
+            string tmpDir = Path.Combine(Path.GetTempPath(), "e004_test_" + Guid.NewGuid().ToString("N").Substring(0, 8));
+            Directory.CreateDirectory(tmpDir);
+            try
+            {
+                File.WriteAllText(Path.Combine(tmpDir, "helpers.ffs"),
+                    "func getMoveDirX(): float {\n    return 1.0\n}");
+                string rootUri = "file:///" + tmpDir.TrimStart('/').Replace("\\", "/");
+                string source = "include \"helpers\"\nfunc main() {\n    var d: float = getMoveDirX()\n}";
+                string fileUri = rootUri + "/main.ffs";
+
+                var session = new LspBatchSession();
+                session.AddInitializeWithRootUri(rootUri);
+                session.AddInitialized();
+                session.AddDidOpen(fileUri, source);
+                // "getMoveDirX" at line 2, col 19 (in "var d: float = getMoveDirX()")
+                session.AddDefinition(fileUri, 2, 19);
+                session.AddShutdown();
+                session.AddExit();
+                session.Run();
+
+                session.ExpectResponse(0);
+                var defResp = session.ExpectResponse(1);
+                var result = defResp?.GetObject("result");
+                Assert(result != null, "E004-06: go-to-def on cross-file regular func returns result");
+                if (result != null)
+                {
+                    string defUri = result.GetString("uri");
+                    Assert(defUri != null && defUri.Contains("helpers.ffs"),
+                        $"E004-06b: definition URI points to helpers.ffs, got '{defUri}'");
+                }
+            }
+            finally
+            {
+                try { Directory.Delete(tmpDir, true); } catch { }
+            }
+        }
+
+        // E004-07: Go-to-definition on enum type in module const with cross-file enum
+        {
+            string tmpDir = Path.Combine(Path.GetTempPath(), "e004_test_" + Guid.NewGuid().ToString("N").Substring(0, 8));
+            Directory.CreateDirectory(tmpDir);
+            try
+            {
+                File.WriteAllText(Path.Combine(tmpDir, "defs.ffs"),
+                    "enum TagBit { IDLE = 1, WALK = 2 }");
+                string rootUri = "file:///" + tmpDir.TrimStart('/').Replace("\\", "/");
+                string source = "include \"defs\"\n@export const tags: int = TagBit.WALK\nfunc main() { wait 1 }";
+                string fileUri = rootUri + "/main.ffs";
+
+                var session = new LspBatchSession();
+                session.AddInitializeWithRootUri(rootUri);
+                session.AddInitialized();
+                session.AddDidOpen(fileUri, source);
+                // "TagBit" at line 1, col 26 (in "@export const tags: int = TagBit.WALK")
+                session.AddDefinition(fileUri, 1, 26);
+                session.AddShutdown();
+                session.AddExit();
+                session.Run();
+
+                session.ExpectResponse(0);
+                var defResp = session.ExpectResponse(1);
+                var result = defResp?.GetObject("result");
+                Assert(result != null, "E004-07: go-to-def on cross-file enum type in module const returns result");
+                if (result != null)
+                {
+                    string defUri = result.GetString("uri");
+                    Assert(defUri != null && defUri.Contains("defs.ffs"),
+                        $"E004-07b: definition URI points to defs.ffs, got '{defUri}'");
+                }
+            }
+            finally
+            {
+                try { Directory.Delete(tmpDir, true); } catch { }
+            }
+        }
+
+        // E004-08: Go-to-definition on enum member in module const with cross-file enum
+        {
+            string tmpDir = Path.Combine(Path.GetTempPath(), "e004_test_" + Guid.NewGuid().ToString("N").Substring(0, 8));
+            Directory.CreateDirectory(tmpDir);
+            try
+            {
+                File.WriteAllText(Path.Combine(tmpDir, "defs.ffs"),
+                    "enum TagBit { IDLE = 1, WALK = 2 }");
+                string rootUri = "file:///" + tmpDir.TrimStart('/').Replace("\\", "/");
+                string source = "include \"defs\"\n@export const tags: int = TagBit.WALK\nfunc main() { wait 1 }";
+                string fileUri = rootUri + "/main.ffs";
+
+                var session = new LspBatchSession();
+                session.AddInitializeWithRootUri(rootUri);
+                session.AddInitialized();
+                session.AddDidOpen(fileUri, source);
+                // "WALK" at line 1, col 33 (in "TagBit.WALK")
+                session.AddDefinition(fileUri, 1, 33);
+                session.AddShutdown();
+                session.AddExit();
+                session.Run();
+
+                session.ExpectResponse(0);
+                var defResp = session.ExpectResponse(1);
+                var result = defResp?.GetObject("result");
+                Assert(result != null, "E004-08: go-to-def on cross-file enum member in module const returns result");
+                if (result != null)
+                {
+                    string defUri = result.GetString("uri");
+                    Assert(defUri != null && defUri.Contains("defs.ffs"),
+                        $"E004-08b: definition URI points to defs.ffs, got '{defUri}'");
+                }
+            }
+            finally
+            {
+                try { Directory.Delete(tmpDir, true); } catch { }
+            }
+        }
+
+        // E004-09: Find-references on external function includes call sites in function bodies
+        {
+            string tmpDir = Path.Combine(Path.GetTempPath(), "e004_test_" + Guid.NewGuid().ToString("N").Substring(0, 8));
+            Directory.CreateDirectory(tmpDir);
+            try
+            {
+                File.WriteAllText(Path.Combine(tmpDir, "syscalls.ffs"),
+                    "external func IsInputHeld(buttonId: int): int");
+                string rootUri = "file:///" + tmpDir.TrimStart('/').Replace("\\", "/");
+                string source = "include \"syscalls\"\nfunc main() {\n    var a: int = IsInputHeld(0)\n    var b: int = IsInputHeld(1)\n}";
+                string fileUri = rootUri + "/main.ffs";
+
+                var session = new LspBatchSession();
+                session.AddInitializeWithRootUri(rootUri);
+                session.AddInitialized();
+                session.AddDidOpen(fileUri, source);
+                // References on "IsInputHeld" call at line 2, col 17
+                session.AddReferences(fileUri, 2, 17);
+                session.AddShutdown();
+                session.AddExit();
+                session.Run();
+
+                session.ExpectResponse(0);
+                var refsResp = session.ExpectResponse(1);
+                var refs = refsResp?.GetArray("result");
+                // Should find: (1) external func declaration, (2) call at line 2, (3) call at line 3
+                Assert(refs != null && refs.Count >= 3,
+                    $"E004-09: external func refs ≥3 (decl + 2 calls), got {refs?.Count ?? 0}");
+            }
+            finally
+            {
+                try { Directory.Delete(tmpDir, true); } catch { }
+            }
+        }
+
+        // E004-10: Go-to-definition on module-level variable name
+        {
+            string source = "enum TagBit { IDLE = 1, WALK = 2 }\n@export const tags: int = TagBit.WALK\nfunc main() {\n    var x: int = tags\n}";
+            var session = new LspBatchSession();
+            session.AddInitialize();
+            session.AddInitialized();
+            session.AddDidOpen("file:///e004_10.ffs", source);
+            // "tags" usage in function body — line 3, col 17 (in "var x: int = tags")
+            session.AddDefinition("file:///e004_10.ffs", 3, 17);
+            session.AddShutdown();
+            session.AddExit();
+            session.Run();
+
+            session.ExpectResponse(0);
+            var defResp = session.ExpectResponse(1);
+            var result = defResp?.GetObject("result");
+            Assert(result != null, "E004-10: go-to-def on module variable reference returns result");
+            if (result != null)
+            {
+                var range = result.GetObject("range");
+                var start = range?.GetObject("start");
+                // "tags" is declared at line 1 in "@export const tags: int = TagBit.WALK"
+                Assert(start != null && start.GetInt("line") == 1,
+                    $"E004-10b: definition at module const declaration line 1, got line {start?.GetInt("line")}");
+            }
+        }
+
         Debug.Log($"\n===== LspTests: {passed} passed, {failed} failed =====");
     }
 

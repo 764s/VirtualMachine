@@ -2352,6 +2352,36 @@ namespace FFVM.Debug
                 }
             }
 
+            // E004: Walk module-level variable declarations (initializers, type annotations, names)
+            foreach (var mv in ast.ModuleVariables)
+            {
+                // Check initializer expression (e.g. TagBit.WALK in "@export const tags: int = TagBit.WALK")
+                if (mv.Initializer != null)
+                {
+                    var r = FindSymbolInExpr(ast, null, mv.Initializer, line, col);
+                    if (r != null) return r;
+                }
+                // Check type annotation
+                if (mv.TypeNameLine > 0 && mv.TypeNameLine == line && mv.TypeName != null
+                    && ColMatches(mv.TypeNameColumn, mv.TypeName.Length, col))
+                {
+                    string baseName = GetBaseTypeName(mv.TypeName);
+                    foreach (var st in ast.Structs)
+                    {
+                        if (st.Name == baseName)
+                            return new SymbolAtPosition { name = baseName, kind = SymbolKindTag.Struct };
+                    }
+                    foreach (var en in ast.Enums)
+                    {
+                        if (en.Name == baseName)
+                            return new SymbolAtPosition { name = baseName, kind = SymbolKindTag.Enum };
+                    }
+                }
+                // Check variable name itself
+                if (mv.NameLine > 0 && mv.NameLine == line && ColMatches(mv.NameColumn, mv.Name.Length, col))
+                    return new SymbolAtPosition { name = mv.Name, kind = SymbolKindTag.Variable };
+            }
+
             // Walk function bodies
             foreach (var func in ast.Functions)
             {
@@ -2473,12 +2503,16 @@ namespace FFVM.Debug
                         return new SymbolAtPosition { name = id.Name, kind = SymbolKindTag.Struct };
                 }
                 // Determine if it's a parameter or variable
-                foreach (var p in func.Parameters)
+                // E004: Guard against null func (module-level context has no enclosing function)
+                if (func != null)
                 {
-                    if (p.Name == id.Name)
-                        return new SymbolAtPosition { name = id.Name, kind = SymbolKindTag.Parameter, scopeFunc = func.Name };
+                    foreach (var p in func.Parameters)
+                    {
+                        if (p.Name == id.Name)
+                            return new SymbolAtPosition { name = id.Name, kind = SymbolKindTag.Parameter, scopeFunc = func.Name };
+                    }
                 }
-                return new SymbolAtPosition { name = id.Name, kind = SymbolKindTag.Variable, scopeFunc = func.Name };
+                return new SymbolAtPosition { name = id.Name, kind = SymbolKindTag.Variable, scopeFunc = func?.Name };
             }
 
             if (expr is CallExpr call && call.Line == line && ColMatches(call.Column, call.FunctionName.Length, col))
@@ -2620,6 +2654,16 @@ namespace FFVM.Debug
             }
             else if (kind == SymbolKindTag.Variable || kind == SymbolKindTag.Parameter)
             {
+                // E004: Check module-level variable declarations (scopeFunc == null for module-level context)
+                if (scopeFunc == null)
+                {
+                    foreach (var mv in ast.ModuleVariables)
+                    {
+                        if (mv.Name == name && mv.NameLine > 0)
+                            return (mv.NameLine, mv.NameColumn, mv.Name.Length, mv.OriginFile);
+                    }
+                }
+
                 // Find the declaration in the scope function
                 foreach (var func in ast.Functions)
                 {
@@ -2642,6 +2686,17 @@ namespace FFVM.Debug
                         // Check variable declarations in body
                         var loc = FindVarDeclLocation(func.Body, name);
                         if (loc != null) return (loc.Value.line, loc.Value.col, loc.Value.nameLen, func.OriginFile);
+                    }
+                }
+
+                // E004: Fallback — variable not found in function scope, check module-level
+                // (e.g., module const referenced inside a function body)
+                if (scopeFunc != null)
+                {
+                    foreach (var mv in ast.ModuleVariables)
+                    {
+                        if (mv.Name == name && mv.NameLine > 0)
+                            return (mv.NameLine, mv.NameColumn, mv.Name.Length, mv.OriginFile);
                     }
                 }
             }
@@ -2763,6 +2818,16 @@ namespace FFVM.Debug
                     string funcUri = ResolveOriginUri(requestingUri, func.OriginFile);
                     CollectCallRefsInBlock(func.Body, name, funcUri, locations);
                 }
+
+                // E004: Function call sites in module-level variable initializers
+                foreach (var mv in ast.ModuleVariables)
+                {
+                    if (mv.Initializer != null)
+                    {
+                        string mvUri = ResolveOriginUri(requestingUri, mv.OriginFile);
+                        CollectCallRefsInExpr(mv.Initializer, name, mvUri, locations);
+                    }
+                }
             }
             else if (kind == SymbolKindTag.Struct)
             {
@@ -2783,6 +2848,16 @@ namespace FFVM.Debug
                     string funcUri = ResolveOriginUri(requestingUri, func.OriginFile);
                     CollectTypeRefsInBlock(func.Body, name, funcUri, locations);
                 }
+
+                // E004: Struct usage in module-level variable type annotations
+                foreach (var mv in ast.ModuleVariables)
+                {
+                    if (mv.TypeName != null && GetBaseTypeName(mv.TypeName) == name && mv.TypeNameLine > 0)
+                    {
+                        string mvUri = ResolveOriginUri(requestingUri, mv.OriginFile);
+                        locations.Add(MakeLocation(mvUri, mv.TypeNameLine, mv.TypeNameColumn, name.Length));
+                    }
+                }
             }
             // Lang-13: enum references
             else if (kind == SymbolKindTag.Enum)
@@ -2802,6 +2877,20 @@ namespace FFVM.Debug
                 {
                     string funcUri = ResolveOriginUri(requestingUri, func.OriginFile);
                     CollectTypeRefsInBlock(func.Body, name, funcUri, locations);
+                    // E004: Enum identifier in expressions (e.g., EnumName.MEMBER)
+                    CollectEnumIdentRefsInBlock(func.Body, name, funcUri, locations);
+                }
+
+                // E004: Enum usage in module-level variable type annotations and initializers
+                foreach (var mv in ast.ModuleVariables)
+                {
+                    string mvUri = ResolveOriginUri(requestingUri, mv.OriginFile);
+                    // Type annotation (e.g., var x: Color)
+                    if (mv.TypeName != null && GetBaseTypeName(mv.TypeName) == name && mv.TypeNameLine > 0)
+                        locations.Add(MakeLocation(mvUri, mv.TypeNameLine, mv.TypeNameColumn, name.Length));
+                    // Initializer expression (e.g., Color.RED where Color is the enum identifier)
+                    if (mv.Initializer != null)
+                        CollectEnumIdentRefsInExpr(mv.Initializer, name, mvUri, locations);
                 }
             }
             // DX5: struct field references
@@ -2867,13 +2956,43 @@ namespace FFVM.Debug
                     string funcUri = ResolveOriginUri(requestingUri, func.OriginFile);
                     CollectEnumMemberAccessRefsInBlock(func.Body, name, parentName, funcUri, locations);
                 }
+
+                // E004: Collect enum member access usages in module-level variable initializers
+                foreach (var mv in ast.ModuleVariables)
+                {
+                    if (mv.Initializer != null)
+                    {
+                        string mvUri = ResolveOriginUri(requestingUri, mv.OriginFile);
+                        CollectEnumMemberAccessRefsInExpr(mv.Initializer, name, parentName, mvUri, locations);
+                    }
+                }
             }
             else // Variable or Parameter
             {
+                // E004: Module-level variable declarations
+                foreach (var mv in ast.ModuleVariables)
+                {
+                    if (mv.Name == name && mv.NameLine > 0)
+                    {
+                        string mvUri = ResolveOriginUri(requestingUri, mv.OriginFile);
+                        locations.Add(MakeLocation(mvUri, mv.NameLine, mv.NameColumn, name.Length));
+                    }
+                }
+
                 foreach (var func in ast.Functions)
                 {
                     string funcUri = ResolveOriginUri(requestingUri, func.OriginFile);
                     CollectIdentRefsInBlock(func.Body, name, funcUri, locations);
+                }
+
+                // E004: Identifier references in module-level variable initializers
+                foreach (var mv in ast.ModuleVariables)
+                {
+                    if (mv.Initializer != null)
+                    {
+                        string mvUri = ResolveOriginUri(requestingUri, mv.OriginFile);
+                        CollectIdentRefsInExpr(mv.Initializer, name, mvUri, locations);
+                    }
                 }
             }
         }
@@ -3480,6 +3599,82 @@ namespace FFVM.Debug
             else if (expr is CallExpr call)
             {
                 foreach (var arg in call.Arguments) CollectEnumMemberAccessRefsInExpr(arg, memberName, enumName, uri, locations);
+            }
+        }
+
+        /// <summary>
+        /// E004: Collect IdentifierExpr references to an enum name in expressions.
+        /// Matches the Target of FieldAccessExpr when Target is IdentifierExpr(enumName).
+        /// Used for enum type reference collection in module-level variable initializers.
+        /// </summary>
+        private static void CollectEnumIdentRefsInExpr(Expr expr, string enumName, string uri, List<object> locations)
+        {
+            if (expr == null) return;
+            if (expr is FieldAccessExpr fa)
+            {
+                if (fa.Target is IdentifierExpr id && id.Name == enumName && id.Line > 0)
+                    locations.Add(MakeLocation(uri, id.Line, id.Column, enumName.Length));
+                CollectEnumIdentRefsInExpr(fa.Target, enumName, uri, locations);
+            }
+            else if (expr is BinaryExpr bin)
+            {
+                CollectEnumIdentRefsInExpr(bin.Left, enumName, uri, locations);
+                CollectEnumIdentRefsInExpr(bin.Right, enumName, uri, locations);
+            }
+            else if (expr is UnaryExpr un) CollectEnumIdentRefsInExpr(un.Operand, enumName, uri, locations);
+            else if (expr is AssignExpr assign)
+            {
+                CollectEnumIdentRefsInExpr(assign.Target, enumName, uri, locations);
+                CollectEnumIdentRefsInExpr(assign.Value, enumName, uri, locations);
+            }
+            else if (expr is CallExpr call)
+            {
+                foreach (var arg in call.Arguments) CollectEnumIdentRefsInExpr(arg, enumName, uri, locations);
+            }
+        }
+
+        /// <summary>
+        /// E004: Collect IdentifierExpr references to an enum name in a block's statements.
+        /// Used for enum type reference collection in function body expressions.
+        /// </summary>
+        private static void CollectEnumIdentRefsInBlock(BlockStmt block, string enumName, string uri, List<object> locations)
+        {
+            if (block == null) return;
+            foreach (var stmt in block.Statements)
+                CollectEnumIdentRefsInStmt(stmt, enumName, uri, locations);
+        }
+
+        private static void CollectEnumIdentRefsInStmt(Stmt stmt, string enumName, string uri, List<object> locations)
+        {
+            if (stmt == null) return;
+            if (stmt is VarDeclStmt vd && vd.Initializer != null) CollectEnumIdentRefsInExpr(vd.Initializer, enumName, uri, locations);
+            else if (stmt is ExprStmt es) CollectEnumIdentRefsInExpr(es.Expression, enumName, uri, locations);
+            else if (stmt is BlockStmt bs) CollectEnumIdentRefsInBlock(bs, enumName, uri, locations);
+            else if (stmt is IfStmt ifs)
+            {
+                CollectEnumIdentRefsInExpr(ifs.Condition, enumName, uri, locations);
+                CollectEnumIdentRefsInStmt(ifs.ThenBranch, enumName, uri, locations);
+                CollectEnumIdentRefsInStmt(ifs.ElseBranch, enumName, uri, locations);
+            }
+            else if (stmt is WhileStmt ws)
+            {
+                CollectEnumIdentRefsInExpr(ws.Condition, enumName, uri, locations);
+                CollectEnumIdentRefsInStmt(ws.Body, enumName, uri, locations);
+            }
+            else if (stmt is ForStmt fs)
+            {
+                CollectEnumIdentRefsInStmt(fs.Initializer, enumName, uri, locations);
+                CollectEnumIdentRefsInExpr(fs.Condition, enumName, uri, locations);
+                CollectEnumIdentRefsInExpr(fs.Increment, enumName, uri, locations);
+                CollectEnumIdentRefsInStmt(fs.Body, enumName, uri, locations);
+            }
+            else if (stmt is ReturnStmt rs && rs.Value != null) CollectEnumIdentRefsInExpr(rs.Value, enumName, uri, locations);
+            else if (stmt is WaitStmt wst) CollectEnumIdentRefsInExpr(wst.FrameCount, enumName, uri, locations);
+            else if (stmt is DeferStmt ds) CollectEnumIdentRefsInBlock(ds.Body, enumName, uri, locations);
+            else if (stmt is UsingStmt us)
+            {
+                foreach (var arg in us.Arguments) CollectEnumIdentRefsInExpr(arg, enumName, uri, locations);
+                CollectEnumIdentRefsInBlock(us.Body, enumName, uri, locations);
             }
         }
 
