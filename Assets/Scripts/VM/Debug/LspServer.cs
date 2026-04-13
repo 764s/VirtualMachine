@@ -1148,254 +1148,160 @@ namespace FFVM.Debug
             return null;
         }
 
+        // R1: FindHover — replaced hand-written Block/Stmt/Expr triad with AstWalker subclass.
         private static string FindHoverInBlock(ModuleNode ast, FuncDecl currentFunc, BlockStmt block, int line, int col)
         {
-            if (block == null) return null;
-            foreach (var stmt in block.Statements)
-            {
-                string result = FindHoverInStmt(ast, currentFunc, stmt, line, col);
-                if (result != null) return result;
-            }
-            return null;
+            var w = new FindHoverWalker(ast, currentFunc, line, col);
+            w.WalkBlock(block);
+            return w.Result;
         }
 
-        private static string FindHoverInStmt(ModuleNode ast, FuncDecl currentFunc, Stmt stmt, int line, int col)
+        private sealed class FindHoverWalker : AstWalker
         {
-            if (stmt == null) return null;
+            private readonly ModuleNode _ast;
+            private readonly FuncDecl _func;
+            private readonly int _line;
+            private readonly int _col;
+            public string Result;
 
-            if (stmt is VarDeclStmt vd)
+            public FindHoverWalker(ModuleNode ast, FuncDecl func, int line, int col) { _ast = ast; _func = func; _line = line; _col = col; }
+
+            private void SetResult(string r) { Result = r; _abort = true; }
+
+            protected override bool VisitStmt(Stmt stmt)
             {
-                // Check initializer FIRST (has precise column matching for calls, identifiers, etc.)
-                if (vd.Initializer != null)
+                if (stmt is VarDeclStmt vd)
                 {
-                    string result = FindHoverInExpr(ast, currentFunc, vd.Initializer, line, col);
-                    if (result != null) return result;
-                }
-                // Variable name hover — only when cursor is on the name itself
-                // VarDeclStmt.Column points to 'var'; name starts at Column + 4 ("var ")
-                if (vd.Line == line)
-                {
-                    int nameStart = vd.Column + 4; // skip "var "
-                    if (ColMatches(nameStart, vd.Name.Length, col))
+                    // Check initializer FIRST (has precise column matching for calls, identifiers, etc.)
+                    if (vd.Initializer != null)
                     {
-                        string typeStr = vd.TypeName ?? "int";
-                        return $"var {vd.Name}: {typeStr}";
+                        WalkExpr(vd.Initializer);
+                        if (Result != null) return true;
                     }
-                }
-            }
-            else if (stmt is IfStmt ifs)
-            {
-                string r = FindHoverInExpr(ast, currentFunc, ifs.Condition, line, col);
-                if (r != null) return r;
-                r = FindHoverInStmt(ast, currentFunc, ifs.ThenBranch, line, col);
-                if (r != null) return r;
-                r = FindHoverInStmt(ast, currentFunc, ifs.ElseBranch, line, col);
-                if (r != null) return r;
-            }
-            else if (stmt is WhileStmt ws)
-            {
-                string r = FindHoverInExpr(ast, currentFunc, ws.Condition, line, col);
-                if (r != null) return r;
-                r = FindHoverInStmt(ast, currentFunc, ws.Body, line, col);
-                if (r != null) return r;
-            }
-            else if (stmt is ForStmt fs)
-            {
-                string r = FindHoverInStmt(ast, currentFunc, fs.Initializer, line, col);
-                if (r != null) return r;
-                r = FindHoverInExpr(ast, currentFunc, fs.Condition, line, col);
-                if (r != null) return r;
-                r = FindHoverInExpr(ast, currentFunc, fs.Increment, line, col);
-                if (r != null) return r;
-                r = FindHoverInStmt(ast, currentFunc, fs.Body, line, col);
-                if (r != null) return r;
-            }
-            else if (stmt is BlockStmt bs)
-            {
-                return FindHoverInBlock(ast, currentFunc, bs, line, col);
-            }
-            else if (stmt is ExprStmt es)
-            {
-                return FindHoverInExpr(ast, currentFunc, es.Expression, line, col);
-            }
-            else if (stmt is ReturnStmt rs)
-            {
-                if (rs.Value != null)
-                    return FindHoverInExpr(ast, currentFunc, rs.Value, line, col);
-            }
-            else if (stmt is WaitStmt wst)
-            {
-                return FindHoverInExpr(ast, currentFunc, wst.FrameCount, line, col);
-            }
-            else if (stmt is DeferStmt ds)
-            {
-                return FindHoverInBlock(ast, currentFunc, ds.Body, line, col);
-            }
-            else if (stmt is UsingStmt us)
-            {
-                foreach (var arg in us.Arguments)
-                {
-                    string r = FindHoverInExpr(ast, currentFunc, arg, line, col);
-                    if (r != null) return r;
-                }
-                return FindHoverInBlock(ast, currentFunc, us.Body, line, col);
-            }
-
-            return null;
-        }
-
-        private static string FindHoverInExpr(ModuleNode ast, FuncDecl currentFunc, Expr expr, int line, int col)
-        {
-            if (expr == null) return null;
-
-            if (expr is IdentifierExpr id && id.Line == line && ColMatches(id.Column, id.Name.Length, col))
-            {
-                // Look up variable declaration in current function
-                string typeInfo = FindVarType(currentFunc, id.Name);
-                if (typeInfo != null)
-                    return $"var {id.Name}: {typeInfo}";
-                // Check if it's a parameter
-                foreach (var p in currentFunc.Parameters)
-                {
-                    if (p.Name == id.Name)
+                    // Variable name hover — only when cursor is on the name itself
+                    // VarDeclStmt.Column points to 'var'; name starts at Column + 4 ("var ")
+                    if (vd.Line == _line)
                     {
-                        string paramHover = $"(parameter) {FormatParamDecl(p)}";
-                        if (p.DocComment != null)
-                            paramHover += $"\n\n{p.DocComment}";
-                        return paramHover;
-                    }
-                }
-                return $"{id.Name}";
-            }
-
-            if (expr is CallExpr call && call.Line == line && ColMatches(call.Column, call.FunctionName.Length, col))
-            {
-                // Look up function declaration
-                foreach (var func in ast.Functions)
-                {
-                    if (func.Name == call.FunctionName)
-                        return FormatFuncHover(func);
-                }
-                return $"func {call.FunctionName}(...)";
-            }
-
-            if (expr is FieldAccessExpr fa && fa.Line == line)
-            {
-                // Lang-13: enum member hover — when target is an enum name, show member info
-                if (fa.Target is IdentifierExpr faEnumId)
-                {
-                    foreach (var en in ast.Enums)
-                    {
-                        if (en.Name == faEnumId.Name)
+                        int nameStart = vd.Column + 4; // skip "var "
+                        if (ColMatches(nameStart, vd.Name.Length, _col))
                         {
-                            // Cursor might be on the enum name itself or on the member name
-                            if (ColMatches(faEnumId.Column, faEnumId.Name.Length, col))
-                            {
-                                return FormatEnumHover(en);
-                            }
-                            // Check if cursor is on the member name (after the dot)
-                            foreach (var member in en.Members)
-                            {
-                                if (member.Name == fa.FieldName)
-                                {
-                                    return $"(enum member) {en.Name}.{member.Name}";
-                                }
-                            }
-                            return null;
+                            string typeStr = vd.TypeName ?? "int";
+                            SetResult($"var {vd.Name}: {typeStr}");
                         }
                     }
+                    return true; // handled all VarDeclStmt paths
                 }
-                return FindHoverInExpr(ast, currentFunc, fa.Target, line, col);
+                return false;
             }
 
-            // Recurse into sub-expressions
-            if (expr is BinaryExpr bin)
+            protected override bool VisitExpr(Expr expr)
             {
-                string r = FindHoverInExpr(ast, currentFunc, bin.Left, line, col);
-                if (r != null) return r;
-                return FindHoverInExpr(ast, currentFunc, bin.Right, line, col);
-            }
-            if (expr is UnaryExpr un)
-            {
-                return FindHoverInExpr(ast, currentFunc, un.Operand, line, col);
-            }
-            if (expr is AssignExpr assign)
-            {
-                string r = FindHoverInExpr(ast, currentFunc, assign.Target, line, col);
-                if (r != null) return r;
-                return FindHoverInExpr(ast, currentFunc, assign.Value, line, col);
-            }
-            if (expr is CallExpr call2)
-            {
-                foreach (var arg in call2.Arguments)
+                if (expr is IdentifierExpr id && id.Line == _line && ColMatches(id.Column, id.Name.Length, _col))
                 {
-                    string r = FindHoverInExpr(ast, currentFunc, arg, line, col);
-                    if (r != null) return r;
-                }
-            }
-            if (expr is StructLiteralExpr sl)
-            {
-                // US: Hover on struct literal name → show struct definition with doc comment
-                if (sl.Line == line && sl.TypeName != null && ColMatches(sl.Column, sl.TypeName.Length, col))
-                {
-                    foreach (var st in ast.Structs)
+                    // Look up variable declaration in current function
+                    string typeInfo = FindVarType(_func, id.Name);
+                    if (typeInfo != null)
+                    { SetResult($"var {id.Name}: {typeInfo}"); return true; }
+                    // Check if it's a parameter
+                    foreach (var p in _func.Parameters)
                     {
-                        if (st.Name == sl.TypeName)
-                            return FormatStructHover(st);
+                        if (p.Name == id.Name)
+                        {
+                            string paramHover = $"(parameter) {FormatParamDecl(p)}";
+                            if (p.DocComment != null)
+                                paramHover += $"\n\n{p.DocComment}";
+                            SetResult(paramHover);
+                            return true;
+                        }
                     }
-                    return $"struct {sl.TypeName}";
+                    SetResult($"{id.Name}");
+                    return true;
                 }
-                foreach (var f in sl.Fields)
-                {
-                    string r = FindHoverInExpr(ast, currentFunc, f.Value, line, col);
-                    if (r != null) return r;
-                }
-            }
 
-            return null;
+                if (expr is CallExpr call && call.Line == _line && ColMatches(call.Column, call.FunctionName.Length, _col))
+                {
+                    // Look up function declaration
+                    foreach (var func in _ast.Functions)
+                    {
+                        if (func.Name == call.FunctionName)
+                        { SetResult(FormatFuncHover(func)); return true; }
+                    }
+                    SetResult($"func {call.FunctionName}(...)");
+                    return true;
+                }
+
+                if (expr is FieldAccessExpr fa && fa.Line == _line)
+                {
+                    // Lang-13: enum member hover — when target is an enum name, show member info
+                    if (fa.Target is IdentifierExpr faEnumId)
+                    {
+                        foreach (var en in _ast.Enums)
+                        {
+                            if (en.Name == faEnumId.Name)
+                            {
+                                // Cursor might be on the enum name itself or on the member name
+                                if (ColMatches(faEnumId.Column, faEnumId.Name.Length, _col))
+                                { SetResult(FormatEnumHover(en)); return true; }
+                                // Check if cursor is on the member name (after the dot)
+                                foreach (var member in en.Members)
+                                {
+                                    if (member.Name == fa.FieldName)
+                                    { SetResult($"(enum member) {en.Name}.{member.Name}"); return true; }
+                                }
+                                return true; // matched enum, but no member hit — stop
+                            }
+                        }
+                    }
+                    // Not an enum — continue walking into target
+                    return false;
+                }
+
+                if (expr is StructLiteralExpr sl)
+                {
+                    // US: Hover on struct literal name → show struct definition with doc comment
+                    if (sl.Line == _line && sl.TypeName != null && ColMatches(sl.Column, sl.TypeName.Length, _col))
+                    {
+                        foreach (var st in _ast.Structs)
+                        {
+                            if (st.Name == sl.TypeName)
+                            { SetResult(FormatStructHover(st)); return true; }
+                        }
+                        SetResult($"struct {sl.TypeName}");
+                        return true;
+                    }
+                    // Continue into field values
+                    return false;
+                }
+
+                return false; // continue walking children
+            }
         }
 
         /// <summary>
         /// Find the type of a variable declared in a function's body.
         /// Walks statements looking for VarDeclStmt with matching name.
         /// </summary>
+        // R1: FindVarType — replaced hand-written Block/Stmt triad with AstWalker subclass.
         private static string FindVarType(FuncDecl func, string varName)
         {
-            return FindVarTypeInBlock(func.Body, varName);
+            var w = new FindVarTypeWalker(varName);
+            w.WalkBlock(func.Body);
+            return w.Result;
         }
 
-        private static string FindVarTypeInBlock(BlockStmt block, string varName)
+        private sealed class FindVarTypeWalker : AstWalker
         {
-            if (block == null) return null;
-            foreach (var stmt in block.Statements)
+            private readonly string _varName;
+            public string Result;
+            public FindVarTypeWalker(string varName) { _varName = varName; }
+            protected override void VisitVarDecl(VarDeclStmt vd)
             {
-                string r = FindVarTypeInStmt(stmt, varName);
-                if (r != null) return r;
+                if (vd.Name == _varName)
+                {
+                    Result = vd.TypeName ?? "int";
+                    _abort = true;
+                }
             }
-            return null;
-        }
-
-        private static string FindVarTypeInStmt(Stmt stmt, string varName)
-        {
-            if (stmt is VarDeclStmt vd && vd.Name == varName)
-                return vd.TypeName ?? "int";
-            if (stmt is BlockStmt bs) return FindVarTypeInBlock(bs, varName);
-            if (stmt is IfStmt ifs)
-            {
-                string r = FindVarTypeInStmt(ifs.ThenBranch, varName);
-                if (r != null) return r;
-                return FindVarTypeInStmt(ifs.ElseBranch, varName);
-            }
-            if (stmt is WhileStmt ws) return FindVarTypeInStmt(ws.Body, varName);
-            if (stmt is ForStmt fs)
-            {
-                string r = FindVarTypeInStmt(fs.Initializer, varName);
-                if (r != null) return r;
-                return FindVarTypeInStmt(fs.Body, varName);
-            }
-            if (stmt is DeferStmt ds) return FindVarTypeInBlock(ds.Body, varName);
-            if (stmt is UsingStmt us) return FindVarTypeInBlock(us.Body, varName);
-            return null;
         }
 
         /// <summary>
@@ -2178,107 +2084,56 @@ namespace FFVM.Debug
             return null;
         }
 
+        // R1: FindVarStructType — replaced hand-written Block/Stmt triad with AstWalker subclass.
         private static string FindVarStructTypeInBlock(ModuleNode ast, BlockStmt block, string varName)
         {
-            if (block == null) return null;
-            foreach (var stmt in block.Statements)
+            var w = new FindVarStructTypeWalker(ast, varName);
+            w.WalkBlock(block);
+            return w.Result;
+        }
+
+        private sealed class FindVarStructTypeWalker : AstWalker
+        {
+            private readonly ModuleNode _ast;
+            private readonly string _varName;
+            public string Result;
+            public FindVarStructTypeWalker(ModuleNode ast, string varName) { _ast = ast; _varName = varName; }
+            protected override void VisitVarDecl(VarDeclStmt vd)
             {
-                if (stmt is VarDeclStmt vd && vd.Name == varName)
+                if (vd.Name == _varName)
                 {
                     if (vd.TypeName != null)
                     {
-                        foreach (var st in ast.Structs)
+                        foreach (var st in _ast.Structs)
                         {
                             if (st.Name == vd.TypeName)
-                                return vd.TypeName;
+                            { Result = vd.TypeName; break; }
                         }
                     }
-                    return null;
+                    _abort = true; // found the variable (whether struct-typed or not)
                 }
-                string r = null;
-                if (stmt is BlockStmt bs) r = FindVarStructTypeInBlock(ast, bs, varName);
-                else if (stmt is IfStmt ifs)
-                {
-                    r = FindVarStructTypeInStmt(ast, ifs.ThenBranch, varName);
-                    if (r == null) r = FindVarStructTypeInStmt(ast, ifs.ElseBranch, varName);
-                }
-                else if (stmt is WhileStmt ws) r = FindVarStructTypeInStmt(ast, ws.Body, varName);
-                else if (stmt is ForStmt fs)
-                {
-                    r = FindVarStructTypeInStmt(ast, fs.Initializer, varName);
-                    if (r == null) r = FindVarStructTypeInStmt(ast, fs.Body, varName);
-                }
-                else if (stmt is DeferStmt ds) r = FindVarStructTypeInBlock(ast, ds.Body, varName);
-                else if (stmt is UsingStmt us) r = FindVarStructTypeInBlock(ast, us.Body, varName);
-                if (r != null) return r;
             }
-            return null;
         }
 
-        private static string FindVarStructTypeInStmt(ModuleNode ast, Stmt stmt, string varName)
-        {
-            if (stmt is BlockStmt bs) return FindVarStructTypeInBlock(ast, bs, varName);
-            if (stmt is VarDeclStmt vd && vd.Name == varName)
-            {
-                if (vd.TypeName != null)
-                {
-                    foreach (var st in ast.Structs)
-                    {
-                        if (st.Name == vd.TypeName)
-                            return vd.TypeName;
-                    }
-                }
-                return null;
-            }
-            return null;
-        }
-
-        /// <summary>
-        /// Collect all variables declared in a block before the given AST line.
-        /// </summary>
+        // R1: CollectVariablesInScope — replaced hand-written Block/Stmt pair with AstWalker subclass.
         private static void CollectVariablesInScope(BlockStmt block, int beforeAstLine, List<object> items)
         {
-            if (block == null) return;
-            foreach (var stmt in block.Statements)
-            {
-                if (stmt is VarDeclStmt vd)
-                {
-                    if (vd.Line < beforeAstLine)
-                    {
-                        string typeStr = vd.TypeName ?? "int";
-                        items.Add(MakeCompletionItem(vd.Name, 6 /* Variable */,
-                            $"var {vd.Name}: {typeStr}"));
-                    }
-                }
-                // Recurse into nested blocks that contain the cursor
-                if (stmt is IfStmt ifs)
-                {
-                    CollectVariablesInStmt(ifs.ThenBranch, beforeAstLine, items);
-                    CollectVariablesInStmt(ifs.ElseBranch, beforeAstLine, items);
-                }
-                else if (stmt is WhileStmt ws)
-                    CollectVariablesInStmt(ws.Body, beforeAstLine, items);
-                else if (stmt is ForStmt fs)
-                {
-                    CollectVariablesInStmt(fs.Initializer, beforeAstLine, items);
-                    CollectVariablesInStmt(fs.Body, beforeAstLine, items);
-                }
-                else if (stmt is BlockStmt bs)
-                    CollectVariablesInScope(bs, beforeAstLine, items);
-                else if (stmt is DeferStmt ds)
-                    CollectVariablesInScope(ds.Body, beforeAstLine, items);
-                else if (stmt is UsingStmt us)
-                    CollectVariablesInScope(us.Body, beforeAstLine, items);
-            }
+            var w = new CollectVarsInScopeWalker(beforeAstLine, items);
+            w.WalkBlock(block);
         }
 
-        private static void CollectVariablesInStmt(Stmt stmt, int beforeAstLine, List<object> items)
+        private sealed class CollectVarsInScopeWalker : AstWalker
         {
-            if (stmt is BlockStmt bs) CollectVariablesInScope(bs, beforeAstLine, items);
-            else if (stmt is VarDeclStmt vd && vd.Line < beforeAstLine)
+            private readonly int _beforeAstLine;
+            private readonly List<object> _items;
+            public CollectVarsInScopeWalker(int beforeAstLine, List<object> items) { _beforeAstLine = beforeAstLine; _items = items; }
+            protected override void VisitVarDecl(VarDeclStmt vd)
             {
-                string typeStr = vd.TypeName ?? "int";
-                items.Add(MakeCompletionItem(vd.Name, 6 /* Variable */, $"var {vd.Name}: {typeStr}"));
+                if (vd.Line < _beforeAstLine)
+                {
+                    string typeStr = vd.TypeName ?? "int";
+                    _items.Add(MakeCompletionItem(vd.Name, 6 /* Variable */, $"var {vd.Name}: {typeStr}"));
+                }
             }
         }
 
@@ -2362,175 +2217,121 @@ namespace FFVM.Debug
             return null;
         }
 
+        // R1: FindSymbol — replaced hand-written Block/Stmt/Expr triad with AstWalker subclass.
         private static SymbolAtPosition? FindSymbolInBlock(ModuleNode ast, FuncDecl func, BlockStmt block, int line, int col)
         {
-            if (block == null) return null;
-            foreach (var stmt in block.Statements)
-            {
-                var r = FindSymbolInStmt(ast, func, stmt, line, col);
-                if (r != null) return r;
-            }
-            return null;
+            var w = new FindSymbolWalker(ast, func, line, col);
+            w.WalkBlock(block);
+            return w.Result;
         }
 
-        private static SymbolAtPosition? FindSymbolInStmt(ModuleNode ast, FuncDecl func, Stmt stmt, int line, int col)
+        private sealed class FindSymbolWalker : AstWalker
         {
-            if (stmt == null) return null;
+            private readonly ModuleNode _ast;
+            private readonly FuncDecl _func;
+            private readonly int _line;
+            private readonly int _col;
+            public SymbolAtPosition? Result;
 
-            if (stmt is VarDeclStmt vd)
+            public FindSymbolWalker(ModuleNode ast, FuncDecl func, int line, int col) { _ast = ast; _func = func; _line = line; _col = col; }
+
+            private void SetResult(SymbolAtPosition r) { Result = r; _abort = true; }
+
+            protected override bool VisitStmt(Stmt stmt)
             {
-                if (vd.Initializer != null)
+                if (stmt is VarDeclStmt vd)
                 {
-                    var r = FindSymbolInExpr(ast, func, vd.Initializer, line, col);
-                    if (r != null) return r;
-                }
-                // US: Check type annotation — if cursor is on the type name, resolve as Struct or Enum
-                if (vd.TypeNameLine > 0 && vd.TypeNameLine == line && vd.TypeName != null
-                    && ColMatches(vd.TypeNameColumn, vd.TypeName.Length, col))
-                {
-                    string baseName = GetBaseTypeName(vd.TypeName);
-                    foreach (var st in ast.Structs)
+                    // Walk initializer first (has precise column matching for calls, identifiers, etc.)
+                    if (vd.Initializer != null)
                     {
-                        if (st.Name == baseName)
-                            return new SymbolAtPosition { name = baseName, kind = SymbolKindTag.Struct };
+                        WalkExpr(vd.Initializer);
+                        if (Result != null) return true;
                     }
-                    foreach (var en in ast.Enums)
+                    // US: Check type annotation — if cursor is on the type name, resolve as Struct or Enum
+                    if (vd.TypeNameLine > 0 && vd.TypeNameLine == _line && vd.TypeName != null
+                        && ColMatches(vd.TypeNameColumn, vd.TypeName.Length, _col))
                     {
-                        if (en.Name == baseName)
-                            return new SymbolAtPosition { name = baseName, kind = SymbolKindTag.Enum };
-                    }
-                }
-                // Match the variable name itself in the declaration
-                if (vd.Line == line)
-                {
-                    int nameStart = vd.Column + (vd.IsConst ? "const".Length : "var".Length) + 1;
-                    if (ColMatches(nameStart, vd.Name.Length, col))
-                        return new SymbolAtPosition { name = vd.Name, kind = SymbolKindTag.Variable, scopeFunc = func.Name };
-                }
-            }
-            else if (stmt is ExprStmt es)
-                return FindSymbolInExpr(ast, func, es.Expression, line, col);
-            else if (stmt is BlockStmt bs)
-                return FindSymbolInBlock(ast, func, bs, line, col);
-            else if (stmt is IfStmt ifs)
-            {
-                var r = FindSymbolInExpr(ast, func, ifs.Condition, line, col);
-                if (r != null) return r;
-                r = FindSymbolInStmt(ast, func, ifs.ThenBranch, line, col);
-                if (r != null) return r;
-                return FindSymbolInStmt(ast, func, ifs.ElseBranch, line, col);
-            }
-            else if (stmt is WhileStmt ws)
-            {
-                var r = FindSymbolInExpr(ast, func, ws.Condition, line, col);
-                if (r != null) return r;
-                return FindSymbolInStmt(ast, func, ws.Body, line, col);
-            }
-            else if (stmt is ForStmt fs)
-            {
-                var r = FindSymbolInStmt(ast, func, fs.Initializer, line, col);
-                if (r != null) return r;
-                r = FindSymbolInExpr(ast, func, fs.Condition, line, col);
-                if (r != null) return r;
-                r = FindSymbolInExpr(ast, func, fs.Increment, line, col);
-                if (r != null) return r;
-                return FindSymbolInStmt(ast, func, fs.Body, line, col);
-            }
-            else if (stmt is ReturnStmt rs && rs.Value != null)
-                return FindSymbolInExpr(ast, func, rs.Value, line, col);
-            else if (stmt is WaitStmt wst)
-                return FindSymbolInExpr(ast, func, wst.FrameCount, line, col);
-            else if (stmt is DeferStmt ds)
-                return FindSymbolInBlock(ast, func, ds.Body, line, col);
-            else if (stmt is UsingStmt us)
-            {
-                foreach (var arg in us.Arguments)
-                {
-                    var r = FindSymbolInExpr(ast, func, arg, line, col);
-                    if (r != null) return r;
-                }
-                return FindSymbolInBlock(ast, func, us.Body, line, col);
-            }
-            return null;
-        }
-
-        private static SymbolAtPosition? FindSymbolInExpr(ModuleNode ast, FuncDecl func, Expr expr, int line, int col)
-        {
-            if (expr == null) return null;
-
-            if (expr is IdentifierExpr id && id.Line == line && ColMatches(id.Column, id.Name.Length, col))
-            {
-                // US: Check if identifier is an enum name (e.g., "Color" in "Color.RED")
-                foreach (var en in ast.Enums)
-                {
-                    if (en.Name == id.Name)
-                        return new SymbolAtPosition { name = id.Name, kind = SymbolKindTag.Enum };
-                }
-                // US: Check if identifier is a struct name (e.g., struct literal or type ref)
-                foreach (var st in ast.Structs)
-                {
-                    if (st.Name == id.Name)
-                        return new SymbolAtPosition { name = id.Name, kind = SymbolKindTag.Struct };
-                }
-                // Determine if it's a parameter or variable
-                foreach (var p in func.Parameters)
-                {
-                    if (p.Name == id.Name)
-                        return new SymbolAtPosition { name = id.Name, kind = SymbolKindTag.Parameter, scopeFunc = func.Name };
-                }
-                return new SymbolAtPosition { name = id.Name, kind = SymbolKindTag.Variable, scopeFunc = func.Name };
-            }
-
-            if (expr is CallExpr call && call.Line == line && ColMatches(call.Column, call.FunctionName.Length, col))
-            {
-                return new SymbolAtPosition { name = call.FunctionName, kind = SymbolKindTag.Function };
-            }
-
-            // Recurse
-            if (expr is BinaryExpr bin)
-            {
-                var r = FindSymbolInExpr(ast, func, bin.Left, line, col);
-                if (r != null) return r;
-                return FindSymbolInExpr(ast, func, bin.Right, line, col);
-            }
-            if (expr is UnaryExpr un)
-                return FindSymbolInExpr(ast, func, un.Operand, line, col);
-            if (expr is AssignExpr assign)
-            {
-                var r = FindSymbolInExpr(ast, func, assign.Target, line, col);
-                if (r != null) return r;
-                return FindSymbolInExpr(ast, func, assign.Value, line, col);
-            }
-            if (expr is CallExpr call2)
-            {
-                foreach (var arg in call2.Arguments)
-                {
-                    var r = FindSymbolInExpr(ast, func, arg, line, col);
-                    if (r != null) return r;
-                }
-            }
-            if (expr is FieldAccessExpr fa)
-            {
-                // DX7: Check if cursor is on the field name token (after '.')
-                if (fa.FieldNameLine == line && fa.FieldNameLine > 0 && ColMatches(fa.FieldNameColumn, fa.FieldName.Length, col))
-                {
-                    // US: Check if target is an enum → return EnumMember instead of StructField
-                    if (fa.Target is IdentifierExpr faId)
-                    {
-                        foreach (var en in ast.Enums)
+                        string baseName = GetBaseTypeName(vd.TypeName);
+                        foreach (var st in _ast.Structs)
                         {
-                            if (en.Name == faId.Name)
-                                return new SymbolAtPosition { name = fa.FieldName, kind = SymbolKindTag.EnumMember, parentName = en.Name };
+                            if (st.Name == baseName)
+                            { SetResult(new SymbolAtPosition { name = baseName, kind = SymbolKindTag.Struct }); return true; }
+                        }
+                        foreach (var en in _ast.Enums)
+                        {
+                            if (en.Name == baseName)
+                            { SetResult(new SymbolAtPosition { name = baseName, kind = SymbolKindTag.Enum }); return true; }
                         }
                     }
-                    // Parent struct cannot always be resolved from AST alone (no type inference);
-                    // callers handle parentName=null by searching all structs.
-                    return new SymbolAtPosition { name = fa.FieldName, kind = SymbolKindTag.StructField, parentName = null };
+                    // Match the variable name itself in the declaration
+                    if (vd.Line == _line)
+                    {
+                        int nameStart = vd.Column + (vd.IsConst ? "const".Length : "var".Length) + 1;
+                        if (ColMatches(nameStart, vd.Name.Length, _col))
+                        { SetResult(new SymbolAtPosition { name = vd.Name, kind = SymbolKindTag.Variable, scopeFunc = _func.Name }); return true; }
+                    }
+                    return true; // handled all VarDeclStmt paths (skip default dispatch which would re-walk initializer)
                 }
-                return FindSymbolInExpr(ast, func, fa.Target, line, col);
+                return false; // let AstWalker dispatch other statement types normally
             }
 
-            return null;
+            protected override bool VisitExpr(Expr expr)
+            {
+                if (expr is IdentifierExpr id && id.Line == _line && ColMatches(id.Column, id.Name.Length, _col))
+                {
+                    // US: Check if identifier is an enum name (e.g., "Color" in "Color.RED")
+                    foreach (var en in _ast.Enums)
+                    {
+                        if (en.Name == id.Name)
+                        { SetResult(new SymbolAtPosition { name = id.Name, kind = SymbolKindTag.Enum }); return true; }
+                    }
+                    // US: Check if identifier is a struct name (e.g., struct literal or type ref)
+                    foreach (var st in _ast.Structs)
+                    {
+                        if (st.Name == id.Name)
+                        { SetResult(new SymbolAtPosition { name = id.Name, kind = SymbolKindTag.Struct }); return true; }
+                    }
+                    // Determine if it's a parameter or variable
+                    foreach (var p in _func.Parameters)
+                    {
+                        if (p.Name == id.Name)
+                        { SetResult(new SymbolAtPosition { name = id.Name, kind = SymbolKindTag.Parameter, scopeFunc = _func.Name }); return true; }
+                    }
+                    SetResult(new SymbolAtPosition { name = id.Name, kind = SymbolKindTag.Variable, scopeFunc = _func.Name });
+                    return true;
+                }
+
+                if (expr is CallExpr call && call.Line == _line && ColMatches(call.Column, call.FunctionName.Length, _col))
+                {
+                    SetResult(new SymbolAtPosition { name = call.FunctionName, kind = SymbolKindTag.Function });
+                    return true;
+                }
+
+                if (expr is FieldAccessExpr fa)
+                {
+                    // DX7: Check if cursor is on the field name token (after '.')
+                    if (fa.FieldNameLine == _line && fa.FieldNameLine > 0 && ColMatches(fa.FieldNameColumn, fa.FieldName.Length, _col))
+                    {
+                        // US: Check if target is an enum → return EnumMember instead of StructField
+                        if (fa.Target is IdentifierExpr faId)
+                        {
+                            foreach (var en in _ast.Enums)
+                            {
+                                if (en.Name == faId.Name)
+                                { SetResult(new SymbolAtPosition { name = fa.FieldName, kind = SymbolKindTag.EnumMember, parentName = en.Name }); return true; }
+                            }
+                        }
+                        // Parent struct cannot always be resolved from AST alone (no type inference);
+                        // callers handle parentName=null by searching all structs.
+                        SetResult(new SymbolAtPosition { name = fa.FieldName, kind = SymbolKindTag.StructField, parentName = null });
+                        return true;
+                    }
+                    // Continue into target (don't skip children)
+                    return false;
+                }
+
+                return false; // continue walking children
+            }
         }
 
         /// <summary>
@@ -3787,19 +3588,28 @@ namespace FFVM.Debug
         /// </summary>
         private class AstWalker
         {
+            /// <summary>
+            /// Set to true in any Visit hook to immediately stop the entire walk.
+            /// All Walk methods check this at entry and bail out.
+            /// </summary>
+            protected bool _abort;
+
             // ---- Block ----
             public void WalkBlock(BlockStmt block)
             {
                 if (block == null) return;
                 foreach (var stmt in block.Statements)
+                {
+                    if (_abort) return;
                     WalkStmt(stmt);
+                }
             }
 
             // ---- Stmt dispatch ----
             public void WalkStmt(Stmt stmt)
             {
-                if (stmt == null) return;
-                if (VisitStmt(stmt)) return; // early-out
+                if (stmt == null || _abort) return;
+                if (VisitStmt(stmt)) return; // early-out (skip children)
 
                 if (stmt is ExprStmt es)
                     WalkExpr(es.Expression);
@@ -3837,7 +3647,10 @@ namespace FFVM.Debug
                 else if (stmt is UsingStmt us)
                 {
                     foreach (var arg in us.Arguments)
+                    {
+                        if (_abort) return;
                         WalkExpr(arg);
+                    }
                     WalkBlock(us.Body);
                 }
                 // YieldStmt, WaitForStmt — no children to walk
@@ -3846,8 +3659,8 @@ namespace FFVM.Debug
             // ---- Expr dispatch ----
             public void WalkExpr(Expr expr)
             {
-                if (expr == null) return;
-                if (VisitExpr(expr)) return; // early-out
+                if (expr == null || _abort) return;
+                if (VisitExpr(expr)) return; // early-out (skip children)
 
                 if (expr is BinaryExpr bin)
                 {
@@ -3864,24 +3677,36 @@ namespace FFVM.Debug
                 else if (expr is CallExpr call)
                 {
                     foreach (var arg in call.Arguments)
+                    {
+                        if (_abort) return;
                         WalkExpr(arg);
+                    }
                 }
                 else if (expr is MemberCallExpr mc)
                 {
                     foreach (var arg in mc.Arguments)
+                    {
+                        if (_abort) return;
                         WalkExpr(arg);
+                    }
                 }
                 else if (expr is FieldAccessExpr fa)
                     WalkExpr(fa.Target);
                 else if (expr is StructLiteralExpr sl)
                 {
                     foreach (var f in sl.Fields)
+                    {
+                        if (_abort) return;
                         WalkExpr(f.Value);
+                    }
                 }
                 else if (expr is SyscallExpr sc)
                 {
                     foreach (var arg in sc.Arguments)
+                    {
+                        if (_abort) return;
                         WalkExpr(arg);
+                    }
                 }
                 // Leaf nodes: IdentifierExpr, NumberLiteralExpr, IntLiteralExpr,
                 // BoolLiteralExpr, StringIdLiteralExpr, StringLiteralExpr — no children
