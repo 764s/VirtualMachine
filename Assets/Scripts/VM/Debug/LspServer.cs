@@ -34,12 +34,35 @@ namespace FFVM.Debug
         private bool _running;
         private bool _shutdownRequested;
 
-        // --- Document store (uri → content + cached AST) ---
-        private readonly Dictionary<string, string> _documents = new Dictionary<string, string>();
-        private readonly Dictionary<string, ModuleNode> _documentAsts = new Dictionary<string, ModuleNode>();
+        // --- R1: DocumentStore — encapsulates document content, per-file AST, and merged AST caches ---
+        private readonly DocumentStore _docStore = new DocumentStore();
 
-        // --- DX4-P3: Merged (preprocessor-resolved) AST cache for cross-file symbol queries ---
-        private readonly Dictionary<string, ModuleNode> _mergedAsts = new Dictionary<string, ModuleNode>();
+        /// <summary>
+        /// R1: Encapsulates document content and AST caches.
+        /// Provides a single point for Open/Change/Close/Get operations,
+        /// replacing scattered dictionary accesses across handlers.
+        /// </summary>
+        private class DocumentStore
+        {
+            private readonly Dictionary<string, string> _content = new Dictionary<string, string>();
+            private readonly Dictionary<string, ModuleNode> _asts = new Dictionary<string, ModuleNode>();
+            private readonly Dictionary<string, ModuleNode> _mergedAsts = new Dictionary<string, ModuleNode>();
+
+            public void SetContent(string uri, string text) => _content[uri] = text ?? "";
+            public bool TryGetContent(string uri, out string content) => _content.TryGetValue(uri, out content);
+            public bool HasContent(string uri) => _content.ContainsKey(uri);
+
+            public void SetAst(string uri, ModuleNode ast) => _asts[uri] = ast;
+            public bool HasAst(string uri) => _asts.ContainsKey(uri);
+            public ModuleNode GetAst(string uri) => uri != null && _asts.TryGetValue(uri, out var ast) ? ast : null;
+
+            public void SetMergedAst(string uri, ModuleNode ast) => _mergedAsts[uri] = ast;
+            public bool HasMergedAst(string uri) => _mergedAsts.ContainsKey(uri);
+            public ModuleNode GetMergedAst(string uri) => uri != null && _mergedAsts.TryGetValue(uri, out var ast) ? ast : null;
+
+            /// <summary>Remove all data for a closed document.</summary>
+            public void Remove(string uri) { _content.Remove(uri); _asts.Remove(uri); _mergedAsts.Remove(uri); }
+        }
 
         // --- Syscall table for compilation (stub, no real syscalls needed for diagnostics) ---
         private readonly Dictionary<string, int> _defaultSyscalls;
@@ -681,7 +704,7 @@ namespace FFVM.Debug
             string text = textDocument.GetString("text");
             if (uri == null) return;
 
-            _documents[uri] = text ?? "";
+            _docStore.SetContent(uri, text ?? "");
             CompileAndPublishDiagnostics(uri, text ?? "");
         }
 
@@ -702,7 +725,7 @@ namespace FFVM.Debug
                 if (lastChange != null)
                 {
                     string text = lastChange.GetString("text");
-                    _documents[uri] = text ?? "";
+                    _docStore.SetContent(uri, text ?? "");
                     CompileAndPublishDiagnostics(uri, text ?? "");
                 }
             }
@@ -722,9 +745,7 @@ namespace FFVM.Debug
             string uri = textDocument.GetString("uri");
             if (uri == null) return;
 
-            _documents.Remove(uri);
-            _documentAsts.Remove(uri);
-            _mergedAsts.Remove(uri);
+            _docStore.Remove(uri);
             // Clear diagnostics for the closed file
             PublishDiagnostics(uri, new List<object>());
         }
@@ -745,9 +766,9 @@ namespace FFVM.Debug
 
                 // Cache AST if parse succeeded (keep old AST on failure for continued symbol support)
                 if (parseErrors == null || parseErrors.Count == 0)
-                    _documentAsts[uri] = ast;
-                else if (!_documentAsts.ContainsKey(uri) && ast != null)
-                    _documentAsts[uri] = ast; // better than nothing on first open
+                    _docStore.SetAst(uri, ast);
+                else if (!_docStore.HasAst(uri) && ast != null)
+                    _docStore.SetAst(uri, ast); // better than nothing on first open
 
                 // DX4-P3: Build merged AST via Preprocessor for cross-file symbol queries.
                 // This includes all symbols from included files with OriginFile set.
@@ -758,15 +779,16 @@ namespace FFVM.Debug
                     var preprocessor = new Preprocessor(_fileResolver);
                     var mergedAst = preprocessor.Resolve(source, mergeFilePath ?? "main", out var ppErrors);
                     if (ppErrors == null || ppErrors.Count == 0)
-                        _mergedAsts[uri] = mergedAst;
-                    else if (!_mergedAsts.ContainsKey(uri) && mergedAst != null)
-                        _mergedAsts[uri] = mergedAst;
+                        _docStore.SetMergedAst(uri, mergedAst);
+                    else if (!_docStore.HasMergedAst(uri) && mergedAst != null)
+                        _docStore.SetMergedAst(uri, mergedAst);
                 }
                 else
                 {
                     // No file resolver — merged AST is same as per-file AST
-                    if (_documentAsts.ContainsKey(uri))
-                        _mergedAsts[uri] = _documentAsts[uri];
+                    var cachedAst = _docStore.GetAst(uri);
+                    if (cachedAst != null)
+                        _docStore.SetMergedAst(uri, cachedAst);
                 }
 
                 // DX4-P0: Compile for diagnostics with workspace file resolver support.
@@ -914,9 +936,7 @@ namespace FFVM.Debug
         /// </summary>
         private ModuleNode GetCachedAst(string uri)
         {
-            if (uri != null && _documentAsts.TryGetValue(uri, out var ast))
-                return ast;
-            return null;
+            return _docStore.GetAst(uri);
         }
 
         /// <summary>
@@ -926,9 +946,7 @@ namespace FFVM.Debug
         /// </summary>
         private ModuleNode GetMergedAst(string uri)
         {
-            if (uri != null && _mergedAsts.TryGetValue(uri, out var merged))
-                return merged;
-            return GetCachedAst(uri);
+            return _docStore.GetMergedAst(uri) ?? _docStore.GetAst(uri);
         }
 
         /// <summary>
@@ -1431,41 +1449,68 @@ namespace FFVM.Debug
             return $"```ffvm\n{sig}\n```\n---\n{en.DocComment}";
         }
 
+        // --- symbol resolution helpers ---
+
+        /// <summary>
+        /// R1: Common dual-AST symbol resolution. Finds the symbol at a cursor position
+        /// using per-file AST first (for include declarations), then falls back to merged AST
+        /// for cross-file struct/enum type annotations and enum members.
+        ///
+        /// Returns (perFileTarget, resolvedTarget, mergedAst):
+        ///  - perFileTarget: result from per-file AST (null if not found; includes IncludeFile)
+        ///  - resolvedTarget: result after merged-AST fallback (may differ from perFileTarget)
+        ///  - mergedAst: the merged AST for this document
+        ///
+        /// Callers should check perFileTarget for IncludeFile before using resolvedTarget.
+        /// </summary>
+        private (SymbolAtPosition? perFileTarget, SymbolAtPosition? resolvedTarget, ModuleNode mergedAst)
+            ResolveSymbolDualAst(string uri, int astLine, int astCol)
+        {
+            var ast = GetCachedAst(uri);
+            if (ast == null) return (null, null, null);
+
+            // US: Check include declarations using per-file AST first (merged AST strips Imports)
+            var perFileTarget = FindSymbolAtPosition(ast, astLine, astCol);
+
+            // Get merged AST for cross-file resolution
+            var mergedAst = GetMergedAst(uri);
+
+            // Re-identify using merged AST if per-file AST couldn't resolve the symbol
+            // correctly (e.g. cross-file struct/enum type annotations or enum members)
+            var resolvedTarget = perFileTarget;
+            if (resolvedTarget == null || resolvedTarget.Value.kind == SymbolKindTag.Variable
+                || (resolvedTarget.Value.kind == SymbolKindTag.StructField && resolvedTarget.Value.parentName == null))
+            {
+                var mergedTarget = FindSymbolAtPosition(mergedAst, astLine, astCol);
+                if (mergedTarget != null) resolvedTarget = mergedTarget;
+            }
+
+            return (perFileTarget, resolvedTarget, mergedAst);
+        }
+
         // --- definition ---
 
         private JsonObject HandleDefinition(JsonObject parameters)
         {
             string uri = GetDocumentUri(parameters);
-            var ast = GetCachedAst(uri);
-            if (ast == null) return null;
-
             var position = parameters?.GetObject("position");
-            if (position == null) return null;
+            if (uri == null || position == null) return null;
 
             int astLine = position.GetInt("line") + 1;
             int astCol = position.GetInt("character") + 1;
 
-            // US: Check include declarations using per-file AST first (merged AST strips Imports)
-            var target = FindSymbolAtPosition(ast, astLine, astCol);
+            // R1: Unified dual-AST symbol resolution
+            var (perFileTarget, target, mergedAst) = ResolveSymbolDualAst(uri, astLine, astCol);
 
             // DX5: Include file navigation — resolve to target file URI
-            if (target != null && target.Value.kind == SymbolKindTag.IncludeFile)
+            if (perFileTarget != null && perFileTarget.Value.kind == SymbolKindTag.IncludeFile)
             {
-                string includeUri = ResolveIncludeFileUri(uri, target.Value.name);
+                string includeUri = ResolveIncludeFileUri(uri, perFileTarget.Value.name);
                 if (includeUri != null)
                     return MakeLocation(includeUri, 1, 1, 0);
                 return null;
             }
 
-            // US: Re-identify using merged AST if per-file AST couldn't resolve the symbol
-            // correctly (e.g. cross-file struct/enum type annotations or enum members)
-            var mergedAst = GetMergedAst(uri);
-            if (target == null || target.Value.kind == SymbolKindTag.Variable
-                || (target.Value.kind == SymbolKindTag.StructField && target.Value.parentName == null))
-            {
-                var mergedTarget = FindSymbolAtPosition(mergedAst, astLine, astCol);
-                if (mergedTarget != null) target = mergedTarget;
-            }
             if (target == null) return null;
 
             // DX4-P3: Use merged AST to find definition (may be in included file)
@@ -1530,35 +1575,25 @@ namespace FFVM.Debug
         private JsonObject HandleReferences(JsonObject parameters)
         {
             string uri = GetDocumentUri(parameters);
-            var ast = GetCachedAst(uri);
-            if (ast == null) return MakeArrayResult(new List<object>());
-
             var position = parameters?.GetObject("position");
-            if (position == null) return MakeArrayResult(new List<object>());
+            if (uri == null || position == null) return MakeArrayResult(new List<object>());
 
             int astLine = position.GetInt("line") + 1;
             int astCol = position.GetInt("character") + 1;
 
-            // US: Check include declarations using per-file AST first (merged AST strips Imports)
-            var target = FindSymbolAtPosition(ast, astLine, astCol);
+            // R1: Unified dual-AST symbol resolution
+            var (perFileTarget, target, mergedAst) = ResolveSymbolDualAst(uri, astLine, astCol);
 
             // DX5: Include file references — find all includes of the same path
-            if (target != null && target.Value.kind == SymbolKindTag.IncludeFile)
+            if (perFileTarget != null && perFileTarget.Value.kind == SymbolKindTag.IncludeFile)
             {
                 var locations = new List<object>();
-                CollectIncludeReferences(ast, target.Value.name, uri, locations);
+                var ast = GetCachedAst(uri);
+                if (ast != null)
+                    CollectIncludeReferences(ast, perFileTarget.Value.name, uri, locations);
                 return MakeArrayResult(locations);
             }
 
-            // US: Re-identify using merged AST if per-file AST couldn't resolve the symbol
-            // correctly (e.g. cross-file struct/enum type annotations or enum members)
-            var mergedAst = GetMergedAst(uri);
-            if (target == null || target.Value.kind == SymbolKindTag.Variable
-                || (target.Value.kind == SymbolKindTag.StructField && target.Value.parentName == null))
-            {
-                var mergedTarget = FindSymbolAtPosition(mergedAst, astLine, astCol);
-                if (mergedTarget != null) target = mergedTarget;
-            }
             if (target == null) return MakeArrayResult(new List<object>());
 
             // DX4-P3: Use merged AST for cross-file reference collection
@@ -1578,7 +1613,7 @@ namespace FFVM.Debug
             // DX4-P3: Use merged AST for symbol lists (includes cross-file symbols)
             var mergedAst = GetMergedAst(uri);
             string source = null;
-            if (uri != null) _documents.TryGetValue(uri, out source);
+            if (uri != null) _docStore.TryGetContent(uri, out source);
 
             var position = parameters?.GetObject("position");
             if (position == null) return MakeArrayResult(new List<object>());
@@ -1783,7 +1818,7 @@ namespace FFVM.Debug
         {
             string uri = GetDocumentUri(parameters);
             string source = null;
-            if (uri != null) _documents.TryGetValue(uri, out source);
+            if (uri != null) _docStore.TryGetContent(uri, out source);
             if (source == null) return null;
 
             var position = parameters?.GetObject("position");
@@ -2975,8 +3010,9 @@ namespace FFVM.Debug
 
                 // Check if this file is open in the editor (use cached content)
                 string fileUri = PathToFileUri(filePath);
-                if (_documents.ContainsKey(fileUri))
-                    source = _documents[fileUri];
+                string cached;
+                if (_docStore.TryGetContent(fileUri, out cached))
+                    source = cached;
 
                 var ast = parser.Parse(source, out var errors);
                 if (ast == null) continue;
@@ -3104,29 +3140,17 @@ namespace FFVM.Debug
         private JsonObject HandlePrepareRename(JsonObject parameters)
         {
             string uri = GetDocumentUri(parameters);
-            var ast = GetCachedAst(uri);
-            if (ast == null) return null;
-
             var position = parameters?.GetObject("position");
-            if (position == null) return null;
+            if (uri == null || position == null) return null;
 
             int astLine = position.GetInt("line") + 1;
             int astCol = position.GetInt("character") + 1;
 
-            // US: Check include declarations using per-file AST first (merged AST strips Imports)
-            var target = FindSymbolAtPosition(ast, astLine, astCol);
+            // R1: Unified dual-AST symbol resolution
+            var (perFileTarget, target, mergedAst) = ResolveSymbolDualAst(uri, astLine, astCol);
 
             // Include files are not renamable via text rename (file system operation)
-            if (target != null && target.Value.kind == SymbolKindTag.IncludeFile) return null;
-
-            // US: Re-identify using merged AST if per-file AST couldn't resolve correctly
-            var mergedAst = GetMergedAst(uri);
-            if (target == null || target.Value.kind == SymbolKindTag.Variable
-                || (target.Value.kind == SymbolKindTag.StructField && target.Value.parentName == null))
-            {
-                var mergedTarget = FindSymbolAtPosition(mergedAst, astLine, astCol);
-                if (mergedTarget != null) target = mergedTarget;
-            }
+            if (perFileTarget != null && perFileTarget.Value.kind == SymbolKindTag.IncludeFile) return null;
             if (target == null) return null;
 
             // Find the definition location to get precise range
@@ -3134,11 +3158,10 @@ namespace FFVM.Debug
 
             // Return range at cursor position with the symbol name as placeholder
             int lspLine = position.GetInt("line");
-            int lspChar = position.GetInt("character");
 
             // Calculate the actual start of the symbol name at cursor
             int nameLen = target.Value.name.Length;
-            // Find the start column by backing up from cursor to the start of the name
+            var ast = GetCachedAst(uri);
             int nameStartCol = FindNameStartCol(ast, target.Value, astLine, astCol);
             int lspStartChar = Math.Max(0, nameStartCol - 1);
 
@@ -3205,11 +3228,8 @@ namespace FFVM.Debug
         private JsonObject HandleRename(JsonObject parameters)
         {
             string uri = GetDocumentUri(parameters);
-            var ast = GetCachedAst(uri);
-            if (ast == null) return null;
-
             var position = parameters?.GetObject("position");
-            if (position == null) return null;
+            if (uri == null || position == null) return null;
 
             string newName = parameters.GetString("newName");
             if (string.IsNullOrEmpty(newName)) return null;
@@ -3217,20 +3237,11 @@ namespace FFVM.Debug
             int astLine = position.GetInt("line") + 1;
             int astCol = position.GetInt("character") + 1;
 
-            // US: Check include declarations using per-file AST first (merged AST strips Imports)
-            var target = FindSymbolAtPosition(ast, astLine, astCol);
+            // R1: Unified dual-AST symbol resolution
+            var (perFileTarget, target, mergedAst) = ResolveSymbolDualAst(uri, astLine, astCol);
 
             // Include files are not renamable
-            if (target != null && target.Value.kind == SymbolKindTag.IncludeFile) return null;
-
-            // US: Re-identify using merged AST if per-file AST couldn't resolve correctly
-            var mergedAst = GetMergedAst(uri);
-            if (target == null || target.Value.kind == SymbolKindTag.Variable
-                || (target.Value.kind == SymbolKindTag.StructField && target.Value.parentName == null))
-            {
-                var mergedTarget = FindSymbolAtPosition(mergedAst, astLine, astCol);
-                if (mergedTarget != null) target = mergedTarget;
-            }
+            if (perFileTarget != null && perFileTarget.Value.kind == SymbolKindTag.IncludeFile) return null;
             if (target == null) return null;
 
             // Collect all reference locations
