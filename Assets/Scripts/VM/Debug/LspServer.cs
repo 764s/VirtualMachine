@@ -135,6 +135,146 @@ namespace FFVM.Debug
             {
                 return _content.Keys;
             }
+
+            /// <summary>
+            /// DX11: Migrate all cached data from oldUri to newUri after a file rename.
+            /// Moves content, AST, merged AST, and updates dependency graph edges.
+            /// </summary>
+            public void RenameUri(string oldUri, string newUri)
+            {
+                if (oldUri == null || newUri == null || oldUri == newUri) return;
+
+                // Migrate content
+                string content;
+                if (_content.TryGetValue(oldUri, out content))
+                {
+                    _content[newUri] = content;
+                    _content.Remove(oldUri);
+                }
+
+                // Migrate ASTs
+                ModuleNode ast;
+                if (_asts.TryGetValue(oldUri, out ast))
+                {
+                    _asts[newUri] = ast;
+                    _asts.Remove(oldUri);
+                }
+                ModuleNode mergedAst;
+                if (_mergedAsts.TryGetValue(oldUri, out mergedAst))
+                {
+                    _mergedAsts[newUri] = mergedAst;
+                    _mergedAsts.Remove(oldUri);
+                }
+
+                // Migrate forward dependency edges
+                HashSet<string> forwardPaths;
+                if (_includeForward.TryGetValue(oldUri, out forwardPaths))
+                {
+                    _includeForward[newUri] = forwardPaths;
+                    _includeForward.Remove(oldUri);
+
+                    // Update reverse edges: replace oldUri with newUri in each dependent set
+                    foreach (string resolvedPath in forwardPaths)
+                    {
+                        HashSet<string> dependents;
+                        if (_includeDependents.TryGetValue(resolvedPath, out dependents))
+                        {
+                            if (dependents.Remove(oldUri))
+                                dependents.Add(newUri);
+                        }
+                    }
+                }
+            }
+
+            /// <summary>
+            /// DX11: Apply LSP TextEdit list to a document's cached content.
+            /// Each edit replaces a range [startLine:startChar, endLine:endChar] with newText.
+            /// Edits are applied in reverse order (bottom-up) to preserve earlier positions.
+            /// </summary>
+            public void ApplyTextEdits(string uri, List<JsonObject> edits)
+            {
+                if (uri == null || edits == null || edits.Count == 0) return;
+                string content;
+                if (!_content.TryGetValue(uri, out content)) return;
+
+                // Sort edits in reverse order (by start position, descending)
+                var sorted = new List<JsonObject>(edits);
+                sorted.Sort((a, b) =>
+                {
+                    var ra = a.GetObject("range");
+                    var rb = b.GetObject("range");
+                    var sa = ra?.GetObject("start");
+                    var sb = rb?.GetObject("start");
+                    int lineA = sa?.GetInt("line") ?? 0;
+                    int lineB = sb?.GetInt("line") ?? 0;
+                    if (lineA != lineB) return lineB.CompareTo(lineA); // descending
+                    int charA = sa?.GetInt("character") ?? 0;
+                    int charB = sb?.GetInt("character") ?? 0;
+                    return charB.CompareTo(charA); // descending
+                });
+
+                // Split content into lines (preserve line endings for accurate reconstruction)
+                var lines = new List<string>();
+                int pos = 0;
+                while (pos < content.Length)
+                {
+                    int nlIdx = content.IndexOf('\n', pos);
+                    if (nlIdx < 0)
+                    {
+                        lines.Add(content.Substring(pos));
+                        break;
+                    }
+                    lines.Add(content.Substring(pos, nlIdx - pos + 1)); // include '\n'
+                    pos = nlIdx + 1;
+                }
+                if (content.Length == 0 || content[content.Length - 1] == '\n')
+                    lines.Add(""); // trailing empty line after final newline
+
+                foreach (var edit in sorted)
+                {
+                    var range = edit.GetObject("range");
+                    if (range == null) continue;
+                    var start = range.GetObject("start");
+                    var end = range.GetObject("end");
+                    if (start == null || end == null) continue;
+
+                    int startLine = start.GetInt("line");
+                    int startChar = start.GetInt("character");
+                    int endLine = end.GetInt("line");
+                    int endChar = end.GetInt("character");
+                    string newText = edit.GetString("newText") ?? "";
+
+                    // Clamp to valid range
+                    if (startLine < 0) startLine = 0;
+                    if (endLine < 0) endLine = 0;
+                    if (startLine >= lines.Count) startLine = lines.Count - 1;
+                    if (endLine >= lines.Count) endLine = lines.Count - 1;
+
+                    // Get the text of start line (without trailing newline) and end line
+                    string startLineText = lines[startLine].TrimEnd('\n', '\r');
+                    string endLineText = lines[endLine].TrimEnd('\n', '\r');
+                    string endLineEnding = lines[endLine].Substring(endLineText.Length);
+
+                    if (startChar > startLineText.Length) startChar = startLineText.Length;
+                    if (endChar > endLineText.Length) endChar = endLineText.Length;
+
+                    // Build replacement: prefix + newText + suffix
+                    string prefix = startLineText.Substring(0, startChar);
+                    string suffix = endLineText.Substring(endChar) + endLineEnding;
+                    string replacement = prefix + newText + suffix;
+
+                    // Replace lines[startLine..endLine] with the replacement
+                    for (int i = endLine; i > startLine; i--)
+                        lines.RemoveAt(i);
+                    lines[startLine] = replacement;
+                }
+
+                // Reconstruct content
+                var sb = new System.Text.StringBuilder();
+                for (int i = 0; i < lines.Count; i++)
+                    sb.Append(lines[i]);
+                _content[uri] = sb.ToString();
+            }
         }
 
         /// <summary>
@@ -3070,6 +3210,9 @@ namespace FFVM.Debug
             // Collect all text edits grouped by file URI
             var editsByUri = new Dictionary<string, List<object>>();
 
+            // DX11: Track file renames for post-response state update
+            var fileRenames = new List<(string oldUri, string newUri)>();
+
             foreach (var item in files)
             {
                 var fileRename = item as JsonObject;
@@ -3078,6 +3221,8 @@ namespace FFVM.Debug
                 string oldUri = fileRename.GetString("oldUri");
                 string newUri = fileRename.GetString("newUri");
                 if (oldUri == null || newUri == null) continue;
+
+                fileRenames.Add((oldUri, newUri));
 
                 // Convert URIs to workspace-relative include paths (without .ffs extension)
                 string oldAbsPath = UriToPath(oldUri);
@@ -3094,15 +3239,79 @@ namespace FFVM.Debug
             }
 
             // Build WorkspaceEdit response
-            if (editsByUri.Count == 0) return new JsonObject();
+            if (editsByUri.Count == 0 && fileRenames.Count == 0) return new JsonObject();
 
-            var changes = new JsonObject();
-            foreach (var kvp in editsByUri)
-                changes.Set(kvp.Key, kvp.Value);
+            JsonObject workspaceEdit;
+            if (editsByUri.Count > 0)
+            {
+                var changes = new JsonObject();
+                foreach (var kvp in editsByUri)
+                    changes.Set(kvp.Key, kvp.Value);
 
-            var workspaceEdit = new JsonObject();
-            workspaceEdit.Set("changes", changes);
+                workspaceEdit = new JsonObject();
+                workspaceEdit.Set("changes", changes);
+            }
+            else
+            {
+                workspaceEdit = new JsonObject();
+            }
+
+            // DX11: Pre-apply edits + rename state so subsequent operations see updated content.
+            // VSCode will apply the WorkspaceEdit and may send didChange later, but we need
+            // consistency NOW for the next willRenameFiles call.
+            ApplyRenameState(editsByUri, fileRenames);
+
             return workspaceEdit;
+        }
+
+        /// <summary>
+        /// DX11: Pre-apply WorkspaceEdit results to DocumentStore so that subsequent
+        /// willRenameFiles requests (consecutive rename scenario) see updated content.
+        /// Steps: 1) Apply text edits to open documents, 2) Migrate URI keys for renamed files,
+        /// 3) Recompile affected files to update AST + dependency graph.
+        /// </summary>
+        private void ApplyRenameState(Dictionary<string, List<object>> editsByUri, List<(string oldUri, string newUri)> fileRenames)
+        {
+            // Step 1: Apply text edits to documents that are open in the editor.
+            // For documents not in _docStore (not opened), the edits will be applied
+            // by VSCode and reflected when the file is opened or via didChangeWatchedFiles.
+            foreach (var kvp in editsByUri)
+            {
+                string uri = kvp.Key;
+                if (!_docStore.HasContent(uri)) continue;
+
+                var edits = new List<JsonObject>();
+                foreach (var edit in kvp.Value)
+                {
+                    var jsonEdit = edit as JsonObject;
+                    if (jsonEdit != null)
+                        edits.Add(jsonEdit);
+                }
+                _docStore.ApplyTextEdits(uri, edits);
+            }
+
+            // Step 2: Migrate URI keys for renamed files.
+            foreach (var (oldUri, newUri) in fileRenames)
+            {
+                if (_docStore.HasContent(oldUri))
+                    _docStore.RenameUri(oldUri, newUri);
+            }
+
+            // Step 3: Recompile documents that had text edits applied, to refresh AST + dependency graph.
+            foreach (var kvp in editsByUri)
+            {
+                string uri = kvp.Key;
+                // If this URI was renamed, use the new URI
+                string effectiveUri = uri;
+                foreach (var (oldUri, newUri) in fileRenames)
+                {
+                    if (uri == oldUri) { effectiveUri = newUri; break; }
+                }
+
+                string content;
+                if (_docStore.TryGetContent(effectiveUri, out content))
+                    CompileAndPublishDiagnostics(effectiveUri, content);
+            }
         }
 
         /// <summary>
