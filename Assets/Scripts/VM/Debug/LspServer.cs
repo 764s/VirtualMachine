@@ -20,7 +20,8 @@ namespace FFVM.Debug
     ///                   textDocument/rename, textDocument/prepareRename,
     ///                   textDocument/semanticTokens/full,
     ///                   workspace/willRenameFiles
-    ///   Notifications:  initialized, exit, textDocument/didOpen, textDocument/didChange
+    ///   Notifications:  initialized, exit, textDocument/didOpen, textDocument/didChange,
+    ///                   textDocument/didClose, workspace/didChangeWatchedFiles
     ///   Server→Client:  textDocument/publishDiagnostics
     ///
     /// Compile-on-change: every didOpen/didChange triggers full recompile → diagnostics push + AST cache.
@@ -48,6 +49,17 @@ namespace FFVM.Debug
             private readonly Dictionary<string, ModuleNode> _asts = new Dictionary<string, ModuleNode>();
             private readonly Dictionary<string, ModuleNode> _mergedAsts = new Dictionary<string, ModuleNode>();
 
+            // DX10: Include dependency graph.
+            // _includeDependents: resolvedFilePath → set of URIs that include this file.
+            // When a file changes, look up its resolved path to find all dependents that need re-diagnosis.
+            private readonly Dictionary<string, HashSet<string>> _includeDependents
+                = new Dictionary<string, HashSet<string>>(StringComparer.OrdinalIgnoreCase);
+
+            // DX10: Forward dependency: URI → set of resolved file paths it includes.
+            // Used to remove stale edges when imports change.
+            private readonly Dictionary<string, HashSet<string>> _includeForward
+                = new Dictionary<string, HashSet<string>>(StringComparer.OrdinalIgnoreCase);
+
             public void SetContent(string uri, string text) => _content[uri] = text ?? "";
             public bool TryGetContent(string uri, out string content) => _content.TryGetValue(uri, out content);
             public bool HasContent(string uri) => _content.ContainsKey(uri);
@@ -62,6 +74,105 @@ namespace FFVM.Debug
 
             /// <summary>Remove all data for a closed document.</summary>
             public void Remove(string uri) { _content.Remove(uri); _asts.Remove(uri); _mergedAsts.Remove(uri); }
+
+            /// <summary>
+            /// DX10: Update the dependency graph for a file.
+            /// Removes old edges for this URI, then adds new edges based on resolved import paths.
+            /// </summary>
+            public void UpdateDependencies(string uri, List<string> resolvedImportPaths)
+            {
+                // Remove old forward edges
+                HashSet<string> oldImports;
+                if (_includeForward.TryGetValue(uri, out oldImports))
+                {
+                    foreach (string oldPath in oldImports)
+                    {
+                        HashSet<string> dependents;
+                        if (_includeDependents.TryGetValue(oldPath, out dependents))
+                        {
+                            dependents.Remove(uri);
+                            if (dependents.Count == 0)
+                                _includeDependents.Remove(oldPath);
+                        }
+                    }
+                }
+
+                // Set new forward edges
+                var newImports = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                if (resolvedImportPaths != null)
+                {
+                    foreach (string path in resolvedImportPaths)
+                    {
+                        newImports.Add(path);
+                        HashSet<string> dependents;
+                        if (!_includeDependents.TryGetValue(path, out dependents))
+                        {
+                            dependents = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                            _includeDependents[path] = dependents;
+                        }
+                        dependents.Add(uri);
+                    }
+                }
+                _includeForward[uri] = newImports;
+            }
+
+            /// <summary>
+            /// DX10: Get all URIs that depend on (include) the given resolved file path.
+            /// Returns empty set if no dependents.
+            /// </summary>
+            public HashSet<string> GetDependents(string resolvedFilePath)
+            {
+                HashSet<string> result;
+                if (resolvedFilePath != null && _includeDependents.TryGetValue(resolvedFilePath, out result))
+                    return result;
+                return new HashSet<string>();
+            }
+
+            /// <summary>
+            /// DX10: Get all open document URIs (for workspace-wide operations).
+            /// </summary>
+            public IEnumerable<string> GetAllOpenUris()
+            {
+                return _content.Keys;
+            }
+        }
+
+        /// <summary>
+        /// DX10: File resolver overlay that checks open document contents first,
+        /// then falls back to the underlying disk-based resolver.
+        /// This enables cascade recompile to see in-memory changes to included files.
+        /// </summary>
+        private class OverlayFileResolver : IFileResolver
+        {
+            private readonly IFileResolver _base;
+            private readonly DocumentStore _docStore;
+            private readonly string _rootPath;
+
+            public OverlayFileResolver(IFileResolver baseResolver, DocumentStore docStore, string rootPath)
+            {
+                _base = baseResolver;
+                _docStore = docStore;
+                _rootPath = rootPath;
+            }
+
+            public string ReadFile(string path)
+            {
+                // Check if any open document matches this resolved path
+                string resolved = _base.ResolveFilePath(path);
+                if (resolved != null)
+                {
+                    string uri = PathToFileUri(resolved);
+                    string content;
+                    if (_docStore.TryGetContent(uri, out content))
+                        return content;
+                }
+                return _base.ReadFile(path);
+            }
+
+            public string ResolveFilePath(string path)
+            {
+                return _base.ResolveFilePath(path);
+            }
         }
 
         // --- Syscall table for compilation (stub, no real syscalls needed for diagnostics) ---
@@ -292,6 +403,9 @@ namespace FFVM.Debug
                     break;
                 case "textDocument/didClose":
                     HandleDidClose(parameters);
+                    break;
+                case "workspace/didChangeWatchedFiles":
+                    HandleDidChangeWatchedFiles(parameters);
                     break;
                 // Ignore unknown notifications
             }
@@ -706,6 +820,14 @@ namespace FFVM.Debug
 
             _docStore.SetContent(uri, text ?? "");
             CompileAndPublishDiagnostics(uri, text ?? "");
+
+            // DX10: Cascade — recompile open files that include this file
+            string filePath = UriToPath(uri);
+            if (filePath != null)
+            {
+                var visited = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { uri };
+                RecompileDependents(filePath, visited);
+            }
         }
 
         private void HandleDidChange(JsonObject parameters)
@@ -727,6 +849,14 @@ namespace FFVM.Debug
                     string text = lastChange.GetString("text");
                     _docStore.SetContent(uri, text ?? "");
                     CompileAndPublishDiagnostics(uri, text ?? "");
+
+                    // DX10: Cascade — recompile open files that include this file
+                    string filePath = UriToPath(uri);
+                    if (filePath != null)
+                    {
+                        var visited = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { uri };
+                        RecompileDependents(filePath, visited);
+                    }
                 }
             }
         }
@@ -750,6 +880,40 @@ namespace FFVM.Debug
             PublishDiagnostics(uri, new List<object>());
         }
 
+        /// <summary>
+        /// DX10: Handle workspace/didChangeWatchedFiles notification.
+        /// When .ffs files change on disk (external edit, git checkout, etc.),
+        /// recompile open files that include the changed files.
+        /// FileChangeType: 1=Created, 2=Changed, 3=Deleted.
+        /// </summary>
+        private void HandleDidChangeWatchedFiles(JsonObject parameters)
+        {
+            if (parameters == null || _fileResolver == null) return;
+            var fileChanges = parameters.GetArray("changes");
+            if (fileChanges == null || fileChanges.Count == 0) return;
+
+            var visited = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+            foreach (var change in fileChanges)
+            {
+                var changeObj = change as JsonObject;
+                if (changeObj == null) continue;
+                string changedUri = changeObj.GetString("uri");
+                if (changedUri == null) continue;
+
+                string changedPath = UriToPath(changedUri);
+                if (changedPath == null) continue;
+
+                // If this file is open, the editor already sent didChange — skip.
+                // Only cascade to dependents of un-opened files changing on disk.
+                if (!_docStore.HasContent(changedUri))
+                {
+                    // Recompile open files that depend on this changed disk file
+                    RecompileDependents(changedPath, visited);
+                }
+            }
+        }
+
         // ============================================================
         // Diagnostics (LSP3)
         // ============================================================
@@ -770,18 +934,27 @@ namespace FFVM.Debug
                 else if (!_docStore.HasAst(uri) && ast != null)
                     _docStore.SetAst(uri, ast); // better than nothing on first open
 
+                // DX10: Build overlay resolver so Preprocessor and Compiler see open-doc content for includes.
+                IFileResolver effectiveResolver = _fileResolver;
+                if (_fileResolver != null)
+                    effectiveResolver = new OverlayFileResolver(_fileResolver, _docStore, _rootPath);
+
                 // DX4-P3: Build merged AST via Preprocessor for cross-file symbol queries.
                 // This includes all symbols from included files with OriginFile set.
                 if (_fileResolver != null)
                 {
                     // Use absolute path so OriginFile values are consistent with resolved include paths
                     string mergeFilePath = UriToPath(uri);
-                    var preprocessor = new Preprocessor(_fileResolver);
+                    var preprocessor = new Preprocessor(effectiveResolver);
                     var mergedAst = preprocessor.Resolve(source, mergeFilePath ?? "main", out var ppErrors);
                     if (ppErrors == null || ppErrors.Count == 0)
                         _docStore.SetMergedAst(uri, mergedAst);
                     else if (!_docStore.HasMergedAst(uri) && mergedAst != null)
                         _docStore.SetMergedAst(uri, mergedAst);
+
+                    // DX10: Update dependency graph using ALL transitively resolved file paths.
+                    // This ensures that editing a deeply-included file cascades to all open dependents.
+                    _docStore.UpdateDependencies(uri, preprocessor.ResolvedFilePaths);
                 }
                 else
                 {
@@ -798,7 +971,7 @@ namespace FFVM.Debug
                 var compiler = new BytecodeCompiler();
                 string filePath = _rootPath != null ? UriToFilePath(uri, _rootPath) : null;
                 var result = compiler.Compile(source, null, _defaultSyscalls, null,
-                    _fileResolver, filePath, null, _projectCompileOptions);
+                    effectiveResolver, filePath, null, _projectCompileOptions);
 
                 if (!result.Success && result.Errors != null)
                 {
@@ -829,6 +1002,33 @@ namespace FFVM.Debug
             }
 
             PublishDiagnostics(uri, diagnostics);
+        }
+
+        /// <summary>
+        /// DX10: Recompile all open documents that depend on the given resolved file path.
+        /// Called after a file changes to propagate diagnostics to files that include it.
+        /// Uses a visited set to prevent infinite recursion in diamond/cyclic include chains.
+        /// </summary>
+        private void RecompileDependents(string resolvedFilePath, HashSet<string> visited)
+        {
+            if (resolvedFilePath == null) return;
+            // Snapshot: CompileAndPublishDiagnostics may modify the dependency graph during iteration
+            var dependents = new List<string>(_docStore.GetDependents(resolvedFilePath));
+            foreach (string depUri in dependents)
+            {
+                if (visited.Contains(depUri)) continue;
+                visited.Add(depUri);
+
+                string content;
+                if (_docStore.TryGetContent(depUri, out content))
+                {
+                    CompileAndPublishDiagnostics(depUri, content);
+                    // Recurse: this file's own dependents may also need updating
+                    string depPath = UriToPath(depUri);
+                    if (depPath != null)
+                        RecompileDependents(depPath, visited);
+                }
+            }
         }
 
         /// <summary>
