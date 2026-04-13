@@ -227,7 +227,7 @@ namespace FFVM.Debug
                     lines.Add(content.Substring(pos, nlIdx - pos + 1)); // include '\n'
                     pos = nlIdx + 1;
                 }
-                if (content.Length == 0 || content[content.Length - 1] == '\n')
+                if (content.Length > 0 && content[content.Length - 1] == '\n')
                     lines.Add(""); // trailing empty line after final newline
 
                 foreach (var edit in sorted)
