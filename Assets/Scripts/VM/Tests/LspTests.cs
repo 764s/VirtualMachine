@@ -5172,6 +5172,255 @@ public static class LspTests
                 "DX8-08c: untagged error not filtered");
         }
 
+        // ============================================================
+        // DX9: Semantic token coloring improvements
+        // ============================================================
+
+        // DX9-01: 'external' keyword gets keyword token (type=9)
+        {
+            string source = "external func SetPos(x: int, y: int): int";
+            var session = new LspBatchSession();
+            session.AddInitialize();
+            session.AddInitialized();
+            session.AddDidOpen("file:///dx9ext.ffs", source);
+            session.AddSemanticTokensFull("file:///dx9ext.ffs");
+            session.AddShutdown();
+            session.AddExit();
+            session.Run();
+
+            session.ExpectResponse(0);
+            var semResp = session.ExpectResponse(1);
+            var data = semResp?.GetObject("result")?.GetArray("data");
+            Assert(data != null && data.Count > 0, "DX9-01a: semantic tokens has data");
+            // First token should be 'external' keyword (type=9)
+            bool hasKeyword = false;
+            if (data != null)
+            {
+                for (int i = 0; i + 4 < data.Count; i += 5)
+                {
+                    int tokenType = Convert.ToInt32(data[i + 3]);
+                    if (tokenType == 9) { hasKeyword = true; break; }
+                }
+            }
+            Assert(hasKeyword, "DX9-01b: semantic tokens include keyword token for 'external'");
+        }
+
+        // DX9-02: parameter names get parameter token (type=7)
+        {
+            string source = "func add(a: int, b: int): int {\n  return a + b\n}";
+            var session = new LspBatchSession();
+            session.AddInitialize();
+            session.AddInitialized();
+            session.AddDidOpen("file:///dx9param.ffs", source);
+            session.AddSemanticTokensFull("file:///dx9param.ffs");
+            session.AddShutdown();
+            session.AddExit();
+            session.Run();
+
+            session.ExpectResponse(0);
+            var semResp = session.ExpectResponse(1);
+            var data = semResp?.GetObject("result")?.GetArray("data");
+            Assert(data != null && data.Count > 0, "DX9-02a: semantic tokens has data");
+            int paramCount = 0;
+            if (data != null)
+            {
+                for (int i = 0; i + 4 < data.Count; i += 5)
+                {
+                    int tokenType = Convert.ToInt32(data[i + 3]);
+                    if (tokenType == 7) paramCount++;
+                }
+            }
+            // Should have 2 parameter tokens: 'a' and 'b' in function definition
+            Assert(paramCount == 2, $"DX9-02b: 2 parameter tokens (a, b), got {paramCount}");
+        }
+
+        // DX9-03: local variable declarations get variable token (type=5)
+        {
+            string source = "func entry() {\n  var x: int = 10\n  const y: int = 20\n}";
+            var session = new LspBatchSession();
+            session.AddInitialize();
+            session.AddInitialized();
+            session.AddDidOpen("file:///dx9var.ffs", source);
+            session.AddSemanticTokensFull("file:///dx9var.ffs");
+            session.AddShutdown();
+            session.AddExit();
+            session.Run();
+
+            session.ExpectResponse(0);
+            var semResp = session.ExpectResponse(1);
+            var data = semResp?.GetObject("result")?.GetArray("data");
+            Assert(data != null && data.Count > 0, "DX9-03a: semantic tokens has data");
+            int varCount = 0;
+            if (data != null)
+            {
+                for (int i = 0; i + 4 < data.Count; i += 5)
+                {
+                    int tokenType = Convert.ToInt32(data[i + 3]);
+                    if (tokenType == 5) varCount++;
+                }
+            }
+            // Should have 2 variable tokens: 'x' and 'y' declarations
+            Assert(varCount == 2, $"DX9-03b: 2 variable tokens (x, y decl), got {varCount}");
+        }
+
+        // DX9-04: module-level variable declarations get variable token (type=5)
+        {
+            string source = "var g: int = 42\nconst PI: int = 3\nfunc entry() {\n  var x: int = g + PI\n}";
+            var session = new LspBatchSession();
+            session.AddInitialize();
+            session.AddInitialized();
+            session.AddDidOpen("file:///dx9mod.ffs", source);
+            session.AddSemanticTokensFull("file:///dx9mod.ffs");
+            session.AddShutdown();
+            session.AddExit();
+            session.Run();
+
+            session.ExpectResponse(0);
+            var semResp = session.ExpectResponse(1);
+            var data = semResp?.GetObject("result")?.GetArray("data");
+            Assert(data != null && data.Count > 0, "DX9-04a: semantic tokens has data");
+            int varCount = 0;
+            if (data != null)
+            {
+                for (int i = 0; i + 4 < data.Count; i += 5)
+                {
+                    int tokenType = Convert.ToInt32(data[i + 3]);
+                    if (tokenType == 5) varCount++;
+                }
+            }
+            // g(decl) + PI(decl) + x(decl) + g(ref) + PI(ref) = 5 variable tokens
+            Assert(varCount == 5, $"DX9-04b: 5 variable tokens (g,PI decls + x decl + g,PI refs), got {varCount}");
+        }
+
+        // DX9-05: variable references in expressions (identifier → variable token)
+        {
+            string source = "func calc(n: int): int {\n  var result: int = n * 2\n  return result\n}";
+            var session = new LspBatchSession();
+            session.AddInitialize();
+            session.AddInitialized();
+            session.AddDidOpen("file:///dx9ref.ffs", source);
+            session.AddSemanticTokensFull("file:///dx9ref.ffs");
+            session.AddShutdown();
+            session.AddExit();
+            session.Run();
+
+            session.ExpectResponse(0);
+            var semResp = session.ExpectResponse(1);
+            var data = semResp?.GetObject("result")?.GetArray("data");
+            Assert(data != null && data.Count > 0, "DX9-05a: semantic tokens has data");
+            int varCount = 0;
+            int paramCount = 0;
+            if (data != null)
+            {
+                for (int i = 0; i + 4 < data.Count; i += 5)
+                {
+                    int tokenType = Convert.ToInt32(data[i + 3]);
+                    if (tokenType == 5) varCount++;
+                    if (tokenType == 7) paramCount++;
+                }
+            }
+            // param: n(decl)=1, var: result(decl)=1 + n(ref in expr)=1 + result(ref in return)=1 = 3
+            Assert(paramCount == 1, $"DX9-05b: 1 parameter token (n), got {paramCount}");
+            Assert(varCount == 3, $"DX9-05c: 3 variable tokens (result decl + n ref + result ref), got {varCount}");
+        }
+
+        // DX9-06: dot-access target gets variable token + field gets property token
+        {
+            string source = "struct Vec2 { x: int; y: int }\nfunc entry() {\n  var v: Vec2 = Vec2 { x: 1, y: 2 }\n  var a: int = v.x\n}";
+            var session = new LspBatchSession();
+            session.AddInitialize();
+            session.AddInitialized();
+            session.AddDidOpen("file:///dx9dot.ffs", source);
+            session.AddSemanticTokensFull("file:///dx9dot.ffs");
+            session.AddShutdown();
+            session.AddExit();
+            session.Run();
+
+            session.ExpectResponse(0);
+            var semResp = session.ExpectResponse(1);
+            var data = semResp?.GetObject("result")?.GetArray("data");
+            Assert(data != null && data.Count > 0, "DX9-06a: semantic tokens has data");
+            int varCount = 0;
+            int propCount = 0;
+            if (data != null)
+            {
+                for (int i = 0; i + 4 < data.Count; i += 5)
+                {
+                    int tokenType = Convert.ToInt32(data[i + 3]);
+                    if (tokenType == 5) varCount++;
+                    if (tokenType == 4) propCount++;
+                }
+            }
+            // var tokens: v(decl) + a(decl) + v(ref in v.x) = 3
+            Assert(varCount == 3, $"DX9-06b: 3 variable tokens (v decl, a decl, v ref), got {varCount}");
+            // property tokens: x(decl) + y(decl) + x(access in v.x) = 3
+            Assert(propCount >= 3, $"DX9-06c: ≥3 property tokens (field decls + access), got {propCount}");
+        }
+
+        // DX9-07: chained dot access (a.b.c) — all parts colored
+        {
+            string source = "struct Inner { val: int }\nstruct Outer { child: Inner }\nfunc entry() {\n  var o: Outer = Outer { child: Inner { val: 5 } }\n  var r: int = o.child.val\n}";
+            var session = new LspBatchSession();
+            session.AddInitialize();
+            session.AddInitialized();
+            session.AddDidOpen("file:///dx9chain.ffs", source);
+            session.AddSemanticTokensFull("file:///dx9chain.ffs");
+            session.AddShutdown();
+            session.AddExit();
+            session.Run();
+
+            session.ExpectResponse(0);
+            var semResp = session.ExpectResponse(1);
+            var data = semResp?.GetObject("result")?.GetArray("data");
+            Assert(data != null && data.Count > 0, "DX9-07a: semantic tokens has data");
+            int varCount = 0;
+            int propCount = 0;
+            if (data != null)
+            {
+                for (int i = 0; i + 4 < data.Count; i += 5)
+                {
+                    int tokenType = Convert.ToInt32(data[i + 3]);
+                    if (tokenType == 5) varCount++;
+                    if (tokenType == 4) propCount++;
+                }
+            }
+            // var tokens: o(decl) + r(decl) + o(ref in chain) = 3
+            Assert(varCount == 3, $"DX9-07b: 3 variable tokens (o decl, r decl, o ref), got {varCount}");
+            // property tokens: val(decl) + child(decl) + child(access) + val(access) = 4
+            Assert(propCount >= 4, $"DX9-07c: ≥4 property tokens (2 field decls + 2 field accesses), got {propCount}");
+        }
+
+        // DX9-08: external func parameter names also get parameter token
+        {
+            string source = "external func Move(dx: int, dy: int): int";
+            var session = new LspBatchSession();
+            session.AddInitialize();
+            session.AddInitialized();
+            session.AddDidOpen("file:///dx9extparam.ffs", source);
+            session.AddSemanticTokensFull("file:///dx9extparam.ffs");
+            session.AddShutdown();
+            session.AddExit();
+            session.Run();
+
+            session.ExpectResponse(0);
+            var semResp = session.ExpectResponse(1);
+            var data = semResp?.GetObject("result")?.GetArray("data");
+            Assert(data != null && data.Count > 0, "DX9-08a: semantic tokens has data");
+            int keywordCount = 0;
+            int paramCount = 0;
+            if (data != null)
+            {
+                for (int i = 0; i + 4 < data.Count; i += 5)
+                {
+                    int tokenType = Convert.ToInt32(data[i + 3]);
+                    if (tokenType == 9) keywordCount++;
+                    if (tokenType == 7) paramCount++;
+                }
+            }
+            Assert(keywordCount == 1, $"DX9-08b: 1 keyword token (external), got {keywordCount}");
+            Assert(paramCount == 2, $"DX9-08c: 2 parameter tokens (dx, dy), got {paramCount}");
+        }
+
         Debug.Log($"\n===== LspTests: {passed} passed, {failed} failed =====");
     }
 
