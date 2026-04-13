@@ -872,10 +872,10 @@ Gate 3: Unity Editor 内嵌 DAP（可选）             ← DBG7 Phase C
 | **R1** | LSP 架构重构（AstWalker + 双 AST 统一 + DocumentStore） | ✅ 完成 | AstWalker 基类统一 13 组遍历三元组 + ResolveSymbolDualAst 统一双 AST 符号解析 + DocumentStore 封装三字典。4100→3780 行（−320 行，−8%），纯重构无功能变更，2113 测试全通过 | E003 ✅ |
 | **E004** | 模块级符号导航（go-to-def / find-refs / hover / rename） | ✅ 完成 | FindSymbolAtPosition 扫描 ModuleVariables（初始化器 + 类型注解 + 变量名）+ FindSymbolInExpr null func 守护 + FindDefinitionLocation 模块变量 + fallback + CollectReferencesWithOrigin 模块变量初始化器扫描 + CollectEnumIdentRefs 枚举类型引用。E004-01~10（17 asserts）全通过，2130 测试总计 | R1 ✅ |
 | **DX10** | 依赖图 + 全项目诊断 | ✅ 完成 | Include 依赖图双向追踪（`_includeDependents`/`_includeForward` + `Preprocessor.ResolvedFilePaths` 传递性）+ `OverlayFileResolver` 内存内容可见 + `RecompileDependents` 级联 + `workspace/didChangeWatchedFiles` 磁盘变更。DX10-01~08 全通过（14 asserts），2127 测试总计 | E004 ✅ |
-| **DX11** | VFS + Rename 状态更新 | ⚪ | 统一文件内容提供器 + rename 后缓存/URI/依赖图更新 → 修复连续重命名。讨论来源 → [D_LspArchitecture.md](../Discussion/D_LspArchitecture.md) | DX10 ✅ |
-| **DX12** | 后台编译调度 | ⚪ | debounce + 取消机制 + 编译结果缓存。讨论来源 → [D_LspArchitecture.md](../Discussion/D_LspArchitecture.md) | DX10 ✅ |
+| **DX11** | VFS + Rename 状态更新 | 🟡 | 统一文件内容提供器 + rename 后缓存/URI/依赖图更新 → 修复连续重命名。讨论来源 → [D_LspArchitecture.md](../Discussion/D_LspArchitecture.md) | DX10 ✅ |
+| **DX12** | 后台编译调度 | ⚪ | debounce + 取消机制 + 编译结果缓存。讨论来源 → [D_LspArchitecture.md](../Discussion/D_LspArchitecture.md) | DX11 🟡 |
 
-> Lang-18 ✅ 完成。DX4-P0 ✅ 完成。DX4-P1 ✅ 完成。DX4-P2 ✅ 完成。DX4-P3 ✅ 完成。DX4-P4 ✅ 完成。DX5 ✅ 完成。DX6 ✅ 完成。DX7 ✅ 完成。DX8 ✅ 完成。DX9 ✅ 完成。E003 ✅ 完成。R1 ✅ 完成。E004 ✅ 完成。DX10 ✅ 完成。2127 测试总计（501 LSP）。DX11~DX12 远期待激活。
+> Lang-18 ✅ 完成。DX4-P0 ✅ 完成。DX4-P1 ✅ 完成。DX4-P2 ✅ 完成。DX4-P3 ✅ 完成。DX4-P4 ✅ 完成。DX5 ✅ 完成。DX6 ✅ 完成。DX7 ✅ 完成。DX8 ✅ 完成。DX9 ✅ 完成。E003 ✅ 完成。R1 ✅ 完成。E004 ✅ 完成。DX10 ✅ 完成。2127 测试总计（501 LSP）。DX11 🟡 可执行（前置 DX10 ✅ 已满足）。DX12 远期待激活（DX11 完成后开始）。
 
 #### 宿主集成侧（C 区间 — 生产必经路径）
 
