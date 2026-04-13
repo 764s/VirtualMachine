@@ -1,6 +1,6 @@
 # LSP 架构演进：全项目诊断、状态管理与增量更新
 
-> **状态**：🔨 部分实施（DX10 ✅ 完成，DX11 🟡 可执行，DX12 ⚪ 待 DX11 完成后开始）
+> **状态**：🔨 部分实施（DX10 ✅ 完成，DX11 ✅ 完成，DX12 ⚪ 待激活）
 > **来源**：E003 — 枚举引用修复与 didClose 缺失暴露的架构性问题
 > **日期**：2026-04-13
 
@@ -147,11 +147,13 @@ DX8 已实现 `IsCrossFileError` 过滤跨文件错误，这为错误隔离提�
 - ✅ `workspace/didChangeWatchedFiles` 处理外部磁盘变更
 - ✅ DX10-01~08 测试覆盖（14 asserts），2127 测试总计（501 LSP）
 
-### 阶段 2 — DX11：VFS + Rename 状态更新 🟡 可执行
+### 阶段 2 — DX11：VFS + Rename 状态更新 ✅ 已完成
 
-- 统一文件内容提供器（VFS/Overlay）
-- Rename 后状态更新（URI key 更新、缓存清除、依赖图更新）
-- 修复连续重命名问题
+- ✅ `DocumentStore.RenameUri()` — URI key 迁移（content + AST + mergedAst + 依赖图 forward/dependent edges）
+- ✅ `DocumentStore.ApplyTextEdits()` — 内存中应用 LSP TextEdit（line/char range replace，逆序防偏移）
+- ✅ `ApplyRenameState()` — `HandleWillRenameFiles` 返回后预应用编辑 + URI 迁移 + 重编译
+- ✅ 修复连续重命名问题：第二次+ rename 时 ScanWorkspaceForRenames 从 _docStore 读到最新 include 路径
+- ✅ DX11-01~05 测试覆盖（13 asserts），2140 测试总计（514 LSP）
 
 ### 阶段 3 — DX12：后台编译调度
 

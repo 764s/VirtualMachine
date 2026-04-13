@@ -18,11 +18,11 @@
 
 | # | 条件 | 状态 |
 |---|------|------|
-| ① | HandleWillRenameFiles 返回 WorkspaceEdit 后内部状态同步更新 | ⏳ |
-| ② | 连续重命名测试通过（DX11-01~02） | ⏳ |
-| ③ | ScanWorkspaceForRenames 优先使用 DocumentStore 内容 | ⏳ |
-| ④ | 依赖图在 rename 后正确更新 | ⏳ |
-| ⑤ | 全部测试通过（包含新增 DX11 测试）无回归 | ⏳ |
+| ① | HandleWillRenameFiles 返回 WorkspaceEdit 后内部状态同步更新 | ✅ |
+| ② | 连续重命名测试通过（DX11-01~02） | ✅ |
+| ③ | ScanWorkspaceForRenames 优先使用 DocumentStore 内容 | ✅ |
+| ④ | 依赖图在 rename 后正确更新 | ✅ |
+| ⑤ | 全部测试通过（包含新增 DX11 测试）无回归 | ✅ |
 
 ## 根因分析
 
@@ -56,34 +56,34 @@ HandleWillRenameFiles 返回 WorkspaceEdit 后，服务器**预应用**（pre-ap
 
 ### Phase 1: DocumentStore rename 基础设施
 
-- [ ] 1.1 DocumentStore.RenameUri(oldUri, newUri) — 迁移 content/ast/mergedAst + 更新依赖图 forward/dependent edges
-- [ ] 1.2 DocumentStore.ApplyTextEdits(uri, edits) — 在内存中应用文本编辑（line/char range replace）
+- [x] 1.1 DocumentStore.RenameUri(oldUri, newUri) — 迁移 content/ast/mergedAst + 更新依赖图 forward/dependent edges
+- [x] 1.2 DocumentStore.ApplyTextEdits(uri, edits) — 在内存中应用文本编辑（line/char range replace）
 
 ### Phase 2: HandleWillRenameFiles 状态同步
 
-- [ ] 2.1 HandleWillRenameFiles 返回 WorkspaceEdit 后，调用 ApplyRenameState
-- [ ] 2.2 ApplyRenameState: 遍历 WorkspaceEdit.changes → 对每个 URI 应用 text edits 到 DocumentStore
-- [ ] 2.3 ApplyRenameState: 对被重命名的文件执行 RenameUri(oldUri, newUri)
-- [ ] 2.4 ApplyRenameState: 触发受影响文件的重编译（CompileAndPublishDiagnostics）更新 AST + 依赖图
+- [x] 2.1 HandleWillRenameFiles 返回 WorkspaceEdit 后，调用 ApplyRenameState
+- [x] 2.2 ApplyRenameState: 遍历 WorkspaceEdit.changes → 对每个 URI 应用 text edits 到 DocumentStore
+- [x] 2.3 ApplyRenameState: 对被重命名的文件执行 RenameUri(oldUri, newUri)
+- [x] 2.4 ApplyRenameState: 触发受影响文件的重编译（CompileAndPublishDiagnostics）更新 AST + 依赖图
 
 ### Phase 3: ScanWorkspaceForRenames VFS 增强
 
-- [ ] 3.1 ScanWorkspaceForRenames 对已打开文件使用 _docStore.TryGetContent（已有，验证）
-- [ ] 3.2 确认 ScanWorkspaceForRenames 现有逻辑与状态同步后的一致性
+- [x] 3.1 ScanWorkspaceForRenames 对已打开文件使用 _docStore.TryGetContent（已有，验证通过）
+- [x] 3.2 确认 ScanWorkspaceForRenames 现有逻辑与状态同步后的一致性
 
 ### Phase 4: 测试覆盖
 
-- [ ] 4.1 DX11-01: 连续重命名 — 第二次 rename 后 include 引用仍正确更新
-- [ ] 4.2 DX11-02: Rename 后依赖图更新 — 旧路径不再有依赖者，新路径有
-- [ ] 4.3 DX11-03: Rename 后 hover/definition 等符号查询仍工作
-- [ ] 4.4 DX11-04: include-as 场景连续重命名
-- [ ] 4.5 DX11-05: rename 后 didChange 仍正确处理
+- [x] 4.1 DX11-01: 连续重命名 — 第二次 rename 后 include 引用仍正确更新（3 asserts）
+- [x] 4.2 DX11-02: Rename 后状态迁移 — hover 在新 URI 工作、旧 URI 返回 null（3 asserts）
+- [x] 4.3 DX11-03: include-as 场景连续重命名（2 asserts）
+- [x] 4.4 DX11-04: rename 后 didChange 仍正确处理（1 assert）
+- [x] 4.5 DX11-05: 三连续重命名 a→b→c→d 全部成功（4 asserts）
 
 ### Phase 5: 文档更新
 
-- [ ] 5.1 VM_Summary.md 更新 DX11 状态 ✅ + 测试总计
-- [ ] 5.2 Outlook_And_Risks.md 更新 DX11 状态
-- [ ] 5.3 D_LspArchitecture.md 更新阶段 2 状态 ✅
+- [x] 5.1 VM_Summary.md 更新 DX11 状态 ✅ + 测试总计 2140
+- [x] 5.2 Outlook_And_Risks.md 更新 DX11 状态
+- [x] 5.3 D_LspArchitecture.md 更新阶段 2 状态 ✅
 
 ## 实现细节
 
@@ -113,3 +113,13 @@ RenameUri(oldUri, newUri):
 
 现有代码已检查 `_docStore.TryGetContent(fileUri, out cached)` 优先使用已打开文件内容。
 DX11 的关键改进是确保 **rename 后内容已更新到 DocumentStore**，使下一次 scan 能读到最新内容。
+
+## 实现统计
+
+| 指标 | 值 |
+|------|-----|
+| LspServer.cs 新增代码 | ~150 行（RenameUri + ApplyTextEdits + ApplyRenameState + HandleWillRenameFiles 修改） |
+| LspTests.cs 新增代码 | ~250 行（DX11-01~05，13 asserts） |
+| 测试总计 | 2140（114 TW + 1302 Compiler + 44 Perf + 18 FFS + 51 Debug + 97 DAP + 514 LSP） |
+| LSP 测试总计 | 514（501 existing + 13 DX11） |
+| 无回归 | ✅ 全部 2140 测试通过 |
