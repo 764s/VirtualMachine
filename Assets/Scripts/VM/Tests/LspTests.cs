@@ -5664,10 +5664,7 @@ public static class LspTests
                 // Find all diagnostics published for main.ffs
                 var allDiags = session.FindAllNotifications("textDocument/publishDiagnostics");
                 // After the change to base.ffs, main.ffs should be recompiled and get diagnostics
-                // about the missing helper function
-                bool mainGotDiagAfterChange = false;
-                // We need to find a diagnostics notification for mainUri that was published AFTER
-                // the initial clean one. Walk through in order.
+                // about the missing helper function.
                 int mainDiagCount = 0;
                 bool lastMainHasErrors = false;
                 foreach (var notif in allDiags)
@@ -5765,7 +5762,7 @@ public static class LspTests
                 session.AddInitialized();
                 session.AddDidOpen(aUri, aSource);
                 session.AddDidOpen(dUri, "func shared(): int { return 1 }");
-                // Rename shared → main.ffs calls shared() but d.ffs no longer provides it
+                // Rename shared → a.ffs calls shared() but d.ffs no longer provides it
                 session.AddDidChange(dUri, "func renamed(): int { return 1 }");
                 session.AddShutdown();
                 session.AddExit();
@@ -5827,16 +5824,12 @@ public static class LspTests
                 session.Run();
 
                 var allDiags = session.FindAllNotifications("textDocument/publishDiagnostics");
-                // Count main.ffs diagnostic pushes after the a.ffs change
-                // Walk through notifications in order to find the last main.ffs diagnostics
                 int mainDiagCount = 0;
-                int aChangeIndex = -1;
-                int idx = 0;
                 bool lastMainClean = false;
                 foreach (var notif in allDiags)
                 {
                     var p = notif.GetObject("params");
-                    if (p == null) { idx++; continue; }
+                    if (p == null) continue;
                     string notifUri = p.GetString("uri");
                     if (notifUri == mainUri)
                     {
@@ -5844,7 +5837,6 @@ public static class LspTests
                         var diags = p.GetArray("diagnostics");
                         lastMainClean = diags == null || diags.Count == 0;
                     }
-                    idx++;
                 }
                 // main.ffs should be clean (no errors from a.ffs change since it no longer includes a)
                 Assert(lastMainClean, "DX10-04: main.ffs has no errors after switching from a.ffs to b.ffs");
