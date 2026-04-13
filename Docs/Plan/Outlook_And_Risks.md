@@ -866,8 +866,14 @@ Gate 3: Unity Editor 内嵌 DAP（可选）             ← DBG7 Phase C
 | **DX5** | LSP 重命名 + 语义染色 + Include 导航 + 成员符号 | ✅ 完成 | `textDocument/rename` + `prepareRename`（函数/变量/结构体/枚举重命名，跨引用 WorkspaceEdit）。`textDocument/semanticTokens/full`（struct/enum/field/member 声明处语义染色）。Include 路径 go-to-definition（`ResolveIncludeFileUri`）+ find-references。StructField/EnumMember 新 SymbolKindTag + definition/references。`.ffproj` 自动创建使用文件夹名 + GenerateTemplate 带注释模板 + StripLineComments。TextMate grammar 增强。DX5-01~20（38 asserts）全通过，1953 测试总计 | DX4 ✅ |
 | **DX6** | Include 文件重命名自动更新引用 | ✅ 完成 | LSP `workspace/willRenameFiles` 请求处理：用户在文件管理器中重命名 `.ffs` 文件时，自动扫描 workspace 内所有 `include "old_path"` → 批量更新为 `include "new_path"`。覆盖：普通 include + `include as` 别名 + 跨 includePaths 搜索路径解析 + 子目录路径 + 显式 .ffs 扩展名。capability 注册 `workspace.fileOperations.willRename`。VSCode 扩展 middleware 注册。DX6-01~10（22 asserts）全通过，1975 测试总计 | DX5 ✅ |
 | **DX7** | AST 精确位置追踪（字段访问 + 类型注解） | ✅ 完成 | R2: FieldAccessExpr 新增 FieldNameLine/FieldNameColumn（`.fieldName` token 精确位置）→ rename/references 覆盖 `v.x` 使用处。FindSymbolInExpr 支持字段访问位置匹配。FindDefinitionLocation/CollectReferencesWithOrigin 支持 parentName=null 全局搜索。CollectFieldAccessRefsInExpr 使用 DX7 位置。WaitStmt 加入字段引用收集。R3: VarDeclStmt/ParamDecl/StructField 新增 TypeNameLine/TypeNameColumn → semantic tokens 覆盖类型注解（struct/enum 用色）。CollectTypeUsageTokens 实际递归遍历 block。参数类型/模块变量类型/字段类型全覆盖。纯 additive AST + Parser 改动，BytecodeCompiler 零变更。DX7-01~08（10 asserts）全通过，1984 测试总计 | DX6 ✅ |
+| **DX8** | external func 语法 + 跨文件错误 + 表达式语义染色 | ✅ 完成 | `external func Name(params): RetType` 无体声明 + 跨文件错误 AddError/IsCrossFileError + 表达式语义染色。DX8-01~08 全通过，2071 测试总计 | DX7 ✅ |
+| **DX9** | 语义染色改进（声明 + 引用 + 类型） | ✅ 完成 | Legend 扩展 10 token types + external/param/var/IdentifierExpr token emission。DX9-01~08 全通过，2104 测试总计 | DX8 ✅ |
+| **E003** | LSP 引用查找修复 + didClose | ✅ 完成 | 枚举类型引用添加 CollectTypeRefsInBlock + 枚举成员引用添加 CollectEnumMemberAccessRefs + textDocument/didClose 处理器。E003-01~06（9 asserts）全通过，2113 测试总计 | — |
+| **DX10** | 依赖图 + 全项目诊断 | ⚪ | Include 依赖图 + 变更影响传播 + `workspace/didChangeWatchedFiles`。讨论来源 → [D_LspArchitecture.md](../Discussion/D_LspArchitecture.md) | E003 ✅ |
+| **DX11** | VFS + Rename 状态更新 | ⚪ | 统一文件内容提供器 + rename 后缓存/URI/依赖图更新 → 修复连续重命名。讨论来源 → [D_LspArchitecture.md](../Discussion/D_LspArchitecture.md) | DX10 |
+| **DX12** | 后台编译调度 | ⚪ | debounce + 取消机制 + 编译结果缓存。讨论来源 → [D_LspArchitecture.md](../Discussion/D_LspArchitecture.md) | DX10 |
 
-> Lang-18 ✅ 完成。DX4-P0 ✅ 完成。DX4-P1 ✅ 完成。DX4-P2 ✅ 完成。DX4-P3 ✅ 完成。DX4-P4 ✅ 完成。DX5 ✅ 完成。DX6 ✅ 完成。DX7 ✅ 完成。1984 测试总计。
+> Lang-18 ✅ 完成。DX4-P0 ✅ 完成。DX4-P1 ✅ 完成。DX4-P2 ✅ 完成。DX4-P3 ✅ 完成。DX4-P4 ✅ 完成。DX5 ✅ 完成。DX6 ✅ 完成。DX7 ✅ 完成。DX8 ✅ 完成。DX9 ✅ 完成。E003 ✅ 完成。2113 测试总计。DX10~DX12 远期待激活。
 
 #### 宿主集成侧（C 区间 — 生产必经路径）
 

@@ -267,6 +267,9 @@ namespace FFVM.Debug
                 case "textDocument/didChange":
                     HandleDidChange(parameters);
                     break;
+                case "textDocument/didClose":
+                    HandleDidClose(parameters);
+                    break;
                 // Ignore unknown notifications
             }
         }
@@ -703,6 +706,27 @@ namespace FFVM.Debug
                     CompileAndPublishDiagnostics(uri, text ?? "");
                 }
             }
+        }
+
+        /// <summary>
+        /// E003: Handle textDocument/didClose notification.
+        /// Clears cached document content, per-file AST, and merged AST for the closed file.
+        /// Also clears diagnostics so stale errors don't persist in the editor.
+        /// </summary>
+        private void HandleDidClose(JsonObject parameters)
+        {
+            if (parameters == null) return;
+            var textDocument = parameters.GetObject("textDocument");
+            if (textDocument == null) return;
+
+            string uri = textDocument.GetString("uri");
+            if (uri == null) return;
+
+            _documents.Remove(uri);
+            _documentAsts.Remove(uri);
+            _mergedAsts.Remove(uri);
+            // Clear diagnostics for the closed file
+            PublishDiagnostics(uri, new List<object>());
         }
 
         // ============================================================
@@ -2772,6 +2796,13 @@ namespace FFVM.Debug
                         locations.Add(MakeLocation(targetUri, en.Line, nameCol, name.Length));
                     }
                 }
+
+                // E003: Enum usage in VarDeclStmt.TypeName — symmetric with Struct
+                foreach (var func in ast.Functions)
+                {
+                    string funcUri = ResolveOriginUri(requestingUri, func.OriginFile);
+                    CollectTypeRefsInBlock(func.Body, name, funcUri, locations);
+                }
             }
             // DX5: struct field references
             else if (kind == SymbolKindTag.StructField && parentName != null)
@@ -2829,6 +2860,12 @@ namespace FFVM.Debug
                                 locations.Add(MakeLocation(targetUri, member.Line, member.Column, name.Length));
                         }
                     }
+                }
+                // E003: Collect enum member access usages (e.g. Color.RED) in function bodies
+                foreach (var func in ast.Functions)
+                {
+                    string funcUri = ResolveOriginUri(requestingUri, func.OriginFile);
+                    CollectEnumMemberAccessRefsInBlock(func.Body, name, parentName, funcUri, locations);
                 }
             }
             else // Variable or Parameter
@@ -3370,7 +3407,83 @@ namespace FFVM.Debug
         }
 
         // ============================================================
-        // DX5: Rename support
+        // E003: Enum member access reference collection
+        // Collects EnumName.MEMBER usage sites (FieldAccessExpr where
+        // Target is IdentifierExpr matching the enum name).
+        // ============================================================
+
+        private static void CollectEnumMemberAccessRefsInBlock(BlockStmt block, string memberName, string enumName, string uri, List<object> locations)
+        {
+            if (block == null) return;
+            foreach (var stmt in block.Statements)
+                CollectEnumMemberAccessRefsInStmt(stmt, memberName, enumName, uri, locations);
+        }
+
+        private static void CollectEnumMemberAccessRefsInStmt(Stmt stmt, string memberName, string enumName, string uri, List<object> locations)
+        {
+            if (stmt == null) return;
+            if (stmt is ExprStmt es) CollectEnumMemberAccessRefsInExpr(es.Expression, memberName, enumName, uri, locations);
+            else if (stmt is BlockStmt bs) CollectEnumMemberAccessRefsInBlock(bs, memberName, enumName, uri, locations);
+            else if (stmt is VarDeclStmt vd && vd.Initializer != null) CollectEnumMemberAccessRefsInExpr(vd.Initializer, memberName, enumName, uri, locations);
+            else if (stmt is IfStmt ifs)
+            {
+                CollectEnumMemberAccessRefsInExpr(ifs.Condition, memberName, enumName, uri, locations);
+                CollectEnumMemberAccessRefsInStmt(ifs.ThenBranch, memberName, enumName, uri, locations);
+                CollectEnumMemberAccessRefsInStmt(ifs.ElseBranch, memberName, enumName, uri, locations);
+            }
+            else if (stmt is WhileStmt ws)
+            {
+                CollectEnumMemberAccessRefsInExpr(ws.Condition, memberName, enumName, uri, locations);
+                CollectEnumMemberAccessRefsInStmt(ws.Body, memberName, enumName, uri, locations);
+            }
+            else if (stmt is ForStmt fs)
+            {
+                CollectEnumMemberAccessRefsInStmt(fs.Initializer, memberName, enumName, uri, locations);
+                CollectEnumMemberAccessRefsInExpr(fs.Condition, memberName, enumName, uri, locations);
+                CollectEnumMemberAccessRefsInExpr(fs.Increment, memberName, enumName, uri, locations);
+                CollectEnumMemberAccessRefsInStmt(fs.Body, memberName, enumName, uri, locations);
+            }
+            else if (stmt is ReturnStmt rs && rs.Value != null) CollectEnumMemberAccessRefsInExpr(rs.Value, memberName, enumName, uri, locations);
+            else if (stmt is DeferStmt ds) CollectEnumMemberAccessRefsInBlock(ds.Body, memberName, enumName, uri, locations);
+            else if (stmt is UsingStmt us)
+            {
+                foreach (var arg in us.Arguments) CollectEnumMemberAccessRefsInExpr(arg, memberName, enumName, uri, locations);
+                CollectEnumMemberAccessRefsInBlock(us.Body, memberName, enumName, uri, locations);
+            }
+            else if (stmt is WaitStmt wst) CollectEnumMemberAccessRefsInExpr(wst.FrameCount, memberName, enumName, uri, locations);
+        }
+
+        private static void CollectEnumMemberAccessRefsInExpr(Expr expr, string memberName, string enumName, string uri, List<object> locations)
+        {
+            if (expr == null) return;
+            // Match EnumName.MEMBER pattern: FieldAccessExpr where Target is IdentifierExpr(enumName) and FieldName matches
+            if (expr is FieldAccessExpr fa)
+            {
+                if (fa.FieldName == memberName && fa.FieldNameLine > 0
+                    && fa.Target is IdentifierExpr id && id.Name == enumName)
+                {
+                    locations.Add(MakeLocation(uri, fa.FieldNameLine, fa.FieldNameColumn, memberName.Length));
+                }
+                CollectEnumMemberAccessRefsInExpr(fa.Target, memberName, enumName, uri, locations);
+            }
+            else if (expr is BinaryExpr bin)
+            {
+                CollectEnumMemberAccessRefsInExpr(bin.Left, memberName, enumName, uri, locations);
+                CollectEnumMemberAccessRefsInExpr(bin.Right, memberName, enumName, uri, locations);
+            }
+            else if (expr is UnaryExpr un) CollectEnumMemberAccessRefsInExpr(un.Operand, memberName, enumName, uri, locations);
+            else if (expr is AssignExpr assign)
+            {
+                CollectEnumMemberAccessRefsInExpr(assign.Target, memberName, enumName, uri, locations);
+                CollectEnumMemberAccessRefsInExpr(assign.Value, memberName, enumName, uri, locations);
+            }
+            else if (expr is CallExpr call)
+            {
+                foreach (var arg in call.Arguments) CollectEnumMemberAccessRefsInExpr(arg, memberName, enumName, uri, locations);
+            }
+        }
+
+        // ============================================================
         // ============================================================
 
         /// <summary>

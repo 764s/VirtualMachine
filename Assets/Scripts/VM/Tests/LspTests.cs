@@ -5421,6 +5421,212 @@ public static class LspTests
             Assert(paramCount == 2, $"DX9-08c: 2 parameter tokens (dx, dy), got {paramCount}");
         }
 
+        // ============================================================
+        // E003: Emergency fixes — enum references + enum member references + didClose
+        // ============================================================
+
+        // E003-01: Enum type references include type annotation usages (var c: Color)
+        {
+            string source = "enum Color { RED, GREEN, BLUE }\nfunc entry() {\n    var c: Color = Color.RED\n    wait c\n}";
+            var session = new LspBatchSession();
+            session.AddInitialize();
+            session.AddInitialized();
+            session.AddDidOpen("file:///e003_01.ffs", source);
+            // References on "Color" at enum declaration — line 0, col 5 (after "enum ")
+            session.AddReferences("file:///e003_01.ffs", 0, 5);
+            session.AddShutdown();
+            session.AddExit();
+            session.Run();
+
+            session.ExpectResponse(0);
+            var refsResp = session.ExpectResponse(1);
+            var refs = refsResp?.GetArray("result");
+            // Should find: (1) enum declaration, (2) type annotation "Color" in var c: Color
+            Assert(refs != null && refs.Count >= 2,
+                $"E003-01: enum references ≥2 (decl + type annotation), got {refs?.Count ?? 0}");
+        }
+
+        // E003-02: Enum member references include usage sites (Color.RED)
+        {
+            string source = "enum Color { RED, GREEN, BLUE }\nfunc entry() {\n    var c: int = Color.RED\n    var d: int = Color.RED\n    wait c\n}";
+            var session = new LspBatchSession();
+            session.AddInitialize();
+            session.AddInitialized();
+            session.AddDidOpen("file:///e003_02.ffs", source);
+            // References on "RED" in enum declaration — line 0, col 13
+            session.AddReferences("file:///e003_02.ffs", 0, 13);
+            session.AddShutdown();
+            session.AddExit();
+            session.Run();
+
+            session.ExpectResponse(0);
+            var refsResp = session.ExpectResponse(1);
+            var refs = refsResp?.GetArray("result");
+            // Should find: (1) RED declaration in enum, (2) Color.RED usage line 2, (3) Color.RED usage line 3
+            Assert(refs != null && refs.Count >= 3,
+                $"E003-02: enum member references ≥3 (decl + 2 usages), got {refs?.Count ?? 0}");
+        }
+
+        // E003-03: Cross-file enum type references include type annotation in other file
+        {
+            string tmpDir = Path.Combine(Path.GetTempPath(), "e003_test_" + Guid.NewGuid().ToString("N").Substring(0, 8));
+            Directory.CreateDirectory(tmpDir);
+            try
+            {
+                File.WriteAllText(Path.Combine(tmpDir, "defs.ffs"),
+                    "enum Color { RED, GREEN, BLUE }");
+                string rootUri = "file:///" + tmpDir.TrimStart('/').Replace("\\", "/");
+                string source = "include \"defs\"\nfunc main() {\n    var c: Color = Color.RED\n}";
+                string fileUri = rootUri + "/main.ffs";
+
+                var session = new LspBatchSession();
+                session.AddInitializeWithRootUri(rootUri);
+                session.AddInitialized();
+                session.AddDidOpen(fileUri, source);
+                // References on "Color" in type annotation — line 2, col 11 ("var c: Color")
+                session.AddReferences(fileUri, 2, 11);
+                session.AddShutdown();
+                session.AddExit();
+                session.Run();
+
+                var initResp = session.ExpectResponse(0);
+                var refsResp = session.ExpectResponse(1);
+                var refs = refsResp?.GetArray("result");
+                Assert(refs != null && refs.Count >= 2,
+                    $"E003-03: cross-file enum refs ≥2 (decl in defs + type annotation), got {refs?.Count ?? 0}");
+
+                // Verify declaration in defs.ffs is included
+                bool hasDefs = false;
+                if (refs != null)
+                {
+                    foreach (var r in refs)
+                    {
+                        var rObj = r as JsonObject;
+                        string rUri = rObj?.GetString("uri") ?? "";
+                        if (rUri.Contains("defs.ffs")) hasDefs = true;
+                    }
+                }
+                Assert(hasDefs, "E003-03b: enum type references include declaration in defs.ffs");
+            }
+            finally
+            {
+                try { Directory.Delete(tmpDir, true); } catch { }
+            }
+        }
+
+        // E003-04: Cross-file enum member references include usage sites
+        {
+            string tmpDir = Path.Combine(Path.GetTempPath(), "e003_test_" + Guid.NewGuid().ToString("N").Substring(0, 8));
+            Directory.CreateDirectory(tmpDir);
+            try
+            {
+                File.WriteAllText(Path.Combine(tmpDir, "defs.ffs"),
+                    "enum Color { RED, GREEN, BLUE }");
+                string rootUri = "file:///" + tmpDir.TrimStart('/').Replace("\\", "/");
+                string source = "include \"defs\"\nfunc main() {\n    var c: int = Color.RED\n    var d: int = Color.RED\n}";
+                string fileUri = rootUri + "/main.ffs";
+
+                var session = new LspBatchSession();
+                session.AddInitializeWithRootUri(rootUri);
+                session.AddInitialized();
+                session.AddDidOpen(fileUri, source);
+                // References on "RED" in Color.RED — line 2, "Color.RED" RED starts at col 23
+                // source line: "    var c: int = Color.RED"
+                //               0123456789012345678901234
+                session.AddReferences(fileUri, 2, 23);
+                session.AddShutdown();
+                session.AddExit();
+                session.Run();
+
+                var initResp = session.ExpectResponse(0);
+                var refsResp = session.ExpectResponse(1);
+                var refs = refsResp?.GetArray("result");
+                // Should find: (1) RED decl in defs.ffs, (2) Color.RED line 2, (3) Color.RED line 3
+                Assert(refs != null && refs.Count >= 3,
+                    $"E003-04: cross-file enum member refs ≥3 (decl + 2 usages), got {refs?.Count ?? 0}");
+
+                bool hasDefs = false;
+                if (refs != null)
+                {
+                    foreach (var r in refs)
+                    {
+                        var rObj = r as JsonObject;
+                        string rUri = rObj?.GetString("uri") ?? "";
+                        if (rUri.Contains("defs.ffs")) hasDefs = true;
+                    }
+                }
+                Assert(hasDefs, "E003-04b: enum member references include declaration in defs.ffs");
+            }
+            finally
+            {
+                try { Directory.Delete(tmpDir, true); } catch { }
+            }
+        }
+
+        // E003-05: didClose clears cached documents (hover returns nothing after close)
+        {
+            string source = "func helper(): int { return 42 }\nfunc entry() { wait 1 }";
+            var session = new LspBatchSession();
+            session.AddInitialize();
+            session.AddInitialized();
+            session.AddDidOpen("file:///e003_close.ffs", source);
+            // Hover on "helper" should work while open
+            session.AddHover("file:///e003_close.ffs", 0, 5);
+            // Close the document
+            session.AddDidClose("file:///e003_close.ffs");
+            // Hover after close should return null/empty
+            session.AddHover("file:///e003_close.ffs", 0, 5);
+            session.AddShutdown();
+            session.AddExit();
+            session.Run();
+
+            session.ExpectResponse(0); // initialize
+            var hoverBefore = session.ExpectResponse(1); // hover while open
+            var hoverAfter = session.ExpectResponse(2); // hover after close
+
+            // Hover before close should have content
+            var contentBefore = hoverBefore?.GetObject("result")?.GetObject("contents");
+            Assert(contentBefore != null, "E003-05a: hover works while document is open");
+
+            // Hover after close should be null result (no cached AST)
+            var resultAfter = hoverAfter?.Get("result");
+            bool afterIsNull = resultAfter == null || (resultAfter is string s && s == "");
+            if (!afterIsNull && resultAfter is JsonObject afterObj)
+                afterIsNull = afterObj.GetObject("contents") == null;
+            Assert(afterIsNull, "E003-05b: hover returns null after document is closed");
+        }
+
+        // E003-06: didClose publishes empty diagnostics (clears errors in editor)
+        {
+            string source = "func entry() { wait 1 }";
+            var session = new LspBatchSession();
+            session.AddInitialize();
+            session.AddInitialized();
+            session.AddDidOpen("file:///e003_diag.ffs", source);
+            session.AddDidClose("file:///e003_diag.ffs");
+            session.AddShutdown();
+            session.AddExit();
+            session.Run();
+
+            session.ExpectResponse(0); // initialize
+            // Check published diagnostics: last publish for this URI should be empty
+            var server = session.GetServer();
+            bool foundEmptyDiag = false;
+            if (server != null)
+            {
+                var published = server.PublishedDiagnostics;
+                for (int i = published.Count - 1; i >= 0; i--)
+                {
+                    if (published[i].uri == "file:///e003_diag.ffs")
+                    {
+                        foundEmptyDiag = published[i].diagnostics.Count == 0;
+                        break;
+                    }
+                }
+            }
+            Assert(foundEmptyDiag, "E003-06: didClose publishes empty diagnostics for closed file");
+        }
+
         Debug.Log($"\n===== LspTests: {passed} passed, {failed} failed =====");
     }
 
@@ -5439,6 +5645,10 @@ public static class LspTests
         private List<JsonObject> _messages;
         private int _readIndex;
         public bool ServerStopped { get; private set; }
+
+        // E003: Store server reference for inspecting internal state in tests
+        private LspServer _serverRef;
+        public LspServer GetServer() => _serverRef;
 
         // LSP6: optional syscall declarations
         private Dictionary<string, int> _syscalls;
@@ -5527,6 +5737,18 @@ public static class LspTests
             parameters.Set("contentChanges", changes);
 
             AddNotification("textDocument/didChange", parameters);
+        }
+
+        /// <summary>
+        /// E003: Send textDocument/didClose notification.
+        /// </summary>
+        public void AddDidClose(string uri)
+        {
+            var parameters = new JsonObject();
+            var textDoc = new JsonObject();
+            textDoc.Set("uri", uri);
+            parameters.Set("textDocument", textDoc);
+            AddNotification("textDocument/didClose", parameters);
         }
 
         public void AddDocumentSymbol(string uri)
@@ -5714,6 +5936,7 @@ public static class LspTests
                 server.LoadDeclarationJson(_declarationJson);
 
             server.Run();
+            _serverRef = server;
             ServerStopped = true;
 
             outputMs.Position = 0;
