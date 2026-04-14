@@ -874,8 +874,12 @@ Gate 3: Unity Editor 内嵌 DAP（可选）             ← DBG7 Phase C
 | **DX10** | 依赖图 + 全项目诊断 | ✅ 完成 | Include 依赖图双向追踪（`_includeDependents`/`_includeForward` + `Preprocessor.ResolvedFilePaths` 传递性）+ `OverlayFileResolver` 内存内容可见 + `RecompileDependents` 级联 + `workspace/didChangeWatchedFiles` 磁盘变更。DX10-01~08 全通过（14 asserts），2127 测试总计 | E004 ✅ |
 | **DX11** | VFS + Rename 状态更新 | ✅ 完成 | DocumentStore.RenameUri URI key 迁移 + ApplyTextEdits 内存文本编辑 + ApplyRenameState willRenameFiles 后状态同步 → 修复连续重命名失败。DX11-01~05 全通过（13 asserts），2140 测试总計。讨论来源 → [D_LspArchitecture.md](../Discussion/D_LspArchitecture.md) | DX10 ✅ |
 | **DX12** | 后台编译调度 | ⚪ | debounce + 取消机制 + 编译结果缓存。讨论来源 → [D_LspArchitecture.md](../Discussion/D_LspArchitecture.md) | DX11 ✅ |
+| **DX13** | 参数 LSP 完整支持 | ⏳ | KL-01 参数引用包含声明位置（CollectReferencesWithOrigin 扩展）+ KL-02 参数重命名支持（HandleRename 参数符号类型）。讨论来源 → [D_LspUsabilityAudit.md](../Discussion/D_LspUsabilityAudit.md) §七/§九 | DX11 ✅ |
+| **DX14** | Rename 完整性补全 | ⏳ | KL-03 struct 字面量名 `Vec2 { ... }` 中的 `Vec2` 计入 struct rename 编辑（CollectReferencesWithOrigin 扩展 StructLiteralExpr.TypeName）。讨论来源 → [D_LspUsabilityAudit.md](../Discussion/D_LspUsabilityAudit.md) §七 | DX13 ✅ |
+| **DX15** | Private 跨文件补全过滤 | ⏳ | KL-04 `private func/struct/enum` 不出现在 include 文件的 completion 列表中（HandleCompletion 过滤 IsPrivate && OriginFile != currentFile）。讨论来源 → [D_LspUsabilityAudit.md](../Discussion/D_LspUsabilityAudit.md) §七 | DX14 ✅ |
+| **DX16** | 变量引用作用域隔离 | ⏳ | KL-05 同名变量 references 按作用域精确匹配（CollectReferencesWithOrigin 需 block-level scope tracking）。讨论来源 → [D_LspUsabilityAudit.md](../Discussion/D_LspUsabilityAudit.md) §七 | DX15 ✅ |
 
-> Lang-18 ✅ 完成。DX4-P0 ✅ 完成。DX4-P1 ✅ 完成。DX4-P2 ✅ 完成。DX4-P3 ✅ 完成。DX4-P4 ✅ 完成。DX5 ✅ 完成。DX6 ✅ 完成。DX7 ✅ 完成。DX8 ✅ 完成。DX9 ✅ 完成。E003 ✅ 完成。R1 ✅ 完成。E004 ✅ 完成。DX10 ✅ 完成。DX11 ✅ 完成。2140 测试总计（514 LSP）。DX12 ⚪ 远期待激活（DX11 完成后开始）。
+> Lang-18 ✅ 完成。DX4-P0 ✅ 完成。DX4-P1 ✅ 完成。DX4-P2 ✅ 完成。DX4-P3 ✅ 完成。DX4-P4 ✅ 完成。DX5 ✅ 完成。DX6 ✅ 完成。DX7 ✅ 完成。DX8 ✅ 完成。DX9 ✅ 完成。E003 ✅ 完成。R1 ✅ 完成。E004 ✅ 完成。DX10 ✅ 完成。DX11 ✅ 完成。2140 测试总计（514 LSP）。DX12 ⚪ 远期待激活。DX13~DX16 ⏳ 待排期（LSP 审查改进 → [D_LspUsabilityAudit.md](../Discussion/D_LspUsabilityAudit.md)）。当前位置 → DX13。
 
 #### 宿主集成侧（C 区间 — 生产必经路径）
 
