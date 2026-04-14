@@ -164,6 +164,8 @@ if (symbol == null) return null;
 
 ## 六、笛卡尔积消除验证
 
+### 6.1 修改点数对比
+
 重构后的覆盖矩阵变化：
 
 | 维度 | 重构前修改点数 | 重构后修改点数 |
@@ -171,6 +173,30 @@ if (symbol == null) return null;
 | 新增符号类型 | FindSymbol + FindDef + CollectRefs + CollectRefsOrigin + HandleCompletion = **5+** | ResolveSymbol + UnifiedRefsWalker = **2** |
 | 新增容器类型 | CollectRefsOrigin 内 8 个分支各 1 处 = **8** | 遍历入口 1 处 = **1** |
 | 新增引用形式 | 对应 Walker 1 个 + CollectRefsOrigin 调用处 1 个 = **2** | UnifiedRefsWalker 内 1 个 if = **1** |
+
+### 6.2 为什么当前方案从结构上解决问题
+
+上表展示了修改点数的数量减少，但更关键的问题是：**为什么旧问题不会以新形式复现？**
+
+**当前架构的根因**：三大函数（FindDefinitionLocation / CollectReferences / CollectReferencesWithOrigin）各自维护一套 SymbolKindTag 分支。它们之间**没有结构性耦合**——编译器不会在遗漏某个分支时报错，也不存在一个"总表"可以检查覆盖完整性。这意味着缺陷的发现完全依赖于测试或用户反馈，而非编译期保证。
+
+笛卡尔积遗漏的本质是：**同一概念（"符号引用"）在 N 个独立位置被各自表达，且这些位置之间无机制保持同步。**
+
+**目标架构的结构性保证**：
+
+1. **概念源唯一 → 遗漏点归零**
+   - 当前：`SymbolAtPosition`（解析结果）和 `FindDefinitionLocation`（定义位置）是两个独立返回值，由不同代码路径产出。如果新增符号类型只改了前者没改后者，go-to-definition 就失效——而编译器不报错。
+   - 目标：`ResolveSymbol` 返回唯一的 `ResolvedSymbol`，其中 `DeclLine/DeclCol/OriginFile` 就是定义位置。**不存在"解析了但忘记填定义位置"的可能**——它们是同一个 struct 的字段，在同一处代码中赋值。
+
+2. **遍历入口唯一 → 容器遗漏不可能**
+   - 当前：8 个 SymbolKindTag 分支各自写 `foreach (func in ast.Functions)` + `foreach (mv in ast.ModuleVariables)`。如果新增容器类型（如 global initializer），必须在 8 处各加一行——这依赖开发者的记忆力。
+   - 目标：遍历入口只有一处（§四.3 的 foreach 循环），`UnifiedRefsWalker` 不关心"我在收集哪种符号"——它只看 `_target` 是否匹配当前节点。新增容器类型 = 在循环入口加一行，所有符号类型自动获得该容器的引用收集。
+
+3. **匹配逻辑集中 → 新增引用形式自动覆盖全符号**
+   - 当前：`StructLiteralTypeRefsWalker` 只在 CollectReferencesWithOrigin 的 Struct 分支被调用。如果将来出现新的表达式形式引用了 Enum，但 Enum 分支不调用该 Walker，就产生新的遗漏。
+   - 目标：`UnifiedRefsWalker` 在一次遍历中对**每个节点**检查所有匹配规则。新增引用形式 = 加一个 `if (expr is NewExprType && matches)`，自动覆盖所有符号类型×所有容器类型。**这将三维笛卡尔积降维为一维列表（匹配规则列表）。**
+
+**总结**：旧架构的问题不是"写错了"，而是"结构允许遗漏"。新架构通过消除独立维护的并行分支，将"开发者必须记住所有交叉点"转化为"编译器/结构自动覆盖所有交叉点"。652 个现有测试是安全网，但结构性保证才是这些测试不再需要被频繁新增来"补格子"的原因。
 
 ---
 
