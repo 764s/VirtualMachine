@@ -243,11 +243,11 @@ Docs/
 | DX11 | VFS + Rename 状态 | ✅ | DocumentStore.RenameUri + 连续重命名修复 | ⭐⭐ |
 | DX12 | 后台编译调度 | ⚪ | debounce + 取消 + 缓存（远期待激活） | ⭐⭐ |
 | DX13 | 参数 LSP 完整支持 | ✅ | KL-01 参数引用含声明位置 + KL-02 参数重命名 + 声明位置定义精确化 + 签名悬停。DX13-01~09（16 asserts）。计划 → [Step_DX13_ParameterLsp](Plan/Step_DX13_ParameterLsp.md)　讨论 → [D_LspUsabilityAudit](Discussion/D_LspUsabilityAudit.md) | ⭐⭐ |
-| DX14 | Rename 完整性补全 | ⏳ | KL-03 struct 字面量名计入 struct 重命名编辑。讨论 → [D_LspUsabilityAudit](Discussion/D_LspUsabilityAudit.md) | ⭐ |
+| DX14 | Rename 完整性补全 | ✅ | KL-03 struct 字面量名计入 struct 重命名编辑（CollectReferencesWithOrigin Struct 分支追加 StructLiteralTypeRefsWalker 函数体走查）。DX14-01~05（14 asserts）。计划 → [Step_DX14_RenameCompleteness](Plan/Step_DX14_RenameCompleteness.md)　讨论 → [D_LspUsabilityAudit](Discussion/D_LspUsabilityAudit.md) | ⭐ |
 | DX15 | Private 跨文件补全过滤 | ⏳ | KL-04 private 符号不出现在 include 文件的补全中。讨论 → [D_LspUsabilityAudit](Discussion/D_LspUsabilityAudit.md) | ⭐⭐ |
 | DX16 | 变量引用作用域隔离 | ⏳ | KL-05 同名变量引用按作用域精确匹配。讨论 → [D_LspUsabilityAudit](Discussion/D_LspUsabilityAudit.md) | ⭐⭐⭐ |
 
-**Lang 系列全部完成。DX13 ✅ 完成。DX14~DX16 ⏳ 待排期（LSP 审查改进）。当前位置 → DX14。**
+**Lang 系列全部完成。DX13 ✅ 完成。DX14 ✅ 完成。DX15~DX16 ⏳ 待排期（LSP 审查改进）。当前位置 → DX15。**
 **DX12（后台编译调度）⚪ 远期待激活。C 区间阻塞于宿主 ECS 就绪。**
 
 ---

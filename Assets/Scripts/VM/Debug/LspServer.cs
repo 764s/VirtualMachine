@@ -3034,11 +3034,14 @@ namespace FFVM.Debug
                     }
                 }
 
-                // Struct usage in VarDeclStmt.TypeName — per function origin
+                // Struct usage in VarDeclStmt.TypeName + struct literal type names — per function origin
                 foreach (var func in ast.Functions)
                 {
                     string funcUri = ResolveOriginUri(requestingUri, func.OriginFile);
                     CollectTypeRefsInBlock(func.Body, name, funcUri, locations);
+                    // DX14: Struct literal type names (e.g., "Vec2" in "Vec2 { ... }") in function bodies
+                    var slw = new StructLiteralTypeRefsWalker(name, funcUri, locations);
+                    slw.WalkBlock(func.Body);
                 }
 
                 // B001: Struct usage in module-level variable type annotations and struct literal initializers
