@@ -1430,8 +1430,6 @@ namespace FFVM.Debug
         private JsonObject HandleHover(JsonObject parameters)
         {
             string uri = GetDocumentUri(parameters);
-            var ast = GetCachedAst(uri);
-            if (ast == null) return null;
 
             var position = parameters?.GetObject("position");
             if (position == null) return null;
@@ -1441,9 +1439,23 @@ namespace FFVM.Debug
             int astLine = lspLine + 1;
             int astCol = lspChar + 1;
 
-            // DX4-P3: Use merged AST for hover (resolves symbols from included files)
-            var mergedAst = GetMergedAst(uri);
-            string hoverText = FindHoverText(mergedAst, astLine, astCol);
+            // DX17: Use unified symbol resolution (shared with Definition/References/Rename)
+            var (symbol, mergedAst) = ResolveSymbol(uri, astLine, astCol);
+
+            string hoverText = null;
+            if (symbol != null && symbol.Value.Kind != SymbolKindTag.IncludeFile)
+            {
+                hoverText = FormatHoverForSymbol(symbol.Value, mergedAst);
+            }
+
+            // Fallback for keyword-level hover (cursor on "func"/"struct"/"enum"/"var"/"const" keyword)
+            // and edge cases where ResolveSymbol doesn't match but FindHoverText does
+            if (hoverText == null)
+            {
+                if (mergedAst == null) mergedAst = GetMergedAst(uri);
+                if (mergedAst != null) hoverText = FindHoverText(mergedAst, astLine, astCol);
+            }
+
             if (hoverText == null) return null;
 
             // Auto-wrap in code fence if not already markdown
@@ -1808,35 +1820,136 @@ namespace FFVM.Debug
             return $"```ffvm\n{sig}\n```\n---\n{en.DocComment}";
         }
 
+        /// <summary>
+        /// DX17: Generate hover text from a resolved symbol by looking up the AST node.
+        /// Returns null if no hover text can be generated for this symbol kind.
+        /// </summary>
+        private static string FormatHoverForSymbol(ResolvedSymbol symbol, ModuleNode ast)
+        {
+            if (ast == null) return null;
+
+            switch (symbol.Kind)
+            {
+                case SymbolKindTag.Function:
+                    foreach (var func in ast.Functions)
+                        if (func.Name == symbol.Name) return FormatFuncHover(func);
+                    return $"func {symbol.Name}(...)";
+
+                case SymbolKindTag.Struct:
+                    foreach (var st in ast.Structs)
+                        if (st.Name == symbol.Name) return FormatStructHover(st);
+                    return $"struct {symbol.Name}";
+
+                case SymbolKindTag.Enum:
+                    foreach (var en in ast.Enums)
+                        if (en.Name == symbol.Name) return FormatEnumHover(en);
+                    return $"enum {symbol.Name}";
+
+                case SymbolKindTag.Variable:
+                    // Check function-scoped variables first
+                    if (symbol.ScopeFunc != null)
+                    {
+                        foreach (var func in ast.Functions)
+                        {
+                            if (func.Name == symbol.ScopeFunc)
+                            {
+                                string typeInfo = FindVarType(func, symbol.Name);
+                                if (typeInfo != null) return $"var {symbol.Name}: {typeInfo}";
+                            }
+                        }
+                    }
+                    // Check module-level variables
+                    foreach (var mv in ast.ModuleVariables)
+                    {
+                        if (mv.Name == symbol.Name)
+                        {
+                            string prefix = mv.IsConst ? "const" : "var";
+                            string typeStr = mv.TypeName ?? "int";
+                            return $"(module {prefix}) {mv.Name}: {typeStr}";
+                        }
+                    }
+                    return symbol.Name;
+
+                case SymbolKindTag.Parameter:
+                    if (symbol.ScopeFunc != null)
+                    {
+                        foreach (var func in ast.Functions)
+                        {
+                            if (func.Name == symbol.ScopeFunc)
+                            {
+                                foreach (var p in func.Parameters)
+                                {
+                                    if (p.Name == symbol.Name)
+                                    {
+                                        string paramHover = $"(parameter) {FormatParamDecl(p)}";
+                                        if (p.DocComment != null)
+                                            paramHover += $"\n\n{p.DocComment}";
+                                        return paramHover;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    return $"(parameter) {symbol.Name}";
+
+                case SymbolKindTag.StructField:
+                    if (symbol.ParentName != null)
+                    {
+                        foreach (var st in ast.Structs)
+                        {
+                            if (st.Name == symbol.ParentName)
+                            {
+                                foreach (var f in st.Fields)
+                                    if (f.Name == symbol.Name)
+                                        return $"(field) {symbol.ParentName}.{f.Name}: {f.TypeName}";
+                            }
+                        }
+                    }
+                    // parentName unknown — search all structs
+                    foreach (var st in ast.Structs)
+                        foreach (var f in st.Fields)
+                            if (f.Name == symbol.Name)
+                                return $"(field) {st.Name}.{f.Name}: {f.TypeName}";
+                    return $"(field) {symbol.Name}";
+
+                case SymbolKindTag.EnumMember:
+                    return $"(enum member) {symbol.ParentName}.{symbol.Name}";
+
+                default:
+                    return null;
+            }
+        }
+
         // --- symbol resolution helpers ---
 
         /// <summary>
-        /// R1: Common dual-AST symbol resolution. Finds the symbol at a cursor position
-        /// using per-file AST first (for include declarations), then falls back to merged AST
-        /// for cross-file struct/enum type annotations and enum members.
+        /// DX17: Unified symbol resolution. Combines dual-AST symbol identification
+        /// (FindSymbolAtPosition on per-file + merged AST) with definition location
+        /// (FindDefinitionLocation) into a single ResolvedSymbol.
         ///
-        /// Returns (perFileTarget, resolvedTarget, perFileAst, mergedAst):
-        ///  - perFileTarget: result from per-file AST (null if not found; includes IncludeFile)
-        ///  - resolvedTarget: result after merged-AST fallback (may differ from perFileTarget)
-        ///  - perFileAst: the per-file AST for this document
-        ///  - mergedAst: the merged AST for this document
-        ///
-        /// Callers should check perFileTarget for IncludeFile before using resolvedTarget.
+        /// Returns (resolved symbol, merged AST for further operations like CollectReferencesWithOrigin).
+        /// For IncludeFile symbols, DefLine/DefCol/OriginFile are not populated.
         /// </summary>
-        private (SymbolAtPosition? perFileTarget, SymbolAtPosition? resolvedTarget, ModuleNode perFileAst, ModuleNode mergedAst)
-            ResolveSymbolDualAst(string uri, int astLine, int astCol)
+        private (ResolvedSymbol? symbol, ModuleNode mergedAst) ResolveSymbol(string uri, int astLine, int astCol)
         {
             var ast = GetCachedAst(uri);
-            if (ast == null) return (null, null, null, null);
+            if (ast == null) return (null, null);
 
-            // US: Check include declarations using per-file AST first (merged AST strips Imports)
+            // Per-file AST resolves include declarations (merged AST strips Imports)
             var perFileTarget = FindSymbolAtPosition(ast, astLine, astCol);
-
-            // Get merged AST for cross-file resolution
             var mergedAst = GetMergedAst(uri);
 
-            // Re-identify using merged AST if per-file AST couldn't resolve the symbol
-            // correctly (e.g. cross-file struct/enum type annotations or enum members)
+            // IncludeFile is only detectable from per-file AST
+            if (perFileTarget != null && perFileTarget.Value.kind == SymbolKindTag.IncludeFile)
+            {
+                return (new ResolvedSymbol
+                {
+                    Kind = SymbolKindTag.IncludeFile,
+                    Name = perFileTarget.Value.name,
+                }, mergedAst);
+            }
+
+            // Dual-AST resolution: fall back to merged AST for cross-file symbols
             var resolvedTarget = perFileTarget;
             if (resolvedTarget == null || resolvedTarget.Value.kind == SymbolKindTag.Variable
                 || (resolvedTarget.Value.kind == SymbolKindTag.StructField && resolvedTarget.Value.parentName == null))
@@ -1845,7 +1958,26 @@ namespace FFVM.Debug
                 if (mergedTarget != null) resolvedTarget = mergedTarget;
             }
 
-            return (perFileTarget, resolvedTarget, ast, mergedAst);
+            if (resolvedTarget == null) return (null, mergedAst);
+
+            // Compute definition location in one pass (eliminates second lookup)
+            var defLoc = FindDefinitionLocation(mergedAst, resolvedTarget.Value.name,
+                resolvedTarget.Value.kind, resolvedTarget.Value.scopeFunc,
+                resolvedTarget.Value.parentName, resolvedTarget.Value.declLine, resolvedTarget.Value.declCol);
+
+            return (new ResolvedSymbol
+            {
+                Kind = resolvedTarget.Value.kind,
+                Name = resolvedTarget.Value.name,
+                ParentName = resolvedTarget.Value.parentName,
+                ScopeFunc = resolvedTarget.Value.scopeFunc,
+                DefLine = defLoc?.line ?? 0,
+                DefCol = defLoc?.col ?? 0,
+                NameLen = defLoc?.nameLen ?? 0,
+                OriginFile = defLoc?.originFile,
+                ScopeDeclLine = resolvedTarget.Value.declLine,
+                ScopeDeclCol = resolvedTarget.Value.declCol,
+            }, mergedAst);
         }
 
         // --- definition ---
@@ -1859,25 +1991,23 @@ namespace FFVM.Debug
             int astLine = position.GetInt("line") + 1;
             int astCol = position.GetInt("character") + 1;
 
-            // R1: Unified dual-AST symbol resolution
-            var (perFileTarget, target, _, mergedAst) = ResolveSymbolDualAst(uri, astLine, astCol);
-            if (perFileTarget != null && perFileTarget.Value.kind == SymbolKindTag.IncludeFile)
+            // DX17: Unified symbol resolution (replaces ResolveSymbolDualAst + FindDefinitionLocation)
+            var (symbol, _) = ResolveSymbol(uri, astLine, astCol);
+            if (symbol == null) return null;
+
+            if (symbol.Value.Kind == SymbolKindTag.IncludeFile)
             {
-                string includeUri = ResolveIncludeFileUri(uri, perFileTarget.Value.name);
+                string includeUri = ResolveIncludeFileUri(uri, symbol.Value.Name);
                 if (includeUri != null)
                     return MakeLocation(includeUri, 1, 1, 0);
                 return null;
             }
 
-            if (target == null) return null;
-
-            // DX4-P3: Use merged AST to find definition (may be in included file)
-            var defLoc = FindDefinitionLocation(mergedAst, target.Value.name, target.Value.kind, target.Value.scopeFunc, target.Value.parentName, target.Value.declLine, target.Value.declCol);
-            if (defLoc == null) return null;
+            if (symbol.Value.DefLine == 0) return null;
 
             // DX4-P3: Resolve target URI — may point to a different file via OriginFile
-            string targetUri = ResolveOriginUri(uri, defLoc.Value.originFile);
-            var loc = MakeLocation(targetUri, defLoc.Value.line, defLoc.Value.col, defLoc.Value.nameLen);
+            string targetUri = ResolveOriginUri(uri, symbol.Value.OriginFile);
+            var loc = MakeLocation(targetUri, symbol.Value.DefLine, symbol.Value.DefCol, symbol.Value.NameLen);
             return loc;
         }
 
@@ -1939,23 +2069,24 @@ namespace FFVM.Debug
             int astLine = position.GetInt("line") + 1;
             int astCol = position.GetInt("character") + 1;
 
-            // R1: Unified dual-AST symbol resolution
-            var (perFileTarget, target, perFileAst, mergedAst) = ResolveSymbolDualAst(uri, astLine, astCol);
+            // DX17: Unified symbol resolution
+            var (symbol, mergedAst) = ResolveSymbol(uri, astLine, astCol);
 
             // DX5: Include file references — find all includes of the same path
-            if (perFileTarget != null && perFileTarget.Value.kind == SymbolKindTag.IncludeFile)
+            if (symbol != null && symbol.Value.Kind == SymbolKindTag.IncludeFile)
             {
                 var locations = new List<object>();
+                var perFileAst = GetCachedAst(uri);
                 if (perFileAst != null)
-                    CollectIncludeReferences(perFileAst, perFileTarget.Value.name, uri, locations);
+                    CollectIncludeReferences(perFileAst, symbol.Value.Name, uri, locations);
                 return MakeArrayResult(locations);
             }
 
-            if (target == null) return MakeArrayResult(new List<object>());
+            if (symbol == null) return MakeArrayResult(new List<object>());
 
             // DX4-P3: Use merged AST for cross-file reference collection
             var locs = new List<object>();
-            CollectReferencesWithOrigin(mergedAst, target.Value.name, target.Value.kind, uri, locs, target.Value.parentName, target.Value.scopeFunc, target.Value.declLine, target.Value.declCol);
+            CollectReferencesWithOrigin(mergedAst, symbol.Value.Name, symbol.Value.Kind, uri, locs, symbol.Value.ParentName, symbol.Value.ScopeFunc, symbol.Value.ScopeDeclLine, symbol.Value.ScopeDeclCol);
             return MakeArrayResult(locs);
         }
 
@@ -2561,6 +2692,27 @@ namespace FFVM.Debug
             public int declLine;
             /// <summary>DX16: 1-based column of the governing VarDeclStmt for scope-isolated variable references.</summary>
             public int declCol;
+        }
+
+        /// <summary>
+        /// DX17: Unified symbol resolution result combining identity (from FindSymbolAtPosition)
+        /// and definition location (from FindDefinitionLocation) into a single struct.
+        /// </summary>
+        private struct ResolvedSymbol
+        {
+            public SymbolKindTag Kind;
+            public string Name;
+            public string ParentName;       // struct/enum name for fields/members
+            public string ScopeFunc;        // containing function (null for top-level)
+
+            // Definition location (from FindDefinitionLocation, 1-based AST coords)
+            public int DefLine, DefCol;     // 0 if definition not found
+            public int NameLen;             // name token length
+            public string OriginFile;       // cross-file origin (null = same file)
+
+            // DX16: Scope isolation (from FindSymbolAtPosition)
+            public int ScopeDeclLine;       // governing VarDeclStmt line (0 = no scope isolation)
+            public int ScopeDeclCol;        // governing VarDeclStmt column
         }
 
         /// <summary>
@@ -4011,79 +4163,77 @@ namespace FFVM.Debug
             int astLine = position.GetInt("line") + 1;
             int astCol = position.GetInt("character") + 1;
 
-            // R1: Unified dual-AST symbol resolution
-            var (perFileTarget, target, perFileAst, mergedAst) = ResolveSymbolDualAst(uri, astLine, astCol);
+            // DX17: Unified symbol resolution
+            var (symbol, mergedAst) = ResolveSymbol(uri, astLine, astCol);
 
             // Include files are not renamable via text rename (file system operation)
-            if (perFileTarget != null && perFileTarget.Value.kind == SymbolKindTag.IncludeFile) return null;
-            if (target == null) return null;
-
-            // Find the definition location to get precise range
-            var defLoc = FindDefinitionLocation(mergedAst, target.Value.name, target.Value.kind, target.Value.scopeFunc, target.Value.parentName, target.Value.declLine, target.Value.declCol);
+            if (symbol == null || symbol.Value.Kind == SymbolKindTag.IncludeFile) return null;
 
             // Return range at cursor position with the symbol name as placeholder
             int lspLine = position.GetInt("line");
 
             // Calculate the actual start of the symbol name at cursor
-            int nameLen = target.Value.name.Length;
-            int nameStartCol = FindNameStartCol(perFileAst, target.Value, astLine, astCol);
+            int nameLen = symbol.Value.Name.Length;
+            var perFileAst = GetCachedAst(uri);
+            int nameStartCol = FindNameStartCol(perFileAst, symbol.Value, astLine, astCol);
             int lspStartChar = Math.Max(0, nameStartCol - 1);
 
             var result = new JsonObject();
             result.Set("range", MakeRange(lspLine, lspStartChar, lspLine, lspStartChar + nameLen));
-            result.Set("placeholder", target.Value.name);
+            result.Set("placeholder", symbol.Value.Name);
             return result;
         }
 
         /// <summary>
         /// DX5: Find the 1-based start column of a symbol name at the given position.
+        /// DX17: Updated to accept ResolvedSymbol instead of SymbolAtPosition.
         /// </summary>
-        private static int FindNameStartCol(ModuleNode ast, SymbolAtPosition target, int line, int col)
+        private static int FindNameStartCol(ModuleNode ast, ResolvedSymbol target, int line, int col)
         {
-            if (target.kind == SymbolKindTag.Function)
+            if (target.Kind == SymbolKindTag.Function)
             {
                 foreach (var func in ast.Functions)
                 {
                     int nameStart = func.Column + "func".Length + 1;
-                    if (func.Line == line && func.Name == target.name && ColMatches(nameStart, func.Name.Length, col))
+                    if (func.Line == line && func.Name == target.Name && ColMatches(nameStart, func.Name.Length, col))
                         return nameStart;
                 }
                 // Could be a call site — check expressions
             }
-            else if (target.kind == SymbolKindTag.Struct)
+            else if (target.Kind == SymbolKindTag.Struct)
             {
                 foreach (var st in ast.Structs)
                 {
                     int nameStart = st.Column + "struct".Length + 1;
-                    if (st.Line == line && st.Name == target.name && ColMatches(nameStart, st.Name.Length, col))
+                    if (st.Line == line && st.Name == target.Name && ColMatches(nameStart, st.Name.Length, col))
                         return nameStart;
                 }
             }
-            else if (target.kind == SymbolKindTag.Enum)
+            else if (target.Kind == SymbolKindTag.Enum)
             {
                 foreach (var en in ast.Enums)
                 {
                     int nameStart = en.Column + "enum".Length + 1;
-                    if (en.Line == line && en.Name == target.name && ColMatches(nameStart, en.Name.Length, col))
+                    if (en.Line == line && en.Name == target.Name && ColMatches(nameStart, en.Name.Length, col))
                         return nameStart;
                 }
             }
-            else if (target.kind == SymbolKindTag.StructField)
+            else if (target.Kind == SymbolKindTag.StructField)
             {
                 foreach (var st in ast.Structs)
                     foreach (var f in st.Fields)
-                        if (f.Line == line && f.Name == target.name && ColMatches(f.Column, f.Name.Length, col))
+                        if (f.Line == line && f.Name == target.Name && ColMatches(f.Column, f.Name.Length, col))
                             return f.Column;
             }
-            else if (target.kind == SymbolKindTag.EnumMember)
+            else if (target.Kind == SymbolKindTag.EnumMember)
             {
                 foreach (var en in ast.Enums)
                     foreach (var m in en.Members)
-                        if (m.Line == line && m.Name == target.name && ColMatches(m.Column, m.Name.Length, col))
+                        if (m.Line == line && m.Name == target.Name && ColMatches(m.Column, m.Name.Length, col))
                             return m.Column;
             }
             // Fallback: col points somewhere in the name, back up to find start
-            return Math.Max(1, col - target.name.Length + 1);
+            return Math.Max(1, col - target.Name.Length + 1);
         }
 
         /// <summary>
@@ -4101,16 +4251,15 @@ namespace FFVM.Debug
             int astLine = position.GetInt("line") + 1;
             int astCol = position.GetInt("character") + 1;
 
-            // R1: Unified dual-AST symbol resolution
-            var (perFileTarget, target, _, mergedAst) = ResolveSymbolDualAst(uri, astLine, astCol);
+            // DX17: Unified symbol resolution
+            var (symbol, mergedAst) = ResolveSymbol(uri, astLine, astCol);
 
             // Include files are not renamable
-            if (perFileTarget != null && perFileTarget.Value.kind == SymbolKindTag.IncludeFile) return null;
-            if (target == null) return null;
+            if (symbol == null || symbol.Value.Kind == SymbolKindTag.IncludeFile) return null;
 
             // Collect all reference locations
             var locations = new List<object>();
-            CollectReferencesWithOrigin(mergedAst, target.Value.name, target.Value.kind, uri, locations, target.Value.parentName, target.Value.scopeFunc, target.Value.declLine, target.Value.declCol);
+            CollectReferencesWithOrigin(mergedAst, symbol.Value.Name, symbol.Value.Kind, uri, locations, symbol.Value.ParentName, symbol.Value.ScopeFunc, symbol.Value.ScopeDeclLine, symbol.Value.ScopeDeclCol);
 
             // Group locations by URI → text edits
             var editsByUri = new Dictionary<string, List<object>>();
@@ -4528,7 +4677,10 @@ namespace FFVM.Debug
                     }
                     WalkBlock(us.Body);
                 }
-                // YieldStmt, WaitForStmt — no children to walk
+                // DX17: WaitForStmt has a TargetInstanceId expression that must be walked
+                else if (stmt is WaitForStmt wfs)
+                    WalkExpr(wfs.TargetInstanceId);
+                // YieldStmt — no children to walk
             }
 
             // ---- Expr dispatch ----
