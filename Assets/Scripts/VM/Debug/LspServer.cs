@@ -3065,6 +3065,14 @@ namespace FFVM.Debug
                     CollectTypeRefsInBlock(func.Body, name, funcUri, locations);
                 }
 
+                // B001: Enum identifier refs in function bodies (e.g., EnumName.MEMBER — the EnumName part)
+                foreach (var func in ast.Functions)
+                {
+                    string funcUri = ResolveOriginUri(requestingUri, func.OriginFile);
+                    var w = new EnumIdentRefsWalker(name, funcUri, locations);
+                    w.WalkBlock(func.Body);
+                }
+
                 // B001: Enum usage in module-level variable type annotations
                 foreach (var mv in ast.ModuleVariables)
                 {

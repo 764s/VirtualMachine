@@ -484,6 +484,7 @@ namespace FFVM.Compiler
             var fields = new List<StructField>();
             while (!Check(TokenType.RBrace) && !IsAtEnd())
             {
+                int savedPos = _pos;
                 int fLine = Current().Line, fCol = Current().Column;
                 string fieldName = Expect(TokenType.Identifier, "for struct field name").Text ?? "?";
                 Expect(TokenType.Colon, "after field name");
@@ -496,7 +497,15 @@ namespace FFVM.Compiler
                 sf.TypeNameLine = fieldTypeToken.Line;
                 sf.TypeNameColumn = fieldTypeToken.Column;
                 fields.Add(sf);
-                Match(TokenType.Semicolon); // optional semicolons
+                // B002: accept comma or semicolon as optional field separator
+                if (!Match(TokenType.Semicolon))
+                    Match(TokenType.Comma);
+                // B002: safety guard — if no progress was made, skip token to avoid infinite loop
+                if (_pos == savedPos)
+                {
+                    Error($"Unexpected token '{Current().Text}' in struct body at {Current().Line}:{Current().Column}");
+                    Advance();
+                }
             }
             Expect(TokenType.RBrace, "to close struct");
 
@@ -1111,11 +1120,18 @@ namespace FFVM.Compiler
                         var fields = new List<(string FieldName, Expr Value)>();
                         while (!Check(TokenType.RBrace) && !IsAtEnd())
                         {
+                            int savedPos = _pos;
                             string fn = Expect(TokenType.Identifier, "for field name in struct literal").Text ?? "?";
                             Expect(TokenType.Colon, "after field name in struct literal");
                             Expr val = ParseExpression();
                             fields.Add((fn, val));
                             Match(TokenType.Comma);
+                            // B002: safety guard — if no progress was made, skip token to avoid infinite loop
+                            if (_pos == savedPos)
+                            {
+                                Error($"Unexpected token '{Current().Text}' in struct literal at {Current().Line}:{Current().Column}");
+                                Advance();
+                            }
                         }
                         Expect(TokenType.RBrace, "to close struct literal");
                         var sl = new StructLiteralExpr(qualType, fields);
@@ -1233,12 +1249,19 @@ namespace FFVM.Compiler
             var fields = new List<(string FieldName, Expr Value)>();
             while (!Check(TokenType.RBrace) && !IsAtEnd())
             {
+                int savedPos = _pos;
                 string fieldName = Expect(TokenType.Identifier, "for field name in struct literal").Text ?? "?";
                 Expect(TokenType.Colon, "after field name in struct literal");
                 Expr value = ParseExpression();
                 fields.Add((fieldName, value));
                 // allow optional comma between fields
                 Match(TokenType.Comma);
+                // B002: safety guard — if no progress was made, skip token to avoid infinite loop
+                if (_pos == savedPos)
+                {
+                    Error($"Unexpected token '{Current().Text}' in struct literal at {Current().Line}:{Current().Column}");
+                    Advance();
+                }
             }
             Expect(TokenType.RBrace, "to close struct literal");
             var expr = new StructLiteralExpr(typeToken.Text, fields);
