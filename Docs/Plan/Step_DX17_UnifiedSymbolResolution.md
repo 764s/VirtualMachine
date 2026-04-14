@@ -73,3 +73,20 @@ struct ResolvedSymbol {
 | **合計** | | **4** |
 
 加上 652 現有 LSP 測試作為回歸保障。
+
+## 功能展望
+
+- **SymbolAtPosition 消除**：目前 `SymbolAtPosition` 仍作為 `FindSymbolAtPosition` 的內部返回類型。DX18（統一引用收集）完成後，可考慮讓 `FindSymbolAtPosition` 直接返回 `ResolvedSymbol`，徹底消除 `SymbolAtPosition`。
+- **關鍵字懸停遷移**：`HandleHover` 使用 `FindHoverText` 作為 fallback 處理 "func"/"struct"/"enum"/"var" 關鍵字上的 hover。可通過擴展 `FindSymbolAtPosition` 匹配關鍵字區域來遷移，但需評估對 go-to-definition/rename 的影響。
+
+## 優化展望
+
+- **單次查找**：`ResolveSymbol` 合併了雙 AST 解析 + 定義位置查找，消除了 `ResolveSymbolDualAst` 的二次查找。`HandleDefinition` 不再獨立調用 `FindDefinitionLocation`。
+- **Hover 快速路徑**：大多數 hover 請求現在走 `ResolveSymbol` + `FormatHoverForSymbol` 快速路徑，只有關鍵字 hover 走 `FindHoverText` fallback。
+
+## 風險點
+
+| 風險 | 等級 | 說明 |
+|------|------|------|
+| FindHoverText fallback 遺留 | 低 | FindHoverText 作為 HandleHover 的 fallback 保留。功能完整但增加代碼量。DX18 或後續可消除。永久妥協原因：修改 FindSymbolAtPosition 匹配關鍵字可能影響其他 LSP 功能的行為。 |
+| SymbolAtPosition 內部殘留 | 低 | SymbolAtPosition 仍作為 FindSymbolAtPosition 的返回類型。不影響外部介面，DX18 可一併消除。 |
