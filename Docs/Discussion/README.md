@@ -32,3 +32,4 @@
 | D16 | [D_LspArchitecture.md](D_LspArchitecture.md) | LSP 架构演进：全项目诊断、状态管理与增量更新 | 🔨 部分实施 | 2026-04-13 | E003 暴露的架构性问题。连续 rename 失败根因分析 + 全项目诊断需求 + 依赖图/VFS/后台调度前置功能 + 跨语言对比。DX10 ✅ 完成，DX11 🟡 可执行，DX12 ⚪ 待 DX11 完成后开始 |
 | D17 | [D_LspUsabilityAudit.md](D_LspUsabilityAudit.md) | LSP 易用性审查：覆盖矩阵、测试缺口与已知限制 | ✅ 已完成 | 2026-04-14 | 三维矩阵审查（10 符号类型 × 8 LSP 功能 × 6 文件范围）+ 25 新测试（DX12-01~25）+ 5 已知限制（KL-01~05）。改进需求 → DX13~DX16 |
 | D18 | [D_ScriptUsabilityChecklist.md](D_ScriptUsabilityChecklist.md) | FFScript 易用性审查：脚本语言使用者视角的系统性检验 | ✅ 已完成 | 2026-04-14 | 35 项检验标准 × 7 大类，33/35 通过。7 项改进建议（UC-1~UC-7）→ 展望项 [Outlook §2.10](../Plan/Outlook_And_Risks.md) |
+| D19 | [D_LspStructuralAudit.md](D_LspStructuralAudit.md) | LSP 结构性审查：概念源唯一性与执行路径收敛 | 💬 讨论中 | 2026-04-14 | KL-01~05 根因分析。三大函数 N 路分派 → 笛卡尔积遗漏。统一符号解析 + 统一引用收集的目标架构 + P1~P3 实施路径 |
