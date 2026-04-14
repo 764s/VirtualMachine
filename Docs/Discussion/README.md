@@ -30,3 +30,4 @@
 | D14 | [D_IncludeAs.md](D_IncludeAs.md) | Include As 别名：命名空间隔离的 include | ✅ 已完成 | 2026-04-11 | Lang-17 设计讨论。`include "path" as Alias` 语法 + Alias.Name 命名空间访问 + override Alias.Name 替换。方案 A（include as）vs 方案 B（using =），采纳方案 A。→ [Step_Lang17](../Plan/Step_Lang17_IncludeAs.md) |
 | D15 | [D_Usability_ModuleScope.md](D_Usability_ModuleScope.md) | 易用性补充：语法信息来源范围 × 编译方式 | ✅ 已完成 | 2026-04-11 | DX4 模块化易用性讨论。语法信息来源 6 分类 + 4 典型场景 + 整体/分块编译对比 + 跨语言参考（Lua/GLSL/TS）+ `.ffproj` 项目描述文件方案。→ DX4-P0~P3 子需求纳入 Lang 串行计划 |
 | D16 | [D_LspArchitecture.md](D_LspArchitecture.md) | LSP 架构演进：全项目诊断、状态管理与增量更新 | 🔨 部分实施 | 2026-04-13 | E003 暴露的架构性问题。连续 rename 失败根因分析 + 全项目诊断需求 + 依赖图/VFS/后台调度前置功能 + 跨语言对比。DX10 ✅ 完成，DX11 🟡 可执行，DX12 ⚪ 待 DX11 完成后开始 |
+| D17 | [D_LspUsabilityAudit.md](D_LspUsabilityAudit.md) | LSP 易用性审查：覆盖矩阵、测试缺口与已知限制 | ✅ 已完成 | 2026-04-14 | 三维矩阵审查（10 符号类型 × 8 LSP 功能 × 6 文件范围）+ 25 新测试（DX12-01~25）+ 5 已知限制（KL-01~05）。改进需求 → DX13~DX16 |

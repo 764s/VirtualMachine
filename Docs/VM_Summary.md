@@ -242,8 +242,13 @@ Docs/
 | DX10 | 依赖图 + 全项目诊断 | ✅ | Include 依赖图 + RecompileDependents | ⭐⭐⭐ |
 | DX11 | VFS + Rename 状态 | ✅ | DocumentStore.RenameUri + 连续重命名修复 | ⭐⭐ |
 | DX12 | 后台编译调度 | ⚪ | debounce + 取消 + 缓存（远期待激活） | ⭐⭐ |
+| DX13 | 参数 LSP 完整支持 | ⏳ | KL-01 参数引用含声明位置 + KL-02 参数重命名。讨论 → [D_LspUsabilityAudit](Discussion/D_LspUsabilityAudit.md) | ⭐⭐ |
+| DX14 | Rename 完整性补全 | ⏳ | KL-03 struct 字面量名计入 struct 重命名编辑。讨论 → [D_LspUsabilityAudit](Discussion/D_LspUsabilityAudit.md) | ⭐ |
+| DX15 | Private 跨文件补全过滤 | ⏳ | KL-04 private 符号不出现在 include 文件的补全中。讨论 → [D_LspUsabilityAudit](Discussion/D_LspUsabilityAudit.md) | ⭐⭐ |
+| DX16 | 变量引用作用域隔离 | ⏳ | KL-05 同名变量引用按作用域精确匹配。讨论 → [D_LspUsabilityAudit](Discussion/D_LspUsabilityAudit.md) | ⭐⭐⭐ |
 
-**Lang/DX 系列全部完成。当前位置 → C 区间（宿主集成侧，待宿主 ECS 就绪）。**
+**Lang 系列全部完成。DX13~DX16 ⏳ 待排期（LSP 审查改进）。当前位置 → DX13。**
+**DX12（后台编译调度）⚪ 远期待激活。C 区间阻塞于宿主 ECS 就绪。**
 
 ---
 
@@ -302,7 +307,7 @@ Docs/
 | 部署架构 (MI) | MI-1~MI-5 | — |
 | 结构体 | MSV-F1 const 折叠、MSV-F2 @export struct（暂缓） | S4 ✅、SN1 ✅、SN2 ✅ |
 | Include | IA-F1 LSP、VIS-1 默认 private（暂缓） | Lang-15~18 ✅ |
-| LSP 架构 | DX12 后台编译（远期） | DX10 ✅、DX11 ✅ |
+| LSP 架构 | DX12 后台编译（远期）、DX13~DX16 审查改进（⏳） | DX10 ✅、DX11 ✅ |
 
 ### 优化展望
 
