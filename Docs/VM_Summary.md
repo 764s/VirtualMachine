@@ -32,6 +32,7 @@ Docs/
   Discussion/                ← 讨论区：设计探讨 / 方案对比 / 决策记录
   Plan/                      ← 计划区：确定步骤 / 无脑执行
   Emergency/                 ← 紧急区：恶性 / 影响深远缺陷的修复通道
+  BugFix/                    ← Bug 修复区：已知 Bug 的修复跟踪
   Practice/                  ← 实践区：探索性实践记录
   Reference/                 ← 参考区：技术规格 / 架构约束 / 示例脚本
 ```
@@ -39,6 +40,7 @@ Docs/
 - **Discussion/**：讨论区。设计探讨、方案对比、决策记录。状态：💬 讨论中 / ✅ 已完成讨论（可再次激活）。详见 [Discussion/README.md](Discussion/README.md)。
 - **Plan/**：计划区。确定步骤与检查清单，无脑执行。状态：⏳ 等待中 / 🔄 进行中 / ✅ 已完成。
 - **Emergency/**：紧急区。恶性/影响深远缺陷的独立修复通道。详见 [Emergency/README.md](Emergency/README.md)。
+- **BugFix/**：Bug 修复区。已知 Bug 的修复跟踪。与讨论区平行。详见 [BugFix/README.md](BugFix/README.md)。
 - **Practice/**：实践区。串行计划之外的探索性实践。
 - **Reference/**：参考区。技术规格、架构约束、示例脚本、背景文档、实现记录等长期引用文档。
 

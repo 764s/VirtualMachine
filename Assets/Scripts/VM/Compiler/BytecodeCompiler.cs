@@ -1145,7 +1145,17 @@ namespace FFVM.Compiler
                         continue;
                     }
 
-                    _errors.Add($"Module 'const' initializer must be a compile-time constant (line {decl.Line})");
+                    // B001: Check for specific enum member not-found error before generic message
+                    if (decl.Initializer is FieldAccessExpr constFa
+                        && constFa.Target is IdentifierExpr constFaId
+                        && _enumNames != null && _enumNames.Contains(constFaId.Name))
+                    {
+                        _errors.Add($"Enum '{constFaId.Name}' has no member '{constFa.FieldName}' (line {decl.Line})");
+                    }
+                    else
+                    {
+                        _errors.Add($"Module 'const' initializer must be a compile-time constant (line {decl.Line})");
+                    }
                     continue;
                 }
 
@@ -1172,7 +1182,17 @@ namespace FFVM.Compiler
                     }
                     else
                     {
-                        _errors.Add($"Module variable '{decl.Name}' initializer must be a compile-time constant (line {decl.Line})");
+                        // B001: Check for specific enum member not-found error before generic message
+                        if (decl.Initializer is FieldAccessExpr varFa
+                            && varFa.Target is IdentifierExpr varFaId
+                            && _enumNames != null && _enumNames.Contains(varFaId.Name))
+                        {
+                            _errors.Add($"Enum '{varFaId.Name}' has no member '{varFa.FieldName}' (line {decl.Line})");
+                        }
+                        else
+                        {
+                            _errors.Add($"Module variable '{decl.Name}' initializer must be a compile-time constant (line {decl.Line})");
+                        }
                     }
                 }
                 // else: no initializer → default zero (no entry in _moduleVarInitValues)

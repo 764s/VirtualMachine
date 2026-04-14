@@ -6336,6 +6336,329 @@ public static class LspTests
             }
         }
 
+        // ============================================================
+        // B001: Module-level symbol navigation bug fixes
+        // ============================================================
+
+        // B001-01: Definition on enum member in module-level const initializer (TagBit.WALK)
+        {
+            string source = "enum TagBit { WALK = 1, ATTACK = 2 }\nconst tags: int = TagBit.WALK\nfunc main() {\n    wait 1\n}";
+            var session = new LspBatchSession();
+            session.AddInitialize();
+            session.AddInitialized();
+            session.AddDidOpen("file:///b001_01.ffs", source);
+            // Line 1: "const tags: int = TagBit.WALK" → "WALK" at col 25 (0-based)
+            session.AddDefinition("file:///b001_01.ffs", 1, 25);
+            session.AddShutdown();
+            session.AddExit();
+            session.Run();
+
+            session.ExpectResponse(0);
+            var defResp = session.ExpectResponse(1);
+            Assert(defResp != null, "B001-01a: definition response for WALK in module const");
+            if (defResp != null)
+            {
+                var result = defResp.GetObject("result");
+                Assert(result != null, "B001-01b: definition result not null for enum member in module const");
+                if (result != null)
+                {
+                    var range = result.GetObject("range");
+                    var start = range?.GetObject("start");
+                    Assert(start != null && start.GetInt("line") == 0, $"B001-01c: WALK definition on line 0, got {start?.GetInt("line")}");
+                }
+            }
+        }
+
+        // B001-02: Definition on enum name in module-level const initializer (TagBit)
+        {
+            string source = "enum TagBit { WALK = 1, ATTACK = 2 }\nconst tags: int = TagBit.WALK\nfunc main() {\n    wait 1\n}";
+            var session = new LspBatchSession();
+            session.AddInitialize();
+            session.AddInitialized();
+            session.AddDidOpen("file:///b001_02.ffs", source);
+            // Line 1: "const tags: int = TagBit.WALK" → "TagBit" at col 18 (0-based)
+            session.AddDefinition("file:///b001_02.ffs", 1, 18);
+            session.AddShutdown();
+            session.AddExit();
+            session.Run();
+
+            session.ExpectResponse(0);
+            var defResp = session.ExpectResponse(1);
+            Assert(defResp != null, "B001-02a: definition response for TagBit in module const");
+            if (defResp != null)
+            {
+                var result = defResp.GetObject("result");
+                Assert(result != null, "B001-02b: definition result not null for enum name in module const");
+                if (result != null)
+                {
+                    var range = result.GetObject("range");
+                    var start = range?.GetObject("start");
+                    Assert(start != null && start.GetInt("line") == 0, $"B001-02c: TagBit definition on line 0, got {start?.GetInt("line")}");
+                }
+            }
+        }
+
+        // B001-03: Definition on enum type in module-level const type annotation
+        {
+            string source = "enum Color { RED = 1, GREEN = 2 }\nconst c: Color = Color.RED\nfunc main() {\n    wait 1\n}";
+            var session = new LspBatchSession();
+            session.AddInitialize();
+            session.AddInitialized();
+            session.AddDidOpen("file:///b001_03.ffs", source);
+            // Line 1: "const c: Color = Color.RED" → "Color" type annotation at col 9 (0-based)
+            session.AddDefinition("file:///b001_03.ffs", 1, 9);
+            session.AddShutdown();
+            session.AddExit();
+            session.Run();
+
+            session.ExpectResponse(0);
+            var defResp = session.ExpectResponse(1);
+            Assert(defResp != null, "B001-03a: definition response for Color in type annotation");
+            if (defResp != null)
+            {
+                var result = defResp.GetObject("result");
+                Assert(result != null, "B001-03b: definition result not null for enum type in module const type annotation");
+                if (result != null)
+                {
+                    var range = result.GetObject("range");
+                    var start = range?.GetObject("start");
+                    Assert(start != null && start.GetInt("line") == 0, $"B001-03c: Color definition on line 0, got {start?.GetInt("line")}");
+                }
+            }
+        }
+
+        // B001-04: Definition on module-level variable name itself
+        {
+            string source = "const speed: int = 5\nfunc main() {\n    wait speed\n}";
+            var session = new LspBatchSession();
+            session.AddInitialize();
+            session.AddInitialized();
+            session.AddDidOpen("file:///b001_04.ffs", source);
+            // Line 0: "const speed: int = 5" → "speed" at col 6 (0-based)
+            session.AddDefinition("file:///b001_04.ffs", 0, 6);
+            session.AddShutdown();
+            session.AddExit();
+            session.Run();
+
+            session.ExpectResponse(0);
+            var defResp = session.ExpectResponse(1);
+            Assert(defResp != null, "B001-04a: definition response for module-level const name");
+            if (defResp != null)
+            {
+                var result = defResp.GetObject("result");
+                Assert(result != null, "B001-04b: definition result not null for module const name");
+                if (result != null)
+                {
+                    var range = result.GetObject("range");
+                    var start = range?.GetObject("start");
+                    Assert(start != null && start.GetInt("line") == 0, $"B001-04c: speed definition on line 0, got {start?.GetInt("line")}");
+                }
+            }
+        }
+
+        // B001-05: Definition on module-level variable referenced from function body
+        {
+            string source = "struct HP { startFrame: int }\nconst hitPhase: HP = HP { startFrame: 3 }\nfunc main() {\n    var f: int = hitPhase.startFrame\n    wait f\n}";
+            var session = new LspBatchSession();
+            session.AddInitialize();
+            session.AddInitialized();
+            session.AddDidOpen("file:///b001_05.ffs", source);
+            // Line 3: "    var f: int = hitPhase.startFrame" → "hitPhase" at col 17 (0-based)
+            session.AddDefinition("file:///b001_05.ffs", 3, 17);
+            session.AddShutdown();
+            session.AddExit();
+            session.Run();
+
+            session.ExpectResponse(0);
+            var defResp = session.ExpectResponse(1);
+            Assert(defResp != null, "B001-05a: definition response for hitPhase in function body");
+            if (defResp != null)
+            {
+                var result = defResp.GetObject("result");
+                Assert(result != null, "B001-05b: definition result not null for module-level var from function body");
+                if (result != null)
+                {
+                    var range = result.GetObject("range");
+                    var start = range?.GetObject("start");
+                    Assert(start != null && start.GetInt("line") == 1, $"B001-05c: hitPhase definition on line 1, got {start?.GetInt("line")}");
+                }
+            }
+        }
+
+        // B001-06: References on enum member include usage in module-level const initializer
+        {
+            string source = "enum TagBit { WALK = 1, ATTACK = 2 }\nconst tags: int = TagBit.WALK\nfunc main() {\n    var x: int = TagBit.WALK\n    wait x\n}";
+            var session = new LspBatchSession();
+            session.AddInitialize();
+            session.AddInitialized();
+            session.AddDidOpen("file:///b001_06.ffs", source);
+            // Line 0: "enum TagBit { WALK = 1, ..." → "WALK" at col 14 (0-based)
+            session.AddReferences("file:///b001_06.ffs", 0, 14);
+            session.AddShutdown();
+            session.AddExit();
+            session.Run();
+
+            session.ExpectResponse(0);
+            var refsResp = session.ExpectResponse(1);
+            var refs = refsResp?.GetArray("result");
+            // Should find: (1) WALK decl, (2) TagBit.WALK in module const, (3) TagBit.WALK in func body
+            Assert(refs != null && refs.Count >= 3,
+                $"B001-06: enum member refs ≥3 (decl + module const + func body), got {refs?.Count ?? 0}");
+        }
+
+        // B001-07: References on struct type include module-level type annotation and struct literal
+        {
+            string source = "struct Box4 { ox: int, oy: int }\nconst box: Box4 = Box4 { ox: 1, oy: 2 }\nfunc main() {\n    var b: Box4 = Box4 { ox: 3, oy: 4 }\n    wait b.ox\n}";
+            var session = new LspBatchSession();
+            session.AddInitialize();
+            session.AddInitialized();
+            session.AddDidOpen("file:///b001_07.ffs", source);
+            // Line 0: "struct Box4 { ..." → "Box4" at col 7 (0-based)
+            session.AddReferences("file:///b001_07.ffs", 0, 7);
+            session.AddShutdown();
+            session.AddExit();
+            session.Run();
+
+            session.ExpectResponse(0);
+            var refsResp = session.ExpectResponse(1);
+            var refs = refsResp?.GetArray("result");
+            // Should find: (1) struct decl, (2) type annotation in module const, (3) struct literal in module const,
+            //              (4) type annotation in func body, (5) struct literal in func body
+            Assert(refs != null && refs.Count >= 4,
+                $"B001-07: struct refs ≥4 (decl + module type + func type + func literal), got {refs?.Count ?? 0}");
+        }
+
+        // B001-08: Definition on module-level variable name itself
+        {
+            string source = "const speed: int = 5\nfunc main() {\n    wait speed\n}";
+            var session = new LspBatchSession();
+            session.AddInitialize();
+            session.AddInitialized();
+            session.AddDidOpen("file:///b001_08.ffs", source);
+            // Line 0: "const speed: int = 5" → "speed" at col 6 (0-based)
+            session.AddDefinition("file:///b001_08.ffs", 0, 6);
+            session.AddShutdown();
+            session.AddExit();
+            session.Run();
+
+            session.ExpectResponse(0);
+            var defResp = session.ExpectResponse(1);
+            Assert(defResp != null, "B001-08a: definition response for module-level const name");
+            if (defResp != null)
+            {
+                var result = defResp.GetObject("result");
+                Assert(result != null, "B001-08b: definition result not null for module const name");
+                if (result != null)
+                {
+                    var range = result.GetObject("range");
+                    var start = range?.GetObject("start");
+                    Assert(start != null && start.GetInt("line") == 0, $"B001-08c: speed definition on line 0, got {start?.GetInt("line")}");
+                }
+            }
+        }
+
+        // B001-09: References on module-level variable include declaration + function body usage
+        {
+            string source = "const speed: int = 5\nfunc main() {\n    var x: int = speed\n    wait x\n}";
+            var session = new LspBatchSession();
+            session.AddInitialize();
+            session.AddInitialized();
+            session.AddDidOpen("file:///b001_09.ffs", source);
+            // Line 0: "const speed: int = 5" → "speed" at col 6 (0-based)
+            session.AddReferences("file:///b001_09.ffs", 0, 6);
+            session.AddShutdown();
+            session.AddExit();
+            session.Run();
+
+            session.ExpectResponse(0);
+            var refsResp = session.ExpectResponse(1);
+            var refs = refsResp?.GetArray("result");
+            // Should find: (1) declaration, (2) usage in func body
+            Assert(refs != null && refs.Count >= 2,
+                $"B001-09: module var refs ≥2 (decl + func usage), got {refs?.Count ?? 0}");
+        }
+
+        // B001-10: Non-existent enum member in module const gives specific error message
+        {
+            string source = "enum TagBit { WALK = 1 }\nconst tags: int = TagBit.NONEXISTENT\nfunc main() {\n    wait 1\n}";
+            var session = new LspBatchSession();
+            session.AddInitialize();
+            session.AddInitialized();
+            session.AddDidOpen("file:///b001_10.ffs", source);
+            session.AddShutdown();
+            session.AddExit();
+            session.Run();
+
+            var allDiags = session.FindAllNotifications("textDocument/publishDiagnostics");
+            bool foundSpecificError = false;
+            foreach (var diag in allDiags)
+            {
+                var diagParams = diag.GetObject("params");
+                var diagArr = diagParams?.GetArray("diagnostics");
+                if (diagArr != null)
+                {
+                    foreach (var d in diagArr)
+                    {
+                        var diagObj = d as JsonObject;
+                        string diagMsg = diagObj?.GetString("message") ?? "";
+                        if (diagMsg.Contains("has no member") && diagMsg.Contains("NONEXISTENT"))
+                            foundSpecificError = true;
+                    }
+                }
+            }
+            Assert(foundSpecificError, "B001-10: non-existent enum member gives 'has no member' error");
+        }
+
+        // B001-11: References on enum name include usage in module-level const initializer
+        {
+            string source = "enum InputBit { UP = 1, DOWN = 2 }\nconst dir: int = InputBit.UP\nfunc main() {\n    var x: int = InputBit.DOWN\n    wait x\n}";
+            var session = new LspBatchSession();
+            session.AddInitialize();
+            session.AddInitialized();
+            session.AddDidOpen("file:///b001_11.ffs", source);
+            // Line 0: "enum InputBit { ..." → "InputBit" at col 5 (0-based)
+            session.AddReferences("file:///b001_11.ffs", 0, 5);
+            session.AddShutdown();
+            session.AddExit();
+            session.Run();
+
+            session.ExpectResponse(0);
+            var refsResp = session.ExpectResponse(1);
+            var refs = refsResp?.GetArray("result");
+            // Should find: (1) enum decl, (2) InputBit in module const, (3) InputBit in func body
+            Assert(refs != null && refs.Count >= 3,
+                $"B001-11: enum name refs ≥3 (decl + module const + func body), got {refs?.Count ?? 0}");
+        }
+
+        // B001-12: Definition on function call in module-level initializer
+        {
+            string source = "func helper(): int {\n    return 42\n}\nconst val: int = helper()\nfunc main() {\n    wait val\n}";
+            var session = new LspBatchSession();
+            session.AddInitialize();
+            session.AddInitialized();
+            session.AddDidOpen("file:///b001_12.ffs", source);
+            // Line 3: "const val: int = helper()" → "helper" at col 17 (0-based)
+            session.AddDefinition("file:///b001_12.ffs", 3, 17);
+            session.AddShutdown();
+            session.AddExit();
+            session.Run();
+
+            session.ExpectResponse(0);
+            var defResp = session.ExpectResponse(1);
+            Assert(defResp != null, "B001-12a: definition response for func call in module const");
+            if (defResp != null)
+            {
+                var result = defResp.GetObject("result");
+                Assert(result != null, "B001-12b: definition result not null for func call in module const");
+                if (result != null)
+                {
+                    var range = result.GetObject("range");
+                    var start = range?.GetObject("start");
+                    Assert(start != null && start.GetInt("line") == 0, $"B001-12c: helper definition on line 0, got {start?.GetInt("line")}");
+                }
+            }
+        }
+
         Debug.Log($"\n===== LspTests: {passed} passed, {failed} failed =====");
     }
 
