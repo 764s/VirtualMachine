@@ -5,7 +5,7 @@
 
 ## 一、目标
 
-消除 LSP 引用收集的笛卡尔积复制问题。将 7 个引用 Walker 合并为 1 个 `UnifiedRefsWalker`，将 `CollectReferencesWithOrigin` 从 8 个 SymbolKindTag 分支简化为「声明位置 + 统一遍历」两阶段。
+消除 LSP 引用收集的笛卡尔积复制问题。将 8 个引用 Walker 合并为 1 个 `UnifiedRefsWalker`，将 `CollectReferencesWithOrigin` 从 8 个 SymbolKindTag 分支简化为「声明位置 + 统一遍历」两阶段。
 
 ## 二、变更
 
@@ -38,7 +38,7 @@
 
 ### 2.3 删除代码
 
-- 7 个旧 Walker 类：`CallRefsWalker`、`IdentRefsWalker`、`ScopedIdentRefsWalker`、`TypeRefsWalker`、`StructLiteralTypeRefsWalker`、`EnumIdentRefsWalker`、`FieldAccessRefsWalker`、`EnumMemberAccessRefsWalker`
+- 8 个旧 Walker 类：`CallRefsWalker`、`IdentRefsWalker`、`ScopedIdentRefsWalker`、`TypeRefsWalker`、`StructLiteralTypeRefsWalker`、`EnumIdentRefsWalker`、`FieldAccessRefsWalker`、`EnumMemberAccessRefsWalker`
 - 6 个旧 helper 方法：`CollectCallRefsInBlock`、`CollectIdentRefsInBlock`、`CollectScopedIdentRefsInBlock`、`CollectTypeRefsInBlock`、`CollectFieldAccessRefsInBlock`、`CollectEnumMemberAccessRefsInBlock`
 - 死代码 `CollectReferences`（无 Origin 版本，已无调用者）
 

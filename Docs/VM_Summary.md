@@ -250,7 +250,6 @@ Docs/
 | DX18 | 统一引用收集 | ✅ | 8 个引用 Walker → 1 个 UnifiedRefsWalker。CollectReferencesWithOrigin 8 分支 → CollectDeclarationLocations + 统一遍历 4 分支。死代码 CollectReferences 删除。LspServer.cs −242 行（4799→4557）。656 LSP 测试全通过。计划 → [Step_DX18_UnifiedRefCollection](Plan/Step_DX18_UnifiedRefCollection.md)　讨论 → [D_LspStructuralAudit](Discussion/D_LspStructuralAudit.md) | ⭐⭐⭐ |
 
 **Lang 系列全部完成。DX13 ✅ 完成。DX14 ✅ 完成。DX15 ✅ 完成。DX16 ✅ 完成。DX17 ✅ 完成。DX18 ✅ 完成。**
-**DX12（后台编译调度）⚪ 远期待激活。**
 **DX12（后台编译调度）⚪ 远期待激活。C 区间阻塞于宿主 ECS 就绪。**
 **语言易用性审查（D18）→ 7 项改进建议（UC-1~UC-7）已纳入 [Outlook §2.10](Plan/Outlook_And_Risks.md)。**
 
