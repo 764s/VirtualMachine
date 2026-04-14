@@ -6835,6 +6835,7 @@ public static class LspTests
         }
 
         // DX12-08: References on parameter finds decl + all usages
+        // DX13: Fixed — parameter declaration is now included in references (KL-01 resolved)
         {
             string source = "func calc(value: int): int {\n    var doubled: int = value + value\n    return doubled\n}";
             var session = new LspBatchSession();
@@ -6850,14 +6851,12 @@ public static class LspTests
             session.ExpectResponse(0);
             var refsResp = session.ExpectResponse(1);
             var refs = refsResp?.GetArray("result");
-            // Known: parameter decl may not be included as a reference location.
-            // 2 usages on line 1 (value + value) are the minimum expected.
-            Assert(refs != null && refs.Count >= 2,
-                $"DX12-08: parameter 'value' references ≥2 (usages in body), got {refs?.Count ?? 0}");
+            // DX13: 1 declaration (line 0) + 2 usages (line 1) = 3
+            Assert(refs != null && refs.Count >= 3,
+                $"DX12-08: parameter 'value' references ≥3 (decl + usages), got {refs?.Count ?? 0}");
         }
 
-        // DX12-09: Rename parameter — known limitation: parameter rename may not be supported.
-        // This test documents the current behavior.
+        // DX12-09: Rename parameter — DX13: parameter rename now supported (KL-02 resolved)
         {
             string source = "func calc(value: int): int {\n    var doubled: int = value + value\n    return doubled\n}";
             var session = new LspBatchSession();
@@ -6873,8 +6872,8 @@ public static class LspTests
             session.ExpectResponse(0);
             var renameResp = session.ExpectResponse(1);
             var result = renameResp?.GetObject("result");
-            // Note: If parameter rename is not supported, result will be null.
-            // If supported in the future, verify ≥3 edits (decl + 2 usages).
+            // DX13: Parameter rename now works — verify ≥3 edits (decl + 2 usages)
+            Assert(result != null, "DX12-09a: parameter rename returns non-null result");
             if (result != null)
             {
                 var changes = result.GetObject("changes");
@@ -6882,13 +6881,8 @@ public static class LspTests
                 {
                     int totalEdits = 0;
                     foreach (string k in changes.Keys) { var e = changes.GetArray(k); if (e != null) totalEdits += e.Count; }
-                    Assert(totalEdits >= 2, $"DX12-09: parameter rename produces ≥2 edits, got {totalEdits}");
+                    Assert(totalEdits >= 3, $"DX12-09b: parameter rename produces ≥3 edits, got {totalEdits}");
                 }
-            }
-            else
-            {
-                // Document known limitation: parameter rename not yet supported
-                Assert(true, "DX12-09: parameter rename not supported (known limitation, result is null)");
             }
         }
 
@@ -7499,6 +7493,271 @@ public static class LspTests
                     Assert(defUri.Contains("level0.ffs"),
                         $"DX12-25b: deep transitive definition URI → level0.ffs, got '{defUri}'");
                 }
+            }
+            finally
+            {
+                try { Directory.Delete(tmpDir, true); } catch { }
+            }
+        }
+
+        // ============================================================
+        // DX13: Parameter LSP complete support (KL-01 + KL-02)
+        //   Fixes from D_LspUsabilityAudit.md:
+        //   KL-01: parameter refs include declaration position
+        //   KL-02: parameter rename supported
+        // ============================================================
+
+        // DX13-01: Parameter references include declaration position (fixes KL-01)
+        {
+            string source = "func calc(value: int): int {\n    var doubled: int = value + value\n    return doubled\n}";
+            var session = new LspBatchSession();
+            session.AddInitialize();
+            session.AddInitialized();
+            session.AddDidOpen("file:///dx13_01.ffs", source);
+            // Cursor on usage of 'value' in body: line 1, col 26 ("value + value" → first "value")
+            session.AddReferences("file:///dx13_01.ffs", 1, 26);
+            session.AddShutdown();
+            session.AddExit();
+            session.Run();
+
+            session.ExpectResponse(0);
+            var refsResp = session.ExpectResponse(1);
+            var refs = refsResp?.GetArray("result");
+            // Must include: 1 declaration (line 0) + 2 usages (line 1) = 3
+            Assert(refs != null && refs.Count >= 3,
+                $"DX13-01a: parameter 'value' references ≥3 (decl + 2 usages), got {refs?.Count ?? 0}");
+            // Verify declaration position is included (line 0)
+            bool hasDeclRef = false;
+            if (refs != null)
+            {
+                foreach (var r in refs)
+                {
+                    var loc = r as JsonObject;
+                    var range = loc?.GetObject("range");
+                    var start = range?.GetObject("start");
+                    if (start != null && start.GetInt("line") == 0)
+                        hasDeclRef = true;
+                }
+            }
+            Assert(hasDeclRef, "DX13-01b: parameter references include declaration on line 0");
+        }
+
+        // DX13-02: Parameter rename from declaration site (fixes KL-02)
+        {
+            string source = "func calc(value: int): int {\n    var doubled: int = value + value\n    return doubled\n}";
+            var session = new LspBatchSession();
+            session.AddInitialize();
+            session.AddInitialized();
+            session.AddDidOpen("file:///dx13_02.ffs", source);
+            // Cursor on parameter declaration: line 0, col 10 ("value" in signature)
+            session.AddRename("file:///dx13_02.ffs", 0, 10, "val");
+            session.AddShutdown();
+            session.AddExit();
+            session.Run();
+
+            session.ExpectResponse(0);
+            var renameResp = session.ExpectResponse(1);
+            var result = renameResp?.GetObject("result");
+            Assert(result != null, "DX13-02a: parameter rename from declaration returns non-null result");
+            if (result != null)
+            {
+                var changes = result.GetObject("changes");
+                Assert(changes != null, "DX13-02b: rename WorkspaceEdit has changes");
+                if (changes != null)
+                {
+                    int totalEdits = 0;
+                    foreach (string k in changes.Keys) { var e = changes.GetArray(k); if (e != null) totalEdits += e.Count; }
+                    // 1 decl + 2 usages = 3 edits
+                    Assert(totalEdits >= 3, $"DX13-02c: parameter rename produces ≥3 edits (decl + usages), got {totalEdits}");
+                }
+            }
+        }
+
+        // DX13-03: Parameter rename from usage site in body
+        {
+            string source = "func calc(value: int): int {\n    var doubled: int = value + value\n    return doubled\n}";
+            var session = new LspBatchSession();
+            session.AddInitialize();
+            session.AddInitialized();
+            session.AddDidOpen("file:///dx13_03.ffs", source);
+            // Cursor on 'value' usage in body: line 1, col 26
+            session.AddRename("file:///dx13_03.ffs", 1, 26, "val");
+            session.AddShutdown();
+            session.AddExit();
+            session.Run();
+
+            session.ExpectResponse(0);
+            var renameResp = session.ExpectResponse(1);
+            var result = renameResp?.GetObject("result");
+            Assert(result != null, "DX13-03a: parameter rename from usage returns non-null result");
+            if (result != null)
+            {
+                var changes = result.GetObject("changes");
+                if (changes != null)
+                {
+                    int totalEdits = 0;
+                    foreach (string k in changes.Keys) { var e = changes.GetArray(k); if (e != null) totalEdits += e.Count; }
+                    // Must rename decl + all usages
+                    Assert(totalEdits >= 3, $"DX13-03b: parameter rename from usage produces ≥3 edits, got {totalEdits}");
+                }
+            }
+        }
+
+        // DX13-04: Parameter references scoped to correct function (multi-function same param name)
+        {
+            string source = "func foo(x: int): int {\n    return x + 1\n}\nfunc bar(x: int): int {\n    return x * 2\n}";
+            var session = new LspBatchSession();
+            session.AddInitialize();
+            session.AddInitialized();
+            session.AddDidOpen("file:///dx13_04.ffs", source);
+            // References on 'x' usage in foo (line 1, col 11 → "return x + 1")
+            session.AddReferences("file:///dx13_04.ffs", 1, 11);
+            session.AddShutdown();
+            session.AddExit();
+            session.Run();
+
+            session.ExpectResponse(0);
+            var refsResp = session.ExpectResponse(1);
+            var refs = refsResp?.GetArray("result");
+            // foo's 'x': 1 decl (line 0) + 1 usage (line 1) = 2
+            Assert(refs != null && refs.Count == 2,
+                $"DX13-04a: parameter 'x' in foo: exactly 2 refs (decl + usage), got {refs?.Count ?? 0}");
+        }
+
+        // DX13-05: Parameter rename scoped to correct function
+        {
+            string source = "func foo(x: int): int {\n    return x + 1\n}\nfunc bar(x: int): int {\n    return x * 2\n}";
+            var session = new LspBatchSession();
+            session.AddInitialize();
+            session.AddInitialized();
+            session.AddDidOpen("file:///dx13_05.ffs", source);
+            // Rename 'x' in foo (line 0, col 9 → param decl)
+            session.AddRename("file:///dx13_05.ffs", 0, 9, "y");
+            session.AddShutdown();
+            session.AddExit();
+            session.Run();
+
+            session.ExpectResponse(0);
+            var renameResp = session.ExpectResponse(1);
+            var result = renameResp?.GetObject("result");
+            Assert(result != null, "DX13-05a: parameter rename in foo returns non-null");
+            if (result != null)
+            {
+                var changes = result.GetObject("changes");
+                if (changes != null)
+                {
+                    int totalEdits = 0;
+                    foreach (string k in changes.Keys) { var e = changes.GetArray(k); if (e != null) totalEdits += e.Count; }
+                    // Only foo's x: 1 decl + 1 usage = 2
+                    Assert(totalEdits == 2, $"DX13-05b: parameter rename scoped to foo, exactly 2 edits, got {totalEdits}");
+                }
+            }
+        }
+
+        // DX13-06: Go-to-definition on parameter usage navigates to declaration position
+        {
+            string source = "func process(name: string, count: int): int {\n    return count + 1\n}";
+            var session = new LspBatchSession();
+            session.AddInitialize();
+            session.AddInitialized();
+            session.AddDidOpen("file:///dx13_06.ffs", source);
+            // Cursor on 'count' usage in body: line 1, col 11
+            session.AddDefinition("file:///dx13_06.ffs", 1, 11);
+            session.AddShutdown();
+            session.AddExit();
+            session.Run();
+
+            session.ExpectResponse(0);
+            var defResp = session.ExpectResponse(1);
+            var defResult = defResp?.GetObject("result");
+            Assert(defResult != null, "DX13-06a: go-to-definition on parameter usage returns result");
+            if (defResult != null)
+            {
+                var start = defResult.GetObject("range")?.GetObject("start");
+                // 'count' declared at line 0, col 27 ("func process(name: string, count: int)")
+                Assert(start != null && start.GetInt("line") == 0,
+                    $"DX13-06b: parameter definition on line 0, got {start?.GetInt("line")}");
+            }
+        }
+
+        // DX13-07: Hover on parameter declaration shows type info
+        {
+            string source = "func greet(msg: string): string {\n    return msg\n}";
+            var session = new LspBatchSession();
+            session.AddInitialize();
+            session.AddInitialized();
+            session.AddDidOpen("file:///dx13_07.ffs", source);
+            // Cursor on 'msg' param declaration: line 0, col 11
+            session.AddHover("file:///dx13_07.ffs", 0, 11);
+            session.AddShutdown();
+            session.AddExit();
+            session.Run();
+
+            session.ExpectResponse(0);
+            var hoverResp = session.ExpectResponse(1);
+            var hoverResult = hoverResp?.GetObject("result");
+            Assert(hoverResult != null, "DX13-07a: hover on parameter declaration returns result");
+            if (hoverResult != null)
+            {
+                var contents = hoverResult.GetObject("contents");
+                string value = contents?.GetString("value") ?? "";
+                Assert(value.Contains("parameter") && value.Contains("msg"),
+                    $"DX13-07b: hover shows parameter info, got '{value}'");
+            }
+        }
+
+        // DX13-08: Parameter references from declaration position
+        {
+            string source = "func add(a: int, b: int): int {\n    return a + b\n}";
+            var session = new LspBatchSession();
+            session.AddInitialize();
+            session.AddInitialized();
+            session.AddDidOpen("file:///dx13_08.ffs", source);
+            // Cursor on 'a' param declaration: line 0, col 9
+            session.AddReferences("file:///dx13_08.ffs", 0, 9);
+            session.AddShutdown();
+            session.AddExit();
+            session.Run();
+
+            session.ExpectResponse(0);
+            var refsResp = session.ExpectResponse(1);
+            var refs = refsResp?.GetArray("result");
+            // 'a': 1 decl (line 0) + 1 usage (line 1) = 2
+            Assert(refs != null && refs.Count >= 2,
+                $"DX13-08: parameter 'a' refs from declaration ≥2, got {refs?.Count ?? 0}");
+        }
+
+        // DX13-09: Cross-file parameter references (param in included file function)
+        {
+            string tmpDir = Path.Combine(Path.GetTempPath(), $"dx13_{Guid.NewGuid().ToString("N").Substring(0, 8)}");
+            Directory.CreateDirectory(tmpDir);
+            try
+            {
+                string libSource = "func double(n: int): int {\n    return n + n\n}";
+                string mainSource = "include \"lib.ffs\"\nfunc main(): int {\n    return double(5)\n}";
+                File.WriteAllText(Path.Combine(tmpDir, "lib.ffs"), libSource);
+                File.WriteAllText(Path.Combine(tmpDir, "main.ffs"), mainSource);
+
+                string libUri = "file://" + Path.Combine(tmpDir, "lib.ffs").Replace("\\", "/");
+                string mainUri = "file://" + Path.Combine(tmpDir, "main.ffs").Replace("\\", "/");
+
+                var session = new LspBatchSession();
+                session.AddInitializeWithRootUri("file://" + tmpDir.Replace("\\", "/"));
+                session.AddInitialized();
+                session.AddDidOpen(mainUri, mainSource);
+                session.AddDidOpen(libUri, libSource);
+                // References on 'n' in lib.ffs (usage): line 1, col 11 ("return n + n" → first n)
+                session.AddReferences(libUri, 1, 11);
+                session.AddShutdown();
+                session.AddExit();
+                session.Run();
+
+                session.ExpectResponse(0);
+                var refsResp = session.ExpectResponse(1);
+                var refs = refsResp?.GetArray("result");
+                // 'n': 1 decl (line 0) + 2 usages (line 1) = 3
+                Assert(refs != null && refs.Count >= 3,
+                    $"DX13-09: cross-file param 'n' refs ≥3 (decl + usages), got {refs?.Count ?? 0}");
             }
             finally
             {

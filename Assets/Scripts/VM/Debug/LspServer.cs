@@ -1492,15 +1492,20 @@ namespace FFVM.Debug
             // Walk function bodies for identifiers, calls, var decls
             foreach (var func in ast.Functions)
             {
-                string result = FindHoverInBlock(ast, func, func.Body, line, col);
-                if (result != null) return result;
-
-                // Check parameters
+                // DX13: Check parameter declarations in function signature
                 foreach (var param in func.Parameters)
                 {
-                    // Parameters don't have their own Line/Column, approximate from function
-                    // We'll match them by name when found as IdentifierExpr in the body
+                    if (param.NameLine > 0 && param.NameLine == line && ColMatches(param.NameColumn, param.Name.Length, col))
+                    {
+                        string paramHover = $"(parameter) {FormatParamDecl(param)}";
+                        if (param.DocComment != null)
+                            paramHover += $"\n\n{param.DocComment}";
+                        return paramHover;
+                    }
                 }
+
+                string result = FindHoverInBlock(ast, func, func.Body, line, col);
+                if (result != null) return result;
             }
 
             return null;
@@ -1936,7 +1941,7 @@ namespace FFVM.Debug
 
             // DX4-P3: Use merged AST for cross-file reference collection
             var locs = new List<object>();
-            CollectReferencesWithOrigin(mergedAst, target.Value.name, target.Value.kind, uri, locs, target.Value.parentName);
+            CollectReferencesWithOrigin(mergedAst, target.Value.name, target.Value.kind, uri, locs, target.Value.parentName, target.Value.scopeFunc);
             return MakeArrayResult(locs);
         }
 
@@ -2548,6 +2553,13 @@ namespace FFVM.Debug
                 int nameStart = func.Column + "func".Length + 1;
                 if (func.Line == line && ColMatches(nameStart, func.Name.Length, col))
                     return new SymbolAtPosition { name = func.Name, kind = SymbolKindTag.Function };
+
+                // DX13: Check parameter declarations in function signature
+                foreach (var p in func.Parameters)
+                {
+                    if (p.NameLine > 0 && p.NameLine == line && ColMatches(p.NameColumn, p.Name.Length, col))
+                        return new SymbolAtPosition { name = p.Name, kind = SymbolKindTag.Parameter, scopeFunc = func.Name };
+                }
             }
 
             // Check struct names
@@ -2852,8 +2864,10 @@ namespace FFVM.Debug
                             {
                                 if (p.Name == name)
                                 {
-                                    // Parameters don't have their own Line/Column;
-                                    // use the function declaration line
+                                    // DX13: Use precise parameter name position (DX9 NameLine/NameColumn)
+                                    if (p.NameLine > 0)
+                                        return (p.NameLine, p.NameColumn, p.Name.Length, func.OriginFile);
+                                    // Fallback to function declaration line if position not available
                                     return (func.Line, func.Column, func.Name.Length, func.OriginFile);
                                 }
                             }
@@ -2972,8 +2986,9 @@ namespace FFVM.Debug
         /// DX4-P3/DX5: Collect references with cross-file URI resolution via OriginFile.
         /// For function/struct/enum declarations, resolves URI based on OriginFile.
         /// For call sites and usages within function bodies, uses the function's OriginFile.
+        /// DX13: scopeFunc scopes Parameter references to the declaring function.
         /// </summary>
-        private void CollectReferencesWithOrigin(ModuleNode ast, string name, SymbolKindTag kind, string requestingUri, List<object> locations, string parentName = null)
+        private void CollectReferencesWithOrigin(ModuleNode ast, string name, SymbolKindTag kind, string requestingUri, List<object> locations, string parentName = null, string scopeFunc = null)
         {
             if (kind == SymbolKindTag.Function)
             {
@@ -3193,7 +3208,31 @@ namespace FFVM.Debug
                     }
                 }
             }
-            else // Variable or Parameter
+            // DX13: Parameter references — declaration + usages scoped to declaring function
+            else if (kind == SymbolKindTag.Parameter && scopeFunc != null)
+            {
+                foreach (var func in ast.Functions)
+                {
+                    if (func.Name == scopeFunc)
+                    {
+                        string funcUri = ResolveOriginUri(requestingUri, func.OriginFile);
+                        // Include parameter declaration position
+                        foreach (var p in func.Parameters)
+                        {
+                            if (p.Name == name && p.NameLine > 0)
+                            {
+                                locations.Add(MakeLocation(funcUri, p.NameLine, p.NameColumn, name.Length));
+                                break;
+                            }
+                        }
+                        // Collect usages in the function body
+                        if (func.Body != null)
+                            CollectIdentRefsInBlock(func.Body, name, funcUri, locations);
+                        break;
+                    }
+                }
+            }
+            else // Variable
             {
                 foreach (var func in ast.Functions)
                 {
@@ -3862,7 +3901,7 @@ namespace FFVM.Debug
 
             // Collect all reference locations
             var locations = new List<object>();
-            CollectReferencesWithOrigin(mergedAst, target.Value.name, target.Value.kind, uri, locations, target.Value.parentName);
+            CollectReferencesWithOrigin(mergedAst, target.Value.name, target.Value.kind, uri, locations, target.Value.parentName, target.Value.scopeFunc);
 
             // Group locations by URI → text edits
             var editsByUri = new Dictionary<string, List<object>>();
