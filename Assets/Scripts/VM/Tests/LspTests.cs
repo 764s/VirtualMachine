@@ -7402,16 +7402,8 @@ public static class LspTests
                     }
                 }
                 Assert(hasVisible, "DX12-23a: public function 'visible' appears in cross-file completion");
-                // Known limitation: private visibility filtering may not be fully enforced in completion.
-                // If private filtering is implemented in the future, this assertion should be !hasSecret.
-                if (!hasSecret)
-                {
-                    Assert(true, "DX12-23b: private function 'secret' correctly hidden from cross-file completion");
-                }
-                else
-                {
-                    Assert(true, "DX12-23b: private function 'secret' appears in cross-file completion (known limitation — private filter not enforced)");
-                }
+                // DX15: Private visibility filtering now enforced — private functions hidden from cross-file completion
+                Assert(!hasSecret, "DX12-23b: private function 'secret' correctly hidden from cross-file completion");
             }
             finally
             {
@@ -7944,6 +7936,303 @@ public static class LspTests
                     // decl + 2 type annotations + 2 struct literals = 5
                     Assert(totalEdits >= 5, $"DX14-05c: rename produces ≥5 edits (decl + 2 types + 2 literals), got {totalEdits}");
                 }
+            }
+        }
+
+        // ============================================================
+        // DX15: Private cross-file completion filter (KL-04)
+        // ============================================================
+
+        // DX15-01: Private func hidden, public func visible in cross-file completion
+        {
+            string tmpDir = Path.Combine(Path.GetTempPath(), "dx15_" + Guid.NewGuid().ToString("N").Substring(0, 8));
+            Directory.CreateDirectory(tmpDir);
+            try
+            {
+                File.WriteAllText(Path.Combine(tmpDir, "lib.ffs"),
+                    "private func secretFunc(): int { return 42 }\nfunc publicFunc(): int { return 1 }");
+                string rootUri = "file:///" + tmpDir.TrimStart('/').Replace("\\", "/");
+                string mainSource = "include \"lib\"\nfunc main() {\n    \n}";
+                string mainUri = rootUri + "/main.ffs";
+
+                var session = new LspBatchSession();
+                session.AddInitializeWithRootUri(rootUri);
+                session.AddInitialized();
+                session.AddDidOpen(mainUri, mainSource);
+                session.AddCompletion(mainUri, 2, 4);
+                session.AddShutdown();
+                session.AddExit();
+                session.Run();
+
+                session.ExpectResponse(0);
+                var compResp = session.ExpectResponse(1);
+                var items = compResp?.GetArray("result");
+                bool hasSecret = false, hasPublic = false;
+                if (items != null)
+                {
+                    foreach (var item in items)
+                    {
+                        var obj = item as JsonObject;
+                        if (obj?.GetString("label") == "secretFunc") hasSecret = true;
+                        if (obj?.GetString("label") == "publicFunc") hasPublic = true;
+                    }
+                }
+                Assert(hasPublic, "DX15-01a: public function visible in cross-file completion");
+                Assert(!hasSecret, "DX15-01b: private function hidden from cross-file completion");
+            }
+            finally
+            {
+                try { Directory.Delete(tmpDir, true); } catch { }
+            }
+        }
+
+        // DX15-02: Private struct hidden, public struct visible in cross-file completion
+        {
+            string tmpDir = Path.Combine(Path.GetTempPath(), "dx15_" + Guid.NewGuid().ToString("N").Substring(0, 8));
+            Directory.CreateDirectory(tmpDir);
+            try
+            {
+                File.WriteAllText(Path.Combine(tmpDir, "types.ffs"),
+                    "private struct Secret { x: int }\nstruct Public { y: int }");
+                string rootUri = "file:///" + tmpDir.TrimStart('/').Replace("\\", "/");
+                string mainSource = "include \"types\"\nfunc main() {\n    \n}";
+                string mainUri = rootUri + "/main.ffs";
+
+                var session = new LspBatchSession();
+                session.AddInitializeWithRootUri(rootUri);
+                session.AddInitialized();
+                session.AddDidOpen(mainUri, mainSource);
+                session.AddCompletion(mainUri, 2, 4);
+                session.AddShutdown();
+                session.AddExit();
+                session.Run();
+
+                session.ExpectResponse(0);
+                var compResp = session.ExpectResponse(1);
+                var items = compResp?.GetArray("result");
+                bool hasSecret = false, hasPublic = false;
+                if (items != null)
+                {
+                    foreach (var item in items)
+                    {
+                        var obj = item as JsonObject;
+                        if (obj?.GetString("label") == "Secret") hasSecret = true;
+                        if (obj?.GetString("label") == "Public") hasPublic = true;
+                    }
+                }
+                Assert(hasPublic, "DX15-02a: public struct visible in cross-file completion");
+                Assert(!hasSecret, "DX15-02b: private struct hidden from cross-file completion");
+            }
+            finally
+            {
+                try { Directory.Delete(tmpDir, true); } catch { }
+            }
+        }
+
+        // DX15-03: Private enum hidden, public enum visible in cross-file completion
+        {
+            string tmpDir = Path.Combine(Path.GetTempPath(), "dx15_" + Guid.NewGuid().ToString("N").Substring(0, 8));
+            Directory.CreateDirectory(tmpDir);
+            try
+            {
+                File.WriteAllText(Path.Combine(tmpDir, "enums.ffs"),
+                    "private enum SecretEnum { A, B }\nenum PublicEnum { X, Y }");
+                string rootUri = "file:///" + tmpDir.TrimStart('/').Replace("\\", "/");
+                string mainSource = "include \"enums\"\nfunc main() {\n    \n}";
+                string mainUri = rootUri + "/main.ffs";
+
+                var session = new LspBatchSession();
+                session.AddInitializeWithRootUri(rootUri);
+                session.AddInitialized();
+                session.AddDidOpen(mainUri, mainSource);
+                session.AddCompletion(mainUri, 2, 4);
+                session.AddShutdown();
+                session.AddExit();
+                session.Run();
+
+                session.ExpectResponse(0);
+                var compResp = session.ExpectResponse(1);
+                var items = compResp?.GetArray("result");
+                bool hasSecret = false, hasPublic = false;
+                if (items != null)
+                {
+                    foreach (var item in items)
+                    {
+                        var obj = item as JsonObject;
+                        if (obj?.GetString("label") == "SecretEnum") hasSecret = true;
+                        if (obj?.GetString("label") == "PublicEnum") hasPublic = true;
+                    }
+                }
+                Assert(hasPublic, "DX15-03a: public enum visible in cross-file completion");
+                Assert(!hasSecret, "DX15-03b: private enum hidden from cross-file completion");
+            }
+            finally
+            {
+                try { Directory.Delete(tmpDir, true); } catch { }
+            }
+        }
+
+        // DX15-04: Private module variable hidden, public visible in cross-file completion
+        {
+            string tmpDir = Path.Combine(Path.GetTempPath(), "dx15_" + Guid.NewGuid().ToString("N").Substring(0, 8));
+            Directory.CreateDirectory(tmpDir);
+            try
+            {
+                File.WriteAllText(Path.Combine(tmpDir, "vars.ffs"),
+                    "private var secretVar: int = 42\nvar publicVar: int = 1");
+                string rootUri = "file:///" + tmpDir.TrimStart('/').Replace("\\", "/");
+                string mainSource = "include \"vars\"\nfunc main() {\n    \n}";
+                string mainUri = rootUri + "/main.ffs";
+
+                var session = new LspBatchSession();
+                session.AddInitializeWithRootUri(rootUri);
+                session.AddInitialized();
+                session.AddDidOpen(mainUri, mainSource);
+                session.AddCompletion(mainUri, 2, 4);
+                session.AddShutdown();
+                session.AddExit();
+                session.Run();
+
+                session.ExpectResponse(0);
+                var compResp = session.ExpectResponse(1);
+                var items = compResp?.GetArray("result");
+                bool hasSecret = false, hasPublic = false;
+                if (items != null)
+                {
+                    foreach (var item in items)
+                    {
+                        var obj = item as JsonObject;
+                        if (obj?.GetString("label") == "secretVar") hasSecret = true;
+                        if (obj?.GetString("label") == "publicVar") hasPublic = true;
+                    }
+                }
+                Assert(hasPublic, "DX15-04a: public module variable visible in cross-file completion");
+                Assert(!hasSecret, "DX15-04b: private module variable hidden from cross-file completion");
+            }
+            finally
+            {
+                try { Directory.Delete(tmpDir, true); } catch { }
+            }
+        }
+
+        // DX15-05: Private func/struct/enum visible in same-file completion (not filtered)
+        {
+            string sameFileSource = "private func mySecret(): int { return 1 }\nprivate struct MyStruct { x: int }\nprivate enum MyEnum { A }\nfunc main() {\n    \n}";
+            string sameFileUri = "file:///test/same.ffs";
+
+            var session = new LspBatchSession();
+            session.AddInitialize();
+            session.AddInitialized();
+            session.AddDidOpen(sameFileUri, sameFileSource);
+            session.AddCompletion(sameFileUri, 4, 4);
+            session.AddShutdown();
+            session.AddExit();
+            session.Run();
+
+            session.ExpectResponse(0);
+            var compResp = session.ExpectResponse(1);
+            var items = compResp?.GetArray("result");
+            bool hasFunc = false, hasStruct = false, hasEnum = false;
+            if (items != null)
+            {
+                foreach (var item in items)
+                {
+                    var obj = item as JsonObject;
+                    if (obj?.GetString("label") == "mySecret") hasFunc = true;
+                    if (obj?.GetString("label") == "MyStruct") hasStruct = true;
+                    if (obj?.GetString("label") == "MyEnum") hasEnum = true;
+                }
+            }
+            Assert(hasFunc, "DX15-05a: private func visible in same-file completion");
+            Assert(hasStruct, "DX15-05b: private struct visible in same-file completion");
+            Assert(hasEnum, "DX15-05c: private enum visible in same-file completion");
+        }
+
+        // DX15-06: Mixed visibility — only public symbols from included file, private still in own file
+        {
+            string tmpDir = Path.Combine(Path.GetTempPath(), "dx15_" + Guid.NewGuid().ToString("N").Substring(0, 8));
+            Directory.CreateDirectory(tmpDir);
+            try
+            {
+                File.WriteAllText(Path.Combine(tmpDir, "lib.ffs"),
+                    "private func libPrivate(): int { return 0 }\nfunc libPublic(): int { return 1 }");
+                string rootUri = "file:///" + tmpDir.TrimStart('/').Replace("\\", "/");
+                string mainSource = "include \"lib\"\nprivate func myPrivate(): int { return 2 }\nfunc main() {\n    \n}";
+                string mainUri = rootUri + "/main.ffs";
+
+                var session = new LspBatchSession();
+                session.AddInitializeWithRootUri(rootUri);
+                session.AddInitialized();
+                session.AddDidOpen(mainUri, mainSource);
+                session.AddCompletion(mainUri, 3, 4);
+                session.AddShutdown();
+                session.AddExit();
+                session.Run();
+
+                session.ExpectResponse(0);
+                var compResp = session.ExpectResponse(1);
+                var items = compResp?.GetArray("result");
+                bool hasLibPrivate = false, hasLibPublic = false, hasMyPrivate = false;
+                if (items != null)
+                {
+                    foreach (var item in items)
+                    {
+                        var obj = item as JsonObject;
+                        if (obj?.GetString("label") == "libPrivate") hasLibPrivate = true;
+                        if (obj?.GetString("label") == "libPublic") hasLibPublic = true;
+                        if (obj?.GetString("label") == "myPrivate") hasMyPrivate = true;
+                    }
+                }
+                Assert(hasLibPublic, "DX15-06a: public function from included file visible");
+                Assert(!hasLibPrivate, "DX15-06b: private function from included file hidden");
+                Assert(hasMyPrivate, "DX15-06c: own private function still visible");
+            }
+            finally
+            {
+                try { Directory.Delete(tmpDir, true); } catch { }
+            }
+        }
+
+        // DX15-07: Private const hidden from cross-file completion
+        {
+            string tmpDir = Path.Combine(Path.GetTempPath(), "dx15_" + Guid.NewGuid().ToString("N").Substring(0, 8));
+            Directory.CreateDirectory(tmpDir);
+            try
+            {
+                File.WriteAllText(Path.Combine(tmpDir, "consts.ffs"),
+                    "private const SECRET_VAL: int = 99\nconst PUBLIC_VAL: int = 42");
+                string rootUri = "file:///" + tmpDir.TrimStart('/').Replace("\\", "/");
+                string mainSource = "include \"consts\"\nfunc main() {\n    \n}";
+                string mainUri = rootUri + "/main.ffs";
+
+                var session = new LspBatchSession();
+                session.AddInitializeWithRootUri(rootUri);
+                session.AddInitialized();
+                session.AddDidOpen(mainUri, mainSource);
+                session.AddCompletion(mainUri, 2, 4);
+                session.AddShutdown();
+                session.AddExit();
+                session.Run();
+
+                session.ExpectResponse(0);
+                var compResp = session.ExpectResponse(1);
+                var items = compResp?.GetArray("result");
+                bool hasSecret = false, hasPublic = false;
+                if (items != null)
+                {
+                    foreach (var item in items)
+                    {
+                        var obj = item as JsonObject;
+                        if (obj?.GetString("label") == "SECRET_VAL") hasSecret = true;
+                        if (obj?.GetString("label") == "PUBLIC_VAL") hasPublic = true;
+                    }
+                }
+                Assert(hasPublic, "DX15-07a: public const visible in cross-file completion");
+                Assert(!hasSecret, "DX15-07b: private const hidden from cross-file completion");
+            }
+            finally
+            {
+                try { Directory.Delete(tmpDir, true); } catch { }
             }
         }
 

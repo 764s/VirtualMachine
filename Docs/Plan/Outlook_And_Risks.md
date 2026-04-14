@@ -876,10 +876,10 @@ Gate 3: Unity Editor 内嵌 DAP（可选）             ← DBG7 Phase C
 | **DX12** | 后台编译调度 | ⚪ | debounce + 取消机制 + 编译结果缓存。讨论来源 → [D_LspArchitecture.md](../Discussion/D_LspArchitecture.md) | DX11 ✅ |
 | **DX13** | 参数 LSP 完整支持 | ✅ 完成 | KL-01 参数引用包含声明位置（CollectReferencesWithOrigin Parameter 分支 + scopeFunc 作用域）+ KL-02 参数重命名支持（FindSymbolAtPosition 签名检测 + HandleRename 参数符号类型）+ FindDefinitionLocation 精确参数位置 + FindHoverText 签名参数悬停。DX13-01~09 全通过（16 asserts），DX12-08/09 升级断言。2228 测试总计（608 LSP）。计划 → [Step_DX13_ParameterLsp.md](Step_DX13_ParameterLsp.md)　讨论来源 → [D_LspUsabilityAudit.md](../Discussion/D_LspUsabilityAudit.md) §七/§九 | DX11 ✅ |
 | **DX14** | Rename 完整性补全 | ✅ 完成 | KL-03 struct 字面量名 `Vec2 { ... }` 中的 `Vec2` 计入 struct rename 编辑（CollectReferencesWithOrigin Struct 分支追加 StructLiteralTypeRefsWalker 函数体走查）。DX14-01~05 全通过（14 asserts），DX12-12 升级 ≥3 断言。2248 测试总计（622 LSP）。计划 → [Step_DX14_RenameCompleteness.md](Step_DX14_RenameCompleteness.md)　讨论来源 → [D_LspUsabilityAudit.md](../Discussion/D_LspUsabilityAudit.md) §七 | DX13 ✅ |
-| **DX15** | Private 跨文件补全过滤 | ⏳ | KL-04 `private func/struct/enum` 不出现在 include 文件的 completion 列表中（HandleCompletion 过滤 IsPrivate && OriginFile != currentFile）。讨论来源 → [D_LspUsabilityAudit.md](../Discussion/D_LspUsabilityAudit.md) §七 | DX14 ✅ |
+| **DX15** | Private 跨文件补全过滤 | ✅ 完成 | KL-04 `private func/struct/enum/var` 不出现在 include 文件的 completion 列表中（HandleCompletion 过滤 IsPrivate + IsFromOtherFile 守卫，dot-context 同步过滤）。DX15-01~07 全通过（16 asserts），DX12-23 升级严格断言。2264 测试总计（638 LSP）。计划 → [Step_DX15_PrivateCompletionFilter.md](Step_DX15_PrivateCompletionFilter.md)　讨论来源 → [D_LspUsabilityAudit.md](../Discussion/D_LspUsabilityAudit.md) §七 | DX14 ✅ |
 | **DX16** | 变量引用作用域隔离 | ⏳ | KL-05 同名变量 references 按作用域精确匹配（CollectReferencesWithOrigin 需 block-level scope tracking）。讨论来源 → [D_LspUsabilityAudit.md](../Discussion/D_LspUsabilityAudit.md) §七 | DX15 ✅ |
 
-> Lang-18 ✅ 完成。DX4-P0 ✅ 完成。DX4-P1 ✅ 完成。DX4-P2 ✅ 完成。DX4-P3 ✅ 完成。DX4-P4 ✅ 完成。DX5 ✅ 完成。DX6 ✅ 完成。DX7 ✅ 完成。DX8 ✅ 完成。DX9 ✅ 完成。E003 ✅ 完成。R1 ✅ 完成。E004 ✅ 完成。DX10 ✅ 完成。DX11 ✅ 完成。DX13 ✅ 完成。DX14 ✅ 完成。2248 测试总计（622 LSP）。DX12 ⚪ 远期待激活。DX15~DX16 ⏳ 待排期（LSP 审查改进 → [D_LspUsabilityAudit.md](../Discussion/D_LspUsabilityAudit.md)）。当前位置 → DX15。
+> Lang-18 ✅ 完成。DX4-P0 ✅ 完成。DX4-P1 ✅ 完成。DX4-P2 ✅ 完成。DX4-P3 ✅ 完成。DX4-P4 ✅ 完成。DX5 ✅ 完成。DX6 ✅ 完成。DX7 ✅ 完成。DX8 ✅ 完成。DX9 ✅ 完成。E003 ✅ 完成。R1 ✅ 完成。E004 ✅ 完成。DX10 ✅ 完成。DX11 ✅ 完成。DX13 ✅ 完成。DX14 ✅ 完成。DX15 ✅ 完成。2264 测试总计（638 LSP）。DX12 ⚪ 远期待激活。DX16 ⏳ 待排期（LSP 审查改进 → [D_LspUsabilityAudit.md](../Discussion/D_LspUsabilityAudit.md)）。当前位置 → DX16。
 
 #### 宿主集成侧（C 区间 — 生产必经路径）
 
