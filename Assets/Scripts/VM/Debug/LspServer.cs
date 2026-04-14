@@ -1247,6 +1247,20 @@ namespace FFVM.Debug
             return origin != currentFilePath;
         }
 
+        /// <summary>
+        /// DX15: Check if a symbol's OriginFile indicates it comes from a different file
+        /// than the current document. Used to filter private symbols in cross-file completion.
+        /// Returns true if the symbol is definitively from another file.
+        /// Returns false if OriginFile is null/empty or matches the current file path.
+        /// </summary>
+        internal static bool IsFromOtherFile(string originFile, string currentFilePath)
+        {
+            if (string.IsNullOrEmpty(originFile) || string.IsNullOrEmpty(currentFilePath)) return false;
+            string normOrigin = originFile.Replace('\\', '/');
+            string normCurrent = currentFilePath.Replace('\\', '/');
+            return !string.Equals(normOrigin, normCurrent, StringComparison.OrdinalIgnoreCase);
+        }
+
         private void PublishDiagnostics(string uri, List<object> diagnostics)
         {
             // Track for testing
@@ -1958,6 +1972,10 @@ namespace FFVM.Debug
             string source = null;
             if (uri != null) _docStore.TryGetContent(uri, out source);
 
+            // DX15: Resolve current file's absolute path for private visibility filtering.
+            // Private symbols from other files should not appear in completion.
+            string currentFilePath = uri != null ? UriToPath(uri) : null;
+
             var position = parameters?.GetObject("position");
             if (position == null) return MakeArrayResult(new List<object>());
 
@@ -2052,6 +2070,8 @@ namespace FFVM.Debug
                         {
                             if (st.Name == resolvedStructType)
                             {
+                                // DX15: Skip field completion for private structs from other files
+                                if (st.IsPrivate && IsFromOtherFile(st.OriginFile, currentFilePath)) break;
                                 foreach (var field in st.Fields)
                                 {
                                     items.Add(MakeCompletionItem(field.Name, 5 /* Field */,
@@ -2070,6 +2090,8 @@ namespace FFVM.Debug
                     {
                         if (en.Name == dotPrefix)
                         {
+                            // DX15: Skip member completion for private enums from other files
+                            if (en.IsPrivate && IsFromOtherFile(en.OriginFile, currentFilePath)) break;
                             foreach (var member in en.Members)
                             {
                                 items.Add(MakeCompletionItem(member.Name, 20 /* EnumMember */,
@@ -2094,6 +2116,8 @@ namespace FFVM.Debug
                     // Functions
                     foreach (var func in mergedAst.Functions)
                     {
+                        // DX15: Skip private functions from other files
+                        if (func.IsPrivate && IsFromOtherFile(func.OriginFile, currentFilePath)) continue;
                         string detail = FormatFuncSignature(func);
                         if (func.DocComment != null)
                             detail += "  — " + func.DocComment.Replace("\n", " ");
@@ -2104,18 +2128,24 @@ namespace FFVM.Debug
                     // Structs
                     foreach (var st in mergedAst.Structs)
                     {
+                        // DX15: Skip private structs from other files
+                        if (st.IsPrivate && IsFromOtherFile(st.OriginFile, currentFilePath)) continue;
                         items.Add(MakeCompletionItem(st.Name, 22 /* Struct */, null));
                     }
 
                     // Lang-13: Enums
                     foreach (var en in mergedAst.Enums)
                     {
+                        // DX15: Skip private enums from other files
+                        if (en.IsPrivate && IsFromOtherFile(en.OriginFile, currentFilePath)) continue;
                         items.Add(MakeCompletionItem(en.Name, 13 /* Enum */, $"enum {en.Name}"));
                     }
 
                     // Lang-1: Module-level variables and constants
                     foreach (var mv in mergedAst.ModuleVariables)
                     {
+                        // DX15: Skip private module variables from other files
+                        if (mv.IsPrivate && IsFromOtherFile(mv.OriginFile, currentFilePath)) continue;
                         string prefix = mv.IsConst ? "const" : "var";
                         string typeStr = mv.TypeName ?? "int";
                         items.Add(MakeCompletionItem(mv.Name, 6 /* Variable */,
