@@ -6728,7 +6728,7 @@ public static class LspTests
             session.ExpectResponse(0);
             var refsResp = session.ExpectResponse(1);
             var refs = refsResp?.GetArray("result");
-            // i declaration + i < 10 + i = ... + ... i + 1 + wait i = ≥5
+            // i declaration + i < 10 + i = ... + ... i + 1 + wait i = ≥4
             Assert(refs != null && refs.Count >= 4,
                 $"DX12-03: for-loop variable references ≥4 (decl + condition + increment + body), got {refs?.Count ?? 0}");
         }
@@ -7004,7 +7004,7 @@ public static class LspTests
                 session.AddInitializeWithRootUri(rootUri);
                 session.AddInitialized();
                 session.AddDidOpen(mainUri, mainSource);
-                // Rename "Vec2" on line 2 col 10 (type annotation "var v: Vec2")
+                // Rename "Vec2" on line 2 col 14 (in "var v: Vec2 = ..." → "Vec2" starts at col 14)
                 session.AddRename(mainUri, 2, 14, "Vector2");
                 session.AddShutdown();
                 session.AddExit();
