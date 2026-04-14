@@ -269,8 +269,8 @@
 
 | ID | 问题 | 严重度 | 说明 |
 |----|------|-------|------|
-| KL-01 | 参数引用不包含声明位置 | 低 | `textDocument/references` 在参数上仅返回函数体内的使用，不包括参数声明本身 |
-| KL-02 | 参数重命名不支持 | 中 | `textDocument/rename` 对参数返回 null，无法重命名参数名 |
+| KL-01 | ~~参数引用不包含声明位置~~ | ~~低~~ | ✅ DX13 已修复。`textDocument/references` 在参数上现在返回声明位置 + 函数体内使用 |
+| KL-02 | ~~参数重命名不支持~~ | ~~中~~ | ✅ DX13 已修复。`textDocument/rename` 对参数现在支持声明位置 + 函数体内使用的重命名 |
 | KL-03 | struct字面量名不计入struct重命名 | 低 | `Vec2 { x: 1 }` 中的 `Vec2` 可能不被 rename 编辑覆盖 |
 | KL-04 | private 不过滤跨文件补全 | 中 | `private func` 仍出现在 include 文件的 completion 列表中 |
 | KL-05 | 同名变量引用不隔离作用域 | 低 | 内外层同名 `var x` 的 references 返回所有同名引用（5个），未按作用域隔离 |
@@ -345,8 +345,8 @@
 
 | 妥协 | 原因 | 理想做法 |
 |------|------|---------|
-| DX12-08 参数引用阈值 ≥2 | LSP 仅返回函数体内使用，不含参数声明位置（KL-01） | 修复 CollectReferencesWithOrigin 让参数声明也被收集，断言 ≥3 |
-| DX12-09 参数重命名走"已知限制"路径 | HandleRename 对参数返回 null（KL-02） | 修复 HandleRename 添加参数符号类型支持 |
+| ~~DX12-08 参数引用阈值 ≥2~~ | ~~LSP 仅返回函数体内使用，不含参数声明位置（KL-01）~~ | ✅ DX13 已修复。断言升级为 ≥3（含参数声明位置） |
+| ~~DX12-09 参数重命名走"已知限制"路径~~ | ~~HandleRename 对参数返回 null（KL-02）~~ | ✅ DX13 已修复。参数重命名现在返回声明 + 全部使用位置的编辑 |
 | DX12-12 struct 重命名阈值 ≥2 | struct 字面量名 `Vec2 { ... }` 未被 rename 覆盖（KL-03） | 修复 struct rename 收集逻辑包含 StructLiteralExpr.TypeName |
 | DX12-22 同名变量未断言隔离 | 内外层同名 `var x` 的 references 都返回全部同名引用（KL-05） | 修复 references 实现基于作用域的精确匹配 |
 | DX12-23 private 过滤走"已知限制"路径 | `private func` 仍出现在跨文件补全中（KL-04） | 修复 completion 过滤 IsPrivate && OriginFile != currentFile |
@@ -370,7 +370,7 @@
 
 | 需求 | 对应 KL | 内容 | 复杂度 |
 |------|---------|------|--------|
-| DX13 | KL-01 + KL-02 | 参数 LSP 完整支持（引用含声明 + 重命名） | ⭐⭐ |
+| DX13 | KL-01 + KL-02 | ✅ 参数 LSP 完整支持（引用含声明 + 重命名 + 定义精确化 + 签名悬停） | ⭐⭐ |
 | DX14 | KL-03 | Rename 完整性（struct 字面量名计入重命名编辑） | ⭐ |
 | DX15 | KL-04 | Private 跨文件补全过滤 | ⭐⭐ |
 | DX16 | KL-05 | 变量引用作用域隔离 | ⭐⭐⭐ |
