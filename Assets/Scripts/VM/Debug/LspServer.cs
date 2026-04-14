@@ -3490,7 +3490,8 @@ namespace FFVM.Debug
                     if (vd.Name == _varName)
                     {
                         // Walk initializer with PREVIOUS active declaration
-                        WalkExpr(vd.Initializer);
+                        if (vd.Initializer != null)
+                            WalkExpr(vd.Initializer);
                         // Now update active declaration
                         _activeDecls[vd.Name] = (vd.Line, vd.Column);
                         // Collect the declaration itself if it matches the target
@@ -3500,7 +3501,7 @@ namespace FFVM.Debug
                     else
                     {
                         // Different variable — walk initializer for references to our variable
-                        if (IsTargetActive)
+                        if (IsTargetActive && vd.Initializer != null)
                             WalkExpr(vd.Initializer);
                     }
                     return true; // skip default dispatch
