@@ -7023,9 +7023,9 @@ public static class LspTests
                             if (k.Contains("types.ffs")) hasTypes = true;
                             if (k.Contains("main.ffs")) hasMain = true;
                         }
-                        // decl in types.ffs + usage(s) in main.ffs = ≥2
-                        // Note: struct literal name (Vec2 { ... }) may or may not be counted separately
-                        Assert(totalEdits >= 2, $"DX12-12c: struct rename produces ≥2 edits, got {totalEdits}");
+                        // decl in types.ffs + usage(s) in main.ffs = ≥3 (decl + type annotation + struct literal)
+                        // DX14: struct literal name (Vec2 { ... }) is now counted
+                        Assert(totalEdits >= 3, $"DX12-12c: struct rename produces ≥3 edits, got {totalEdits}");
                         Assert(hasTypes || hasMain, "DX12-12d: rename edits touch source files");
                     }
                 }
@@ -7762,6 +7762,188 @@ public static class LspTests
             finally
             {
                 try { Directory.Delete(tmpDir, true); } catch { }
+            }
+        }
+
+        // ============================================================
+        // DX14: Rename completeness — struct literal name included in struct rename edits (KL-03)
+        // ============================================================
+
+        // DX14-01: Single-file struct rename includes struct literal type name
+        {
+            string source = "struct Vec2 { x: int; y: int }\nfunc main() {\n    var v: Vec2 = Vec2 { x: 1, y: 2 }\n    wait v.x\n}";
+            var session = new LspBatchSession();
+            session.AddInitialize();
+            session.AddInitialized();
+            session.AddDidOpen("file:///dx14_01.ffs", source);
+            // Rename "Vec2" on struct declaration: line 0, col 7
+            session.AddRename("file:///dx14_01.ffs", 0, 7, "Vector2");
+            session.AddShutdown();
+            session.AddExit();
+            session.Run();
+
+            session.ExpectResponse(0);
+            var renameResp = session.ExpectResponse(1);
+            var result = renameResp?.GetObject("result");
+            Assert(result != null, "DX14-01a: struct rename result not null");
+            if (result != null)
+            {
+                var changes = result.GetObject("changes");
+                Assert(changes != null, "DX14-01b: rename WorkspaceEdit has changes");
+                if (changes != null)
+                {
+                    int totalEdits = 0;
+                    foreach (string k in changes.Keys)
+                    {
+                        var e = changes.GetArray(k);
+                        if (e != null) totalEdits += e.Count;
+                    }
+                    // struct decl "Vec2" + type annotation "Vec2" + struct literal "Vec2 { ... }" = 3
+                    Assert(totalEdits >= 3, $"DX14-01c: struct rename produces ≥3 edits (decl + type + literal), got {totalEdits}");
+                }
+            }
+        }
+
+        // DX14-02: Struct rename from struct literal position also finds all refs
+        {
+            string source = "struct Point { x: int; y: int }\nfunc make() {\n    var p: Point = Point { x: 0, y: 0 }\n    wait p.x\n}";
+            var session = new LspBatchSession();
+            session.AddInitialize();
+            session.AddInitialized();
+            session.AddDidOpen("file:///dx14_02.ffs", source);
+            // Rename "Point" on struct literal: line 2, col 19 (the "Point" in "Point { x: 0, y: 0 }")
+            session.AddRename("file:///dx14_02.ffs", 2, 19, "Position");
+            session.AddShutdown();
+            session.AddExit();
+            session.Run();
+
+            session.ExpectResponse(0);
+            var renameResp = session.ExpectResponse(1);
+            var result = renameResp?.GetObject("result");
+            Assert(result != null, "DX14-02a: struct rename from literal position result not null");
+            if (result != null)
+            {
+                var changes = result.GetObject("changes");
+                Assert(changes != null, "DX14-02b: rename WorkspaceEdit has changes");
+                if (changes != null)
+                {
+                    int totalEdits = 0;
+                    foreach (string k in changes.Keys)
+                    {
+                        var e = changes.GetArray(k);
+                        if (e != null) totalEdits += e.Count;
+                    }
+                    // struct decl + type annotation + struct literal = 3
+                    Assert(totalEdits >= 3, $"DX14-02c: rename from literal ≥3 edits, got {totalEdits}");
+                }
+            }
+        }
+
+        // DX14-03: Multiple struct literals in same function
+        {
+            string source = "struct Pair { a: int; b: int }\nfunc test() {\n    var p1: Pair = Pair { a: 1, b: 2 }\n    var p2: Pair = Pair { a: 3, b: 4 }\n    wait p1.a\n}";
+            var session = new LspBatchSession();
+            session.AddInitialize();
+            session.AddInitialized();
+            session.AddDidOpen("file:///dx14_03.ffs", source);
+            // References on "Pair" at declaration: line 0, col 7
+            session.AddReferences("file:///dx14_03.ffs", 0, 7);
+            session.AddShutdown();
+            session.AddExit();
+            session.Run();
+
+            session.ExpectResponse(0);
+            var refsResp = session.ExpectResponse(1);
+            var refs = refsResp?.GetArray("result");
+            // decl + 2 type annotations + 2 struct literals = 5
+            Assert(refs != null && refs.Count >= 5,
+                $"DX14-03a: multiple struct literals, refs ≥5 (decl + 2 type + 2 literal), got {refs?.Count ?? 0}");
+        }
+
+        // DX14-04: Cross-file struct rename includes struct literal in included file
+        {
+            string tmpDir = Path.Combine(Path.GetTempPath(), "dx14_" + Guid.NewGuid().ToString("N").Substring(0, 8));
+            Directory.CreateDirectory(tmpDir);
+            try
+            {
+                File.WriteAllText(Path.Combine(tmpDir, "types.ffs"), "struct Color { r: int; g: int; b: int }");
+                string rootUri = "file:///" + tmpDir.TrimStart('/').Replace("\\", "/");
+                string mainSource = "include \"types\"\nfunc main() {\n    var c: Color = Color { r: 255, g: 0, b: 0 }\n    wait c.r\n}";
+                string mainUri = rootUri + "/main.ffs";
+
+                var session = new LspBatchSession();
+                session.AddInitializeWithRootUri(rootUri);
+                session.AddInitialized();
+                session.AddDidOpen(mainUri, mainSource);
+                // Rename "Color" on type annotation: line 2, col 11
+                session.AddRename(mainUri, 2, 11, "Colour");
+                session.AddShutdown();
+                session.AddExit();
+                session.Run();
+
+                session.ExpectResponse(0);
+                var renameResp = session.ExpectResponse(1);
+                var result = renameResp?.GetObject("result");
+                Assert(result != null, "DX14-04a: cross-file struct rename result not null");
+                if (result != null)
+                {
+                    var changes = result.GetObject("changes");
+                    Assert(changes != null, "DX14-04b: rename WorkspaceEdit has changes");
+                    if (changes != null)
+                    {
+                        int totalEdits = 0;
+                        bool hasTypes = false, hasMain = false;
+                        foreach (string k in changes.Keys)
+                        {
+                            var e = changes.GetArray(k);
+                            if (e != null) totalEdits += e.Count;
+                            if (k.Contains("types.ffs")) hasTypes = true;
+                            if (k.Contains("main.ffs")) hasMain = true;
+                        }
+                        // types.ffs: decl. main.ffs: type annotation + struct literal = ≥3
+                        Assert(totalEdits >= 3, $"DX14-04c: cross-file rename ≥3 edits (decl + type + literal), got {totalEdits}");
+                        Assert(hasTypes && hasMain, "DX14-04d: rename edits touch both files");
+                    }
+                }
+            }
+            finally
+            {
+                try { Directory.Delete(tmpDir, true); } catch { }
+            }
+        }
+
+        // DX14-05: Struct literal as function argument — struct literal name still captured
+        {
+            string source = "struct Msg { text: string }\nfunc main() {\n    var m: Msg = Msg { text: \"hello\" }\n    var m2: Msg = Msg { text: \"world\" }\n    wait m.text\n}";
+            var session = new LspBatchSession();
+            session.AddInitialize();
+            session.AddInitialized();
+            session.AddDidOpen("file:///dx14_05.ffs", source);
+            // Rename "Msg" at declaration: line 0, col 7
+            session.AddRename("file:///dx14_05.ffs", 0, 7, "Message");
+            session.AddShutdown();
+            session.AddExit();
+            session.Run();
+
+            session.ExpectResponse(0);
+            var renameResp = session.ExpectResponse(1);
+            var result = renameResp?.GetObject("result");
+            Assert(result != null, "DX14-05a: struct rename with multiple literals returns result");
+            if (result != null)
+            {
+                var changes = result.GetObject("changes");
+                Assert(changes != null, "DX14-05b: rename has changes");
+                if (changes != null)
+                {
+                    int totalEdits = 0;
+                    foreach (string k in changes.Keys)
+                    {
+                        var e = changes.GetArray(k);
+                        if (e != null) totalEdits += e.Count;
+                    }
+                    // decl + 2 type annotations + 2 struct literals = 5
+                    Assert(totalEdits >= 5, $"DX14-05c: rename produces ≥5 edits (decl + 2 types + 2 literals), got {totalEdits}");
+                }
             }
         }
 
