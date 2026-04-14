@@ -247,10 +247,9 @@ Docs/
 | DX15 | Private 跨文件补全过滤 | ✅ | KL-04 private func/struct/enum/var 不出现在 include 文件的 completion 中（HandleCompletion IsPrivate + IsFromOtherFile 守卫）。DX15-01~07（16 asserts）。计划 → [Step_DX15_PrivateCompletionFilter](Plan/Step_DX15_PrivateCompletionFilter.md)　讨论 → [D_LspUsabilityAudit](Discussion/D_LspUsabilityAudit.md) | ⭐⭐ |
 | DX16 | 变量引用作用域隔离 | ✅ | KL-05 同名变量引用按作用域精确匹配（FindSymbolWalker 块级作用域追踪 + ScopedIdentRefsWalker 精确声明匹配）。DX16-01~08（16 asserts），DX12-22 升级严格断言。计划 → [Step_DX16_ScopeIsolatedRefs](Plan/Step_DX16_ScopeIsolatedRefs.md)　讨论 → [D_LspUsabilityAudit](Discussion/D_LspUsabilityAudit.md) | ⭐⭐⭐ |
 | DX17 | 统一符号解析 | ✅ | 合并 SymbolAtPosition + FindDefinitionLocation → ResolvedSymbol。HandleDefinition/HandleReferences/HandleRename/HandleHover 共享 ResolveSymbol。消除 ResolveSymbolDualAst 二次查找。修复 WaitForStmt 子表达式遗漏。DX17-01~02（4 asserts）。计划 → [Step_DX17_UnifiedSymbolResolution](Plan/Step_DX17_UnifiedSymbolResolution.md)　讨论 → [D_LspStructuralAudit](Discussion/D_LspStructuralAudit.md) | ⭐⭐ |
-| DX18 | 统一引用收集 | ⏳ | 7 个引用 Walker → UnifiedRefsWalker。CollectReferencesWithOrigin 8 分支 → 声明位置 + 统一遍历。消除 CollectReferences/CollectReferencesWithOrigin 二重性。讨论 → [D_LspStructuralAudit](Discussion/D_LspStructuralAudit.md) | ⭐⭐⭐ |
+| DX18 | 统一引用收集 | ✅ | 8 个引用 Walker → 1 个 UnifiedRefsWalker。CollectReferencesWithOrigin 8 分支 → CollectDeclarationLocations + 统一遍历 4 分支。死代码 CollectReferences 删除。LspServer.cs −242 行（4799→4557）。656 LSP 测试全通过。计划 → [Step_DX18_UnifiedRefCollection](Plan/Step_DX18_UnifiedRefCollection.md)　讨论 → [D_LspStructuralAudit](Discussion/D_LspStructuralAudit.md) | ⭐⭐⭐ |
 
-**Lang 系列全部完成。DX13 ✅ 完成。DX14 ✅ 完成。DX15 ✅ 完成。DX16 ✅ 完成。DX17 ✅ 完成。**
-**当前位置 → DX18**
+**Lang 系列全部完成。DX13 ✅ 完成。DX14 ✅ 完成。DX15 ✅ 完成。DX16 ✅ 完成。DX17 ✅ 完成。DX18 ✅ 完成。**
 **DX12（后台编译调度）⚪ 远期待激活。C 区间阻塞于宿主 ECS 就绪。**
 **语言易用性审查（D18）→ 7 项改进建议（UC-1~UC-7）已纳入 [Outlook §2.10](Plan/Outlook_And_Risks.md)。**
 
@@ -311,7 +310,7 @@ Docs/
 | 部署架构 (MI) | MI-1~MI-5 | — |
 | 结构体 | MSV-F1 const 折叠、MSV-F2 @export struct（暂缓） | S4 ✅、SN1 ✅、SN2 ✅ |
 | Include | IA-F1 LSP、VIS-1 默认 private（暂缓） | Lang-15~18 ✅ |
-| LSP 架构 | DX12 后台编译（远期）、DX13~DX16 审查改进 ✅、DX17 统一符号解析 ✅、DX18 统一引用收集（⏳） | DX10 ✅、DX11 ✅ |
+| LSP 架构 | DX12 后台编译（远期）、DX13~DX16 审查改进 ✅、DX17 统一符号解析 ✅、DX18 统一引用收集 ✅ | DX10 ✅、DX11 ✅ |
 
 ### 优化展望
 

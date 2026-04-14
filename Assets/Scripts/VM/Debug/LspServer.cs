@@ -3155,80 +3155,119 @@ namespace FFVM.Debug
         }
 
         /// <summary>
-        /// Collect all reference locations for a named symbol across the AST.
+        /// DX18: Collect references with cross-file URI resolution via OriginFile.
+        /// Uses UnifiedRefsWalker for all body/initializer traversal, eliminating per-SymbolKindTag walker dispatch.
+        /// Declaration locations are collected first, then a single traversal pass collects all usage references.
         /// </summary>
-        private static void CollectReferences(ModuleNode ast, string name, SymbolKindTag kind, string uri, List<object> locations)
+        private void CollectReferencesWithOrigin(ModuleNode ast, string name, SymbolKindTag kind, string requestingUri, List<object> locations, string parentName = null, string scopeFunc = null, int declLine = 0, int declCol = 0)
         {
-            if (kind == SymbolKindTag.Function)
-            {
-                // Function declaration
-                foreach (var func in ast.Functions)
-                {
-                    if (func.Name == name)
-                    {
-                        int nameCol = func.Column + "func".Length + 1;
-                        locations.Add(MakeLocation(uri, func.Line, nameCol, name.Length));
-                    }
-                }
+            // --- Phase 1: Collect declaration locations ---
+            CollectDeclarationLocations(ast, name, kind, requestingUri, locations, parentName, scopeFunc);
 
-                // Function call sites
-                foreach (var func in ast.Functions)
-                {
-                    CollectCallRefsInBlock(func.Body, name, uri, locations);
-                }
-            }
-            else if (kind == SymbolKindTag.Struct)
-            {
-                // Struct declaration
-                foreach (var st in ast.Structs)
-                {
-                    if (st.Name == name)
-                    {
-                        int nameCol = st.Column + "struct".Length + 1;
-                        locations.Add(MakeLocation(uri, st.Line, nameCol, name.Length));
-                    }
-                }
+            // --- Phase 2: Collect usage references via unified traversal ---
 
-                // Struct usage in VarDeclStmt.TypeName
+            // DX13: Parameter — scoped to declaring function only
+            if (kind == SymbolKindTag.Parameter && scopeFunc != null)
+            {
                 foreach (var func in ast.Functions)
                 {
-                    CollectTypeRefsInBlock(func.Body, name, uri, locations);
-                }
-            }
-            // Lang-13: enum references
-            else if (kind == SymbolKindTag.Enum)
-            {
-                // Enum declaration
-                foreach (var en in ast.Enums)
-                {
-                    if (en.Name == name)
+                    if (func.Name == scopeFunc)
                     {
-                        int nameCol = en.Column + "enum".Length + 1;
-                        locations.Add(MakeLocation(uri, en.Line, nameCol, name.Length));
+                        if (func.Body != null)
+                        {
+                            string funcUri = ResolveOriginUri(requestingUri, func.OriginFile);
+                            var w = new UnifiedRefsWalker(kind, name, parentName, funcUri, locations);
+                            w.WalkBlock(func.Body);
+                        }
+                        break;
                     }
                 }
+                return;
             }
-            else // Variable or Parameter
+
+            // DX16: Scope-isolated variable — scoped to declaring function with declaration tracking
+            if (kind == SymbolKindTag.Variable && scopeFunc != null && declLine > 0)
             {
-                // All identifier references with matching name across all functions
                 foreach (var func in ast.Functions)
                 {
-                    CollectIdentRefsInBlock(func.Body, name, uri, locations);
+                    if (func.Name == scopeFunc)
+                    {
+                        if (func.Body != null)
+                        {
+                            string funcUri = ResolveOriginUri(requestingUri, func.OriginFile);
+                            var w = new UnifiedRefsWalker(kind, name, parentName, funcUri, locations, declLine, declCol);
+                            w.WalkBlock(func.Body);
+                        }
+                        break;
+                    }
+                }
+                return;
+            }
+
+            // DX7: StructField with unknown parentName — walk once per struct that has matching field
+            if (kind == SymbolKindTag.StructField && parentName == null)
+            {
+                foreach (var func in ast.Functions)
+                {
+                    string funcUri = ResolveOriginUri(requestingUri, func.OriginFile);
+                    var w = new UnifiedRefsWalker(kind, name, parentName, funcUri, locations);
+                    w.WalkBlock(func.Body);
+                }
+                foreach (var mv in ast.ModuleVariables)
+                {
+                    if (mv.Initializer != null)
+                    {
+                        string mvUri = ResolveOriginUri(requestingUri, mv.OriginFile);
+                        var w = new UnifiedRefsWalker(kind, name, parentName, mvUri, locations);
+                        w.WalkExpr(mv.Initializer);
+                    }
+                }
+                return;
+            }
+
+            // General case: walk all function bodies + module variable initializers
+            foreach (var func in ast.Functions)
+            {
+                string funcUri = ResolveOriginUri(requestingUri, func.OriginFile);
+                var w = new UnifiedRefsWalker(kind, name, parentName, funcUri, locations);
+                w.WalkBlock(func.Body);
+            }
+
+            foreach (var mv in ast.ModuleVariables)
+            {
+                string mvUri = ResolveOriginUri(requestingUri, mv.OriginFile);
+                // B001: Module variable type annotations (Struct/Enum)
+                if ((kind == SymbolKindTag.Struct || kind == SymbolKindTag.Enum) && mv.TypeName != null && GetBaseTypeName(mv.TypeName) == name)
+                {
+                    if (mv.TypeNameLine > 0)
+                        locations.Add(MakeLocation(mvUri, mv.TypeNameLine, mv.TypeNameColumn, name.Length));
+                    else
+                        locations.Add(MakeLocation(mvUri, mv.Line, mv.Column, name.Length));
+                }
+                // B001: Module variable name declaration (Variable)
+                if (kind == SymbolKindTag.Variable && mv.Name == name)
+                {
+                    int defLine = mv.NameLine > 0 ? mv.NameLine : mv.Line;
+                    int defCol = mv.NameLine > 0 ? mv.NameColumn : mv.Column;
+                    locations.Add(MakeLocation(mvUri, defLine, defCol, name.Length));
+                }
+                // B001: Walk initializer expressions
+                if (mv.Initializer != null)
+                {
+                    var w = new UnifiedRefsWalker(kind, name, parentName, mvUri, locations);
+                    w.WalkExpr(mv.Initializer);
                 }
             }
         }
 
         /// <summary>
-        /// DX4-P3/DX5: Collect references with cross-file URI resolution via OriginFile.
-        /// For function/struct/enum declarations, resolves URI based on OriginFile.
-        /// For call sites and usages within function bodies, uses the function's OriginFile.
-        /// DX13: scopeFunc scopes Parameter references to the declaring function.
+        /// DX18: Collect declaration locations (function/struct/enum/field/member/parameter declarations).
+        /// Separated from usage-reference collection for clarity.
         /// </summary>
-        private void CollectReferencesWithOrigin(ModuleNode ast, string name, SymbolKindTag kind, string requestingUri, List<object> locations, string parentName = null, string scopeFunc = null, int declLine = 0, int declCol = 0)
+        private void CollectDeclarationLocations(ModuleNode ast, string name, SymbolKindTag kind, string requestingUri, List<object> locations, string parentName, string scopeFunc)
         {
             if (kind == SymbolKindTag.Function)
             {
-                // Function declaration
                 foreach (var func in ast.Functions)
                 {
                     if (func.Name == name)
@@ -3238,28 +3277,9 @@ namespace FFVM.Debug
                         locations.Add(MakeLocation(targetUri, func.Line, nameCol, name.Length));
                     }
                 }
-
-                // Function call sites — resolve per calling function's origin
-                foreach (var func in ast.Functions)
-                {
-                    string funcUri = ResolveOriginUri(requestingUri, func.OriginFile);
-                    CollectCallRefsInBlock(func.Body, name, funcUri, locations);
-                }
-
-                // B001: Function call sites in module-level variable initializers
-                foreach (var mv in ast.ModuleVariables)
-                {
-                    if (mv.Initializer != null)
-                    {
-                        string mvUri = ResolveOriginUri(requestingUri, mv.OriginFile);
-                        var w = new CallRefsWalker(name, mvUri, locations);
-                        w.WalkExpr(mv.Initializer);
-                    }
-                }
             }
             else if (kind == SymbolKindTag.Struct)
             {
-                // Struct declaration
                 foreach (var st in ast.Structs)
                 {
                     if (st.Name == name)
@@ -3269,37 +3289,7 @@ namespace FFVM.Debug
                         locations.Add(MakeLocation(targetUri, st.Line, nameCol, name.Length));
                     }
                 }
-
-                // Struct usage in VarDeclStmt.TypeName + struct literal type names — per function origin
-                foreach (var func in ast.Functions)
-                {
-                    string funcUri = ResolveOriginUri(requestingUri, func.OriginFile);
-                    CollectTypeRefsInBlock(func.Body, name, funcUri, locations);
-                    // DX14: Struct literal type names (e.g., "Vec2" in "Vec2 { ... }") in function bodies
-                    var slw = new StructLiteralTypeRefsWalker(name, funcUri, locations);
-                    slw.WalkBlock(func.Body);
-                }
-
-                // B001: Struct usage in module-level variable type annotations and struct literal initializers
-                foreach (var mv in ast.ModuleVariables)
-                {
-                    string mvUri = ResolveOriginUri(requestingUri, mv.OriginFile);
-                    if (mv.TypeName != null && GetBaseTypeName(mv.TypeName) == name)
-                    {
-                        if (mv.TypeNameLine > 0)
-                            locations.Add(MakeLocation(mvUri, mv.TypeNameLine, mv.TypeNameColumn, name.Length));
-                        else
-                            locations.Add(MakeLocation(mvUri, mv.Line, mv.Column, name.Length));
-                    }
-                    // Also collect struct type in StructLiteralExpr within initializers
-                    if (mv.Initializer != null)
-                    {
-                        var w = new StructLiteralTypeRefsWalker(name, mvUri, locations);
-                        w.WalkExpr(mv.Initializer);
-                    }
-                }
             }
-            // Lang-13: enum references
             else if (kind == SymbolKindTag.Enum)
             {
                 foreach (var en in ast.Enums)
@@ -3311,52 +3301,28 @@ namespace FFVM.Debug
                         locations.Add(MakeLocation(targetUri, en.Line, nameCol, name.Length));
                     }
                 }
-
-                // E003: Enum usage in VarDeclStmt.TypeName — symmetric with Struct
-                foreach (var func in ast.Functions)
-                {
-                    string funcUri = ResolveOriginUri(requestingUri, func.OriginFile);
-                    CollectTypeRefsInBlock(func.Body, name, funcUri, locations);
-                }
-
-                // B001: Enum identifier refs in function bodies (e.g., EnumName.MEMBER — the EnumName part)
-                foreach (var func in ast.Functions)
-                {
-                    string funcUri = ResolveOriginUri(requestingUri, func.OriginFile);
-                    var w = new EnumIdentRefsWalker(name, funcUri, locations);
-                    w.WalkBlock(func.Body);
-                }
-
-                // B001: Enum usage in module-level variable type annotations
-                foreach (var mv in ast.ModuleVariables)
-                {
-                    if (mv.TypeName != null && GetBaseTypeName(mv.TypeName) == name)
-                    {
-                        string mvUri = ResolveOriginUri(requestingUri, mv.OriginFile);
-                        if (mv.TypeNameLine > 0)
-                            locations.Add(MakeLocation(mvUri, mv.TypeNameLine, mv.TypeNameColumn, name.Length));
-                        else
-                            locations.Add(MakeLocation(mvUri, mv.Line, mv.Column, name.Length));
-                    }
-                }
-
-                // B001: Enum identifier refs in module-level variable initializers (e.g., EnumName.MEMBER — the EnumName part)
-                foreach (var mv in ast.ModuleVariables)
-                {
-                    if (mv.Initializer != null)
-                    {
-                        string mvUri = ResolveOriginUri(requestingUri, mv.OriginFile);
-                        var w = new EnumIdentRefsWalker(name, mvUri, locations);
-                        w.WalkExpr(mv.Initializer);
-                    }
-                }
             }
-            // DX5: struct field references
-            else if (kind == SymbolKindTag.StructField && parentName != null)
+            else if (kind == SymbolKindTag.StructField)
             {
-                foreach (var st in ast.Structs)
+                if (parentName != null)
                 {
-                    if (st.Name == parentName)
+                    foreach (var st in ast.Structs)
+                    {
+                        if (st.Name == parentName)
+                        {
+                            string targetUri = ResolveOriginUri(requestingUri, st.OriginFile);
+                            foreach (var field in st.Fields)
+                            {
+                                if (field.Name == name)
+                                    locations.Add(MakeLocation(targetUri, field.Line, field.Column, name.Length));
+                            }
+                        }
+                    }
+                }
+                else
+                {
+                    // DX7: Unknown parent — search all structs
+                    foreach (var st in ast.Structs)
                     {
                         string targetUri = ResolveOriginUri(requestingUri, st.OriginFile);
                         foreach (var field in st.Fields)
@@ -3366,55 +3332,7 @@ namespace FFVM.Debug
                         }
                     }
                 }
-                // Also collect field access usages in function bodies
-                foreach (var func in ast.Functions)
-                {
-                    string funcUri = ResolveOriginUri(requestingUri, func.OriginFile);
-                    CollectFieldAccessRefsInBlock(func.Body, name, parentName, funcUri, locations);
-                }
-
-                // B001: Also collect field access usages in module-level variable initializers
-                foreach (var mv in ast.ModuleVariables)
-                {
-                    if (mv.Initializer != null)
-                    {
-                        string mvUri = ResolveOriginUri(requestingUri, mv.OriginFile);
-                        var w = new FieldAccessRefsWalker(name, mvUri, locations);
-                        w.WalkExpr(mv.Initializer);
-                    }
-                }
             }
-            // DX7: struct field references when parentName unknown (from field access usage site)
-            else if (kind == SymbolKindTag.StructField && parentName == null)
-            {
-                // Search all structs for matching field name
-                foreach (var st in ast.Structs)
-                {
-                    string targetUri = ResolveOriginUri(requestingUri, st.OriginFile);
-                    foreach (var field in st.Fields)
-                    {
-                        if (field.Name == name)
-                            locations.Add(MakeLocation(targetUri, field.Line, field.Column, name.Length));
-                    }
-                    // Also collect field access usages
-                    foreach (var func in ast.Functions)
-                    {
-                        string funcUri = ResolveOriginUri(requestingUri, func.OriginFile);
-                        CollectFieldAccessRefsInBlock(func.Body, name, st.Name, funcUri, locations);
-                    }
-                    // B001: Also collect field access usages in module-level variable initializers
-                    foreach (var mv in ast.ModuleVariables)
-                    {
-                        if (mv.Initializer != null)
-                        {
-                            string mvUri = ResolveOriginUri(requestingUri, mv.OriginFile);
-                            var w = new FieldAccessRefsWalker(name, mvUri, locations);
-                            w.WalkExpr(mv.Initializer);
-                        }
-                    }
-                }
-            }
-            // DX5: enum member references
             else if (kind == SymbolKindTag.EnumMember && parentName != null)
             {
                 foreach (var en in ast.Enums)
@@ -3429,25 +3347,7 @@ namespace FFVM.Debug
                         }
                     }
                 }
-                // E003: Collect enum member access usages (e.g. Color.RED) in function bodies
-                foreach (var func in ast.Functions)
-                {
-                    string funcUri = ResolveOriginUri(requestingUri, func.OriginFile);
-                    CollectEnumMemberAccessRefsInBlock(func.Body, name, parentName, funcUri, locations);
-                }
-
-                // B001: Collect enum member access usages in module-level variable initializers
-                foreach (var mv in ast.ModuleVariables)
-                {
-                    if (mv.Initializer != null)
-                    {
-                        string mvUri = ResolveOriginUri(requestingUri, mv.OriginFile);
-                        var w = new EnumMemberAccessRefsWalker(name, parentName, mvUri, locations);
-                        w.WalkExpr(mv.Initializer);
-                    }
-                }
             }
-            // DX13: Parameter references — declaration + usages scoped to declaring function
             else if (kind == SymbolKindTag.Parameter && scopeFunc != null)
             {
                 foreach (var func in ast.Functions)
@@ -3455,7 +3355,6 @@ namespace FFVM.Debug
                     if (func.Name == scopeFunc)
                     {
                         string funcUri = ResolveOriginUri(requestingUri, func.OriginFile);
-                        // Include parameter declaration position
                         foreach (var p in func.Parameters)
                         {
                             if (p.Name == name && p.NameLine > 0)
@@ -3464,136 +3363,60 @@ namespace FFVM.Debug
                                 break;
                             }
                         }
-                        // Collect usages in the function body
-                        if (func.Body != null)
-                            CollectIdentRefsInBlock(func.Body, name, funcUri, locations);
                         break;
                     }
                 }
             }
-            else // Variable
-            {
-                // DX16: If we have a governing declaration (function-local variable), use scope-isolated collection
-                if (scopeFunc != null && declLine > 0)
-                {
-                    foreach (var func in ast.Functions)
-                    {
-                        if (func.Name == scopeFunc)
-                        {
-                            string funcUri = ResolveOriginUri(requestingUri, func.OriginFile);
-                            CollectScopedIdentRefsInBlock(func.Body, name, declLine, declCol, funcUri, locations);
-                            break;
-                        }
-                    }
-                }
-                else
-                {
-                    // Module-level or unresolved declaration — use existing unscoped collection
-                    foreach (var func in ast.Functions)
-                    {
-                        string funcUri = ResolveOriginUri(requestingUri, func.OriginFile);
-                        CollectIdentRefsInBlock(func.Body, name, funcUri, locations);
-                    }
-
-                    // B001: Module-level variable declaration and initializer references
-                    foreach (var mv in ast.ModuleVariables)
-                    {
-                        if (mv.Name == name)
-                        {
-                            string mvUri = ResolveOriginUri(requestingUri, mv.OriginFile);
-                            int defLine = mv.NameLine > 0 ? mv.NameLine : mv.Line;
-                            int defCol = mv.NameLine > 0 ? mv.NameColumn : mv.Column;
-                            locations.Add(MakeLocation(mvUri, defLine, defCol, name.Length));
-                        }
-                        // Also collect identifier references within initializers
-                        if (mv.Initializer != null)
-                        {
-                            string mvUri = ResolveOriginUri(requestingUri, mv.OriginFile);
-                            var w = new IdentRefsWalker(name, mvUri, locations);
-                            w.WalkExpr(mv.Initializer);
-                        }
-                    }
-                }
-            }
+            // Variable declarations are handled inline in CollectReferencesWithOrigin (module vars)
+            // or by ScopedIdentRefsWalker (function-local vars via VisitVarDecl/VisitStmt).
         }
 
-        // R1: CallRefs — replaced hand-written Block/Stmt/Expr triad with AstWalker subclass.
-        private static void CollectCallRefsInBlock(BlockStmt block, string funcName, string uri, List<object> locations)
-        {
-            var w = new CallRefsWalker(funcName, uri, locations);
-            w.WalkBlock(block);
-        }
+        // ============================================================
+        // DX18: UnifiedRefsWalker — single walker for all reference forms.
+        // Replaces CallRefsWalker, IdentRefsWalker, ScopedIdentRefsWalker,
+        // TypeRefsWalker, StructLiteralTypeRefsWalker, EnumIdentRefsWalker,
+        // FieldAccessRefsWalker, EnumMemberAccessRefsWalker.
+        // ============================================================
 
-        private sealed class CallRefsWalker : AstWalker
+        /// <summary>
+        /// DX18: Unified reference walker. Matches all reference patterns based on the target's SymbolKindTag.
+        /// For scope-isolated variables (declLine > 0), includes scope tracking via VisitStmt.
+        /// </summary>
+        private sealed class UnifiedRefsWalker : AstWalker
         {
-            private readonly string _funcName;
+            private readonly SymbolKindTag _kind;
+            private readonly string _name;
+            private readonly string _parentName;
             private readonly string _uri;
             private readonly List<object> _locations;
-            public CallRefsWalker(string funcName, string uri, List<object> locations) { _funcName = funcName; _uri = uri; _locations = locations; }
-            protected override bool VisitExpr(Expr expr)
-            {
-                if (expr is CallExpr call && call.FunctionName == _funcName)
-                    _locations.Add(MakeLocation(_uri, call.Line, call.Column, _funcName.Length));
-                return false; // continue walking children
-            }
-        }
 
-        // R1: IdentRefs — replaced hand-written Block/Stmt/Expr triad with AstWalker subclass.
-        private static void CollectIdentRefsInBlock(BlockStmt block, string varName, string uri, List<object> locations)
-        {
-            var w = new IdentRefsWalker(varName, uri, locations);
-            w.WalkBlock(block);
-        }
-
-        private sealed class IdentRefsWalker : AstWalker
-        {
-            private readonly string _varName;
-            private readonly string _uri;
-            private readonly List<object> _locations;
-            public IdentRefsWalker(string varName, string uri, List<object> locations) { _varName = varName; _uri = uri; _locations = locations; }
-            protected override void VisitVarDecl(VarDeclStmt vd)
-            {
-                // Include the declaration itself as a reference
-                if (vd.Name == _varName)
-                    _locations.Add(MakeLocation(_uri, vd.Line, vd.Column, _varName.Length));
-            }
-            protected override bool VisitExpr(Expr expr)
-            {
-                if (expr is IdentifierExpr id && id.Name == _varName)
-                    _locations.Add(MakeLocation(_uri, id.Line, id.Column, _varName.Length));
-                return false;
-            }
-        }
-
-        // DX16: Scope-isolated variable reference collection.
-        // Only collects references governed by a specific VarDeclStmt (identified by targetDeclLine/targetDeclCol).
-        private static void CollectScopedIdentRefsInBlock(BlockStmt block, string varName, int targetDeclLine, int targetDeclCol, string uri, List<object> locations)
-        {
-            var w = new ScopedIdentRefsWalker(varName, targetDeclLine, targetDeclCol, uri, locations);
-            w.WalkBlock(block);
-        }
-
-        private sealed class ScopedIdentRefsWalker : AstWalker
-        {
-            private readonly string _varName;
+            // DX16 scope-isolation fields (active only when _scopeIsolated == true)
+            private readonly bool _scopeIsolated;
             private readonly int _targetDeclLine;
             private readonly int _targetDeclCol;
-            private readonly string _uri;
-            private readonly List<object> _locations;
-            // Track the active declaration position for _varName at each point in the walk.
-            private Dictionary<string, (int line, int col)> _activeDecls = new Dictionary<string, (int line, int col)>();
+            private Dictionary<string, (int line, int col)> _activeDecls;
 
-            public ScopedIdentRefsWalker(string varName, int targetDeclLine, int targetDeclCol, string uri, List<object> locations)
+            public UnifiedRefsWalker(SymbolKindTag kind, string name, string parentName, string uri, List<object> locations, int declLine = 0, int declCol = 0)
             {
-                _varName = varName; _targetDeclLine = targetDeclLine; _targetDeclCol = targetDeclCol;
-                _uri = uri; _locations = locations;
+                _kind = kind;
+                _name = name;
+                _parentName = parentName;
+                _uri = uri;
+                _locations = locations;
+                _scopeIsolated = kind == SymbolKindTag.Variable && declLine > 0;
+                _targetDeclLine = declLine;
+                _targetDeclCol = declCol;
+                if (_scopeIsolated)
+                    _activeDecls = new Dictionary<string, (int line, int col)>();
             }
+
+            // --- Scope-isolation helpers (DX16) ---
 
             private bool IsTargetActive
             {
                 get
                 {
-                    if (_activeDecls.TryGetValue(_varName, out var d))
+                    if (_activeDecls != null && _activeDecls.TryGetValue(_name, out var d))
                         return d.line == _targetDeclLine && d.col == _targetDeclCol;
                     return false;
                 }
@@ -3603,14 +3426,18 @@ namespace FFVM.Debug
             {
                 return new Dictionary<string, (int line, int col)>(_activeDecls);
             }
+
             private void RestoreDecls(Dictionary<string, (int line, int col)> saved)
             {
                 _activeDecls = saved;
             }
 
+            // --- VisitStmt: scope tracking for scope-isolated variables ---
+
             protected override bool VisitStmt(Stmt stmt)
             {
-                // BlockStmt: scope boundary — save/restore active declarations
+                if (!_scopeIsolated) return false; // default dispatch for non-scoped modes
+
                 if (stmt is BlockStmt bs)
                 {
                     var saved = SaveDecls();
@@ -3623,7 +3450,6 @@ namespace FFVM.Debug
                     return true;
                 }
 
-                // ForStmt: scope boundary for initializer variable
                 if (stmt is ForStmt fs)
                 {
                     var saved = SaveDecls();
@@ -3635,108 +3461,114 @@ namespace FFVM.Debug
                     return true;
                 }
 
-                // VarDeclStmt: walk initializer BEFORE updating active declaration
-                // (initializer references use the previous declaration scope)
                 if (stmt is VarDeclStmt vd)
                 {
-                    if (vd.Name == _varName)
+                    if (vd.Name == _name)
                     {
-                        // Walk initializer with PREVIOUS active declaration
                         if (vd.Initializer != null)
                             WalkExpr(vd.Initializer);
-                        // Now update active declaration
                         _activeDecls[vd.Name] = (vd.Line, vd.Column);
-                        // Collect the declaration itself if it matches the target
                         if (IsTargetActive)
-                            _locations.Add(MakeLocation(_uri, vd.Line, vd.Column, _varName.Length));
+                            _locations.Add(MakeLocation(_uri, vd.Line, vd.Column, _name.Length));
                     }
                     else
                     {
-                        // Different variable — walk initializer for references to our variable
                         if (IsTargetActive && vd.Initializer != null)
                             WalkExpr(vd.Initializer);
                     }
-                    return true; // skip default dispatch
+                    return true;
                 }
 
-                return false; // default dispatch for other statement types
+                return false;
             }
 
-            protected override bool VisitExpr(Expr expr)
-            {
-                if (expr is IdentifierExpr id && id.Name == _varName && IsTargetActive)
-                    _locations.Add(MakeLocation(_uri, id.Line, id.Column, _varName.Length));
-                return false; // continue walking children
-            }
-        }
+            // --- VisitVarDecl: type annotation + variable name matching ---
 
-        // R1: TypeRefs — replaced hand-written Block/Stmt triad with AstWalker subclass.
-        private static void CollectTypeRefsInBlock(BlockStmt block, string typeName, string uri, List<object> locations)
-        {
-            var w = new TypeRefsWalker(typeName, uri, locations);
-            w.WalkBlock(block);
-        }
-
-        private sealed class TypeRefsWalker : AstWalker
-        {
-            private readonly string _typeName;
-            private readonly string _uri;
-            private readonly List<object> _locations;
-            public TypeRefsWalker(string typeName, string uri, List<object> locations) { _typeName = typeName; _uri = uri; _locations = locations; }
             protected override void VisitVarDecl(VarDeclStmt vd)
             {
-                if (vd.TypeName != null)
+                // Type annotations (Struct/Enum references)
+                if ((_kind == SymbolKindTag.Struct || _kind == SymbolKindTag.Enum) && vd.TypeName != null)
                 {
                     string baseName = GetBaseTypeName(vd.TypeName);
-                    if (baseName == _typeName)
+                    if (baseName == _name)
                     {
-                        // US: Use precise TypeNameLine/TypeNameColumn when available
                         if (vd.TypeNameLine > 0)
-                            _locations.Add(MakeLocation(_uri, vd.TypeNameLine, vd.TypeNameColumn, _typeName.Length));
+                            _locations.Add(MakeLocation(_uri, vd.TypeNameLine, vd.TypeNameColumn, _name.Length));
                         else
-                            _locations.Add(MakeLocation(_uri, vd.Line, vd.Column, _typeName.Length));
+                            _locations.Add(MakeLocation(_uri, vd.Line, vd.Column, _name.Length));
                     }
                 }
+
+                // Variable/Parameter name declarations (unscoped only; scoped handled by VisitStmt)
+                if ((_kind == SymbolKindTag.Variable || _kind == SymbolKindTag.Parameter) && !_scopeIsolated && vd.Name == _name)
+                    _locations.Add(MakeLocation(_uri, vd.Line, vd.Column, _name.Length));
             }
-        }
 
-        // ============================================================
-        // B001: Additional walkers for module-level reference scanning
-        // ============================================================
+            // --- VisitExpr: all expression-level reference patterns ---
 
-        /// <summary>
-        /// B001: Collect struct type references within StructLiteralExpr nodes.
-        /// Walks expressions looking for struct literal type names (e.g., "Box4" in "Box4 { ... }").
-        /// </summary>
-        private sealed class StructLiteralTypeRefsWalker : AstWalker
-        {
-            private readonly string _typeName;
-            private readonly string _uri;
-            private readonly List<object> _locations;
-            public StructLiteralTypeRefsWalker(string typeName, string uri, List<object> locations) { _typeName = typeName; _uri = uri; _locations = locations; }
             protected override bool VisitExpr(Expr expr)
             {
-                if (expr is StructLiteralExpr sl && sl.TypeName == _typeName)
-                    _locations.Add(MakeLocation(_uri, sl.Line, sl.Column, _typeName.Length));
-                return false; // continue walking children (nested struct literals)
-            }
-        }
+                switch (_kind)
+                {
+                    case SymbolKindTag.Function:
+                        // CallExpr: function call site
+                        if (expr is CallExpr call && call.FunctionName == _name)
+                            _locations.Add(MakeLocation(_uri, call.Line, call.Column, _name.Length));
+                        break;
 
-        /// <summary>
-        /// B001: Collect enum identifier references (the enum name part of EnumName.MEMBER expressions).
-        /// Walks expressions looking for FieldAccessExpr where Target is IdentifierExpr matching the enum name.
-        /// </summary>
-        private sealed class EnumIdentRefsWalker : AstWalker
-        {
-            private readonly string _enumName;
-            private readonly string _uri;
-            private readonly List<object> _locations;
-            public EnumIdentRefsWalker(string enumName, string uri, List<object> locations) { _enumName = enumName; _uri = uri; _locations = locations; }
-            protected override bool VisitExpr(Expr expr)
-            {
-                if (expr is FieldAccessExpr fa && fa.Target is IdentifierExpr id && id.Name == _enumName)
-                    _locations.Add(MakeLocation(_uri, id.Line, id.Column, _enumName.Length));
-                return false;
+                    case SymbolKindTag.Variable:
+                    case SymbolKindTag.Parameter:
+                        // IdentifierExpr: variable/parameter usage
+                        if (expr is IdentifierExpr vid && vid.Name == _name)
+                        {
+                            if (!_scopeIsolated || IsTargetActive)
+                                _locations.Add(MakeLocation(_uri, vid.Line, vid.Column, _name.Length));
+                        }
+                        break;
+
+                    case SymbolKindTag.Struct:
+                        // StructLiteralExpr: struct literal type name (e.g., "Vec2 { ... }")
+                        if (expr is StructLiteralExpr slStruct && slStruct.TypeName == _name)
+                            _locations.Add(MakeLocation(_uri, slStruct.Line, slStruct.Column, _name.Length));
+                        break;
+
+                    case SymbolKindTag.Enum:
+                        // FieldAccessExpr: enum identifier in EnumName.MEMBER pattern
+                        if (expr is FieldAccessExpr faEnum && faEnum.Target is IdentifierExpr eid && eid.Name == _name)
+                            _locations.Add(MakeLocation(_uri, eid.Line, eid.Column, _name.Length));
+                        break;
+
+                    case SymbolKindTag.StructField:
+                        // FieldAccessExpr: field access (e.g., "obj.fieldName")
+                        if (expr is FieldAccessExpr faField)
+                        {
+                            if (faField.FieldName == _name && faField.FieldNameLine > 0)
+                                _locations.Add(MakeLocation(_uri, faField.FieldNameLine, faField.FieldNameColumn, _name.Length));
+                        }
+                        // StructLiteralExpr: field in struct literal (e.g., "Foo { fieldName: ... }")
+                        else if (expr is StructLiteralExpr slField)
+                        {
+                            foreach (var f in slField.Fields)
+                            {
+                                if (f.FieldName == _name)
+                                    _locations.Add(MakeLocation(_uri, slField.Line, slField.Column, _name.Length));
+                            }
+                        }
+                        break;
+
+                    case SymbolKindTag.EnumMember:
+                        // FieldAccessExpr: enum member access (e.g., "Color.RED" — the RED part)
+                        if (expr is FieldAccessExpr faMember)
+                        {
+                            if (faMember.FieldName == _name && faMember.FieldNameLine > 0
+                                && _parentName != null && faMember.Target is IdentifierExpr mid && mid.Name == _parentName)
+                            {
+                                _locations.Add(MakeLocation(_uri, faMember.FieldNameLine, faMember.FieldNameColumn, _name.Length));
+                            }
+                        }
+                        break;
+                }
+                return false; // continue walking children
             }
         }
 
@@ -4075,80 +3907,6 @@ namespace FFVM.Debug
             textEdit.Set("newText", newText);
             return textEdit;
         }
-
-        /// <summary>
-        /// DX5: Collect references to a struct field (field access expressions in function bodies).
-        /// </summary>
-        // R1: FieldAccessRefs — replaced hand-written Block/Stmt/Expr triad with AstWalker subclass.
-        private static void CollectFieldAccessRefsInBlock(BlockStmt block, string fieldName, string structName, string uri, List<object> locations)
-        {
-            var w = new FieldAccessRefsWalker(fieldName, uri, locations);
-            w.WalkBlock(block);
-        }
-
-        private sealed class FieldAccessRefsWalker : AstWalker
-        {
-            private readonly string _fieldName;
-            private readonly string _uri;
-            private readonly List<object> _locations;
-            public FieldAccessRefsWalker(string fieldName, string uri, List<object> locations) { _fieldName = fieldName; _uri = uri; _locations = locations; }
-            protected override bool VisitExpr(Expr expr)
-            {
-                if (expr is FieldAccessExpr fa)
-                {
-                    // DX7: FieldNameLine/FieldNameColumn now tracks precise field name position
-                    if (fa.FieldName == _fieldName && fa.FieldNameLine > 0)
-                        _locations.Add(MakeLocation(_uri, fa.FieldNameLine, fa.FieldNameColumn, _fieldName.Length));
-                }
-                else if (expr is StructLiteralExpr sl)
-                {
-                    foreach (var f in sl.Fields)
-                    {
-                        if (f.FieldName == _fieldName)
-                            _locations.Add(MakeLocation(_uri, sl.Line, sl.Column, _fieldName.Length));
-                    }
-                }
-                return false; // continue walking children
-            }
-        }
-
-        // ============================================================
-        // E003: Enum member access reference collection
-        // Collects EnumName.MEMBER usage sites (FieldAccessExpr where
-        // Target is IdentifierExpr matching the enum name).
-        // ============================================================
-
-        // R1: EnumMemberAccessRefs — replaced hand-written Block/Stmt/Expr triad with AstWalker subclass.
-        private static void CollectEnumMemberAccessRefsInBlock(BlockStmt block, string memberName, string enumName, string uri, List<object> locations)
-        {
-            var w = new EnumMemberAccessRefsWalker(memberName, enumName, uri, locations);
-            w.WalkBlock(block);
-        }
-
-        private sealed class EnumMemberAccessRefsWalker : AstWalker
-        {
-            private readonly string _memberName;
-            private readonly string _enumName;
-            private readonly string _uri;
-            private readonly List<object> _locations;
-            public EnumMemberAccessRefsWalker(string memberName, string enumName, string uri, List<object> locations) { _memberName = memberName; _enumName = enumName; _uri = uri; _locations = locations; }
-            protected override bool VisitExpr(Expr expr)
-            {
-                // Match EnumName.MEMBER pattern: FieldAccessExpr where Target is IdentifierExpr(enumName) and FieldName matches
-                if (expr is FieldAccessExpr fa)
-                {
-                    if (fa.FieldName == _memberName && fa.FieldNameLine > 0
-                        && fa.Target is IdentifierExpr id && id.Name == _enumName)
-                    {
-                        _locations.Add(MakeLocation(_uri, fa.FieldNameLine, fa.FieldNameColumn, _memberName.Length));
-                    }
-                }
-                return false;
-            }
-        }
-
-        // ============================================================
-        // ============================================================
 
         /// <summary>
         /// DX5: Prepare rename — validate that the position is on a renamable symbol
