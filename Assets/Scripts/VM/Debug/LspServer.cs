@@ -1430,8 +1430,6 @@ namespace FFVM.Debug
         private JsonObject HandleHover(JsonObject parameters)
         {
             string uri = GetDocumentUri(parameters);
-            var ast = GetCachedAst(uri);
-            if (ast == null) return null;
 
             var position = parameters?.GetObject("position");
             if (position == null) return null;
@@ -1441,9 +1439,23 @@ namespace FFVM.Debug
             int astLine = lspLine + 1;
             int astCol = lspChar + 1;
 
-            // DX4-P3: Use merged AST for hover (resolves symbols from included files)
-            var mergedAst = GetMergedAst(uri);
-            string hoverText = FindHoverText(mergedAst, astLine, astCol);
+            // DX17: Use unified symbol resolution (shared with Definition/References/Rename)
+            var (symbol, mergedAst) = ResolveSymbol(uri, astLine, astCol);
+
+            string hoverText = null;
+            if (symbol != null && symbol.Value.Kind != SymbolKindTag.IncludeFile)
+            {
+                hoverText = FormatHoverForSymbol(symbol.Value, mergedAst);
+            }
+
+            // Fallback for keyword-level hover (cursor on "func"/"struct"/"enum"/"var"/"const" keyword)
+            // and edge cases where ResolveSymbol doesn't match but FindHoverText does
+            if (hoverText == null)
+            {
+                if (mergedAst == null) mergedAst = GetMergedAst(uri);
+                if (mergedAst != null) hoverText = FindHoverText(mergedAst, astLine, astCol);
+            }
+
             if (hoverText == null) return null;
 
             // Auto-wrap in code fence if not already markdown
@@ -1808,45 +1820,107 @@ namespace FFVM.Debug
             return $"```ffvm\n{sig}\n```\n---\n{en.DocComment}";
         }
 
-        // --- symbol resolution helpers ---
-
         /// <summary>
-        /// R1: Common dual-AST symbol resolution. Finds the symbol at a cursor position
-        /// using per-file AST first (for include declarations), then falls back to merged AST
-        /// for cross-file struct/enum type annotations and enum members.
-        ///
-        /// Returns (perFileTarget, resolvedTarget, perFileAst, mergedAst):
-        ///  - perFileTarget: result from per-file AST (null if not found; includes IncludeFile)
-        ///  - resolvedTarget: result after merged-AST fallback (may differ from perFileTarget)
-        ///  - perFileAst: the per-file AST for this document
-        ///  - mergedAst: the merged AST for this document
-        ///
-        /// Callers should check perFileTarget for IncludeFile before using resolvedTarget.
+        /// DX17: Generate hover text from a resolved symbol by looking up the AST node.
+        /// Returns null if no hover text can be generated for this symbol kind.
         /// </summary>
-        private (SymbolAtPosition? perFileTarget, SymbolAtPosition? resolvedTarget, ModuleNode perFileAst, ModuleNode mergedAst)
-            ResolveSymbolDualAst(string uri, int astLine, int astCol)
+        private static string FormatHoverForSymbol(ResolvedSymbol symbol, ModuleNode ast)
         {
-            var ast = GetCachedAst(uri);
-            if (ast == null) return (null, null, null, null);
+            if (ast == null) return null;
 
-            // US: Check include declarations using per-file AST first (merged AST strips Imports)
-            var perFileTarget = FindSymbolAtPosition(ast, astLine, astCol);
-
-            // Get merged AST for cross-file resolution
-            var mergedAst = GetMergedAst(uri);
-
-            // Re-identify using merged AST if per-file AST couldn't resolve the symbol
-            // correctly (e.g. cross-file struct/enum type annotations or enum members)
-            var resolvedTarget = perFileTarget;
-            if (resolvedTarget == null || resolvedTarget.Value.kind == SymbolKindTag.Variable
-                || (resolvedTarget.Value.kind == SymbolKindTag.StructField && resolvedTarget.Value.parentName == null))
+            switch (symbol.Kind)
             {
-                var mergedTarget = FindSymbolAtPosition(mergedAst, astLine, astCol);
-                if (mergedTarget != null) resolvedTarget = mergedTarget;
-            }
+                case SymbolKindTag.Function:
+                    foreach (var func in ast.Functions)
+                        if (func.Name == symbol.Name) return FormatFuncHover(func);
+                    return $"func {symbol.Name}(...)";
 
-            return (perFileTarget, resolvedTarget, ast, mergedAst);
+                case SymbolKindTag.Struct:
+                    foreach (var st in ast.Structs)
+                        if (st.Name == symbol.Name) return FormatStructHover(st);
+                    return $"struct {symbol.Name}";
+
+                case SymbolKindTag.Enum:
+                    foreach (var en in ast.Enums)
+                        if (en.Name == symbol.Name) return FormatEnumHover(en);
+                    return $"enum {symbol.Name}";
+
+                case SymbolKindTag.Variable:
+                    // Check function-scoped variables first
+                    if (symbol.ScopeFunc != null)
+                    {
+                        foreach (var func in ast.Functions)
+                        {
+                            if (func.Name == symbol.ScopeFunc)
+                            {
+                                string typeInfo = FindVarType(func, symbol.Name);
+                                if (typeInfo != null) return $"var {symbol.Name}: {typeInfo}";
+                            }
+                        }
+                    }
+                    // Check module-level variables
+                    foreach (var mv in ast.ModuleVariables)
+                    {
+                        if (mv.Name == symbol.Name)
+                        {
+                            string prefix = mv.IsConst ? "const" : "var";
+                            string typeStr = mv.TypeName ?? "int";
+                            return $"(module {prefix}) {mv.Name}: {typeStr}";
+                        }
+                    }
+                    return symbol.Name;
+
+                case SymbolKindTag.Parameter:
+                    if (symbol.ScopeFunc != null)
+                    {
+                        foreach (var func in ast.Functions)
+                        {
+                            if (func.Name == symbol.ScopeFunc)
+                            {
+                                foreach (var p in func.Parameters)
+                                {
+                                    if (p.Name == symbol.Name)
+                                    {
+                                        string paramHover = $"(parameter) {FormatParamDecl(p)}";
+                                        if (p.DocComment != null)
+                                            paramHover += $"\n\n{p.DocComment}";
+                                        return paramHover;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    return $"(parameter) {symbol.Name}";
+
+                case SymbolKindTag.StructField:
+                    if (symbol.ParentName != null)
+                    {
+                        foreach (var st in ast.Structs)
+                        {
+                            if (st.Name == symbol.ParentName)
+                            {
+                                foreach (var f in st.Fields)
+                                    if (f.Name == symbol.Name)
+                                        return $"(field) {symbol.ParentName}.{f.Name}: {f.TypeName}";
+                            }
+                        }
+                    }
+                    // parentName unknown — search all structs
+                    foreach (var st in ast.Structs)
+                        foreach (var f in st.Fields)
+                            if (f.Name == symbol.Name)
+                                return $"(field) {st.Name}.{f.Name}: {f.TypeName}";
+                    return $"(field) {symbol.Name}";
+
+                case SymbolKindTag.EnumMember:
+                    return $"(enum member) {symbol.ParentName}.{symbol.Name}";
+
+                default:
+                    return null;
+            }
         }
+
+        // --- symbol resolution helpers ---
 
         /// <summary>
         /// DX17: Unified symbol resolution. Combines dual-AST symbol identification
