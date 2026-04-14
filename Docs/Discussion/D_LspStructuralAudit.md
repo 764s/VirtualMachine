@@ -1,6 +1,6 @@
 # LSP 结构性审查：概念源唯一性与执行路径收敛
 
-> **状态**：💬 讨论中
+> **状态**：✅ 已完成讨论
 > **日期**：2026-04-14
 > **来源**：D17（D_LspUsabilityAudit）KL-01~05 修复过程中暴露的系统性模式
 
@@ -181,3 +181,36 @@ if (symbol == null) return null;
 | D16 (D_LspArchitecture) | DX10/DX11 已实施。本文补充 LSP 内部符号引擎的结构性改进 |
 | D17 (D_LspUsabilityAudit) | KL-01~05 的**根因分析**。审查发现的 GAP 是笛卡尔积遗漏的表现 |
 | R1 (AstWalker) | R1 是底层遍历统一。本文是上层分派统一，两者互补 |
+
+---
+
+## 八、自审注意点
+
+### 8.1 AstWalker 已知缺陷：WaitForStmt 子表达式未遍历
+
+`AstWalker.WalkStmt` 注释 `WaitForStmt` 为 "no children to walk"，但 `WaitForStmt.TargetInstanceId` 是 `Expr`。后果：`wait_for(myVar)` 中的 `myVar` 对所有 AstWalker 子类不可见——引用收集、语义高亮、作用域跟踪均遗漏此节点。DX17/DX18 实施时应同步修复。
+
+### 8.2 BytecodeCompiler 明确不在范围
+
+BytecodeCompiler 有 262 个 `is`-dispatch 站点，但每个分支有独立的 `_errors.Add("Unknown statement type")` 兜底。编译器的分派维度（Stmt/Expr → 字节码）与 LSP 的分派维度（SymbolKindTag × 容器 × 功能）正交。本次重构不触碰 BytecodeCompiler。
+
+### 8.3 不预期性能回归
+
+所有变更局限于 LSP 引擎（`LspServer.cs`），不涉及 VM 运行时、Parser 或 BytecodeCompiler。具体分析：
+
+- **VM 运行时**：零影响（不触碰字节码解释器）
+- **LSP AST 分派**：UnifiedRefsWalker 将多次特化遍历（当前每个 SymbolKindTag 分支各自调用不同 Walker 组合）合并为一次遍历。单次遍历中多几个 `is` 分支判断（纳秒级），但消除了重复遍历整棵树的开销。**净效果为正或中性**
+- **符号解析**：ResolvedSymbol 合并 SymbolAtPosition + FindDefinitionLocation 返回值，消除 ResolveSymbolDualAst 中的二次查找。**净效果为正**
+- **内存分配**：减少 Walker 实例化次数（7 → 1），struct 略大。中性
+- **44 个 Perf 测试**：测量 VM tick throughput，不测量 LSP。不受影响
+
+---
+
+## 九、行动项（固化为需求）
+
+| 需求 | 名称 | 内容 | 优先级 | 前置 |
+|------|------|------|--------|------|
+| DX17 | 统一符号解析 | P1：合并 SymbolAtPosition + FindDefinitionLocation 返回值为 ResolvedSymbol。HandleDefinition/HandleReferences/HandleRename/HandleHover 共享 ResolveSymbol 调用。消除 ResolveSymbolDualAst 二次查找。修复 WaitForStmt 子表达式遗漏 | ⭐⭐ | DX16 ✅ |
+| DX18 | 统一引用收集 | P2+P3：7 个引用 Walker → 1 个 UnifiedRefsWalker。CollectReferencesWithOrigin 8 个 SymbolKindTag 分支 → 声明位置 + 统一遍历。消除 CollectReferences/CollectReferencesWithOrigin 二重性 | ⭐⭐⭐ | DX17 ✅ |
+
+> 652 个现有 LSP 测试提供完整回归保障。新增符号类型修改点从 5+ 降至 2，新增容器类型修改点从 8 降至 1。
