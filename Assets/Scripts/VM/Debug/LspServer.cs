@@ -4528,7 +4528,10 @@ namespace FFVM.Debug
                     }
                     WalkBlock(us.Body);
                 }
-                // YieldStmt, WaitForStmt — no children to walk
+                // DX17: WaitForStmt has a TargetInstanceId expression that must be walked
+                else if (stmt is WaitForStmt wfs)
+                    WalkExpr(wfs.TargetInstanceId);
+                // YieldStmt — no children to walk
             }
 
             // ---- Expr dispatch ----

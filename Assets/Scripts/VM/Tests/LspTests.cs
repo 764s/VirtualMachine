@@ -8453,6 +8453,77 @@ public static class LspTests
                 $"DX16-08a: single 'x' references == 4, got {list?.Count ?? 0}");
         }
 
+        // DX17-01: wait_for(myVar) — myVar appears in references
+        {
+            // wait_for syntax: wait_for(expr)
+            // The variable inside wait_for must be visible to AstWalker (bug fixed in DX17)
+            string source = "func main() {\n    var targetId: int = 42\n    wait_for(targetId)\n}";
+            // Line 0: func main()
+            // Line 1: var targetId: int = 42  → col 8 = "targetId"
+            // Line 2: wait_for(targetId)      → "targetId" starts at col 13
+            var session = new LspBatchSession();
+            session.AddInitialize();
+            session.AddInitialized();
+            session.AddDidOpen("file:///dx17_01.ffs", source);
+            // References on declaration "targetId" — line 1, col 8
+            session.AddReferences("file:///dx17_01.ffs", 1, 8);
+            session.AddShutdown();
+            session.AddExit();
+            session.Run();
+
+            session.ExpectResponse(0);
+            var refs = session.ExpectResponse(1);
+            var list = refs?.GetArray("result");
+            // Expected: decl (line 1) + usage inside wait_for (line 2) = 2
+            Assert(list != null && list.Count == 2,
+                $"DX17-01a: wait_for(targetId) references == 2, got {list?.Count ?? 0}");
+            // Verify one reference is on line 2 (the wait_for line)
+            bool hasWaitForRef = false;
+            if (list != null)
+            {
+                for (int i = 0; i < list.Count; i++)
+                {
+                    var loc = list[i] as JsonObject;
+                    var range = loc?.GetObject("range");
+                    var start = range?.GetObject("start");
+                    if (start != null && start.GetInt("line") == 2) hasWaitForRef = true;
+                }
+            }
+            Assert(hasWaitForRef,
+                $"DX17-01b: references include wait_for line (line 2)");
+        }
+
+        // DX17-02: wait_for(myVar) — rename also renames inside wait_for
+        {
+            string source = "func main() {\n    var targetId: int = 42\n    wait_for(targetId)\n}";
+            var session = new LspBatchSession();
+            session.AddInitialize();
+            session.AddInitialized();
+            session.AddDidOpen("file:///dx17_02.ffs", source);
+            // Rename "targetId" at declaration — line 1, col 8
+            session.AddRename("file:///dx17_02.ffs", 1, 8, "newTarget");
+            session.AddShutdown();
+            session.AddExit();
+            session.Run();
+
+            session.ExpectResponse(0);
+            var renameResp = session.ExpectResponse(1);
+            var wsEdit = renameResp?.GetObject("result");
+            var changes = wsEdit?.GetObject("changes");
+            Assert(changes != null,
+                "DX17-02a: rename returns WorkspaceEdit with changes");
+            // Count edits for the file
+            int editCount = 0;
+            if (changes != null)
+            {
+                var edits = changes.GetArray("file:///dx17_02.ffs");
+                editCount = edits?.Count ?? 0;
+            }
+            // Expected: 2 edits — declaration (line 1) + wait_for usage (line 2)
+            Assert(editCount == 2,
+                $"DX17-02b: rename produces 2 edits (decl + wait_for), got {editCount}");
+        }
+
         Debug.Log($"\n===== LspTests: {passed} passed, {failed} failed =====");
     }
 
