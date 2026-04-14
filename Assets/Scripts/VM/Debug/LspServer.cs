@@ -1872,7 +1872,7 @@ namespace FFVM.Debug
             if (target == null) return null;
 
             // DX4-P3: Use merged AST to find definition (may be in included file)
-            var defLoc = FindDefinitionLocation(mergedAst, target.Value.name, target.Value.kind, target.Value.scopeFunc, target.Value.parentName);
+            var defLoc = FindDefinitionLocation(mergedAst, target.Value.name, target.Value.kind, target.Value.scopeFunc, target.Value.parentName, target.Value.declLine, target.Value.declCol);
             if (defLoc == null) return null;
 
             // DX4-P3: Resolve target URI — may point to a different file via OriginFile
@@ -1955,7 +1955,7 @@ namespace FFVM.Debug
 
             // DX4-P3: Use merged AST for cross-file reference collection
             var locs = new List<object>();
-            CollectReferencesWithOrigin(mergedAst, target.Value.name, target.Value.kind, uri, locs, target.Value.parentName, target.Value.scopeFunc);
+            CollectReferencesWithOrigin(mergedAst, target.Value.name, target.Value.kind, uri, locs, target.Value.parentName, target.Value.scopeFunc, target.Value.declLine, target.Value.declCol);
             return MakeArrayResult(locs);
         }
 
@@ -2557,6 +2557,10 @@ namespace FFVM.Debug
             public SymbolKindTag kind;
             public string scopeFunc; // null for top-level symbols
             public string parentName; // for StructField → struct name, for EnumMember → enum name
+            /// <summary>DX16: 1-based line of the governing VarDeclStmt for scope-isolated variable references. 0 = unresolved (module-level or parameter).</summary>
+            public int declLine;
+            /// <summary>DX16: 1-based column of the governing VarDeclStmt for scope-isolated variable references.</summary>
+            public int declCol;
         }
 
         /// <summary>
@@ -2681,20 +2685,62 @@ namespace FFVM.Debug
             private readonly int _col;
             public SymbolAtPosition? Result;
 
+            // DX16: Track the active variable declaration per variable name for scope isolation.
+            // Key = variable name, Value = (declLine, declCol) of the most recent VarDeclStmt.
+            private Dictionary<string, (int line, int col)> _activeDecls = new Dictionary<string, (int line, int col)>();
+
             public FindSymbolWalker(ModuleNode ast, FuncDecl func, int line, int col) { _ast = ast; _func = func; _line = line; _col = col; }
 
             private void SetResult(SymbolAtPosition r) { Result = r; _abort = true; }
 
+            // DX16: Save/restore active declarations around block scopes
+            private Dictionary<string, (int line, int col)> SaveDecls()
+            {
+                return new Dictionary<string, (int line, int col)>(_activeDecls);
+            }
+            private void RestoreDecls(Dictionary<string, (int line, int col)> saved)
+            {
+                _activeDecls = saved;
+            }
+
             protected override bool VisitStmt(Stmt stmt)
             {
+                // DX16: BlockStmt creates a scope boundary — save/restore active declarations
+                if (stmt is BlockStmt bs)
+                {
+                    var saved = SaveDecls();
+                    foreach (var s in bs.Statements)
+                    {
+                        if (_abort) break;
+                        WalkStmt(s);
+                    }
+                    RestoreDecls(saved);
+                    return true; // skip default dispatch
+                }
+
+                // DX16: ForStmt creates a scope boundary for its initializer variable
+                if (stmt is ForStmt fs)
+                {
+                    var saved = SaveDecls();
+                    WalkStmt(fs.Initializer);
+                    if (!_abort) WalkExpr(fs.Condition);
+                    if (!_abort) WalkExpr(fs.Increment);
+                    if (!_abort) WalkStmt(fs.Body);
+                    RestoreDecls(saved);
+                    return true; // skip default dispatch
+                }
+
                 if (stmt is VarDeclStmt vd)
                 {
                     // Walk initializer first (has precise column matching for calls, identifiers, etc.)
+                    // DX16: Initializer references use the PREVIOUS active declaration
                     if (vd.Initializer != null)
                     {
                         WalkExpr(vd.Initializer);
                         if (Result != null) return true;
                     }
+                    // DX16: After processing initializer, update active declaration for this variable name
+                    _activeDecls[vd.Name] = (vd.Line, vd.Column);
                     // US: Check type annotation — if cursor is on the type name, resolve as Struct or Enum
                     if (vd.TypeNameLine > 0 && vd.TypeNameLine == _line && vd.TypeName != null
                         && ColMatches(vd.TypeNameColumn, vd.TypeName.Length, _col))
@@ -2716,7 +2762,7 @@ namespace FFVM.Debug
                     {
                         int nameStart = vd.Column + (vd.IsConst ? "const".Length : "var".Length) + 1;
                         if (ColMatches(nameStart, vd.Name.Length, _col))
-                        { SetResult(new SymbolAtPosition { name = vd.Name, kind = SymbolKindTag.Variable, scopeFunc = _func?.Name }); return true; }
+                        { SetResult(new SymbolAtPosition { name = vd.Name, kind = SymbolKindTag.Variable, scopeFunc = _func?.Name, declLine = vd.Line, declCol = vd.Column }); return true; }
                     }
                     return true; // handled all VarDeclStmt paths (skip default dispatch which would re-walk initializer)
                 }
@@ -2748,7 +2794,11 @@ namespace FFVM.Debug
                             { SetResult(new SymbolAtPosition { name = id.Name, kind = SymbolKindTag.Parameter, scopeFunc = _func.Name }); return true; }
                         }
                     }
-                    SetResult(new SymbolAtPosition { name = id.Name, kind = SymbolKindTag.Variable, scopeFunc = _func?.Name });
+                    // DX16: Resolve governing declaration from scope tracking
+                    int dl = 0, dc = 0;
+                    if (_activeDecls.TryGetValue(id.Name, out var activeDecl))
+                    { dl = activeDecl.line; dc = activeDecl.col; }
+                    SetResult(new SymbolAtPosition { name = id.Name, kind = SymbolKindTag.Variable, scopeFunc = _func?.Name, declLine = dl, declCol = dc });
                     return true;
                 }
 
@@ -2801,7 +2851,7 @@ namespace FFVM.Debug
         /// Returns null if no symbol found. Coordinates are 1-based (AST convention).
         /// </summary>
         private static (int line, int col, int nameLen, string originFile)? FindDefinitionLocation(
-            ModuleNode ast, string name, SymbolKindTag kind, string scopeFunc, string parentName = null)
+            ModuleNode ast, string name, SymbolKindTag kind, string scopeFunc, string parentName = null, int declLine = 0, int declCol = 0)
         {
             if (kind == SymbolKindTag.Function)
             {
@@ -2902,6 +2952,10 @@ namespace FFVM.Debug
                                 }
                             }
                         }
+
+                        // DX16: If we have a precise declaration position, use it directly
+                        if (declLine > 0)
+                            return (declLine, declCol, name.Length, func.OriginFile);
 
                         // Check variable declarations in body
                         var loc = FindVarDeclLocation(func.Body, name);
@@ -3018,7 +3072,7 @@ namespace FFVM.Debug
         /// For call sites and usages within function bodies, uses the function's OriginFile.
         /// DX13: scopeFunc scopes Parameter references to the declaring function.
         /// </summary>
-        private void CollectReferencesWithOrigin(ModuleNode ast, string name, SymbolKindTag kind, string requestingUri, List<object> locations, string parentName = null, string scopeFunc = null)
+        private void CollectReferencesWithOrigin(ModuleNode ast, string name, SymbolKindTag kind, string requestingUri, List<object> locations, string parentName = null, string scopeFunc = null, int declLine = 0, int declCol = 0)
         {
             if (kind == SymbolKindTag.Function)
             {
@@ -3267,28 +3321,45 @@ namespace FFVM.Debug
             }
             else // Variable
             {
-                foreach (var func in ast.Functions)
+                // DX16: If we have a governing declaration (function-local variable), use scope-isolated collection
+                if (scopeFunc != null && declLine > 0)
                 {
-                    string funcUri = ResolveOriginUri(requestingUri, func.OriginFile);
-                    CollectIdentRefsInBlock(func.Body, name, funcUri, locations);
-                }
-
-                // B001: Module-level variable declaration and initializer references
-                foreach (var mv in ast.ModuleVariables)
-                {
-                    if (mv.Name == name)
+                    foreach (var func in ast.Functions)
                     {
-                        string mvUri = ResolveOriginUri(requestingUri, mv.OriginFile);
-                        int defLine = mv.NameLine > 0 ? mv.NameLine : mv.Line;
-                        int defCol = mv.NameLine > 0 ? mv.NameColumn : mv.Column;
-                        locations.Add(MakeLocation(mvUri, defLine, defCol, name.Length));
+                        if (func.Name == scopeFunc)
+                        {
+                            string funcUri = ResolveOriginUri(requestingUri, func.OriginFile);
+                            CollectScopedIdentRefsInBlock(func.Body, name, declLine, declCol, funcUri, locations);
+                            break;
+                        }
                     }
-                    // Also collect identifier references within initializers
-                    if (mv.Initializer != null)
+                }
+                else
+                {
+                    // Module-level or unresolved declaration — use existing unscoped collection
+                    foreach (var func in ast.Functions)
                     {
-                        string mvUri = ResolveOriginUri(requestingUri, mv.OriginFile);
-                        var w = new IdentRefsWalker(name, mvUri, locations);
-                        w.WalkExpr(mv.Initializer);
+                        string funcUri = ResolveOriginUri(requestingUri, func.OriginFile);
+                        CollectIdentRefsInBlock(func.Body, name, funcUri, locations);
+                    }
+
+                    // B001: Module-level variable declaration and initializer references
+                    foreach (var mv in ast.ModuleVariables)
+                    {
+                        if (mv.Name == name)
+                        {
+                            string mvUri = ResolveOriginUri(requestingUri, mv.OriginFile);
+                            int defLine = mv.NameLine > 0 ? mv.NameLine : mv.Line;
+                            int defCol = mv.NameLine > 0 ? mv.NameColumn : mv.Column;
+                            locations.Add(MakeLocation(mvUri, defLine, defCol, name.Length));
+                        }
+                        // Also collect identifier references within initializers
+                        if (mv.Initializer != null)
+                        {
+                            string mvUri = ResolveOriginUri(requestingUri, mv.OriginFile);
+                            var w = new IdentRefsWalker(name, mvUri, locations);
+                            w.WalkExpr(mv.Initializer);
+                        }
                     }
                 }
             }
@@ -3339,6 +3410,111 @@ namespace FFVM.Debug
                 if (expr is IdentifierExpr id && id.Name == _varName)
                     _locations.Add(MakeLocation(_uri, id.Line, id.Column, _varName.Length));
                 return false;
+            }
+        }
+
+        // DX16: Scope-isolated variable reference collection.
+        // Only collects references governed by a specific VarDeclStmt (identified by targetDeclLine/targetDeclCol).
+        private static void CollectScopedIdentRefsInBlock(BlockStmt block, string varName, int targetDeclLine, int targetDeclCol, string uri, List<object> locations)
+        {
+            var w = new ScopedIdentRefsWalker(varName, targetDeclLine, targetDeclCol, uri, locations);
+            w.WalkBlock(block);
+        }
+
+        private sealed class ScopedIdentRefsWalker : AstWalker
+        {
+            private readonly string _varName;
+            private readonly int _targetDeclLine;
+            private readonly int _targetDeclCol;
+            private readonly string _uri;
+            private readonly List<object> _locations;
+            // Track the active declaration position for _varName at each point in the walk.
+            private Dictionary<string, (int line, int col)> _activeDecls = new Dictionary<string, (int line, int col)>();
+
+            public ScopedIdentRefsWalker(string varName, int targetDeclLine, int targetDeclCol, string uri, List<object> locations)
+            {
+                _varName = varName; _targetDeclLine = targetDeclLine; _targetDeclCol = targetDeclCol;
+                _uri = uri; _locations = locations;
+            }
+
+            private bool IsTargetActive
+            {
+                get
+                {
+                    if (_activeDecls.TryGetValue(_varName, out var d))
+                        return d.line == _targetDeclLine && d.col == _targetDeclCol;
+                    return false;
+                }
+            }
+
+            private Dictionary<string, (int line, int col)> SaveDecls()
+            {
+                return new Dictionary<string, (int line, int col)>(_activeDecls);
+            }
+            private void RestoreDecls(Dictionary<string, (int line, int col)> saved)
+            {
+                _activeDecls = saved;
+            }
+
+            protected override bool VisitStmt(Stmt stmt)
+            {
+                // BlockStmt: scope boundary — save/restore active declarations
+                if (stmt is BlockStmt bs)
+                {
+                    var saved = SaveDecls();
+                    foreach (var s in bs.Statements)
+                    {
+                        if (_abort) break;
+                        WalkStmt(s);
+                    }
+                    RestoreDecls(saved);
+                    return true;
+                }
+
+                // ForStmt: scope boundary for initializer variable
+                if (stmt is ForStmt fs)
+                {
+                    var saved = SaveDecls();
+                    WalkStmt(fs.Initializer);
+                    if (!_abort) WalkExpr(fs.Condition);
+                    if (!_abort) WalkExpr(fs.Increment);
+                    if (!_abort) WalkStmt(fs.Body);
+                    RestoreDecls(saved);
+                    return true;
+                }
+
+                // VarDeclStmt: walk initializer BEFORE updating active declaration
+                // (initializer references use the previous declaration scope)
+                if (stmt is VarDeclStmt vd)
+                {
+                    if (vd.Name == _varName)
+                    {
+                        // Walk initializer with PREVIOUS active declaration
+                        if (vd.Initializer != null)
+                            WalkExpr(vd.Initializer);
+                        // Now update active declaration
+                        _activeDecls[vd.Name] = (vd.Line, vd.Column);
+                        // Collect the declaration itself if it matches the target
+                        if (IsTargetActive)
+                            _locations.Add(MakeLocation(_uri, vd.Line, vd.Column, _varName.Length));
+                    }
+                    else
+                    {
+                        // Different variable — walk initializer for references to our variable
+                        if (IsTargetActive && vd.Initializer != null)
+                            WalkExpr(vd.Initializer);
+                    }
+                    return true; // skip default dispatch
+                }
+
+                return false; // default dispatch for other statement types
+            }
+
+            protected override bool VisitExpr(Expr expr)
+            {
+                if (expr is IdentifierExpr id && id.Name == _varName && IsTargetActive)
+                    _locations.Add(MakeLocation(_uri, id.Line, id.Column, _varName.Length));
+                return false; // continue walking children
             }
         }
 
@@ -3843,7 +4019,7 @@ namespace FFVM.Debug
             if (target == null) return null;
 
             // Find the definition location to get precise range
-            var defLoc = FindDefinitionLocation(mergedAst, target.Value.name, target.Value.kind, target.Value.scopeFunc, target.Value.parentName);
+            var defLoc = FindDefinitionLocation(mergedAst, target.Value.name, target.Value.kind, target.Value.scopeFunc, target.Value.parentName, target.Value.declLine, target.Value.declCol);
 
             // Return range at cursor position with the symbol name as placeholder
             int lspLine = position.GetInt("line");
@@ -3934,7 +4110,7 @@ namespace FFVM.Debug
 
             // Collect all reference locations
             var locations = new List<object>();
-            CollectReferencesWithOrigin(mergedAst, target.Value.name, target.Value.kind, uri, locations, target.Value.parentName, target.Value.scopeFunc);
+            CollectReferencesWithOrigin(mergedAst, target.Value.name, target.Value.kind, uri, locations, target.Value.parentName, target.Value.scopeFunc, target.Value.declLine, target.Value.declCol);
 
             // Group locations by URI → text edits
             var editsByUri = new Dictionary<string, List<object>>();

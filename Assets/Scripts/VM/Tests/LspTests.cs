@@ -7355,12 +7355,11 @@ public static class LspTests
             var outerList = outerRefs?.GetArray("result");
             var innerList = innerRefs?.GetArray("result");
 
-            // Note: Whether scoped isolation is enforced depends on the LSP implementation.
-            // At minimum, both should return some references without crashing.
-            Assert(outerList != null && outerList.Count >= 1,
-                $"DX12-22a: outer 'x' references ≥1, got {outerList?.Count ?? 0}");
-            Assert(innerList != null && innerList.Count >= 1,
-                $"DX12-22b: inner 'x' references ≥1, got {innerList?.Count ?? 0}");
+            // DX16: Scope isolation now enforced — outer and inner variables are isolated.
+            Assert(outerList != null && outerList.Count == 3,
+                $"DX12-22a: outer 'x' references == 3 (decl + condition + wait), got {outerList?.Count ?? 0}");
+            Assert(innerList != null && innerList.Count == 2,
+                $"DX12-22b: inner 'x' references == 2 (decl + wait), got {innerList?.Count ?? 0}");
         }
 
         // ============================================================
@@ -8234,6 +8233,224 @@ public static class LspTests
             {
                 try { Directory.Delete(tmpDir, true); } catch { }
             }
+        }
+
+        // ============================================================
+        // DX16: Variable references scope isolation (KL-05)
+        // ============================================================
+
+        // DX16-01: Inner/outer same-name variable — outer references isolated
+        {
+            string source = "func main() {\n    var x: int = 1\n    if x > 0 {\n        var x: int = 2\n        wait x\n    }\n    wait x\n}";
+            // Line 1: var x = 1 (outer), Line 2: if x > 0, Line 3: var x = 2 (inner), Line 4: wait x (inner), Line 6: wait x (outer)
+            var session = new LspBatchSession();
+            session.AddInitialize();
+            session.AddInitialized();
+            session.AddDidOpen("file:///dx16_01.ffs", source);
+            // References on outer "x" declaration — line 1, col 8 ("var x")
+            session.AddReferences("file:///dx16_01.ffs", 1, 8);
+            session.AddShutdown();
+            session.AddExit();
+            session.Run();
+
+            session.ExpectResponse(0);
+            var outerRefs = session.ExpectResponse(1);
+            var outerList = outerRefs?.GetArray("result");
+            // Outer x: decl(line 1) + condition(line 2) + wait(line 6) = 3
+            Assert(outerList != null && outerList.Count == 3,
+                $"DX16-01a: outer 'x' references == 3, got {outerList?.Count ?? 0}");
+        }
+
+        // DX16-02: Inner/outer same-name variable — inner references isolated
+        {
+            string source = "func main() {\n    var x: int = 1\n    if x > 0 {\n        var x: int = 2\n        wait x\n    }\n    wait x\n}";
+            var session = new LspBatchSession();
+            session.AddInitialize();
+            session.AddInitialized();
+            session.AddDidOpen("file:///dx16_02.ffs", source);
+            // References on inner "x" declaration — line 3, col 12 ("var x" inside if)
+            session.AddReferences("file:///dx16_02.ffs", 3, 12);
+            session.AddShutdown();
+            session.AddExit();
+            session.Run();
+
+            session.ExpectResponse(0);
+            var innerRefs = session.ExpectResponse(1);
+            var innerList = innerRefs?.GetArray("result");
+            // Inner x: decl(line 3) + wait(line 4) = 2
+            Assert(innerList != null && innerList.Count == 2,
+                $"DX16-02a: inner 'x' references == 2, got {innerList?.Count ?? 0}");
+        }
+
+        // DX16-03: References from usage position (not declaration) — still scope-isolated
+        {
+            string source = "func main() {\n    var x: int = 1\n    if x > 0 {\n        var x: int = 2\n        wait x\n    }\n    wait x\n}";
+            var session = new LspBatchSession();
+            session.AddInitialize();
+            session.AddInitialized();
+            session.AddDidOpen("file:///dx16_03.ffs", source);
+            // References on outer "x" usage in condition — line 2, col 7 ("if x > 0")
+            session.AddReferences("file:///dx16_03.ffs", 2, 7);
+            // References on inner "x" usage in wait — line 4, col 13 ("wait x")
+            session.AddReferences("file:///dx16_03.ffs", 4, 13);
+            session.AddShutdown();
+            session.AddExit();
+            session.Run();
+
+            session.ExpectResponse(0);
+            var outerUsageRefs = session.ExpectResponse(1);
+            var innerUsageRefs = session.ExpectResponse(2);
+            var outerUsageList = outerUsageRefs?.GetArray("result");
+            var innerUsageList = innerUsageRefs?.GetArray("result");
+            Assert(outerUsageList != null && outerUsageList.Count == 3,
+                $"DX16-03a: outer 'x' from usage == 3, got {outerUsageList?.Count ?? 0}");
+            Assert(innerUsageList != null && innerUsageList.Count == 2,
+                $"DX16-03b: inner 'x' from usage == 2, got {innerUsageList?.Count ?? 0}");
+        }
+
+        // DX16-04: For loop variable scoped to loop body
+        {
+            string source = "func main() {\n    var i: int = 99\n    for var i: int = 0; i < 10; i = i + 1 {\n        wait i\n    }\n    wait i\n}";
+            // Line 1: var i = 99 (outer), Line 2: for var i = 0 (loop), Line 3: wait i (loop body), Line 5: wait i (outer)
+            var session = new LspBatchSession();
+            session.AddInitialize();
+            session.AddInitialized();
+            session.AddDidOpen("file:///dx16_04.ffs", source);
+            // References on outer "i" — line 1, col 8
+            session.AddReferences("file:///dx16_04.ffs", 1, 8);
+            // References on for-loop "i" — line 2, col 12
+            session.AddReferences("file:///dx16_04.ffs", 2, 12);
+            session.AddShutdown();
+            session.AddExit();
+            session.Run();
+
+            session.ExpectResponse(0);
+            var outerRefs = session.ExpectResponse(1);
+            var forRefs = session.ExpectResponse(2);
+            var outerList = outerRefs?.GetArray("result");
+            var forList = forRefs?.GetArray("result");
+            // Outer i: decl(line 1) + wait(line 5) = 2
+            Assert(outerList != null && outerList.Count == 2,
+                $"DX16-04a: outer 'i' references == 2, got {outerList?.Count ?? 0}");
+            // For-loop i: decl(line 2) + condition i<10 + increment i=i+1 (2 refs) + wait(line 3) = 5
+            Assert(forList != null && forList.Count >= 4,
+                $"DX16-04b: for-loop 'i' references ≥4, got {forList?.Count ?? 0}");
+        }
+
+        // DX16-05: Rename respects scope isolation
+        {
+            string source = "func main() {\n    var x: int = 1\n    if x > 0 {\n        var x: int = 2\n        wait x\n    }\n    wait x\n}";
+            var session = new LspBatchSession();
+            session.AddInitialize();
+            session.AddInitialized();
+            session.AddDidOpen("file:///dx16_05.ffs", source);
+            // Rename outer "x" to "y" — line 1, col 8
+            session.AddRename("file:///dx16_05.ffs", 1, 8, "y");
+            session.AddShutdown();
+            session.AddExit();
+            session.Run();
+
+            session.ExpectResponse(0);
+            var renameResp = session.ExpectResponse(1);
+            var changes = renameResp?.GetObject("result")?.GetObject("changes");
+            Assert(changes != null, "DX16-05a: rename returns WorkspaceEdit with changes");
+            int totalEdits = 0;
+            if (changes != null)
+            {
+                foreach (var key in changes.Keys)
+                {
+                    var edits = changes.GetArray(key);
+                    if (edits != null) totalEdits += edits.Count;
+                }
+            }
+            // Outer x rename: decl + condition + wait = 3 edits (inner x untouched)
+            Assert(totalEdits == 3, $"DX16-05b: outer 'x' rename produces 3 edits, got {totalEdits}");
+        }
+
+        // DX16-06: Go-to-definition on inner variable usage jumps to inner declaration
+        {
+            string source = "func main() {\n    var x: int = 1\n    if x > 0 {\n        var x: int = 2\n        wait x\n    }\n    wait x\n}";
+            var session = new LspBatchSession();
+            session.AddInitialize();
+            session.AddInitialized();
+            session.AddDidOpen("file:///dx16_06.ffs", source);
+            // Definition on inner "x" usage — line 4, col 13 ("wait x")
+            session.AddDefinition("file:///dx16_06.ffs", 4, 13);
+            // Definition on outer "x" usage — line 6, col 9 ("wait x")
+            session.AddDefinition("file:///dx16_06.ffs", 6, 9);
+            session.AddShutdown();
+            session.AddExit();
+            session.Run();
+
+            session.ExpectResponse(0);
+            var innerDef = session.ExpectResponse(1);
+            var outerDef = session.ExpectResponse(2);
+            // Inner x usage → should jump to inner declaration (line 3, 0-based)
+            var innerResult = innerDef?.GetObject("result");
+            var innerStart = innerResult?.GetObject("range")?.GetObject("start");
+            Assert(innerStart != null && innerStart.GetInt("line") == 3,
+                $"DX16-06a: inner 'x' definition on line 3 (0-based), got {innerStart?.GetInt("line")}");
+            // Outer x usage → should jump to outer declaration (line 1, 0-based)
+            var outerResult = outerDef?.GetObject("result");
+            var outerStart = outerResult?.GetObject("range")?.GetObject("start");
+            Assert(outerStart != null && outerStart.GetInt("line") == 1,
+                $"DX16-06b: outer 'x' definition on line 1 (0-based), got {outerStart?.GetInt("line")}");
+        }
+
+        // DX16-07: Three levels of nesting — each scope isolated
+        {
+            string source = "func main() {\n    var n: int = 1\n    if n > 0 {\n        var n: int = 2\n        if n > 1 {\n            var n: int = 3\n            wait n\n        }\n        wait n\n    }\n    wait n\n}";
+            // Line 1: var n=1 (L0), Line 3: var n=2 (L1), Line 5: var n=3 (L2)
+            var session = new LspBatchSession();
+            session.AddInitialize();
+            session.AddInitialized();
+            session.AddDidOpen("file:///dx16_07.ffs", source);
+            // References on L0 "n" — line 1, col 8
+            session.AddReferences("file:///dx16_07.ffs", 1, 8);
+            // References on L1 "n" — line 3, col 12
+            session.AddReferences("file:///dx16_07.ffs", 3, 12);
+            // References on L2 "n" — line 5, col 16
+            session.AddReferences("file:///dx16_07.ffs", 5, 16);
+            session.AddShutdown();
+            session.AddExit();
+            session.Run();
+
+            session.ExpectResponse(0);
+            var l0Refs = session.ExpectResponse(1);
+            var l1Refs = session.ExpectResponse(2);
+            var l2Refs = session.ExpectResponse(3);
+            var l0List = l0Refs?.GetArray("result");
+            var l1List = l1Refs?.GetArray("result");
+            var l2List = l2Refs?.GetArray("result");
+            // L0: decl + condition(line 2) + wait(line 10) = 3
+            Assert(l0List != null && l0List.Count == 3,
+                $"DX16-07a: L0 'n' references == 3, got {l0List?.Count ?? 0}");
+            // L1: decl + condition(line 4) + wait(line 8) = 3
+            Assert(l1List != null && l1List.Count == 3,
+                $"DX16-07b: L1 'n' references == 3, got {l1List?.Count ?? 0}");
+            // L2: decl + wait(line 6) = 2
+            Assert(l2List != null && l2List.Count == 2,
+                $"DX16-07c: L2 'n' references == 2, got {l2List?.Count ?? 0}");
+        }
+
+        // DX16-08: No shadowing — single variable references all occurrences
+        {
+            string source = "func main() {\n    var x: int = 1\n    if x > 0 {\n        wait x\n    }\n    wait x\n}";
+            var session = new LspBatchSession();
+            session.AddInitialize();
+            session.AddInitialized();
+            session.AddDidOpen("file:///dx16_08.ffs", source);
+            session.AddReferences("file:///dx16_08.ffs", 1, 8);
+            session.AddShutdown();
+            session.AddExit();
+            session.Run();
+
+            session.ExpectResponse(0);
+            var refs = session.ExpectResponse(1);
+            var list = refs?.GetArray("result");
+            // Single x: decl + condition + inner wait + outer wait = 4
+            Assert(list != null && list.Count == 4,
+                $"DX16-08a: single 'x' references == 4, got {list?.Count ?? 0}");
         }
 
         Debug.Log($"\n===== LspTests: {passed} passed, {failed} failed =====");
