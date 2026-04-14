@@ -1,6 +1,6 @@
 # B001: 模块级符号导航缺陷
 
-> **状态**：🔧 修复中
+> **状态**：✅ 已修复
 > **来源**：skill_walk_forward.ffs / skill_light_punch.ffs 实际使用场景
 > **影响**：定义提供器（Go to Definition）、引用提供器（Find References）在模块级声明上下文中功能异常
 
