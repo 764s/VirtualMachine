@@ -16,3 +16,4 @@
 |---|------|------|------|------|------|
 | B001 | [B001_ModuleLevelSymbolNavigation.md](B001_ModuleLevelSymbolNavigation.md) | 模块级符号导航缺陷 — 定义提供器/引用提供器/诊断 | ✅ 已修复 | 2026-04-13 | 影响 module-level const/var 声明中的枚举、结构体、函数、变量符号 |
 | B002 | [B002_ParserInfiniteLoop.md](B002_ParserInfiniteLoop.md) | Parser 无限循环 — struct 声明中逗号分隔导致解析停滞 | ✅ 已修复 | 2026-04-14 | 静默无限循环，CI 超时；同时修复了三处 struct 解析循环的安全守卫 |
+| B003 | [B003_LspUserExpectationBehaviorGapReport.md](B003_LspUserExpectationBehaviorGapReport.md) | LSP 功能行为偏差诊断（用户操作 × 语言特性 × 预期结果） | 🔧 修复中 | 2026-04-15 | 聚焦 alias/member call、位置精度、跨文件一致性与必要测试覆盖点 |
