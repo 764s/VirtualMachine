@@ -27,6 +27,40 @@ namespace FFVM.Debug.Lsp.Database
 	{
 		private const int CompletionLimit = 128;
 		private const int DocumentSymbolLimit = 512;
+		private const int SemanticTokenTypeStruct = 5;
+		private const int SemanticTokenTypeParameter = 7;
+		private const int SemanticTokenTypeVariable = 8;
+		private const int SemanticTokenTypeProperty = 9;
+		private const int SemanticTokenTypeEnum = 10;
+		private const int SemanticTokenTypeFunction = 12;
+		private const int SemanticTokenTypeKeyword = 15;
+
+		private static readonly Dictionary<string, int> SemanticTokenTypeMap = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase)
+		{
+			{ "namespace", 0 },
+			{ "type", 1 },
+			{ "class", 2 },
+			{ "enum", 3 },
+			{ "interface", 4 },
+			{ "struct", SemanticTokenTypeStruct },
+			{ "typeParameter", 6 },
+			{ "parameter", SemanticTokenTypeParameter },
+			{ "variable", SemanticTokenTypeVariable },
+			{ "property", SemanticTokenTypeProperty },
+			{ "enumMember", SemanticTokenTypeEnum },
+			{ "event", 11 },
+			{ "function", SemanticTokenTypeFunction },
+			{ "method", 13 },
+			{ "macro", 14 },
+			{ "keyword", SemanticTokenTypeKeyword },
+			{ "modifier", 16 },
+			{ "comment", 17 },
+			{ "string", 18 },
+			{ "number", 19 },
+			{ "regexp", 20 },
+			{ "operator", 21 },
+			{ "decorator", 22 },
+		};
 
 		public SymbolQueryResult QueryDefinition(CodeDatabaseSnapshot snapshot, SymbolQueryRequest request)
 		{
@@ -237,7 +271,71 @@ namespace FFVM.Debug.Lsp.Database
 
 		public object QuerySemanticTokensFull(CodeDatabaseSnapshot snapshot, SymbolQueryRequest request)
 		{
-			return new LspSemanticTokensPayload(new List<int>(0), "Semantic token extraction is not implemented yet.");
+			if (request == null || string.IsNullOrWhiteSpace(request.DocumentKey))
+			{
+				return new LspSemanticTokensPayload(
+					new List<int>(0),
+					"DocumentKey is required for semanticTokens/full query.");
+			}
+
+			if (snapshot == null)
+			{
+				return new LspSemanticTokensPayload(
+					new List<int>(0),
+					"Snapshot is required for semanticTokens/full query.");
+			}
+
+			List<SemanticTokenAbsolute> absoluteTokens = CollectSemanticTokens(snapshot, request.DocumentKey);
+			if (absoluteTokens.Count == 0)
+			{
+				return new LspSemanticTokensPayload(
+					new List<int>(0),
+					"No semantic token facts available for requested document.");
+			}
+
+			absoluteTokens.Sort(CompareSemanticTokenAbsolute);
+
+			var encoded = new List<int>(absoluteTokens.Count * 5);
+			int previousLine = 0;
+			int previousStart = 0;
+			bool hasPrevious = false;
+
+			for (int i = 0; i < absoluteTokens.Count; i++)
+			{
+				SemanticTokenAbsolute token = absoluteTokens[i];
+				if (token.Length <= 0 || token.Line < 0 || token.Start < 0)
+					continue;
+
+				int deltaLine = hasPrevious ? token.Line - previousLine : token.Line;
+				if (deltaLine < 0)
+					continue;
+
+				int deltaStart = !hasPrevious || deltaLine != 0
+					? token.Start
+					: token.Start - previousStart;
+
+				if (deltaStart < 0)
+					continue;
+
+				encoded.Add(deltaLine);
+				encoded.Add(deltaStart);
+				encoded.Add(token.Length);
+				encoded.Add(token.TokenType);
+				encoded.Add(token.TokenModifiers);
+
+				previousLine = token.Line;
+				previousStart = token.Start;
+				hasPrevious = true;
+			}
+
+			if (encoded.Count == 0)
+			{
+				return new LspSemanticTokensPayload(
+					encoded,
+					"No valid semantic tokens were emitted after normalization.");
+			}
+
+			return new LspSemanticTokensPayload(encoded, string.Empty);
 		}
 
 		private static bool TryGetIndex(CodeDatabaseSnapshot snapshot, out IIndexSnapshot index, out SymbolQueryResult error)
@@ -318,6 +416,377 @@ namespace FFVM.Debug.Lsp.Database
 				return symbol.Kind + " member of " + symbol.ParentName;
 
 			return symbol.Kind.ToString();
+		}
+
+		private static List<SemanticTokenAbsolute> CollectSemanticTokens(CodeDatabaseSnapshot snapshot, string documentKey)
+		{
+			if (snapshot == null || snapshot.Facts == null || snapshot.Facts.Count == 0)
+				return new List<SemanticTokenAbsolute>(0);
+
+			var tokens = new List<SemanticTokenAbsolute>();
+			var dedupe = new HashSet<string>(StringComparer.Ordinal);
+
+			for (int i = 0; i < snapshot.Facts.Count; i++)
+			{
+				DataFact fact = snapshot.Facts[i];
+				if (fact == null)
+					continue;
+
+				if (fact.Kind != DataFactKind.Token
+					&& fact.Kind != DataFactKind.SymbolDefinition
+					&& fact.Kind != DataFactKind.SymbolReference)
+				{
+					continue;
+				}
+
+				if (!string.Equals(fact.DocumentKey.Value, documentKey, StringComparison.OrdinalIgnoreCase))
+					continue;
+
+				if (!TryParseTokenFact(fact, out SemanticTokenAbsolute token))
+					continue;
+
+				string tokenKey = token.Line
+					+ "|" + token.Start
+					+ "|" + token.Length
+					+ "|" + token.TokenType
+					+ "|" + token.TokenModifiers;
+
+				if (dedupe.Add(tokenKey))
+					tokens.Add(token);
+			}
+
+			return tokens;
+		}
+
+		private static bool TryParseTokenFact(DataFact fact, out SemanticTokenAbsolute token)
+		{
+			token = null;
+			if (fact == null)
+				return false;
+
+			if (TryParseTokenPayload(fact.Payload, out SemanticTokenAbsolute parsed))
+			{
+				token = parsed;
+				return true;
+			}
+
+			if (fact.Payload is SymbolIdentity symbolIdentity)
+			{
+				// SymbolIdentity-only payloads have no line/character data, so skip.
+				if (symbolIdentity.DeclarationSpan.Length <= 0)
+					return false;
+			}
+
+			return false;
+		}
+
+		private static bool TryParseTokenPayload(object payload, out SemanticTokenAbsolute token)
+		{
+			token = null;
+
+			if (payload is JsonObject json)
+				return TryParseTokenFromJson(json, out token);
+
+			if (payload is IReadOnlyList<int> intList)
+				return TryParseTokenFromIntList(intList, out token);
+
+			if (payload is int[] intArray)
+				return TryParseTokenFromIntList(intArray, out token);
+
+			if (payload is IReadOnlyList<object> objectList)
+				return TryParseTokenFromObjectList(objectList, out token);
+
+			if (payload is IDictionary<string, object> map)
+				return TryParseTokenFromMap(map, out token);
+
+			return false;
+		}
+
+		private static bool TryParseTokenFromJson(JsonObject payload, out SemanticTokenAbsolute token)
+		{
+			token = null;
+			if (payload == null)
+				return false;
+
+			if (!TryGetInt(payload, "line", out int line))
+				return false;
+
+			if (!TryGetInt(payload, "character", out int start)
+				&& !TryGetInt(payload, "start", out start))
+			{
+				return false;
+			}
+
+			if (!TryGetInt(payload, "length", out int length) || length <= 0)
+				return false;
+
+			if (!TryResolveTokenType(payload.Get("tokenType"), payload.Get("type"), payload.Get("kind"), out int tokenType))
+				return false;
+
+			int modifiers = 0;
+			TryGetInt(payload, "tokenModifiers", out modifiers);
+
+			if (line < 0 || start < 0 || tokenType < 0 || modifiers < 0)
+				return false;
+
+			token = new SemanticTokenAbsolute(line, start, length, tokenType, modifiers);
+			return true;
+		}
+
+		private static bool TryParseTokenFromMap(IDictionary<string, object> payload, out SemanticTokenAbsolute token)
+		{
+			token = null;
+			if (payload == null)
+				return false;
+
+			if (!TryGetInt(payload, "line", out int line))
+				return false;
+
+			if (!TryGetInt(payload, "character", out int start)
+				&& !TryGetInt(payload, "start", out start))
+			{
+				return false;
+			}
+
+			if (!TryGetInt(payload, "length", out int length) || length <= 0)
+				return false;
+
+			payload.TryGetValue("tokenType", out object tokenTypeValue);
+			payload.TryGetValue("type", out object typeValue);
+			payload.TryGetValue("kind", out object kindValue);
+
+			if (!TryResolveTokenType(tokenTypeValue, typeValue, kindValue, out int tokenType))
+				return false;
+
+			int modifiers = 0;
+			TryGetInt(payload, "tokenModifiers", out modifiers);
+
+			if (line < 0 || start < 0 || tokenType < 0 || modifiers < 0)
+				return false;
+
+			token = new SemanticTokenAbsolute(line, start, length, tokenType, modifiers);
+			return true;
+		}
+
+		private static bool TryParseTokenFromIntList(IReadOnlyList<int> values, out SemanticTokenAbsolute token)
+		{
+			token = null;
+			if (values == null || values.Count < 5)
+				return false;
+
+			int line = values[0];
+			int start = values[1];
+			int length = values[2];
+			int tokenType = values[3];
+			int tokenModifiers = values[4];
+
+			if (line < 0 || start < 0 || length <= 0 || tokenType < 0 || tokenModifiers < 0)
+				return false;
+
+			token = new SemanticTokenAbsolute(line, start, length, tokenType, tokenModifiers);
+			return true;
+		}
+
+		private static bool TryParseTokenFromObjectList(IReadOnlyList<object> values, out SemanticTokenAbsolute token)
+		{
+			token = null;
+			if (values == null || values.Count < 5)
+				return false;
+
+			if (!TryConvertInt(values[0], out int line)
+				|| !TryConvertInt(values[1], out int start)
+				|| !TryConvertInt(values[2], out int length)
+				|| !TryConvertInt(values[3], out int tokenType)
+				|| !TryConvertInt(values[4], out int tokenModifiers))
+			{
+				return false;
+			}
+
+			if (line < 0 || start < 0 || length <= 0 || tokenType < 0 || tokenModifiers < 0)
+				return false;
+
+			token = new SemanticTokenAbsolute(line, start, length, tokenType, tokenModifiers);
+			return true;
+		}
+
+		private static bool TryResolveTokenType(object tokenTypeValue, object typeValue, object kindValue, out int tokenType)
+		{
+			tokenType = -1;
+
+			if (TryConvertInt(tokenTypeValue, out tokenType) && tokenType >= 0)
+				return true;
+
+			if (typeValue is string typeName && TryResolveTokenTypeByName(typeName, out tokenType))
+				return true;
+
+			if (tokenTypeValue is string tokenTypeName && TryResolveTokenTypeByName(tokenTypeName, out tokenType))
+				return true;
+
+			if (kindValue is string kindName)
+			{
+				if (TryResolveTokenTypeByName(kindName, out tokenType))
+					return true;
+
+				if (Enum.TryParse(kindName, true, out SymbolKindTag kindTag))
+				{
+					tokenType = MapSymbolKindToSemanticType(kindTag);
+					return tokenType >= 0;
+				}
+			}
+
+			if (TryConvertInt(kindValue, out int kindInt)
+				&& Enum.IsDefined(typeof(SymbolKindTag), kindInt))
+			{
+				tokenType = MapSymbolKindToSemanticType((SymbolKindTag)kindInt);
+				return tokenType >= 0;
+			}
+
+			return false;
+		}
+
+		private static bool TryResolveTokenTypeByName(string tokenTypeName, out int tokenType)
+		{
+			tokenType = -1;
+			if (string.IsNullOrWhiteSpace(tokenTypeName))
+				return false;
+
+			if (SemanticTokenTypeMap.TryGetValue(tokenTypeName, out tokenType))
+				return true;
+
+			if (Enum.TryParse(tokenTypeName, true, out SymbolKindTag kindTag))
+			{
+				tokenType = MapSymbolKindToSemanticType(kindTag);
+				return tokenType >= 0;
+			}
+
+			return false;
+		}
+
+		private static int MapSymbolKindToSemanticType(SymbolKindTag kind)
+		{
+			switch (kind)
+			{
+				case SymbolKindTag.Function:
+					return SemanticTokenTypeFunction;
+				case SymbolKindTag.Variable:
+					return SemanticTokenTypeVariable;
+				case SymbolKindTag.Struct:
+					return SemanticTokenTypeStruct;
+				case SymbolKindTag.Parameter:
+					return SemanticTokenTypeParameter;
+				case SymbolKindTag.Enum:
+					return 3;
+				case SymbolKindTag.StructField:
+					return SemanticTokenTypeProperty;
+				case SymbolKindTag.EnumMember:
+					return SemanticTokenTypeEnum;
+				case SymbolKindTag.IncludeFile:
+					return SemanticTokenTypeKeyword;
+				default:
+					return -1;
+			}
+		}
+
+		private static bool TryGetInt(JsonObject payload, string key, out int value)
+		{
+			value = 0;
+			if (payload == null || string.IsNullOrWhiteSpace(key) || !payload.ContainsKey(key))
+				return false;
+
+			return TryConvertInt(payload.Get(key), out value);
+		}
+
+		private static bool TryGetInt(IDictionary<string, object> payload, string key, out int value)
+		{
+			value = 0;
+			if (payload == null || string.IsNullOrWhiteSpace(key) || !payload.TryGetValue(key, out object raw))
+				return false;
+
+			return TryConvertInt(raw, out value);
+		}
+
+		private static bool TryConvertInt(object raw, out int value)
+		{
+			value = 0;
+			if (raw == null)
+				return false;
+
+			if (raw is int asInt)
+			{
+				value = asInt;
+				return true;
+			}
+
+			if (raw is long asLong && asLong >= int.MinValue && asLong <= int.MaxValue)
+			{
+				value = (int)asLong;
+				return true;
+			}
+
+			if (raw is double asDouble)
+			{
+				value = (int)asDouble;
+				return true;
+			}
+
+			if (raw is float asFloat)
+			{
+				value = (int)asFloat;
+				return true;
+			}
+
+			if (raw is string asString)
+				return int.TryParse(asString, out value);
+
+			return false;
+		}
+
+		private static int CompareSemanticTokenAbsolute(SemanticTokenAbsolute left, SemanticTokenAbsolute right)
+		{
+			if (ReferenceEquals(left, right))
+				return 0;
+
+			if (left == null)
+				return -1;
+
+			if (right == null)
+				return 1;
+
+			int byLine = left.Line.CompareTo(right.Line);
+			if (byLine != 0)
+				return byLine;
+
+			int byStart = left.Start.CompareTo(right.Start);
+			if (byStart != 0)
+				return byStart;
+
+			int byLength = left.Length.CompareTo(right.Length);
+			if (byLength != 0)
+				return byLength;
+
+			int byType = left.TokenType.CompareTo(right.TokenType);
+			if (byType != 0)
+				return byType;
+
+			return left.TokenModifiers.CompareTo(right.TokenModifiers);
+		}
+
+		private sealed class SemanticTokenAbsolute
+		{
+			public SemanticTokenAbsolute(int line, int start, int length, int tokenType, int tokenModifiers)
+			{
+				Line = line;
+				Start = start;
+				Length = length;
+				TokenType = tokenType;
+				TokenModifiers = tokenModifiers;
+			}
+
+			public int Line { get; }
+			public int Start { get; }
+			public int Length { get; }
+			public int TokenType { get; }
+			public int TokenModifiers { get; }
 		}
 	}
 

@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using FFVM.Debug;
 using FFVM.Debug.Lsp.Database;
 using FFVM.Debug.Lsp.Database.Contracts;
 using FFVM.Debug.Lsp.Database.Paths;
@@ -211,16 +212,89 @@ public static class LspDatabaseQueryTests
 			}
 		}
 
+		// ================================================================
+		// DBQ-06: SemanticTokens encodes sorted/filtered token facts
+		// ================================================================
+		{
+			var doc = new PathKey("file:///query/semantic.ffs");
+			var otherDoc = new PathKey("file:///query/other.ffs");
+
+			var jsonToken = new JsonObject();
+			jsonToken.Set("line", 2);
+			jsonToken.Set("character", 4);
+			jsonToken.Set("length", 3);
+			jsonToken.Set("tokenType", "function");
+			jsonToken.Set("tokenModifiers", 1);
+
+			var mapToken = new Dictionary<string, object>(StringComparer.Ordinal)
+			{
+				["line"] = 1,
+				["start"] = 1,
+				["length"] = 2,
+				["kind"] = "Variable",
+				["tokenModifiers"] = 0,
+			};
+
+			var facts = new List<DataFact>
+			{
+				new DataFact(new DataFactId("tok-json"), new DataAggregateId("agg-sem"), DataFactKind.Token, doc, new TextSpan(0, 0), 1, jsonToken),
+				new DataFact(new DataFactId("tok-map"), new DataAggregateId("agg-sem"), DataFactKind.Token, doc, new TextSpan(0, 0), 1, mapToken),
+				new DataFact(new DataFactId("tok-array"), new DataAggregateId("agg-sem"), DataFactKind.Token, doc, new TextSpan(0, 0), 1, new[] { 2, 10, 5, 15, 0 }),
+				new DataFact(new DataFactId("tok-dup"), new DataAggregateId("agg-sem"), DataFactKind.Token, doc, new TextSpan(0, 0), 1, new[] { 2, 10, 5, 15, 0 }),
+				new DataFact(new DataFactId("tok-invalid"), new DataAggregateId("agg-sem"), DataFactKind.Token, doc, new TextSpan(0, 0), 1, new[] { -1, 10, 5, 15, 0 }),
+				new DataFact(new DataFactId("tok-other-doc"), new DataAggregateId("agg-sem"), DataFactKind.Token, otherDoc, new TextSpan(0, 0), 1, new[] { 0, 0, 3, 8, 0 }),
+			};
+
+			CodeDatabaseSnapshot snapshot = BuildSnapshot(indexSnapshot: null, facts: facts);
+			var request = new SymbolQueryRequest("semanticTokens/full", doc.Value, new TextPosition(0, 0), new TextSpan(0, 0), false, string.Empty);
+
+			object rawPayload = facade.QuerySemanticTokensFull(snapshot, request);
+			Assert(rawPayload is LspSemanticTokensPayload, "DBQ-06A: semantic token payload type");
+
+			if (rawPayload is LspSemanticTokensPayload payload)
+			{
+				Assert(payload.Data.Count == 15, "DBQ-06B: semantic token payload has 3 encoded tokens");
+				Assert(payload.Message == string.Empty, "DBQ-06C: semantic token success message empty");
+
+				int[] expected = { 1, 1, 2, 8, 0, 1, 4, 3, 12, 1, 0, 6, 5, 15, 0 };
+				bool matched = payload.Data.Count == expected.Length;
+				for (int i = 0; matched && i < expected.Length; i++)
+				{
+					if (payload.Data[i] != expected[i])
+						matched = false;
+				}
+
+				Assert(matched, "DBQ-06D: semantic token delta encoding is deterministic");
+			}
+		}
+
+		// ================================================================
+		// DBQ-07: SemanticTokens requires document key
+		// ================================================================
+		{
+			CodeDatabaseSnapshot snapshot = BuildSnapshot(indexSnapshot: null, facts: new List<DataFact>(0));
+			var request = new SymbolQueryRequest("semanticTokens/full", string.Empty, new TextPosition(0, 0), new TextSpan(0, 0), false, string.Empty);
+
+			object rawPayload = facade.QuerySemanticTokensFull(snapshot, request);
+			Assert(rawPayload is LspSemanticTokensPayload, "DBQ-07A: semantic token payload type for invalid request");
+
+			if (rawPayload is LspSemanticTokensPayload payload)
+			{
+				Assert(payload.Data.Count == 0, "DBQ-07B: invalid semantic token request returns empty data");
+				Assert(payload.Message.IndexOf("DocumentKey", StringComparison.OrdinalIgnoreCase) >= 0, "DBQ-07C: invalid semantic token request returns reason message");
+			}
+		}
+
 		Debug.Log($"[LspDatabaseQueryTests] Completed. Passed={passed}, Failed={failed}");
 	}
 
-	private static CodeDatabaseSnapshot BuildSnapshot(IIndexSnapshot indexSnapshot)
+	private static CodeDatabaseSnapshot BuildSnapshot(IIndexSnapshot indexSnapshot, IReadOnlyList<DataFact> facts = null)
 	{
 		return new CodeDatabaseSnapshot(
 			version: 1,
 			capturedAtUtc: DateTime.UtcNow,
 			aggregates: new List<DataAggregate>(0),
-			facts: new List<DataFact>(0),
+			facts: facts ?? new List<DataFact>(0),
 			indexSnapshot: indexSnapshot);
 	}
 
