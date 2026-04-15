@@ -8524,6 +8524,48 @@ public static class LspTests
                 $"DX17-02b: rename produces 2 edits (decl + wait_for), got {editCount}");
         }
 
+        // VERIFY-01: include/main same line+col variable collision should still resolve to current file symbol
+        {
+            string tmpDir = Path.Combine(Path.GetTempPath(), "verify01_" + Guid.NewGuid().ToString("N").Substring(0, 8));
+            Directory.CreateDirectory(tmpDir);
+            try
+            {
+                File.WriteAllText(Path.Combine(tmpDir, "common.ffs"),
+                    "func lib() {\n    var hp: int = 100\n\n    wait hp\n}");
+                string rootUri = "file:///" + tmpDir.TrimStart('/').Replace("\\", "/");
+                string mainSource = "include \"common\"\nfunc main() {\n    var hp: int = 1\n    wait hp\n}";
+                string mainUri = rootUri + "/main.ffs";
+
+                var session = new LspBatchSession();
+                session.AddInitializeWithRootUri(rootUri);
+                session.AddInitialized();
+                session.AddDidOpen(mainUri, mainSource);
+                // "wait hp" in main.ffs: line 3, hp starts at col 9
+                session.AddDefinition(mainUri, 3, 9);
+                session.AddShutdown();
+                session.AddExit();
+                session.Run();
+
+                session.ExpectResponse(0);
+                var defResp = session.ExpectResponse(1);
+                var result = defResp?.GetObject("result");
+                Assert(result != null, "VERIFY-01a: definition response exists");
+                if (result != null)
+                {
+                    string defUri = result.GetString("uri") ?? "";
+                    int defLine = result.GetObject("range")?.GetObject("start")?.GetInt("line") ?? -1;
+                    Assert(defUri.Contains("main.ffs"),
+                        $"VERIFY-01b: definition uri should be main.ffs, got '{defUri}'");
+                    Assert(defLine == 2,
+                        $"VERIFY-01c: definition line should be main local declaration (line 2), got {defLine}");
+                }
+            }
+            finally
+            {
+                try { Directory.Delete(tmpDir, true); } catch { }
+            }
+        }
+
         Debug.Log($"\n===== LspTests: {passed} passed, {failed} failed =====");
     }
 
