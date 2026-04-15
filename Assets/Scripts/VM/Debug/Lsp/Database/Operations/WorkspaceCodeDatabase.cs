@@ -17,7 +17,7 @@
 //   - Readers only observe immutable snapshots.
 // Boundary Closure:
 //   Upstream: handlers, adapters, and composition root.
-//   Downstream: task planner/center and read-side query facade.
+//   Downstream: execution orchestrator and read-side query facade.
 
 namespace FFVM.Debug.Lsp.Database
 {

@@ -15,7 +15,7 @@
 //   - Executes only planned tasks for the given command.
 //   - Report command identity must match triggering request.
 // Boundary Closure:
-//   Upstream: IWorkspaceCodeDatabase.Execute.
+//   Upstream: IDatabaseExecutionOrchestrator.
 //   Downstream: snapshot compose/commit orchestration.
 
 using System.Collections.Generic;

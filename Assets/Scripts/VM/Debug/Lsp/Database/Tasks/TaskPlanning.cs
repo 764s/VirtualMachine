@@ -15,7 +15,7 @@
 //   - One command maps to one task plan instance.
 //   - Task identifiers are unique within one plan.
 // Boundary Closure:
-//   Upstream: IWorkspaceCodeDatabase.Execute orchestration.
+//   Upstream: IDatabaseExecutionOrchestrator.
 //   Downstream: IDatabaseTaskCenter.
 
 using System;
