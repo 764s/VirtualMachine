@@ -26,6 +26,22 @@
 
 <!-- HISTORY_START — CI 自动追加区域，请勿手动编辑此标记 -->
 
+### 2026-04-15 09:35 UTC — `c785d85529232b76ae31002f6b5a0a2120c3659d`
+
+> .NET 8.0.26 | Unix | 4 cores
+
+| Benchmark | VM (μs) | C# (μs) | Ratio | Δ VM | Δ Ratio |
+|-----------|---------|---------|-------|------|---------|
+| B01_ArithLoop | 565.9 | 82.8 | 6.83x | — (env changed) | — (env changed) |
+| B02_Fibonacci | 1.5 | 0.5 | 3.30x | — (env changed) | — (env changed) |
+| B03_NestedLoop | 373.3 | 58.8 | 6.35x | — (env changed) | — (env changed) |
+| B04_Branching | 632.3 | 20.5 | 30.79x | — (env changed) | — (env changed) |
+| B05_Accumulator | 1010.3 | 47.0 | 21.49x | — (env changed) | — (env changed) |
+| B06_FuncCall | 124.7 | 15.0 | 8.28x | — (env changed) | — (env changed) |
+
+📌 **New environment baseline**: environment changed from `8.0.25|Unix|4` → `8.0.26|Unix|4`. Deltas reset.
+
+
 ### 2026-04-14 16:54 UTC — `691ba92d352ce2659ad55642b3423a8592160fd2`
 
 > .NET 8.0.25 | Unix | 4 cores
