@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using FFVM.Debug.Lsp.Bridge;
 
 namespace FFVM.Debug
 {
@@ -18,14 +19,16 @@ namespace FFVM.Debug
     {
         private readonly Stream _input;
         private readonly Stream _output;
+        private readonly ILspVsCodeDatabaseBridge _bridge;
 
         private bool _running;
         private bool _shutdownRequested;
 
-        public LspServerNew(Stream input, Stream output)
+        public LspServerNew(Stream input, Stream output, ILspVsCodeDatabaseBridge bridge = null)
         {
             _input = input;
             _output = output;
+            _bridge = bridge ?? new NoOpLspVsCodeDatabaseBridge();
         }
 
         /// <summary>
@@ -230,131 +233,137 @@ namespace FFVM.Debug
             ContentLengthStream.WriteMessage(_output, notification.ToJson());
         }
 
+        private void FlushBridgeDiagnostics()
+        {
+            while (_bridge.TryDequeueDiagnostics(out LspPublishedDiagnostics diagnostics) && diagnostics != null)
+            {
+                PublishDiagnostics(
+                    diagnostics.Uri,
+                    diagnostics.Diagnostics != null ? new List<object>(diagnostics.Diagnostics) : null,
+                    diagnostics.Version);
+            }
+        }
+
         // ------------------------------------------------------------
-        // VS Code bridge points (business intentionally left empty)
+        // VS Code bridge points (delegated to ILspVsCodeDatabaseBridge)
         // ------------------------------------------------------------
 
         private void BridgeInitialize(JsonObject initializeParams)
         {
-            // Business intent:
-            // 1) Parse client capabilities/workspaceFolders from initialize params.
-            // 2) Initialize workspace document store and semantic index services.
-            // 3) Prepare diagnostic router and protocol dispatch dependencies.
+            _bridge.Initialize(initializeParams);
+            FlushBridgeDiagnostics();
         }
 
         private void BridgeShutdown(JsonObject shutdownParams)
         {
-            // Business intent:
-            // 1) Flush pending publishDiagnostics notifications if needed.
-            // 2) Dispose index/document resources and stop background workers.
-            // 3) Transition server state to shutdown-ready.
+            _bridge.Shutdown(shutdownParams);
+            FlushBridgeDiagnostics();
         }
 
         private object BridgeDocumentSymbol(JsonObject requestParams)
         {
-            // Business intent:
-            // Return document symbol tree for current file from semantic index.
-            return null;
+            object result = _bridge.QueryDocumentSymbol(requestParams);
+            FlushBridgeDiagnostics();
+            return result;
         }
 
         private object BridgeHover(JsonObject requestParams)
         {
-            // Business intent:
-            // Resolve symbol at position and build markdown hover payload.
-            return null;
+            object result = _bridge.QueryHover(requestParams);
+            FlushBridgeDiagnostics();
+            return result;
         }
 
         private object BridgeDefinition(JsonObject requestParams)
         {
-            // Business intent:
-            // Resolve symbol at cursor and return declaration location(s).
-            return null;
+            object result = _bridge.QueryDefinition(requestParams);
+            FlushBridgeDiagnostics();
+            return result;
         }
 
         private object BridgeReferences(JsonObject requestParams)
         {
-            // Business intent:
-            // Collect reference locations for resolved symbol across workspace index.
-            return null;
+            object result = _bridge.QueryReferences(requestParams);
+            FlushBridgeDiagnostics();
+            return result;
         }
 
         private object BridgeCompletion(JsonObject requestParams)
         {
-            // Business intent:
-            // Build completion items based on scope, trigger kind, and type context.
-            return null;
+            object result = _bridge.QueryCompletion(requestParams);
+            FlushBridgeDiagnostics();
+            return result;
         }
 
         private object BridgeSignatureHelp(JsonObject requestParams)
         {
-            // Business intent:
-            // Resolve call site and return active signature/parameter metadata.
-            return null;
+            object result = _bridge.QuerySignatureHelp(requestParams);
+            FlushBridgeDiagnostics();
+            return result;
         }
 
         private object BridgeRename(JsonObject requestParams)
         {
-            // Business intent:
-            // Validate rename target and produce workspace edit for all references.
-            return null;
+            object result = _bridge.QueryRename(requestParams);
+            FlushBridgeDiagnostics();
+            return result;
         }
 
         private object BridgePrepareRename(JsonObject requestParams)
         {
-            // Business intent:
-            // Validate symbol is renameable and return precise rename range.
-            return null;
+            object result = _bridge.QueryPrepareRename(requestParams);
+            FlushBridgeDiagnostics();
+            return result;
         }
 
         private object BridgeSemanticTokensFull(JsonObject requestParams)
         {
-            // Business intent:
-            // Produce full semantic token stream based on parser/index token mapping.
-            return null;
+            object result = _bridge.QuerySemanticTokensFull(requestParams);
+            FlushBridgeDiagnostics();
+            return result;
         }
 
         private object BridgeWillRenameFiles(JsonObject requestParams)
         {
-            // Business intent:
-            // Plan include/import path rewrites caused by file rename operations.
-            return null;
+            object result = _bridge.QueryWillRenameFiles(requestParams);
+            FlushBridgeDiagnostics();
+            return result;
         }
 
         private void BridgeInitialized(JsonObject initializedParams)
         {
-            // Business intent:
-            // Run post-initialize warmup such as project scan and initial diagnostics.
+            _bridge.Initialized(initializedParams);
+            FlushBridgeDiagnostics();
         }
 
         private void BridgeExit(JsonObject exitParams)
         {
-            // Business intent:
-            // Final process-level cleanup before server loop terminates.
-            // _shutdownRequested can be used to distinguish normal/abnormal exit paths.
+            _bridge.Exit(exitParams);
+            FlushBridgeDiagnostics();
         }
 
         private void BridgeDidOpen(JsonObject didOpenParams)
         {
-            // Business intent:
-            // Cache opened document text/version and trigger first compile/index update.
+            _bridge.DidOpen(didOpenParams);
+            FlushBridgeDiagnostics();
         }
 
         private void BridgeDidChange(JsonObject didChangeParams)
         {
-            // Business intent:
-            // Apply incremental edits, refresh semantic snapshot, and republish diagnostics.
+            _bridge.DidChange(didChangeParams);
+            FlushBridgeDiagnostics();
         }
 
         private void BridgeDidClose(JsonObject didCloseParams)
         {
-            // Business intent:
-            // Release transient open-buffer state while preserving workspace index baseline.
+            _bridge.DidClose(didCloseParams);
+            FlushBridgeDiagnostics();
         }
 
         private void BridgeDidChangeWatchedFiles(JsonObject didChangeWatchedFilesParams)
         {
-            // Business intent:
-            // Sync file-system changes into workspace model and update dependent diagnostics.
+            _bridge.DidChangeWatchedFiles(didChangeWatchedFilesParams);
+            FlushBridgeDiagnostics();
         }
     }
 }
