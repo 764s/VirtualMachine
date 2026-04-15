@@ -45,26 +45,26 @@ namespace FFVM.Debug.Lsp.Database
 
 		public InMemoryWorkspaceCodeDatabase(
 			IDatabaseExecutionOrchestrator orchestrator,
-			IDatabaseTaskPlanner taskPlanner,
-			IDatabaseTaskCenter taskCenter,
-			IDatabaseOperationCoalescer operationCoalescer,
-			IDatabaseSupersessionPolicy supersessionPolicy,
-			IDatabaseConflictResolver conflictResolver,
-			IDatabaseCommandLifecyclePolicy lifecyclePolicy,
-			IDatabaseCommandLifecycleSink lifecycleSink,
-			IDatabaseDecisionLogSink decisionLogSink,
-			IDatabaseSnapshotCommitter snapshotCommitter)
+			IDatabaseTaskPlanner taskPlanner = null,
+			IDatabaseTaskCenter taskCenter = null,
+			IDatabaseOperationCoalescer operationCoalescer = null,
+			IDatabaseSupersessionPolicy supersessionPolicy = null,
+			IDatabaseConflictResolver conflictResolver = null,
+			IDatabaseCommandLifecyclePolicy lifecyclePolicy = null,
+			IDatabaseCommandLifecycleSink lifecycleSink = null,
+			IDatabaseDecisionLogSink decisionLogSink = null,
+			IDatabaseSnapshotCommitter snapshotCommitter = null)
 		{
 			_orchestrator = orchestrator ?? throw new ArgumentNullException(nameof(orchestrator));
-			_taskPlanner = taskPlanner;
-			_taskCenter = taskCenter;
-			_operationCoalescer = operationCoalescer;
-			_supersessionPolicy = supersessionPolicy;
-			_conflictResolver = conflictResolver;
-			_lifecyclePolicy = lifecyclePolicy;
-			_lifecycleSink = lifecycleSink;
-			_decisionLogSink = decisionLogSink;
-			_snapshotCommitter = snapshotCommitter;
+			_taskPlanner = taskPlanner ?? new PassThroughDatabaseTaskPlanner();
+			_taskCenter = taskCenter ?? new InMemoryDatabaseTaskCenter();
+			_operationCoalescer = operationCoalescer ?? new DefaultDatabaseOperationCoalescer();
+			_supersessionPolicy = supersessionPolicy ?? new DefaultDatabaseSupersessionPolicy();
+			_conflictResolver = conflictResolver ?? new DefaultDatabaseConflictResolver();
+			_lifecyclePolicy = lifecyclePolicy ?? new DefaultDatabaseCommandLifecyclePolicy();
+			_lifecycleSink = lifecycleSink ?? new InMemoryDatabaseCommandLifecycleSink();
+			_decisionLogSink = decisionLogSink ?? new InMemoryDatabaseDecisionLogSink();
+			_snapshotCommitter = snapshotCommitter ?? new PassThroughDatabaseSnapshotCommitter();
 			_currentSnapshot = CodeDatabaseSnapshot.Empty();
 		}
 
