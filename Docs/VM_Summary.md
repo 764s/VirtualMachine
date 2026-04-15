@@ -248,10 +248,10 @@ Docs/
 | DX16 | 变量引用作用域隔离 | ✅ | KL-05 同名变量引用按作用域精确匹配（FindSymbolWalker 块级作用域追踪 + ScopedIdentRefsWalker 精确声明匹配）。DX16-01~08（16 asserts），DX12-22 升级严格断言。计划 → [Step_DX16_ScopeIsolatedRefs](Plan/Step_DX16_ScopeIsolatedRefs.md)　讨论 → [D_LspUsabilityAudit](Discussion/D_LspUsabilityAudit.md) | ⭐⭐⭐ |
 | DX17 | 统一符号解析 | ✅ | 合并 SymbolAtPosition + FindDefinitionLocation → ResolvedSymbol。HandleDefinition/HandleReferences/HandleRename/HandleHover 共享 ResolveSymbol。消除 ResolveSymbolDualAst 二次查找。修复 WaitForStmt 子表达式遗漏。DX17-01~02（4 asserts）。计划 → [Step_DX17_UnifiedSymbolResolution](Plan/Step_DX17_UnifiedSymbolResolution.md)　讨论 → [D_LspStructuralAudit](Discussion/D_LspStructuralAudit.md) | ⭐⭐ |
 | DX18 | 统一引用收集 | ✅ | 8 个引用 Walker → 1 个 UnifiedRefsWalker。CollectReferencesWithOrigin 8 分支 → CollectDeclarationLocations + 统一遍历 4 分支。死代码 CollectReferences 删除。LspServer.cs −242 行（4799→4557）。656 LSP 测试全通过。计划 → [Step_DX18_UnifiedRefCollection](Plan/Step_DX18_UnifiedRefCollection.md)　讨论 → [D_LspStructuralAudit](Discussion/D_LspStructuralAudit.md) | ⭐⭐⭐ |
-| DX19 | ResolveSymbol 候选仲裁修复 | ⏳ | 保留 VERIFY-01 为长期回归测试；将 ResolveSymbol 从“变量强制 merged fallback”升级为“统一候选收集 + 仲裁规则”，确保 Definition/References/Rename/Hover 一致语义并避免 include/main 同 line+col 冲突误跳。计划 → [Step_DX19_ResolveSymbolCandidateResolution](Plan/Step_DX19_ResolveSymbolCandidateResolution.md)　讨论 → [D_ResolveSymbolCollisionTopDown](Discussion/D_ResolveSymbolCollisionTopDown.md) | ⭐⭐⭐ |
+| DX19 | ResolveSymbol 候选仲裁修复 | ✅ | VERIFY-01 长期回归测试保留。ResolveSymbol 从"变量强制 merged fallback"升级为"条件化候选仲裁"：per-file 有完整作用域身份（scopeFunc+declLine>0）时保留，否则 merged 接管。修复 include/main 同 line+col 冲突误跳。DX19-01~05（16 asserts）。675 LSP 测试全通过。计划 → [Step_DX19_ResolveSymbolCandidateResolution](Plan/Step_DX19_ResolveSymbolCandidateResolution.md)　讨论 → [D_ResolveSymbolCollisionTopDown](Discussion/D_ResolveSymbolCollisionTopDown.md) | ⭐⭐⭐ |
 
-**Lang 系列全部完成。DX13 ✅ 完成。DX14 ✅ 完成。DX15 ✅ 完成。DX16 ✅ 完成。DX17 ✅ 完成。DX18 ✅ 完成。DX19 ⏳ 待执行。**
-**当前位置 → DX19（ResolveSymbol 候选仲裁修复）**
+**Lang 系列全部完成。DX13 ✅ 完成。DX14 ✅ 完成。DX15 ✅ 完成。DX16 ✅ 完成。DX17 ✅ 完成。DX18 ✅ 完成。DX19 ✅ 完成。**
+**DX13~DX19 ALL ✅。D_LspStructuralAudit P1（DX17 统一符号解析）✅ + P2+P3（DX18 统一引用收集）✅ + 候选仲裁（DX19）✅。**
 **DX12（后台编译调度）⚪ 远期待激活。C 区间阻塞于宿主 ECS 就绪。**
 **语言易用性审查（D18）→ 7 项改进建议（UC-1~UC-7）已纳入 [Outlook §2.10](Plan/Outlook_And_Risks.md)。**
 
