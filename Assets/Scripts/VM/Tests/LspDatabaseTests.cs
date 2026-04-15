@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using FFVM.Debug;
 using FFVM.Debug.Lsp.Database;
 using FFVM.Debug.Lsp.Database.Paths;
 using UnityEngine;
@@ -215,6 +216,136 @@ public static class LspDatabaseTests
 				"DBMID-06C: supersession cancels older equal-priority command");
 		}
 
+		// ================================================================
+		// DBMID-07: ApplyChangeSet materializes document aggregate
+		// ================================================================
+		{
+			var orchestrator = new InMemoryDatabaseExecutionOrchestrator();
+			var database = new InMemoryWorkspaceCodeDatabase(orchestrator);
+
+			var didOpen = CreateDidOpenPayload(
+				"file:///tests/materialize.ffs",
+				"ffscript",
+				1,
+				"func entry() { wait 1 }");
+
+			DatabaseOperationResult openResult = database.Execute(CreateApplyChangesRequest(
+				streamKey: "stream://doc/materialize",
+				priority: DatabaseOperationPriority.Normal,
+				expectedVersion: null,
+				createdAtUtc: DateTime.UtcNow,
+				changes: new[]
+				{
+					new DatabaseChangeEvent(
+						DatabaseChangeKind.DocumentOpened,
+						new PathKey("file:///tests/materialize.ffs"),
+						1,
+						didOpen),
+				}));
+
+			Assert(openResult != null && openResult.Succeeded, "DBMID-07A: didOpen apply succeeded");
+			Assert(openResult != null && openResult.CurrentVersion == 1, "DBMID-07B: version incremented to 1");
+			Assert(openResult?.Snapshot != null && openResult.Snapshot.Aggregates.Count == 1, "DBMID-07C: one aggregate materialized");
+
+			DataAggregate aggregate = openResult?.Snapshot != null && openResult.Snapshot.Aggregates.Count > 0
+				? openResult.Snapshot.Aggregates[0]
+				: null;
+
+			Assert(aggregate != null && aggregate.DocumentKey.Value == "file:///tests/materialize.ffs", "DBMID-07D: aggregate document key captured");
+			Assert(aggregate != null && aggregate.LanguageId == "ffscript", "DBMID-07E: languageId captured");
+			Assert(aggregate != null && aggregate.SourceVersion == 1, "DBMID-07F: source version captured");
+			Assert(aggregate != null && !string.IsNullOrWhiteSpace(aggregate.TextHash), "DBMID-07G: text hash captured");
+		}
+
+		// ================================================================
+		// DBMID-08: DocumentChanged updates aggregate metadata
+		// ================================================================
+		{
+			var orchestrator = new InMemoryDatabaseExecutionOrchestrator();
+			var database = new InMemoryWorkspaceCodeDatabase(orchestrator);
+
+			DatabaseOperationResult openResult = database.Execute(CreateApplyChangesRequest(
+				streamKey: "stream://doc/change",
+				priority: DatabaseOperationPriority.Normal,
+				expectedVersion: null,
+				createdAtUtc: DateTime.UtcNow,
+				changes: new[]
+				{
+					new DatabaseChangeEvent(
+						DatabaseChangeKind.DocumentOpened,
+						new PathKey("file:///tests/change.ffs"),
+						1,
+						CreateDidOpenPayload("file:///tests/change.ffs", "ffscript", 1, "func entry() { wait 1 }")),
+				}));
+
+			string oldHash = openResult?.Snapshot != null && openResult.Snapshot.Aggregates.Count > 0
+				? openResult.Snapshot.Aggregates[0].TextHash
+				: string.Empty;
+
+			DatabaseOperationResult changeResult = database.Execute(CreateApplyChangesRequest(
+				streamKey: "stream://doc/change",
+				priority: DatabaseOperationPriority.Normal,
+				expectedVersion: null,
+				createdAtUtc: DateTime.UtcNow,
+				changes: new[]
+				{
+					new DatabaseChangeEvent(
+						DatabaseChangeKind.DocumentChanged,
+						new PathKey("file:///tests/change.ffs"),
+						2,
+						CreateDidChangePayload("file:///tests/change.ffs", 2, "func entry() { wait 2 }") ),
+				}));
+
+			DataAggregate changedAggregate = changeResult?.Snapshot != null && changeResult.Snapshot.Aggregates.Count > 0
+				? changeResult.Snapshot.Aggregates[0]
+				: null;
+
+			Assert(changeResult != null && changeResult.Succeeded, "DBMID-08A: didChange apply succeeded");
+			Assert(changeResult != null && changeResult.CurrentVersion == 2, "DBMID-08B: version incremented to 2");
+			Assert(changedAggregate != null && changedAggregate.SourceVersion == 2, "DBMID-08C: source version updated");
+			Assert(changedAggregate != null && changedAggregate.TextHash != oldHash, "DBMID-08D: text hash updated after change");
+		}
+
+		// ================================================================
+		// DBMID-09: DocumentClosed removes aggregate
+		// ================================================================
+		{
+			var orchestrator = new InMemoryDatabaseExecutionOrchestrator();
+			var database = new InMemoryWorkspaceCodeDatabase(orchestrator);
+
+			database.Execute(CreateApplyChangesRequest(
+				streamKey: "stream://doc/close",
+				priority: DatabaseOperationPriority.Normal,
+				expectedVersion: null,
+				createdAtUtc: DateTime.UtcNow,
+				changes: new[]
+				{
+					new DatabaseChangeEvent(
+						DatabaseChangeKind.DocumentOpened,
+						new PathKey("file:///tests/close.ffs"),
+						1,
+						CreateDidOpenPayload("file:///tests/close.ffs", "ffscript", 1, "func entry() { wait 1 }")),
+				}));
+
+			DatabaseOperationResult closeResult = database.Execute(CreateApplyChangesRequest(
+				streamKey: "stream://doc/close",
+				priority: DatabaseOperationPriority.Normal,
+				expectedVersion: null,
+				createdAtUtc: DateTime.UtcNow,
+				changes: new[]
+				{
+					new DatabaseChangeEvent(
+						DatabaseChangeKind.DocumentClosed,
+						new PathKey("file:///tests/close.ffs"),
+						2,
+						CreateDidClosePayload("file:///tests/close.ffs", 2)),
+				}));
+
+			Assert(closeResult != null && closeResult.Succeeded, "DBMID-09A: didClose apply succeeded");
+			Assert(closeResult != null && closeResult.CurrentVersion == 2, "DBMID-09B: version incremented on close");
+			Assert(closeResult?.Snapshot != null && closeResult.Snapshot.Aggregates.Count == 0, "DBMID-09C: aggregate removed on close");
+		}
+
 		Debug.Log($"[LspDatabaseTests] Completed. Passed={passed}, Failed={failed}");
 	}
 
@@ -222,9 +353,10 @@ public static class LspDatabaseTests
 		string streamKey,
 		DatabaseOperationPriority priority,
 		long? expectedVersion,
-		DateTime createdAtUtc)
+		DateTime createdAtUtc,
+		IReadOnlyList<DatabaseChangeEvent> changes = null)
 	{
-		var changes = new List<DatabaseChangeEvent>
+		IReadOnlyList<DatabaseChangeEvent> effectiveChanges = changes ?? new List<DatabaseChangeEvent>
 		{
 			new DatabaseChangeEvent(
 				DatabaseChangeKind.DocumentChanged,
@@ -238,7 +370,7 @@ public static class LspDatabaseTests
 			: DatabaseOperationStreamBehavior.CoalesceAndCancelSuperseded;
 
 		return DatabaseOperationRequest.ApplyChanges(
-			changes,
+			effectiveChanges,
 			expectedVersion: expectedVersion,
 			reason: "test",
 			correlationId: "corr-lspdb",
@@ -247,5 +379,41 @@ public static class LspDatabaseTests
 			streamKey: streamKey,
 			streamBehavior: behavior,
 			createdAtUtc: createdAtUtc);
+	}
+
+	private static JsonObject CreateDidOpenPayload(string uri, string languageId, int version, string text)
+	{
+		var payload = new JsonObject();
+		var textDocument = new JsonObject();
+		textDocument.Set("uri", uri);
+		textDocument.Set("languageId", languageId);
+		textDocument.Set("version", version);
+		textDocument.Set("text", text);
+		payload.Set("textDocument", textDocument);
+		return payload;
+	}
+
+	private static JsonObject CreateDidChangePayload(string uri, int version, string text)
+	{
+		var payload = new JsonObject();
+		var textDocument = new JsonObject();
+		textDocument.Set("uri", uri);
+		textDocument.Set("version", version);
+		payload.Set("textDocument", textDocument);
+
+		var change = new JsonObject();
+		change.Set("text", text);
+		payload.Set("contentChanges", new List<object> { change });
+		return payload;
+	}
+
+	private static JsonObject CreateDidClosePayload(string uri, int version)
+	{
+		var payload = new JsonObject();
+		var textDocument = new JsonObject();
+		textDocument.Set("uri", uri);
+		textDocument.Set("version", version);
+		payload.Set("textDocument", textDocument);
+		return payload;
 	}
 }

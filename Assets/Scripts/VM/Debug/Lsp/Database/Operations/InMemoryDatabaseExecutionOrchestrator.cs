@@ -20,6 +20,7 @@
 
 using System;
 using System.Collections.Generic;
+using FFVM.Debug;
 
 namespace FFVM.Debug.Lsp.Database
 {
@@ -345,16 +346,16 @@ namespace FFVM.Debug.Lsp.Database
 				}
 			}
 
-			// Stage 7: compose next snapshot (pass-through scaffold).
+			// Stage 7: compose next snapshot.
 			if (!canProceed)
 			{
 				AddTrace(trace, DatabaseExecutionStage.ComposeSnapshot, false, "Skipped due to previous stage failure.");
 			}
 			else
 			{
-				nextSnapshot = ComposeSnapshotPassThrough(currentSnapshot, executionReport, effectiveRequest);
-				AddTrace(trace, DatabaseExecutionStage.ComposeSnapshot, true, "ComposeSnapshot pass-through completed.");
-				WriteDecision(input, decisions, effectiveRequest, DatabaseExecutionStage.ComposeSnapshot, DatabaseDecisionCategory.Compose, DatabaseDecisionSeverity.Info, "COMPOSE_PASSTHROUGH", "ComposeSnapshot pass-through completed.", null);
+				nextSnapshot = ComposeSnapshot(currentSnapshot, executionReport, effectiveRequest);
+				AddTrace(trace, DatabaseExecutionStage.ComposeSnapshot, true, "ComposeSnapshot completed.");
+				WriteDecision(input, decisions, effectiveRequest, DatabaseExecutionStage.ComposeSnapshot, DatabaseDecisionCategory.Compose, DatabaseDecisionSeverity.Info, "COMPOSE_COMPLETED", "ComposeSnapshot completed.", new { nextSnapshotVersion = nextSnapshot != null ? nextSnapshot.Version : 0L });
 
 				if (!TryTransition(
 					input,
@@ -881,22 +882,460 @@ namespace FFVM.Debug.Lsp.Database
 				message);
 		}
 
-		private static CodeDatabaseSnapshot ComposeSnapshotPassThrough(
+		private static CodeDatabaseSnapshot ComposeSnapshot(
 			CodeDatabaseSnapshot currentSnapshot,
 			DatabaseTaskExecutionReport executionReport,
 			DatabaseOperationRequest request)
 		{
-			if (request != null
-				&& request.Kind == DatabaseOperationKind.ReplaceSnapshot
-				&& request.ReplacementSnapshot != null)
-			{
-				return request.ReplacementSnapshot;
-			}
+			CodeDatabaseSnapshot baseline = currentSnapshot ?? CodeDatabaseSnapshot.Empty();
 
 			if (executionReport != null && executionReport.Output is CodeDatabaseSnapshot fromReport)
-				return fromReport;
+			{
+				long reportVersion = request != null && request.Kind == DatabaseOperationKind.ReadSnapshot
+					? baseline.Version
+					: baseline.Version + 1;
 
-			return currentSnapshot ?? CodeDatabaseSnapshot.Empty();
+				return StampSnapshotVersion(fromReport, reportVersion, fromReport.IndexSnapshot);
+			}
+
+			if (request == null)
+				return baseline;
+
+			switch (request.Kind)
+			{
+				case DatabaseOperationKind.ReadSnapshot:
+					return baseline;
+
+				case DatabaseOperationKind.ResetDatabase:
+					return new CodeDatabaseSnapshot(
+						baseline.Version + 1,
+						DateTime.UtcNow,
+						new List<DataAggregate>(0),
+						new List<DataFact>(0),
+						null);
+
+				case DatabaseOperationKind.ReplaceSnapshot:
+					return StampSnapshotVersion(
+						request.ReplacementSnapshot ?? CodeDatabaseSnapshot.Empty(),
+						baseline.Version + 1,
+						request.ReplacementSnapshot != null ? request.ReplacementSnapshot.IndexSnapshot : null);
+
+				case DatabaseOperationKind.ApplyChangeSet:
+					return ComposeApplyChangeSetSnapshot(baseline, request);
+
+				default:
+					return baseline;
+			}
+		}
+
+		private static CodeDatabaseSnapshot ComposeApplyChangeSetSnapshot(
+			CodeDatabaseSnapshot currentSnapshot,
+			DatabaseOperationRequest request)
+		{
+			CodeDatabaseSnapshot baseline = currentSnapshot ?? CodeDatabaseSnapshot.Empty();
+			if (request == null || request.Changes == null || request.Changes.Count == 0)
+				return baseline;
+
+			long nextVersion = baseline.Version + 1;
+
+			var aggregatesByDocument = new Dictionary<string, DataAggregate>(StringComparer.OrdinalIgnoreCase);
+			if (baseline.Aggregates != null)
+			{
+				for (int i = 0; i < baseline.Aggregates.Count; i++)
+				{
+					DataAggregate aggregate = baseline.Aggregates[i];
+					if (aggregate == null)
+						continue;
+
+					string aggregateDocument = NormalizeDocumentKey(aggregate.DocumentKey.Value);
+					if (string.IsNullOrWhiteSpace(aggregateDocument))
+						continue;
+
+					aggregatesByDocument[aggregateDocument] = aggregate;
+				}
+			}
+
+			var touchedDocuments = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+			var removedDocuments = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+			var renamedDocuments = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+			bool fullResyncRequested = false;
+
+			for (int i = 0; i < request.Changes.Count; i++)
+			{
+				DatabaseChangeEvent change = request.Changes[i];
+				if (change == null)
+					continue;
+
+				if (change.Kind == DatabaseChangeKind.FullResyncRequested)
+				{
+					aggregatesByDocument.Clear();
+					touchedDocuments.Clear();
+					removedDocuments.Clear();
+					renamedDocuments.Clear();
+					fullResyncRequested = true;
+					continue;
+				}
+
+				string documentKey = NormalizeDocumentKey(change.DocumentKey.Value);
+				switch (change.Kind)
+				{
+					case DatabaseChangeKind.DocumentOpened:
+					case DatabaseChangeKind.DocumentChanged:
+						if (string.IsNullOrWhiteSpace(documentKey))
+							break;
+
+						aggregatesByDocument.TryGetValue(documentKey, out DataAggregate existingAggregate);
+						DataAggregate updatedAggregate = ComposeDocumentAggregate(existingAggregate, change, documentKey);
+						aggregatesByDocument[documentKey] = updatedAggregate;
+						touchedDocuments.Add(documentKey);
+						removedDocuments.Remove(documentKey);
+						break;
+
+					case DatabaseChangeKind.DocumentClosed:
+						if (string.IsNullOrWhiteSpace(documentKey))
+							break;
+
+						aggregatesByDocument.Remove(documentKey);
+						removedDocuments.Add(documentKey);
+						touchedDocuments.Add(documentKey);
+						break;
+
+					case DatabaseChangeKind.FileRenamed:
+						if (!TryExtractRename(change, out string oldDocumentKey, out string newDocumentKey))
+							break;
+
+						if (aggregatesByDocument.TryGetValue(oldDocumentKey, out DataAggregate renamedAggregate))
+						{
+							aggregatesByDocument.Remove(oldDocumentKey);
+							aggregatesByDocument[newDocumentKey] = CloneAggregateForDocument(
+								renamedAggregate,
+								new PathKey(newDocumentKey),
+								change.VersionHint);
+						}
+
+						renamedDocuments[oldDocumentKey] = newDocumentKey;
+						removedDocuments.Add(oldDocumentKey);
+						touchedDocuments.Add(oldDocumentKey);
+						touchedDocuments.Add(newDocumentKey);
+						break;
+
+					case DatabaseChangeKind.WatchedFilesChanged:
+						if (TryShouldDeleteByWatcher(change, out string deletedDocumentKey)
+							&& !string.IsNullOrWhiteSpace(deletedDocumentKey))
+						{
+							aggregatesByDocument.Remove(deletedDocumentKey);
+							removedDocuments.Add(deletedDocumentKey);
+							touchedDocuments.Add(deletedDocumentKey);
+						}
+						break;
+
+					case DatabaseChangeKind.Unknown:
+					default:
+						break;
+				}
+			}
+
+			var aggregates = new List<DataAggregate>(aggregatesByDocument.Count);
+			foreach (KeyValuePair<string, DataAggregate> pair in aggregatesByDocument)
+				aggregates.Add(pair.Value);
+
+			aggregates.Sort((left, right) => StringComparer.OrdinalIgnoreCase.Compare(left.DocumentKey.Value, right.DocumentKey.Value));
+
+			var facts = new List<DataFact>();
+			if (!fullResyncRequested && baseline.Facts != null)
+			{
+				for (int i = 0; i < baseline.Facts.Count; i++)
+				{
+					DataFact fact = baseline.Facts[i];
+					if (fact == null)
+						continue;
+
+					string factDocument = NormalizeDocumentKey(fact.DocumentKey.Value);
+					if (string.IsNullOrWhiteSpace(factDocument))
+						continue;
+
+					if (renamedDocuments.TryGetValue(factDocument, out string renamedDocument))
+					{
+						facts.Add(CloneFactForDocument(fact, new PathKey(renamedDocument), nextVersion));
+						continue;
+					}
+
+					if (removedDocuments.Contains(factDocument))
+						continue;
+
+					if (touchedDocuments.Contains(factDocument))
+						continue;
+
+					facts.Add(fact);
+				}
+			}
+
+			return new CodeDatabaseSnapshot(
+				nextVersion,
+				DateTime.UtcNow,
+				aggregates,
+				facts,
+				null);
+		}
+
+		private static DataAggregate ComposeDocumentAggregate(
+			DataAggregate existingAggregate,
+			DatabaseChangeEvent change,
+			string documentKey)
+		{
+			string languageId = existingAggregate != null ? existingAggregate.LanguageId : string.Empty;
+			if (TryExtractLanguageId(change.Payload, out string extractedLanguageId)
+				&& !string.IsNullOrWhiteSpace(extractedLanguageId))
+			{
+				languageId = extractedLanguageId;
+			}
+
+			string textHash = existingAggregate != null ? existingAggregate.TextHash : string.Empty;
+			if (TryExtractText(change.Payload, out string text))
+				textHash = ComputeStableTextHash(text);
+
+			int? sourceVersion = ResolveSourceVersion(change, existingAggregate != null ? existingAggregate.SourceVersion : null);
+
+			return new DataAggregate(
+				CreateAggregateId(new PathKey(documentKey)),
+				DataAggregateKind.Document,
+				new PathKey(documentKey),
+				languageId,
+				textHash,
+				sourceVersion,
+				new List<DataFact>(0));
+		}
+
+		private static DataAggregate CloneAggregateForDocument(
+			DataAggregate aggregate,
+			PathKey documentKey,
+			int? sourceVersionOverride)
+		{
+			if (aggregate == null)
+			{
+				return new DataAggregate(
+					CreateAggregateId(documentKey),
+					DataAggregateKind.Document,
+					documentKey,
+					string.Empty,
+					string.Empty,
+					sourceVersionOverride,
+					new List<DataFact>(0));
+			}
+
+			return new DataAggregate(
+				CreateAggregateId(documentKey),
+				aggregate.Kind,
+				documentKey,
+				aggregate.LanguageId,
+				aggregate.TextHash,
+				sourceVersionOverride ?? aggregate.SourceVersion,
+				aggregate.Facts);
+		}
+
+		private static DataFact CloneFactForDocument(DataFact fact, PathKey documentKey, long snapshotVersion)
+		{
+			return new DataFact(
+				fact.Id,
+				CreateAggregateId(documentKey),
+				fact.Kind,
+				documentKey,
+				fact.Span,
+				snapshotVersion,
+				fact.Payload);
+		}
+
+		private static DataAggregateId CreateAggregateId(PathKey documentKey)
+		{
+			string normalized = NormalizeDocumentKey(documentKey.Value);
+			return new DataAggregateId("agg:doc:" + normalized.ToLowerInvariant());
+		}
+
+		private static int? ResolveSourceVersion(DatabaseChangeEvent change, int? fallback)
+		{
+			if (change == null)
+				return fallback;
+
+			if (change.VersionHint.HasValue)
+				return change.VersionHint;
+
+			if (change.Payload is JsonObject payload)
+			{
+				JsonObject textDocument = payload.GetObject("textDocument");
+				if (textDocument != null && textDocument.ContainsKey("version"))
+					return textDocument.GetInt("version");
+
+				if (payload.ContainsKey("version"))
+					return payload.GetInt("version");
+			}
+
+			return fallback;
+		}
+
+		private static bool TryExtractLanguageId(object payload, out string languageId)
+		{
+			languageId = string.Empty;
+			if (!(payload is JsonObject root))
+				return false;
+
+			JsonObject textDocument = root.GetObject("textDocument");
+			if (textDocument == null)
+				return false;
+
+			string value = textDocument.GetString("languageId");
+			if (string.IsNullOrWhiteSpace(value))
+				return false;
+
+			languageId = value;
+			return true;
+		}
+
+		private static bool TryExtractText(object payload, out string text)
+		{
+			text = string.Empty;
+			if (payload == null)
+				return false;
+
+			if (payload is string raw)
+			{
+				text = raw;
+				return true;
+			}
+
+			if (!(payload is JsonObject root))
+				return false;
+
+			JsonObject textDocument = root.GetObject("textDocument");
+			if (textDocument != null)
+			{
+				string embeddedText = textDocument.GetString("text");
+				if (embeddedText != null)
+				{
+					text = embeddedText;
+					return true;
+				}
+			}
+
+			List<object> contentChanges = root.GetArray("contentChanges");
+			if (contentChanges != null && contentChanges.Count > 0)
+			{
+				for (int i = contentChanges.Count - 1; i >= 0; i--)
+				{
+					if (contentChanges[i] is JsonObject change)
+					{
+						string candidate = change.GetString("text");
+						if (candidate != null)
+						{
+							text = candidate;
+							return true;
+						}
+					}
+				}
+			}
+
+			string directText = root.GetString("text");
+			if (directText != null)
+			{
+				text = directText;
+				return true;
+			}
+
+			return false;
+		}
+
+		private static bool TryExtractRename(DatabaseChangeEvent change, out string oldDocumentKey, out string newDocumentKey)
+		{
+			oldDocumentKey = string.Empty;
+			newDocumentKey = string.Empty;
+			if (change == null)
+				return false;
+
+			if (!(change.Payload is JsonObject payload))
+				return false;
+
+			oldDocumentKey = NormalizeDocumentKey(payload.GetString("oldUri"));
+			if (string.IsNullOrWhiteSpace(oldDocumentKey))
+				oldDocumentKey = NormalizeDocumentKey(payload.GetString("oldPath"));
+
+			newDocumentKey = NormalizeDocumentKey(payload.GetString("newUri"));
+			if (string.IsNullOrWhiteSpace(newDocumentKey))
+				newDocumentKey = NormalizeDocumentKey(payload.GetString("newPath"));
+
+			if (string.IsNullOrWhiteSpace(oldDocumentKey) || string.IsNullOrWhiteSpace(newDocumentKey))
+				return false;
+
+			return true;
+		}
+
+		private static bool TryShouldDeleteByWatcher(DatabaseChangeEvent change, out string documentKey)
+		{
+			documentKey = NormalizeDocumentKey(change != null ? change.DocumentKey.Value : string.Empty);
+			if (change == null || !(change.Payload is JsonObject payload))
+				return false;
+
+			if (payload.ContainsKey("uri"))
+				documentKey = NormalizeDocumentKey(payload.GetString("uri"));
+
+			if (!payload.ContainsKey("type"))
+				return false;
+
+			object typeObject = payload.Get("type");
+			if (typeObject is int typeInt)
+				return typeInt == 3;
+
+			if (typeObject is long typeLong)
+				return typeLong == 3L;
+
+			if (typeObject is double typeDouble)
+				return (int)typeDouble == 3;
+
+			if (typeObject is string typeString)
+			{
+				if (int.TryParse(typeString, out int parsedType))
+					return parsedType == 3;
+
+				return string.Equals(typeString, "deleted", StringComparison.OrdinalIgnoreCase)
+					|| string.Equals(typeString, "delete", StringComparison.OrdinalIgnoreCase);
+			}
+
+			return false;
+		}
+
+		private static string NormalizeDocumentKey(string value)
+		{
+			return string.IsNullOrWhiteSpace(value) ? string.Empty : value.Trim();
+		}
+
+		private static string ComputeStableTextHash(string text)
+		{
+			if (string.IsNullOrEmpty(text))
+				return string.Empty;
+
+			unchecked
+			{
+				uint hash = 2166136261;
+				for (int i = 0; i < text.Length; i++)
+				{
+					hash ^= text[i];
+					hash *= 16777619;
+				}
+
+				return hash.ToString("X8");
+			}
+		}
+
+		private static CodeDatabaseSnapshot StampSnapshotVersion(
+			CodeDatabaseSnapshot snapshot,
+			long version,
+			IIndexSnapshot indexSnapshot)
+		{
+			CodeDatabaseSnapshot candidate = snapshot ?? CodeDatabaseSnapshot.Empty();
+			return new CodeDatabaseSnapshot(
+				version,
+				DateTime.UtcNow,
+				candidate.Aggregates,
+				candidate.Facts,
+				indexSnapshot);
 		}
 	}
 }
