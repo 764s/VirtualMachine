@@ -18,7 +18,7 @@
 //   Upstream: parser and workspace index producers.
 //   Downstream: Query core, rename/references/definition, diagnostics.
 
-namespace FFVM.Debug.Lsp.Contracts
+namespace FFVM.Debug.Lsp.Database.Contracts
 {
 	public sealed class SymbolIdentity
 	{

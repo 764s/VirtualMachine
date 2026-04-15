@@ -16,7 +16,7 @@
 //   Upstream: parser/index classification.
 //   Downstream: SymbolIdentity, completion, hover, semantic tokens.
 
-namespace FFVM.Debug.Lsp.Contracts
+namespace FFVM.Debug.Lsp.Database.Contracts
 {
 	public enum SymbolKindTag
 	{

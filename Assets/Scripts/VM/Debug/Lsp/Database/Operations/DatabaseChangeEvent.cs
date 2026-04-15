@@ -16,7 +16,7 @@
 //   Upstream: LSP notification handlers.
 //   Downstream: IWorkspaceCodeDatabase.Execute (ApplyChangeSet operation).
 
-using FFVM.Debug.Lsp.Infrastructure.Paths;
+using FFVM.Debug.Lsp.Database.Paths;
 
 namespace FFVM.Debug.Lsp.Database
 {

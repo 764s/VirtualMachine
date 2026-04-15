@@ -19,7 +19,7 @@
 
 using System;
 
-namespace FFVM.Debug.Lsp.Contracts
+namespace FFVM.Debug.Lsp.Database.Contracts
 {
 	public struct TextPosition : IEquatable<TextPosition>
 	{

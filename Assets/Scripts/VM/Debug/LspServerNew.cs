@@ -1,7 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
-using FFVM.Debug.Lsp.Bridge;
+using FFVM.Debug.Lsp.Integration.VsCode;
 
 namespace FFVM.Debug
 {

@@ -19,8 +19,8 @@
 //   Downstream: index views and query facade.
 
 using System;
-using FFVM.Debug.Lsp.Contracts;
-using FFVM.Debug.Lsp.Infrastructure.Paths;
+using FFVM.Debug.Lsp.Database.Contracts;
+using FFVM.Debug.Lsp.Database.Paths;
 
 namespace FFVM.Debug.Lsp.Database
 {

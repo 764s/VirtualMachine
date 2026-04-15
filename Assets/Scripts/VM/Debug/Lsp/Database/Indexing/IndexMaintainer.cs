@@ -18,7 +18,7 @@
 //   Downstream: query facade and read-side services.
 
 using System.Collections.Generic;
-using FFVM.Debug.Lsp.Infrastructure.Paths;
+using FFVM.Debug.Lsp.Database.Paths;
 
 namespace FFVM.Debug.Lsp.Database
 {

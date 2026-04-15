@@ -17,7 +17,7 @@
 //   Upstream: WorkspaceCodeDatabase write pipeline.
 //   Downstream: Fact extractor.
 
-using FFVM.Debug.Lsp.Infrastructure.Paths;
+using FFVM.Debug.Lsp.Database.Paths;
 
 namespace FFVM.Debug.Lsp.Database
 {

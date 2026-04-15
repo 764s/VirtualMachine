@@ -20,7 +20,7 @@
 
 using System.Collections.Generic;
 
-namespace FFVM.Debug.Lsp.Contracts
+namespace FFVM.Debug.Lsp.Database.Contracts
 {
 	public sealed class SymbolQueryResult
 	{

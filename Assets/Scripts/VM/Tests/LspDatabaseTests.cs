@@ -1,7 +1,7 @@
 using System;
 using System.Collections.Generic;
 using FFVM.Debug.Lsp.Database;
-using FFVM.Debug.Lsp.Infrastructure.Paths;
+using FFVM.Debug.Lsp.Database.Paths;
 using UnityEngine;
 
 /// <summary>

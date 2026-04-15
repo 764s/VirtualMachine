@@ -18,7 +18,7 @@
 //   Upstream: LspServer input adapters, watched files events.
 //   Downstream: index, query request normalization, diagnostics routing.
 
-namespace FFVM.Debug.Lsp.Infrastructure.Paths
+namespace FFVM.Debug.Lsp.Database.Paths
 {
 	public interface IPathCanonicalizer
 	{

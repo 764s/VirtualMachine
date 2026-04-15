@@ -19,7 +19,7 @@
 
 using System;
 
-namespace FFVM.Debug.Lsp.Infrastructure.Paths
+namespace FFVM.Debug.Lsp.Database.Paths
 {
 	public struct UriKey : IEquatable<UriKey>
 	{

@@ -18,7 +18,7 @@
 //   Upstream: request handlers/services.
 //   Downstream: response writer adapters.
 
-using FFVM.Debug.Lsp.Contracts;
+using FFVM.Debug.Lsp.Database.Contracts;
 
 namespace FFVM.Debug.Lsp.Database
 {

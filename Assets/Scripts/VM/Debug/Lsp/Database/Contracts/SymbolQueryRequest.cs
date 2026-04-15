@@ -19,7 +19,7 @@
 //   Upstream: handlers.
 //   Downstream: SymbolQueryCore, Definition/References/Rename services.
 
-namespace FFVM.Debug.Lsp.Contracts
+namespace FFVM.Debug.Lsp.Database.Contracts
 {
 	public sealed class SymbolQueryRequest
 	{

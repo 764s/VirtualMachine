@@ -1,0 +1,309 @@
+// Responsibility:
+//   Default VS Code bridge implementation backed by workspace code database + query facade.
+// Owns:
+//   LSP param normalization and single-entry database/query invocation.
+// Inputs/Outputs:
+//   In: LSP JsonObject request/notification params.
+//   Out: query payload objects and queued diagnostics notifications.
+// Allowed Dependencies:
+//   - IWorkspaceCodeDatabase
+//   - ILspQueryFacade
+// Forbidden Dependencies:
+//   - Direct stdio framing/writing.
+// Invariants:
+//   - All writes go through IWorkspaceCodeDatabase.Execute.
+//   - Read-side queries always run against a snapshot fetched from database.
+// Boundary Closure:
+//   Upstream: LspServerNew bridge callbacks.
+//   Downstream: database operation/query components.
+
+using System;
+using System.Collections.Generic;
+using FFVM.Debug.Lsp.Database;
+using FFVM.Debug.Lsp.Database.Contracts;
+using FFVM.Debug.Lsp.Database.Paths;
+
+namespace FFVM.Debug.Lsp.Integration.VsCode
+{
+	public sealed class DatabaseBackedVsCodeBridge : ILspVsCodeDatabaseBridge
+	{
+		private readonly IWorkspaceCodeDatabase _database;
+		private readonly ILspQueryFacade _queryFacade;
+		private readonly object _sync = new object();
+		private readonly Queue<LspPublishedDiagnostics> _diagnosticsQueue = new Queue<LspPublishedDiagnostics>();
+
+		public DatabaseBackedVsCodeBridge(
+			IWorkspaceCodeDatabase database,
+			ILspQueryFacade queryFacade = null)
+		{
+			_database = database ?? throw new ArgumentNullException(nameof(database));
+			_queryFacade = queryFacade ?? new InMemoryLspQueryFacade();
+		}
+
+		public void Initialize(JsonObject initializeParams)
+		{
+			// No-op in scaffold mode. Composition root may preload snapshot state separately.
+		}
+
+		public void Shutdown(JsonObject shutdownParams)
+		{
+		}
+
+		public void Initialized(JsonObject initializedParams)
+		{
+		}
+
+		public void Exit(JsonObject exitParams)
+		{
+		}
+
+		public void DidOpen(JsonObject didOpenParams)
+		{
+			ApplySingleChange(DatabaseChangeKind.DocumentOpened, didOpenParams, "didOpen");
+		}
+
+		public void DidChange(JsonObject didChangeParams)
+		{
+			ApplySingleChange(DatabaseChangeKind.DocumentChanged, didChangeParams, "didChange");
+		}
+
+		public void DidClose(JsonObject didCloseParams)
+		{
+			ApplySingleChange(DatabaseChangeKind.DocumentClosed, didCloseParams, "didClose");
+		}
+
+		public void DidChangeWatchedFiles(JsonObject didChangeWatchedFilesParams)
+		{
+			if (didChangeWatchedFilesParams == null)
+				return;
+
+			List<object> rawChanges = didChangeWatchedFilesParams.GetArray("changes");
+			if (rawChanges == null || rawChanges.Count == 0)
+				return;
+
+			var changes = new List<DatabaseChangeEvent>(rawChanges.Count);
+			for (int i = 0; i < rawChanges.Count; i++)
+			{
+				if (!(rawChanges[i] is JsonObject item))
+					continue;
+
+				string uri = item.GetString("uri") ?? string.Empty;
+				changes.Add(new DatabaseChangeEvent(
+					DatabaseChangeKind.WatchedFilesChanged,
+					new PathKey(uri),
+					null,
+					item));
+			}
+
+			if (changes.Count == 0)
+				return;
+
+			_database.Execute(DatabaseOperationRequest.ApplyChanges(
+				changes,
+				reason: "didChangeWatchedFiles",
+				correlationId: "lsp-notify-watched-files",
+				priority: DatabaseOperationPriority.Normal,
+				timeout: TimeSpan.FromSeconds(15),
+				streamKey: string.Empty,
+				streamBehavior: DatabaseOperationStreamBehavior.None));
+		}
+
+		public object QueryDocumentSymbol(JsonObject requestParams)
+		{
+			if (!TryReadSnapshot(out CodeDatabaseSnapshot snapshot))
+				return null;
+
+			SymbolQueryRequest query = BuildQueryRequest("documentSymbol", requestParams, false, string.Empty);
+			return _queryFacade.QueryDocumentSymbols(snapshot, query);
+		}
+
+		public object QueryHover(JsonObject requestParams)
+		{
+			return ExecuteResultQuery("hover", requestParams, false, string.Empty, (snapshot, query)
+				=> _queryFacade.QueryHover(snapshot, query));
+		}
+
+		public object QueryDefinition(JsonObject requestParams)
+		{
+			return ExecuteResultQuery("definition", requestParams, false, string.Empty, (snapshot, query)
+				=> _queryFacade.QueryDefinition(snapshot, query));
+		}
+
+		public object QueryReferences(JsonObject requestParams)
+		{
+			bool includeDeclaration = requestParams?.GetObject("context")?.GetBool("includeDeclaration") == true;
+			return ExecuteResultQuery("references", requestParams, includeDeclaration, string.Empty, (snapshot, query)
+				=> _queryFacade.QueryReferences(snapshot, query));
+		}
+
+		public object QueryCompletion(JsonObject requestParams)
+		{
+			return ExecuteResultQuery("completion", requestParams, false, string.Empty, (snapshot, query)
+				=> _queryFacade.QueryCompletion(snapshot, query));
+		}
+
+		public object QuerySignatureHelp(JsonObject requestParams)
+		{
+			return ExecuteResultQuery("signatureHelp", requestParams, false, string.Empty, (snapshot, query)
+				=> _queryFacade.QuerySignatureHelp(snapshot, query));
+		}
+
+		public object QueryRename(JsonObject requestParams)
+		{
+			string newName = requestParams != null ? requestParams.GetString("newName") : string.Empty;
+			return ExecuteResultQuery("rename", requestParams, true, newName, (snapshot, query)
+				=> _queryFacade.QueryRename(snapshot, query));
+		}
+
+		public object QueryPrepareRename(JsonObject requestParams)
+		{
+			return ExecuteResultQuery("prepareRename", requestParams, false, string.Empty, (snapshot, query)
+				=> _queryFacade.QueryPrepareRename(snapshot, query));
+		}
+
+		public object QuerySemanticTokensFull(JsonObject requestParams)
+		{
+			if (!TryReadSnapshot(out CodeDatabaseSnapshot snapshot))
+				return null;
+
+			SymbolQueryRequest query = BuildQueryRequest("semanticTokens/full", requestParams, false, string.Empty);
+			return _queryFacade.QuerySemanticTokensFull(snapshot, query);
+		}
+
+		public object QueryWillRenameFiles(JsonObject requestParams)
+		{
+			// Workspace file-rename rewrite planning is intentionally deferred.
+			return null;
+		}
+
+		public bool TryDequeueDiagnostics(out LspPublishedDiagnostics diagnostics)
+		{
+			lock (_sync)
+			{
+				if (_diagnosticsQueue.Count > 0)
+				{
+					diagnostics = _diagnosticsQueue.Dequeue();
+					return true;
+				}
+
+				diagnostics = null;
+				return false;
+			}
+		}
+
+		private void ApplySingleChange(DatabaseChangeKind kind, JsonObject payload, string reason)
+		{
+			string uri = ExtractDocumentUri(payload);
+			int? version = ExtractVersion(payload);
+
+			var change = new DatabaseChangeEvent(
+				kind,
+				new PathKey(uri),
+				version,
+				payload);
+
+			_database.Execute(DatabaseOperationRequest.ApplyChanges(
+				new[] { change },
+				reason: reason,
+				correlationId: "lsp-notify-" + reason,
+				priority: DatabaseOperationPriority.Normal,
+				timeout: TimeSpan.FromSeconds(15),
+				streamKey: string.IsNullOrWhiteSpace(uri) ? string.Empty : "doc:" + uri,
+				streamBehavior: string.IsNullOrWhiteSpace(uri)
+					? DatabaseOperationStreamBehavior.None
+					: DatabaseOperationStreamBehavior.CoalesceAndCancelSuperseded));
+		}
+
+		private object ExecuteResultQuery(
+			string operation,
+			JsonObject requestParams,
+			bool includeDeclaration,
+			string newName,
+			Func<CodeDatabaseSnapshot, SymbolQueryRequest, SymbolQueryResult> query)
+		{
+			if (query == null)
+				return null;
+
+			if (!TryReadSnapshot(out CodeDatabaseSnapshot snapshot))
+				return null;
+
+			SymbolQueryRequest normalized = BuildQueryRequest(operation, requestParams, includeDeclaration, newName);
+			SymbolQueryResult result = query(snapshot, normalized);
+
+			if (result == null)
+				return null;
+
+			if (result.Succeeded)
+				return result.Payload;
+
+			return null;
+		}
+
+		private bool TryReadSnapshot(out CodeDatabaseSnapshot snapshot)
+		{
+			snapshot = null;
+
+			DatabaseOperationResult readResult = _database.Execute(DatabaseOperationRequest.ReadSnapshot(
+				correlationId: "lsp-query-read-snapshot",
+				priority: DatabaseOperationPriority.Normal,
+				timeout: TimeSpan.FromSeconds(10)));
+
+			if (readResult == null || !readResult.Succeeded || readResult.Snapshot == null)
+				return false;
+
+			snapshot = readResult.Snapshot;
+			return true;
+		}
+
+		private static SymbolQueryRequest BuildQueryRequest(
+			string operation,
+			JsonObject requestParams,
+			bool includeDeclaration,
+			string newName)
+		{
+			string uri = ExtractDocumentUri(requestParams);
+
+			JsonObject position = requestParams != null ? requestParams.GetObject("position") : null;
+			int line = position != null ? position.GetInt("line") : 0;
+			int character = position != null ? position.GetInt("character") : 0;
+
+			var normalizedPosition = new TextPosition(line, character);
+			return new SymbolQueryRequest(
+				operation,
+				uri,
+				normalizedPosition,
+				new TextSpan(0, 0),
+				includeDeclaration,
+				newName);
+		}
+
+		private static string ExtractDocumentUri(JsonObject payload)
+		{
+			if (payload == null)
+				return string.Empty;
+
+			JsonObject textDocument = payload.GetObject("textDocument");
+			if (textDocument != null)
+			{
+				string uri = textDocument.GetString("uri");
+				if (!string.IsNullOrWhiteSpace(uri))
+					return uri;
+			}
+
+			string fallback = payload.GetString("uri");
+			return fallback ?? string.Empty;
+		}
+
+		private static int? ExtractVersion(JsonObject payload)
+		{
+			JsonObject textDocument = payload != null ? payload.GetObject("textDocument") : null;
+			if (textDocument != null && textDocument.ContainsKey("version"))
+				return textDocument.GetInt("version");
+
+			if (payload != null && payload.ContainsKey("version"))
+				return payload.GetInt("version");
+
+			return null;
+		}
+	}
+}

@@ -19,7 +19,7 @@
 
 using System.Collections.Generic;
 
-namespace FFVM.Debug.Lsp.Bridge
+namespace FFVM.Debug.Lsp.Integration.VsCode
 {
 	public sealed class LspPublishedDiagnostics
 	{
