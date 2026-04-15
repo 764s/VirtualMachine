@@ -8566,6 +8566,241 @@ public static class LspTests
             }
         }
 
+        // ================================================================
+        // DX19: ResolveSymbol candidate arbitration — collision variant matrix
+        // ================================================================
+
+        // DX19-01: Cross-file-only definition still works (function defined in included file, not in main)
+        {
+            string tmpDir = Path.Combine(Path.GetTempPath(), "dx19_01_" + Guid.NewGuid().ToString("N").Substring(0, 8));
+            Directory.CreateDirectory(tmpDir);
+            try
+            {
+                File.WriteAllText(Path.Combine(tmpDir, "lib.ffs"),
+                    "func helper() {\n    wait 1\n}");
+                string rootUri = "file:///" + tmpDir.TrimStart('/').Replace("\\", "/");
+                // main.ffs calls helper() defined only in lib.ffs
+                string mainSource = "include \"lib\"\nfunc main() {\n    helper()\n}";
+                string mainUri = rootUri + "/main.ffs";
+
+                var session = new LspBatchSession();
+                session.AddInitializeWithRootUri(rootUri);
+                session.AddInitialized();
+                session.AddDidOpen(mainUri, mainSource);
+                // "helper()" in main.ffs: line 2 (0-based), col 4
+                session.AddDefinition(mainUri, 2, 4);
+                session.AddShutdown();
+                session.AddExit();
+                session.Run();
+
+                session.ExpectResponse(0);
+                var defResp = session.ExpectResponse(1);
+                var result = defResp?.GetObject("result");
+                Assert(result != null, "DX19-01a: cross-file definition response exists");
+                if (result != null)
+                {
+                    string defUri = result.GetString("uri") ?? "";
+                    int defLine = result.GetObject("range")?.GetObject("start")?.GetInt("line") ?? -1;
+                    Assert(defUri.Contains("lib.ffs"),
+                        $"DX19-01b: definition uri should be lib.ffs, got '{defUri}'");
+                    Assert(defLine == 0,
+                        $"DX19-01c: definition line should be 0 (func helper), got {defLine}");
+                }
+            }
+            finally
+            {
+                try { Directory.Delete(tmpDir, true); } catch { }
+            }
+        }
+
+        // DX19-02: Local variable shadows module variable — definition resolves to local
+        {
+            string source = "var x: int = 10\nfunc main() {\n    var x: int = 5\n    wait x\n}";
+            var session = new LspBatchSession();
+            session.AddInitialize();
+            session.AddInitialized();
+            session.AddDidOpen("file:///dx19_02.ffs", source);
+            // "wait x" at line 3 (0-based), col 9
+            session.AddDefinition("file:///dx19_02.ffs", 3, 9);
+            session.AddShutdown();
+            session.AddExit();
+            session.Run();
+
+            session.ExpectResponse(0);
+            var defResp = session.ExpectResponse(1);
+            var result = defResp?.GetObject("result");
+            Assert(result != null, "DX19-02a: local-shadows-module definition response exists");
+            if (result != null)
+            {
+                int defLine = result.GetObject("range")?.GetObject("start")?.GetInt("line") ?? -1;
+                Assert(defLine == 2,
+                    $"DX19-02b: definition should be local var (line 2), got {defLine}");
+            }
+        }
+
+        // DX19-03: Same cursor point — Definition/References/Rename/Hover semantic consistency
+        // In collision scenario, all 4 operations should agree on the same symbol
+        {
+            string tmpDir = Path.Combine(Path.GetTempPath(), "dx19_03_" + Guid.NewGuid().ToString("N").Substring(0, 8));
+            Directory.CreateDirectory(tmpDir);
+            try
+            {
+                File.WriteAllText(Path.Combine(tmpDir, "common.ffs"),
+                    "func lib() {\n    var hp: int = 100\n\n    wait hp\n}");
+                string rootUri = "file:///" + tmpDir.TrimStart('/').Replace("\\", "/");
+                string mainSource = "include \"common\"\nfunc main() {\n    var hp: int = 1\n    wait hp\n}";
+                string mainUri = rootUri + "/main.ffs";
+
+                // All 4 operations at same cursor: "wait hp" line 3, col 9
+                var session = new LspBatchSession();
+                session.AddInitializeWithRootUri(rootUri);
+                session.AddInitialized();
+                session.AddDidOpen(mainUri, mainSource);
+                session.AddDefinition(mainUri, 3, 9);     // resp 1
+                session.AddReferences(mainUri, 3, 9);     // resp 2
+                session.AddRename(mainUri, 3, 9, "mp");   // resp 3
+                session.AddHover(mainUri, 3, 9);          // resp 4
+                session.AddShutdown();
+                session.AddExit();
+                session.Run();
+
+                session.ExpectResponse(0); // initialize
+
+                // Definition → main.ffs
+                var defResp = session.ExpectResponse(1);
+                var defResult = defResp?.GetObject("result");
+                string defUri = defResult?.GetString("uri") ?? "";
+                Assert(defUri.Contains("main.ffs"),
+                    $"DX19-03a: definition targets main.ffs, got '{defUri}'");
+
+                // References → all in main.ffs (decl + usage)
+                var refsResp = session.ExpectResponse(2);
+                var refsArr = refsResp?.GetArray("result");
+                int refCount = refsArr?.Count ?? 0;
+                Assert(refCount == 2,
+                    $"DX19-03b: references count == 2 (decl + usage in main), got {refCount}");
+                if (refCount > 0)
+                {
+                    bool allMain = true;
+                    for (int i = 0; i < refCount; i++)
+                    {
+                        var loc = refsArr[i] as JsonObject;
+                        string locUri = loc?.GetString("uri") ?? "";
+                        if (!locUri.Contains("main.ffs")) allMain = false;
+                    }
+                    Assert(allMain, "DX19-03c: all references are in main.ffs");
+                }
+
+                // Rename → edits only in main.ffs
+                var renResp = session.ExpectResponse(3);
+                var renResult = renResp?.GetObject("result");
+                var renChanges = renResult?.GetObject("changes");
+                if (renChanges != null)
+                {
+                    bool hasMain = false;
+                    bool hasOther = false;
+                    foreach (var key in renChanges.Keys)
+                    {
+                        if (key.Contains("main.ffs")) hasMain = true;
+                        else hasOther = true;
+                    }
+                    Assert(hasMain, "DX19-03d: rename includes main.ffs edits");
+                    Assert(!hasOther, "DX19-03e: rename does not include other file edits");
+                }
+
+                // Hover → non-null (symbol resolved)
+                var hoverResp = session.ExpectResponse(4);
+                var hoverResult = hoverResp?.GetObject("result");
+                Assert(hoverResult != null, "DX19-03f: hover response exists for collision symbol");
+            }
+            finally
+            {
+                try { Directory.Delete(tmpDir, true); } catch { }
+            }
+        }
+
+        // DX19-04: Cross-file struct field access still resolves via merged fallback (StructField parentName==null)
+        {
+            string tmpDir = Path.Combine(Path.GetTempPath(), "dx19_04_" + Guid.NewGuid().ToString("N").Substring(0, 8));
+            Directory.CreateDirectory(tmpDir);
+            try
+            {
+                File.WriteAllText(Path.Combine(tmpDir, "types.ffs"),
+                    "struct Vec2 { x: int; y: int }");
+                string rootUri = "file:///" + tmpDir.TrimStart('/').Replace("\\", "/");
+                string mainSource = "include \"types\"\nfunc main() {\n    var v: Vec2 = Vec2 { x: 1, y: 2 }\n    wait v.x\n}";
+                string mainUri = rootUri + "/main.ffs";
+
+                var session = new LspBatchSession();
+                session.AddInitializeWithRootUri(rootUri);
+                session.AddInitialized();
+                session.AddDidOpen(mainUri, mainSource);
+                // "v.x" at line 3 (0-based), cursor on "x" after dot
+                // "    wait v.x" → col 11 for "x"
+                session.AddDefinition(mainUri, 3, 11);
+                session.AddShutdown();
+                session.AddExit();
+                session.Run();
+
+                session.ExpectResponse(0);
+                var defResp = session.ExpectResponse(1);
+                var result = defResp?.GetObject("result");
+                Assert(result != null, "DX19-04a: cross-file struct field definition exists");
+                if (result != null)
+                {
+                    string defUri = result.GetString("uri") ?? "";
+                    int defLine = result.GetObject("range")?.GetObject("start")?.GetInt("line") ?? -1;
+                    Assert(defUri.Contains("types.ffs"),
+                        $"DX19-04b: field definition is in types.ffs, got '{defUri}'");
+                    Assert(defLine == 0,
+                        $"DX19-04c: field 'x' definition on line 0, got {defLine}");
+                }
+            }
+            finally
+            {
+                try { Directory.Delete(tmpDir, true); } catch { }
+            }
+        }
+
+        // DX19-05: Module-level variable cross-file usage still resolves via merged fallback
+        {
+            string tmpDir = Path.Combine(Path.GetTempPath(), "dx19_05_" + Guid.NewGuid().ToString("N").Substring(0, 8));
+            Directory.CreateDirectory(tmpDir);
+            try
+            {
+                File.WriteAllText(Path.Combine(tmpDir, "globals.ffs"),
+                    "var gMaxHp: int = 999");
+                string rootUri = "file:///" + tmpDir.TrimStart('/').Replace("\\", "/");
+                string mainSource = "include \"globals\"\nfunc main() {\n    wait gMaxHp\n}";
+                string mainUri = rootUri + "/main.ffs";
+
+                var session = new LspBatchSession();
+                session.AddInitializeWithRootUri(rootUri);
+                session.AddInitialized();
+                session.AddDidOpen(mainUri, mainSource);
+                // "wait gMaxHp" at line 2 (0-based), col 9
+                session.AddDefinition(mainUri, 2, 9);
+                session.AddShutdown();
+                session.AddExit();
+                session.Run();
+
+                session.ExpectResponse(0);
+                var defResp = session.ExpectResponse(1);
+                var result = defResp?.GetObject("result");
+                Assert(result != null, "DX19-05a: cross-file module var definition exists");
+                if (result != null)
+                {
+                    string defUri = result.GetString("uri") ?? "";
+                    Assert(defUri.Contains("globals.ffs"),
+                        $"DX19-05b: module var definition is in globals.ffs, got '{defUri}'");
+                }
+            }
+            finally
+            {
+                try { Directory.Delete(tmpDir, true); } catch { }
+            }
+        }
+
         Debug.Log($"\n===== LspTests: {passed} passed, {failed} failed =====");
     }
 
