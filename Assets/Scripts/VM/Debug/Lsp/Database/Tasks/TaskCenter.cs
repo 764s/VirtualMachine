@@ -124,6 +124,8 @@ namespace FFVM.Debug.Lsp.Database
 
 	public interface IDatabaseTaskCenter
 	{
+		bool TryGetLatestPending(string streamKey, out DatabaseOperationRequest pendingRequest);
+
 		DatabaseTaskEnqueueResult Enqueue(DatabaseTaskPlan plan, DatabaseOperationRequest request);
 
 		DatabaseTaskExecutionReport Execute(DatabaseTaskPlan plan, DatabaseOperationRequest request);
