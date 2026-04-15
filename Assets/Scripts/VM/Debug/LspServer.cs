@@ -1949,9 +1949,20 @@ namespace FFVM.Debug
                 }, mergedAst);
             }
 
-            // Dual-AST resolution: fall back to merged AST for cross-file symbols
+            // DX19: Unified candidate collection + arbitration.
+            // Per-file AST has priority when it provides complete scope identity.
+            // Merged AST fallback only triggers when: (a) no per-file hit, (b) Variable without
+            // local scope identity (module-level or cross-file type misresolved as Variable),
+            // or (c) StructField without parent name (needs cross-file struct lookup).
+            // This prevents same line+col collisions from included files overriding local variables.
             var resolvedTarget = perFileTarget;
-            if (resolvedTarget == null || resolvedTarget.Value.kind == SymbolKindTag.Variable
+            if (resolvedTarget != null && resolvedTarget.Value.kind == SymbolKindTag.Variable
+                && resolvedTarget.Value.scopeFunc != null && resolvedTarget.Value.declLine > 0)
+            {
+                // Per-file found a locally-scoped variable with complete identity — keep it.
+            }
+            else if (resolvedTarget == null
+                || resolvedTarget.Value.kind == SymbolKindTag.Variable
                 || (resolvedTarget.Value.kind == SymbolKindTag.StructField && resolvedTarget.Value.parentName == null))
             {
                 var mergedTarget = FindSymbolAtPosition(mergedAst, astLine, astCol);
