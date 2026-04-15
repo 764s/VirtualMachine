@@ -37,6 +37,7 @@ namespace FFVM.Debug.Lsp.Database
 		Unknown = 0,
 		RejectedInvalid,
 		Enqueued,
+		Bypassed,
 		Coalesced,
 		ReplacedSuperseded,
 		SkippedSuperseded

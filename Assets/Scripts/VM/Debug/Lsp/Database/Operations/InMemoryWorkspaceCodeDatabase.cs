@@ -33,9 +33,15 @@ namespace FFVM.Debug.Lsp.Database
 		private readonly IDatabaseTaskCenter _taskCenter;
 		private readonly IDatabaseOperationCoalescer _operationCoalescer;
 		private readonly IDatabaseSupersessionPolicy _supersessionPolicy;
+		private readonly IDatabaseConflictResolver _conflictResolver;
+		private readonly IDatabaseCommandLifecyclePolicy _lifecyclePolicy;
+		private readonly IDatabaseCommandLifecycleSink _lifecycleSink;
+		private readonly IDatabaseDecisionLogSink _decisionLogSink;
 		private readonly IDatabaseSnapshotCommitter _snapshotCommitter;
 
 		private CodeDatabaseSnapshot _currentSnapshot;
+
+		public DatabaseExecutionOutcome LastOutcome { get; private set; }
 
 		public InMemoryWorkspaceCodeDatabase(
 			IDatabaseExecutionOrchestrator orchestrator,
@@ -43,6 +49,10 @@ namespace FFVM.Debug.Lsp.Database
 			IDatabaseTaskCenter taskCenter,
 			IDatabaseOperationCoalescer operationCoalescer,
 			IDatabaseSupersessionPolicy supersessionPolicy,
+			IDatabaseConflictResolver conflictResolver,
+			IDatabaseCommandLifecyclePolicy lifecyclePolicy,
+			IDatabaseCommandLifecycleSink lifecycleSink,
+			IDatabaseDecisionLogSink decisionLogSink,
 			IDatabaseSnapshotCommitter snapshotCommitter)
 		{
 			_orchestrator = orchestrator ?? throw new ArgumentNullException(nameof(orchestrator));
@@ -50,6 +60,10 @@ namespace FFVM.Debug.Lsp.Database
 			_taskCenter = taskCenter;
 			_operationCoalescer = operationCoalescer;
 			_supersessionPolicy = supersessionPolicy;
+			_conflictResolver = conflictResolver;
+			_lifecyclePolicy = lifecyclePolicy;
+			_lifecycleSink = lifecycleSink;
+			_decisionLogSink = decisionLogSink;
 			_snapshotCommitter = snapshotCommitter;
 			_currentSnapshot = CodeDatabaseSnapshot.Empty();
 		}
@@ -81,10 +95,15 @@ namespace FFVM.Debug.Lsp.Database
 				_taskCenter,
 				_operationCoalescer,
 				_supersessionPolicy,
+				_conflictResolver,
+				_lifecyclePolicy,
+				_lifecycleSink,
+				_decisionLogSink,
 				_snapshotCommitter,
 				InferScenario(request));
 
 			DatabaseExecutionOutcome outcome = _orchestrator.Execute(input);
+			LastOutcome = outcome;
 
 			if (outcome != null
 				&& outcome.OperationResult != null

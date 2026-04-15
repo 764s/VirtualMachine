@@ -12,6 +12,10 @@
 //   - IDatabaseTaskCenter
 //   - IDatabaseOperationCoalescer
 //   - IDatabaseSupersessionPolicy
+//   - IDatabaseConflictResolver
+//   - IDatabaseCommandLifecyclePolicy
+//   - IDatabaseCommandLifecycleSink
+//   - IDatabaseDecisionLogSink
 // Forbidden Dependencies:
 //   - Protocol transport concerns.
 //   - Direct handler-level branching logic.
@@ -69,6 +73,10 @@ namespace FFVM.Debug.Lsp.Database
 		public IDatabaseTaskCenter TaskCenter { get; }
 		public IDatabaseOperationCoalescer OperationCoalescer { get; }
 		public IDatabaseSupersessionPolicy SupersessionPolicy { get; }
+		public IDatabaseConflictResolver ConflictResolver { get; }
+		public IDatabaseCommandLifecyclePolicy LifecyclePolicy { get; }
+		public IDatabaseCommandLifecycleSink LifecycleSink { get; }
+		public IDatabaseDecisionLogSink DecisionLogSink { get; }
 		public IDatabaseSnapshotCommitter SnapshotCommitter { get; }
 		public HighFrequencyScenarioKind Scenario { get; }
 
@@ -79,6 +87,10 @@ namespace FFVM.Debug.Lsp.Database
 			IDatabaseTaskCenter taskCenter,
 			IDatabaseOperationCoalescer operationCoalescer,
 			IDatabaseSupersessionPolicy supersessionPolicy,
+			IDatabaseConflictResolver conflictResolver,
+			IDatabaseCommandLifecyclePolicy lifecyclePolicy,
+			IDatabaseCommandLifecycleSink lifecycleSink,
+			IDatabaseDecisionLogSink decisionLogSink,
 			IDatabaseSnapshotCommitter snapshotCommitter,
 			HighFrequencyScenarioKind scenario)
 		{
@@ -88,6 +100,10 @@ namespace FFVM.Debug.Lsp.Database
 			TaskCenter = taskCenter;
 			OperationCoalescer = operationCoalescer;
 			SupersessionPolicy = supersessionPolicy;
+			ConflictResolver = conflictResolver;
+			LifecyclePolicy = lifecyclePolicy;
+			LifecycleSink = lifecycleSink;
+			DecisionLogSink = decisionLogSink;
 			SnapshotCommitter = snapshotCommitter;
 			Scenario = scenario;
 		}
@@ -97,12 +113,19 @@ namespace FFVM.Debug.Lsp.Database
 	{
 		private static readonly IReadOnlyList<DatabaseExecutionTraceEntry> EmptyTrace
 			= new List<DatabaseExecutionTraceEntry>(0);
+		private static readonly IReadOnlyList<DatabaseConflictDecision> EmptyConflicts
+			= new List<DatabaseConflictDecision>(0);
+		private static readonly IReadOnlyList<DatabaseDecisionLogEntry> EmptyDecisions
+			= new List<DatabaseDecisionLogEntry>(0);
 
 		public DatabaseOperationResult OperationResult { get; }
 		public DatabaseTaskPlan PlannedTaskPlan { get; }
 		public DatabaseTaskEnqueueResult EnqueueResult { get; }
 		public DatabaseTaskExecutionReport ExecutionReport { get; }
 		public CodeDatabaseSnapshot NextSnapshot { get; }
+		public DatabaseCommandLifecycleTrace LifecycleTrace { get; }
+		public IReadOnlyList<DatabaseConflictDecision> ConflictDecisions { get; }
+		public IReadOnlyList<DatabaseDecisionLogEntry> DecisionEntries { get; }
 		public IReadOnlyList<DatabaseExecutionTraceEntry> Trace { get; }
 
 		public DatabaseExecutionOutcome(
@@ -111,6 +134,9 @@ namespace FFVM.Debug.Lsp.Database
 			DatabaseTaskEnqueueResult enqueueResult,
 			DatabaseTaskExecutionReport executionReport,
 			CodeDatabaseSnapshot nextSnapshot,
+			DatabaseCommandLifecycleTrace lifecycleTrace,
+			IReadOnlyList<DatabaseConflictDecision> conflictDecisions,
+			IReadOnlyList<DatabaseDecisionLogEntry> decisionEntries,
 			IReadOnlyList<DatabaseExecutionTraceEntry> trace)
 		{
 			OperationResult = operationResult;
@@ -118,6 +144,9 @@ namespace FFVM.Debug.Lsp.Database
 			EnqueueResult = enqueueResult;
 			ExecutionReport = executionReport;
 			NextSnapshot = nextSnapshot;
+			LifecycleTrace = lifecycleTrace;
+			ConflictDecisions = conflictDecisions ?? EmptyConflicts;
+			DecisionEntries = decisionEntries ?? EmptyDecisions;
 			Trace = trace ?? EmptyTrace;
 		}
 	}

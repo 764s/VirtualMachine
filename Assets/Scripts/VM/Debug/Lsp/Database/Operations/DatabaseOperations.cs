@@ -281,6 +281,7 @@ namespace FFVM.Debug.Lsp.Database
 		public string StreamKey { get; }
 		public DatabaseOperationPriority Priority { get; }
 		public DatabaseOperationKind Kind { get; }
+		public DatabaseCommandState FinalState { get; }
 		public long PreviousVersion { get; }
 		public long CurrentVersion { get; }
 		public CodeDatabaseSnapshot Snapshot { get; }
@@ -293,6 +294,7 @@ namespace FFVM.Debug.Lsp.Database
 			string streamKey,
 			DatabaseOperationPriority priority,
 			DatabaseOperationKind kind,
+			DatabaseCommandState finalState,
 			long previousVersion,
 			long currentVersion,
 			CodeDatabaseSnapshot snapshot,
@@ -304,6 +306,7 @@ namespace FFVM.Debug.Lsp.Database
 			StreamKey = streamKey ?? string.Empty;
 			Priority = priority;
 			Kind = kind;
+			FinalState = finalState;
 			PreviousVersion = previousVersion;
 			CurrentVersion = currentVersion;
 			Snapshot = snapshot;
@@ -315,7 +318,8 @@ namespace FFVM.Debug.Lsp.Database
 			long previousVersion,
 			long currentVersion,
 			CodeDatabaseSnapshot snapshot,
-			string message = null)
+			string message = null,
+			DatabaseCommandState finalState = DatabaseCommandState.Completed)
 		{
 			return new DatabaseOperationResult(
 				true,
@@ -324,6 +328,7 @@ namespace FFVM.Debug.Lsp.Database
 				request?.StreamKey,
 				request != null ? request.Priority : DatabaseOperationPriority.Normal,
 				request != null ? request.Kind : DatabaseOperationKind.Unknown,
+				finalState,
 				previousVersion,
 				currentVersion,
 				snapshot,
@@ -334,7 +339,8 @@ namespace FFVM.Debug.Lsp.Database
 			DatabaseOperationRequest request,
 			long previousVersion,
 			CodeDatabaseSnapshot snapshot,
-			string message)
+			string message,
+			DatabaseCommandState finalState = DatabaseCommandState.Failed)
 		{
 			return new DatabaseOperationResult(
 				false,
@@ -343,6 +349,7 @@ namespace FFVM.Debug.Lsp.Database
 				request?.StreamKey,
 				request != null ? request.Priority : DatabaseOperationPriority.Normal,
 				request != null ? request.Kind : DatabaseOperationKind.Unknown,
+				finalState,
 				previousVersion,
 				previousVersion,
 				snapshot,
