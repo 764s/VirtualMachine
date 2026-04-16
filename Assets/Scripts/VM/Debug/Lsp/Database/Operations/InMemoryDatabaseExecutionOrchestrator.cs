@@ -353,7 +353,7 @@ namespace FFVM.Debug.Lsp.Database
 			}
 			else
 			{
-				nextSnapshot = ComposeSnapshot(currentSnapshot, executionReport, effectiveRequest);
+				nextSnapshot = ComposeSnapshot(currentSnapshot, executionReport, effectiveRequest, input.IndexMaintainer);
 				AddTrace(trace, DatabaseExecutionStage.ComposeSnapshot, true, "ComposeSnapshot completed.");
 				WriteDecision(input, decisions, effectiveRequest, DatabaseExecutionStage.ComposeSnapshot, DatabaseDecisionCategory.Compose, DatabaseDecisionSeverity.Info, "COMPOSE_COMPLETED", "ComposeSnapshot completed.", new { nextSnapshotVersion = nextSnapshot != null ? nextSnapshot.Version : 0L });
 
@@ -885,9 +885,11 @@ namespace FFVM.Debug.Lsp.Database
 		private static CodeDatabaseSnapshot ComposeSnapshot(
 			CodeDatabaseSnapshot currentSnapshot,
 			DatabaseTaskExecutionReport executionReport,
-			DatabaseOperationRequest request)
+			DatabaseOperationRequest request,
+			IIndexMaintainer indexMaintainer)
 		{
 			CodeDatabaseSnapshot baseline = currentSnapshot ?? CodeDatabaseSnapshot.Empty();
+			CodeDatabaseSnapshot rawSnapshot;
 
 			if (executionReport != null && executionReport.Output is CodeDatabaseSnapshot fromReport)
 			{
@@ -895,37 +897,72 @@ namespace FFVM.Debug.Lsp.Database
 					? baseline.Version
 					: baseline.Version + 1;
 
-				return StampSnapshotVersion(fromReport, reportVersion, fromReport.IndexSnapshot);
+				rawSnapshot = StampSnapshotVersion(fromReport, reportVersion, fromReport.IndexSnapshot);
+				return EnsureIndexSnapshot(rawSnapshot, request, indexMaintainer);
 			}
 
 			if (request == null)
-				return baseline;
+				return EnsureIndexSnapshot(baseline, null, indexMaintainer);
 
 			switch (request.Kind)
 			{
 				case DatabaseOperationKind.ReadSnapshot:
-					return baseline;
+					rawSnapshot = baseline;
+					break;
 
 				case DatabaseOperationKind.ResetDatabase:
-					return new CodeDatabaseSnapshot(
+					rawSnapshot = new CodeDatabaseSnapshot(
 						baseline.Version + 1,
 						DateTime.UtcNow,
 						new List<DataAggregate>(0),
 						new List<DataFact>(0),
 						null);
+					break;
 
 				case DatabaseOperationKind.ReplaceSnapshot:
-					return StampSnapshotVersion(
+					rawSnapshot = StampSnapshotVersion(
 						request.ReplacementSnapshot ?? CodeDatabaseSnapshot.Empty(),
 						baseline.Version + 1,
 						request.ReplacementSnapshot != null ? request.ReplacementSnapshot.IndexSnapshot : null);
+					break;
 
 				case DatabaseOperationKind.ApplyChangeSet:
-					return ComposeApplyChangeSetSnapshot(baseline, request);
+					rawSnapshot = ComposeApplyChangeSetSnapshot(baseline, request);
+					break;
 
 				default:
-					return baseline;
+					rawSnapshot = baseline;
+					break;
 			}
+
+			return EnsureIndexSnapshot(rawSnapshot, request, indexMaintainer);
+		}
+
+		private static CodeDatabaseSnapshot EnsureIndexSnapshot(
+			CodeDatabaseSnapshot snapshot,
+			DatabaseOperationRequest request,
+			IIndexMaintainer indexMaintainer)
+		{
+			CodeDatabaseSnapshot candidate = snapshot ?? CodeDatabaseSnapshot.Empty();
+			if (indexMaintainer == null)
+				return candidate;
+
+			DatabaseOperationKind kind = request != null ? request.Kind : DatabaseOperationKind.Unknown;
+			bool shouldRebuild = kind == DatabaseOperationKind.ApplyChangeSet
+				|| kind == DatabaseOperationKind.ReplaceSnapshot
+				|| kind == DatabaseOperationKind.ResetDatabase;
+
+			bool shouldRepair = candidate.IndexSnapshot == null
+				|| candidate.IndexSnapshot.SnapshotVersion != candidate.Version;
+
+			if (!shouldRebuild && kind != DatabaseOperationKind.ReadSnapshot)
+				return candidate;
+
+			if (!shouldRebuild && !shouldRepair)
+				return candidate;
+
+			IIndexSnapshot rebuilt = indexMaintainer.Rebuild(candidate);
+			return StampSnapshotVersion(candidate, candidate.Version, rebuilt);
 		}
 
 		private static CodeDatabaseSnapshot ComposeApplyChangeSetSnapshot(

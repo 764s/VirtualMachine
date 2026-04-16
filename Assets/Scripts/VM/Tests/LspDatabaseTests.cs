@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using FFVM.Debug;
 using FFVM.Debug.Lsp.Database;
+using FFVM.Debug.Lsp.Database.Contracts;
 using FFVM.Debug.Lsp.Database.Paths;
 using UnityEngine;
 
@@ -346,6 +347,129 @@ public static class LspDatabaseTests
 			Assert(closeResult?.Snapshot != null && closeResult.Snapshot.Aggregates.Count == 0, "DBMID-09C: aggregate removed on close");
 		}
 
+		// ================================================================
+		// DBMID-10: ReplaceSnapshot rebuilds indexes for query facade
+		// ================================================================
+		{
+			var orchestrator = new InMemoryDatabaseExecutionOrchestrator();
+			var database = new InMemoryWorkspaceCodeDatabase(orchestrator);
+
+			var document = new PathKey("file:///tests/indexed.ffs");
+			var aggregateId = new DataAggregateId("agg:indexed");
+
+			JsonObject definitionPayload = CreateSymbolFactPayload(document.Value, "Function", "entry", 0, 0, 0, 5, 0, 5);
+			JsonObject referencePayload = CreateSymbolFactPayload(document.Value, "Function", "entry", 1, 2, 1, 7, 0, 5);
+
+			var definitionFact = new DataFact(
+				new DataFactId("indexed-def"),
+				aggregateId,
+				DataFactKind.SymbolDefinition,
+				document,
+				new TextSpan(0, 5),
+				snapshotVersion: 1,
+				payload: definitionPayload);
+
+			var referenceFact = new DataFact(
+				new DataFactId("indexed-ref"),
+				aggregateId,
+				DataFactKind.SymbolReference,
+				document,
+				new TextSpan(10, 5),
+				snapshotVersion: 1,
+				payload: referencePayload);
+
+			var replacementAggregate = new DataAggregate(
+				aggregateId,
+				DataAggregateKind.Document,
+				document,
+				"ffscript",
+				"HASH",
+				1,
+				new List<DataFact> { definitionFact, referenceFact });
+
+			var replacementSnapshot = new CodeDatabaseSnapshot(
+				version: 99,
+				capturedAtUtc: DateTime.UtcNow,
+				aggregates: new List<DataAggregate> { replacementAggregate },
+				facts: new List<DataFact> { definitionFact, referenceFact },
+				indexSnapshot: null);
+
+			DatabaseOperationResult replaceResult = database.Execute(DatabaseOperationRequest.ReplaceSnapshot(
+				replacementSnapshot,
+				reason: "index-bootstrap",
+				correlationId: "corr-index-bootstrap",
+				priority: DatabaseOperationPriority.Normal,
+				timeout: TimeSpan.FromSeconds(15)));
+
+			Assert(replaceResult != null && replaceResult.Succeeded, "DBMID-10A: replace snapshot succeeded");
+			Assert(replaceResult != null && replaceResult.CurrentVersion == 1, "DBMID-10B: replace snapshot normalized version progression");
+			Assert(replaceResult?.Snapshot != null && replaceResult.Snapshot.IndexSnapshot != null, "DBMID-10C: index snapshot rebuilt on replace");
+
+			var facade = new InMemoryLspQueryFacade();
+			var definitionRequest = SymbolQueryRequest.ForPosition("definition", document.Value, new TextPosition(0, 1));
+			SymbolQueryResult definitionResult = facade.QueryDefinition(replaceResult?.Snapshot, definitionRequest);
+			Assert(definitionResult != null && definitionResult.Succeeded, "DBMID-10D: query definition succeeds on rebuilt index");
+
+			var referencesRequest = new SymbolQueryRequest("references", document.Value, new TextPosition(0, 1), new TextSpan(0, 0), false, string.Empty);
+			SymbolQueryResult referencesResult = facade.QueryReferences(replaceResult?.Snapshot, referencesRequest);
+			Assert(referencesResult != null && referencesResult.Succeeded && referencesResult.Ranges.Count == 1, "DBMID-10E: references query returns non-declaration usage");
+
+			var completionRequest = new SymbolQueryRequest("completion", document.Value, new TextPosition(0, 0), new TextSpan(0, 0), false, "ent");
+			SymbolQueryResult completionResult = facade.QueryCompletion(replaceResult?.Snapshot, completionRequest);
+			Assert(completionResult != null && completionResult.Succeeded, "DBMID-10F: completion query succeeds on rebuilt index");
+		}
+
+		// ================================================================
+		// DBMID-11: Index maintainer builds include/dependent graph
+		// ================================================================
+		{
+			var maintainer = new InMemoryIndexMaintainer();
+			var sourceDocument = new PathKey("file:///tests/include-a.ffs");
+			var targetDocument = new PathKey("file:///tests/include-b.ffs");
+
+			var includePayload = new JsonObject();
+			includePayload.Set("includeUri", targetDocument.Value);
+
+			var includeFact = new DataFact(
+				new DataFactId("include-edge"),
+				new DataAggregateId("agg-include-a"),
+				DataFactKind.IncludeEdge,
+				sourceDocument,
+				new TextSpan(0, 0),
+				snapshotVersion: 5,
+				payload: includePayload);
+
+			var sourceAggregate = new DataAggregate(
+				new DataAggregateId("agg-include-a"),
+				DataAggregateKind.Document,
+				sourceDocument,
+				"ffscript",
+				string.Empty,
+				1,
+				new List<DataFact> { includeFact });
+
+			var snapshot = new CodeDatabaseSnapshot(
+				version: 5,
+				capturedAtUtc: DateTime.UtcNow,
+				aggregates: new List<DataAggregate> { sourceAggregate },
+				facts: new List<DataFact> { includeFact },
+				indexSnapshot: null);
+
+			IIndexSnapshot indexSnapshot = maintainer.Rebuild(snapshot);
+			Assert(indexSnapshot != null && indexSnapshot.SnapshotVersion == 5, "DBMID-11A: index snapshot rebuilt at source version");
+
+			IReadOnlyList<PathKey> includes = indexSnapshot != null
+				? indexSnapshot.IncludeGraphIndex.GetIncludes(sourceDocument)
+				: new List<PathKey>(0);
+
+			IReadOnlyList<PathKey> dependents = indexSnapshot != null
+				? indexSnapshot.IncludeGraphIndex.GetDependents(targetDocument)
+				: new List<PathKey>(0);
+
+			Assert(includes.Count == 1 && includes[0].Value == targetDocument.Value, "DBMID-11B: include graph contains target document");
+			Assert(dependents.Count == 1 && dependents[0].Value == sourceDocument.Value, "DBMID-11C: dependent graph contains source document");
+		}
+
 		Debug.Log($"[LspDatabaseTests] Completed. Passed={passed}, Failed={failed}");
 	}
 
@@ -414,6 +538,48 @@ public static class LspDatabaseTests
 		textDocument.Set("uri", uri);
 		textDocument.Set("version", version);
 		payload.Set("textDocument", textDocument);
+		return payload;
+	}
+
+	private static JsonObject CreateSymbolFactPayload(
+		string origin,
+		string kind,
+		string name,
+		int rangeStartLine,
+		int rangeStartCharacter,
+		int rangeEndLine,
+		int rangeEndCharacter,
+		int declarationStart,
+		int declarationLength)
+	{
+		var payload = new JsonObject();
+
+		var symbol = new JsonObject();
+		symbol.Set("kind", kind);
+		symbol.Set("name", name);
+		symbol.Set("scope", string.Empty);
+		symbol.Set("parentName", string.Empty);
+		symbol.Set("origin", origin);
+
+		var declaration = new JsonObject();
+		declaration.Set("start", declarationStart);
+		declaration.Set("length", declarationLength);
+		symbol.Set("declarationSpan", declaration);
+		payload.Set("symbol", symbol);
+
+		var range = new JsonObject();
+		var start = new JsonObject();
+		start.Set("line", rangeStartLine);
+		start.Set("character", rangeStartCharacter);
+
+		var end = new JsonObject();
+		end.Set("line", rangeEndLine);
+		end.Set("character", rangeEndCharacter);
+
+		range.Set("start", start);
+		range.Set("end", end);
+		payload.Set("range", range);
+
 		return payload;
 	}
 }

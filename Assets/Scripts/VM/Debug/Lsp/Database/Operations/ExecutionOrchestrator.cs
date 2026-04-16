@@ -69,6 +69,7 @@ namespace FFVM.Debug.Lsp.Database
 	{
 		public DatabaseOperationRequest Request { get; }
 		public CodeDatabaseSnapshot CurrentSnapshot { get; }
+		public IIndexMaintainer IndexMaintainer { get; }
 		public IDatabaseTaskPlanner TaskPlanner { get; }
 		public IDatabaseTaskCenter TaskCenter { get; }
 		public IDatabaseOperationCoalescer OperationCoalescer { get; }
@@ -83,6 +84,7 @@ namespace FFVM.Debug.Lsp.Database
 		public DatabaseExecutionInput(
 			DatabaseOperationRequest request,
 			CodeDatabaseSnapshot currentSnapshot,
+			IIndexMaintainer indexMaintainer,
 			IDatabaseTaskPlanner taskPlanner,
 			IDatabaseTaskCenter taskCenter,
 			IDatabaseOperationCoalescer operationCoalescer,
@@ -96,6 +98,7 @@ namespace FFVM.Debug.Lsp.Database
 		{
 			Request = request;
 			CurrentSnapshot = currentSnapshot;
+			IndexMaintainer = indexMaintainer;
 			TaskPlanner = taskPlanner;
 			TaskCenter = taskCenter;
 			OperationCoalescer = operationCoalescer;

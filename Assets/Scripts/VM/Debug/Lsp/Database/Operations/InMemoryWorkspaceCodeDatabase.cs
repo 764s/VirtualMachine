@@ -29,6 +29,7 @@ namespace FFVM.Debug.Lsp.Database
 	public sealed class InMemoryWorkspaceCodeDatabase : IWorkspaceCodeDatabase
 	{
 		private readonly IDatabaseExecutionOrchestrator _orchestrator;
+		private readonly IIndexMaintainer _indexMaintainer;
 		private readonly IDatabaseTaskPlanner _taskPlanner;
 		private readonly IDatabaseTaskCenter _taskCenter;
 		private readonly IDatabaseOperationCoalescer _operationCoalescer;
@@ -45,6 +46,7 @@ namespace FFVM.Debug.Lsp.Database
 
 		public InMemoryWorkspaceCodeDatabase(
 			IDatabaseExecutionOrchestrator orchestrator,
+			IIndexMaintainer indexMaintainer = null,
 			IDatabaseTaskPlanner taskPlanner = null,
 			IDatabaseTaskCenter taskCenter = null,
 			IDatabaseOperationCoalescer operationCoalescer = null,
@@ -56,6 +58,7 @@ namespace FFVM.Debug.Lsp.Database
 			IDatabaseSnapshotCommitter snapshotCommitter = null)
 		{
 			_orchestrator = orchestrator ?? throw new ArgumentNullException(nameof(orchestrator));
+			_indexMaintainer = indexMaintainer ?? new InMemoryIndexMaintainer();
 			_taskPlanner = taskPlanner ?? new PassThroughDatabaseTaskPlanner();
 			_taskCenter = taskCenter ?? new InMemoryDatabaseTaskCenter();
 			_operationCoalescer = operationCoalescer ?? new DefaultDatabaseOperationCoalescer();
@@ -91,6 +94,7 @@ namespace FFVM.Debug.Lsp.Database
 			var input = new DatabaseExecutionInput(
 				request,
 				_currentSnapshot,
+				_indexMaintainer,
 				_taskPlanner,
 				_taskCenter,
 				_operationCoalescer,
