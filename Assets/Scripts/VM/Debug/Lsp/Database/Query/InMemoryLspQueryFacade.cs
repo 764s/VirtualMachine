@@ -46,14 +46,14 @@ namespace FFVM.Debug.Lsp.Database
 			if (index.SymbolIndex != null && index.SymbolIndex.TryGetDefinition(symbol, out DataFact definitionFact) && definitionFact != null)
 			{
 				var ranges = new List<TextSpan> { definitionFact.Span };
-				var payload = new LspDefinitionPayload(definitionFact.DocumentKey.Value, definitionFact.Span, definitionFact.Payload);
+				var payload = new LspDefinitionPayload(NormalizeDocumentKey(definitionFact.DocumentKey.Value), definitionFact.Span, definitionFact.Payload);
 				return SymbolQueryResult.Success(symbol, ranges, SymbolQueryPayload.ForDefinition(payload));
 			}
 
 			if (symbol.DeclarationSpan.Length > 0)
 			{
 				var ranges = new List<TextSpan> { symbol.DeclarationSpan };
-				var payload = new LspDefinitionPayload(symbol.Origin, symbol.DeclarationSpan, null);
+				var payload = new LspDefinitionPayload(NormalizeDocumentKey(symbol.Origin), symbol.DeclarationSpan, null);
 				return SymbolQueryResult.Success(symbol, ranges, SymbolQueryPayload.ForDefinition(payload));
 			}
 
@@ -81,7 +81,7 @@ namespace FFVM.Debug.Lsp.Database
 			{
 				DataFact fact = references[i];
 				ranges.Add(fact.Span);
-				payload.Add(new LspReferenceItem(fact.DocumentKey.Value, fact.Span, fact.Payload));
+				payload.Add(new LspReferenceItem(NormalizeDocumentKey(fact.DocumentKey.Value), fact.Span, fact.Payload));
 			}
 
 			return SymbolQueryResult.Success(symbol, ranges, SymbolQueryPayload.ForReferences(payload));
@@ -254,6 +254,14 @@ namespace FFVM.Debug.Lsp.Database
 					"DocumentKey is required for semanticTokens/full query.");
 			}
 
+			string normalizedDocumentKey = NormalizeDocumentKey(request.DocumentKey);
+			if (string.IsNullOrWhiteSpace(normalizedDocumentKey))
+			{
+				return new LspSemanticTokensPayload(
+					new List<int>(0),
+					"DocumentKey is required for semanticTokens/full query.");
+			}
+
 			if (snapshot == null)
 			{
 				return new LspSemanticTokensPayload(
@@ -261,7 +269,7 @@ namespace FFVM.Debug.Lsp.Database
 					"Snapshot is required for semanticTokens/full query.");
 			}
 
-			List<SemanticTokenAbsolute> absoluteTokens = CollectSemanticTokens(snapshot, request.DocumentKey);
+			List<SemanticTokenAbsolute> absoluteTokens = CollectSemanticTokens(snapshot, normalizedDocumentKey);
 			if (absoluteTokens.Count == 0)
 			{
 				return new LspSemanticTokensPayload(
@@ -359,7 +367,14 @@ namespace FFVM.Debug.Lsp.Database
 				return false;
 			}
 
-			if (!index.PositionIndex.TryResolveSymbol(new PathKey(request.DocumentKey), request.Position, out symbol) || symbol == null)
+			string normalizedDocumentKey = NormalizeDocumentKey(request.DocumentKey);
+			if (string.IsNullOrWhiteSpace(normalizedDocumentKey))
+			{
+				error = SymbolQueryResult.Failure("DocumentKey is required for symbol resolution.");
+				return false;
+			}
+
+			if (!index.PositionIndex.TryResolveSymbol(new PathKey(normalizedDocumentKey), request.Position, out symbol) || symbol == null)
 			{
 				error = SymbolQueryResult.NotFound("No symbol resolved at requested position.");
 				return false;
@@ -415,7 +430,7 @@ namespace FFVM.Debug.Lsp.Database
 					continue;
 				}
 
-				if (!string.Equals(fact.DocumentKey.Value, documentKey, StringComparison.OrdinalIgnoreCase))
+				if (!string.Equals(NormalizeDocumentKey(fact.DocumentKey.Value), documentKey, StringComparison.OrdinalIgnoreCase))
 					continue;
 
 				if (!TryParseTokenFact(fact, out SemanticTokenAbsolute token))
@@ -565,6 +580,11 @@ namespace FFVM.Debug.Lsp.Database
 				return byType;
 
 			return left.TokenModifiers.CompareTo(right.TokenModifiers);
+		}
+
+		private static string NormalizeDocumentKey(string value)
+		{
+			return DocumentKeyNormalizer.Normalize(value);
 		}
 
 		private sealed class SemanticTokenAbsolute

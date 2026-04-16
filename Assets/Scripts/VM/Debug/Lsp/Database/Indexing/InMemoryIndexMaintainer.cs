@@ -395,6 +395,9 @@ namespace FFVM.Debug.Lsp.Database
 			string origin = string.IsNullOrWhiteSpace(symbol.Origin)
 				? fact.DocumentKey.Value
 				: symbol.Origin;
+			origin = NormalizeDocumentKey(origin);
+			if (string.IsNullOrWhiteSpace(origin))
+				origin = symbol.Origin ?? string.Empty;
 
 			TextSpan declaration = symbol.DeclarationSpan.Length > 0
 				? symbol.DeclarationSpan
@@ -428,7 +431,7 @@ namespace FFVM.Debug.Lsp.Database
 
 		private static string NormalizeDocumentKey(string value)
 		{
-			return string.IsNullOrWhiteSpace(value) ? string.Empty : value.Trim();
+			return DocumentKeyNormalizer.Normalize(value);
 		}
 
 		private static string BuildSymbolKey(SymbolIdentity symbol)

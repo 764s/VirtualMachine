@@ -790,6 +790,113 @@ public static class LspDatabaseTests
 			Assert(dependentsAIncremental == dependentsARebuilt && dependentsAIncremental == documentC.Value, "DBMID-13I: dependents graph is consistent");
 		}
 
+		// ================================================================
+		// DBMID-14: DocumentKey normalization collapses URI/path aliases
+		// ================================================================
+		{
+			var orchestrator = new InMemoryDatabaseExecutionOrchestrator();
+			var database = new InMemoryWorkspaceCodeDatabase(orchestrator);
+
+			string canonicalUri = "file:///tests/key%20norm.ffs";
+			string uriAlias = "  FILE:///tests/key%20norm.ffs  ";
+			string pathAlias = "/tests/key norm.ffs";
+
+			DatabaseOperationResult openResult = database.Execute(CreateApplyChangesRequest(
+				streamKey: "stream://doc/key-normalize",
+				priority: DatabaseOperationPriority.Normal,
+				expectedVersion: null,
+				createdAtUtc: DateTime.UtcNow,
+				changes: new[]
+				{
+					new DatabaseChangeEvent(
+						DatabaseChangeKind.DocumentOpened,
+						new PathKey(uriAlias),
+						1,
+						CreateDidOpenPayload(uriAlias, "ffscript", 1, "func entry() { wait 1 }")),
+				}));
+
+			DatabaseOperationResult changeResult = database.Execute(CreateApplyChangesRequest(
+				streamKey: "stream://doc/key-normalize",
+				priority: DatabaseOperationPriority.Normal,
+				expectedVersion: null,
+				createdAtUtc: DateTime.UtcNow,
+				changes: new[]
+				{
+					new DatabaseChangeEvent(
+						DatabaseChangeKind.DocumentChanged,
+						new PathKey(pathAlias),
+						2,
+						CreateDidChangePayload(pathAlias, 2, "func entry() { wait 2 }")),
+				}));
+
+			DataAggregate normalizedAggregate = changeResult?.Snapshot != null && changeResult.Snapshot.Aggregates.Count > 0
+				? changeResult.Snapshot.Aggregates[0]
+				: null;
+
+			Assert(openResult != null && openResult.Succeeded, "DBMID-14A: didOpen with URI alias succeeded");
+			Assert(changeResult != null && changeResult.Succeeded, "DBMID-14B: didChange with path alias succeeded");
+			Assert(changeResult?.Snapshot != null && changeResult.Snapshot.Aggregates.Count == 1, "DBMID-14C: aliases collapsed to one aggregate");
+			Assert(normalizedAggregate != null && normalizedAggregate.DocumentKey.Value == canonicalUri, "DBMID-14D: aggregate key normalized to canonical file URI");
+			Assert(normalizedAggregate != null && normalizedAggregate.SourceVersion == 2, "DBMID-14E: latest alias update applied on canonical aggregate");
+		}
+
+		// ================================================================
+		// DBMID-15: Query resolves symbols with normalized DocumentKey
+		// ================================================================
+		{
+			var maintainer = new InMemoryIndexMaintainer();
+			var facade = new InMemoryLspQueryFacade();
+
+			string canonicalUri = "file:///tests/query%20norm.ffs";
+			string pathAlias = "/tests/query norm.ffs";
+			string uriAlias = " FILE:///tests/query%20norm.ffs ";
+
+			var definitionFact = new DataFact(
+				new DataFactId("norm-def"),
+				new DataAggregateId("agg-norm"),
+				DataFactKind.SymbolDefinition,
+				new PathKey(pathAlias),
+				new TextSpan(0, 5),
+				snapshotVersion: 1,
+				payload: CreateSymbolFactPayload(pathAlias, "Function", "entry", 0, 0, 0, 5, 0, 5));
+
+			var aggregate = new DataAggregate(
+				new DataAggregateId("agg-norm"),
+				DataAggregateKind.Document,
+				new PathKey(pathAlias),
+				"ffscript",
+				"HASH-NORM",
+				1,
+				new List<DataFact> { definitionFact });
+
+			var snapshot = new CodeDatabaseSnapshot(
+				version: 1,
+				capturedAtUtc: DateTime.UtcNow,
+				aggregates: new List<DataAggregate> { aggregate },
+				facts: new List<DataFact> { definitionFact },
+				indexSnapshot: null);
+
+			IIndexSnapshot index = maintainer.Rebuild(snapshot);
+			var indexedSnapshot = new CodeDatabaseSnapshot(
+				snapshot.Version,
+				snapshot.CapturedAtUtc,
+				snapshot.Aggregates,
+				snapshot.Facts,
+				index);
+
+			SymbolQueryResult result = facade.QueryDefinition(
+				indexedSnapshot,
+				SymbolQueryRequest.ForPosition("definition", uriAlias, new TextPosition(0, 1)));
+
+			LspDefinitionPayload payload = result?.Payload != null
+				? result.Payload.Definition
+				: null;
+
+			Assert(result != null && result.Succeeded, "DBMID-15A: definition query resolves with URI alias document key");
+			Assert(payload != null && payload.DocumentKey == canonicalUri, "DBMID-15B: definition payload document key normalized to canonical URI");
+			Assert(result != null && result.Symbol != null && result.Symbol.Origin == canonicalUri, "DBMID-15C: resolved symbol origin normalized to canonical URI");
+		}
+
 		Debug.Log($"[LspDatabaseTests] Completed. Passed={passed}, Failed={failed}");
 	}
 

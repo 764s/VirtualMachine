@@ -21,6 +21,7 @@
 using System;
 using System.Collections.Generic;
 using FFVM.Debug;
+using DocumentKeyNormalizer = FFVM.Debug.Lsp.Database.Paths.DocumentKeyNormalizer;
 using PathKey = FFVM.Debug.Lsp.Database.Paths.PathKey;
 
 namespace FFVM.Debug.Lsp.Database
@@ -1368,7 +1369,7 @@ namespace FFVM.Debug.Lsp.Database
 
 		private static string NormalizeDocumentKey(string value)
 		{
-			return string.IsNullOrWhiteSpace(value) ? string.Empty : value.Trim();
+			return DocumentKeyNormalizer.Normalize(value);
 		}
 
 		private static string ComputeStableTextHash(string text)

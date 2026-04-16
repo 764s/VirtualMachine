@@ -87,7 +87,9 @@ namespace FFVM.Debug.Lsp.Integration.VsCode
 				if (!(rawChanges[i] is JsonObject item))
 					continue;
 
-				string uri = item.GetString("uri") ?? string.Empty;
+				string uri = DocumentKeyNormalizer.Normalize(item.GetString("uri"));
+				if (string.IsNullOrWhiteSpace(uri))
+					continue;
 				WatchedFileChangeType changeType = ParseWatchedFileChangeType(item.Get("type"));
 				changes.Add(new DatabaseChangeEvent(
 					DatabaseChangeKind.WatchedFilesChanged,
@@ -320,13 +322,12 @@ namespace FFVM.Debug.Lsp.Integration.VsCode
 			JsonObject textDocument = payload.GetObject("textDocument");
 			if (textDocument != null)
 			{
-				string uri = textDocument.GetString("uri");
+				string uri = DocumentKeyNormalizer.Normalize(textDocument.GetString("uri"));
 				if (!string.IsNullOrWhiteSpace(uri))
 					return uri;
 			}
 
-			string fallback = payload.GetString("uri");
-			return fallback ?? string.Empty;
+			return DocumentKeyNormalizer.Normalize(payload.GetString("uri"));
 		}
 
 		private static int? ExtractVersion(JsonObject payload)
@@ -415,8 +416,8 @@ namespace FFVM.Debug.Lsp.Integration.VsCode
 			if (payload == null)
 				return false;
 
-			oldUri = payload.GetString("oldUri") ?? payload.GetString("oldPath") ?? string.Empty;
-			newUri = payload.GetString("newUri") ?? payload.GetString("newPath") ?? string.Empty;
+			oldUri = DocumentKeyNormalizer.Normalize(payload.GetString("oldUri") ?? payload.GetString("oldPath"));
+			newUri = DocumentKeyNormalizer.Normalize(payload.GetString("newUri") ?? payload.GetString("newPath"));
 			return !string.IsNullOrWhiteSpace(oldUri) && !string.IsNullOrWhiteSpace(newUri);
 		}
 
