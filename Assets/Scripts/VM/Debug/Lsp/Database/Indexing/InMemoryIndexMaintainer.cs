@@ -365,25 +365,10 @@ namespace FFVM.Debug.Lsp.Database
 		private static bool TryResolveIncludeTarget(DataFact fact, out PathKey includeTarget)
 		{
 			includeTarget = new PathKey(string.Empty);
-			if (fact == null)
+			if (fact == null || !(fact.Payload is IncludeEdgeDataFactPayload payload))
 				return false;
 
-			string targetValue = string.Empty;
-			if (fact.Payload is string payloadString)
-			{
-				targetValue = payloadString;
-			}
-			else if (fact.Payload is JsonObject payload)
-			{
-				targetValue = ReadString(payload, "includeUri");
-				if (string.IsNullOrWhiteSpace(targetValue)) targetValue = ReadString(payload, "targetUri");
-				if (string.IsNullOrWhiteSpace(targetValue)) targetValue = ReadString(payload, "toUri");
-				if (string.IsNullOrWhiteSpace(targetValue)) targetValue = ReadString(payload, "target");
-				if (string.IsNullOrWhiteSpace(targetValue)) targetValue = ReadString(payload, "include");
-				if (string.IsNullOrWhiteSpace(targetValue)) targetValue = ReadString(payload, "path");
-				if (string.IsNullOrWhiteSpace(targetValue)) targetValue = ReadString(payload, "to");
-			}
-
+			string targetValue = payload.TargetDocumentUri;
 			targetValue = NormalizeDocumentKey(targetValue);
 			if (string.IsNullOrWhiteSpace(targetValue))
 				return false;
@@ -395,32 +380,11 @@ namespace FFVM.Debug.Lsp.Database
 		private static bool TryResolveSymbolFromFact(DataFact fact, out SymbolIdentity symbol)
 		{
 			symbol = null;
-			if (fact == null)
+			if (fact == null || !(fact.Payload is SymbolDataFactPayload payload) || payload.Symbol == null)
 				return false;
 
-			if (fact.Payload is SymbolIdentity directSymbol)
-			{
-				symbol = EnsureSymbolDefaults(directSymbol, fact);
-				return true;
-			}
-
-			if (!(fact.Payload is JsonObject payload))
-				return false;
-
-			if (TryResolveSymbolFromJson(payload, fact, out SymbolIdentity payloadSymbol))
-			{
-				symbol = EnsureSymbolDefaults(payloadSymbol, fact);
-				return true;
-			}
-
-			JsonObject nestedSymbol = payload.GetObject("symbol");
-			if (nestedSymbol != null && TryResolveSymbolFromJson(nestedSymbol, fact, out SymbolIdentity nested))
-			{
-				symbol = EnsureSymbolDefaults(nested, fact);
-				return true;
-			}
-
-			return false;
+			symbol = EnsureSymbolDefaults(payload.Symbol, fact);
+			return true;
 		}
 
 		private static SymbolIdentity EnsureSymbolDefaults(SymbolIdentity symbol, DataFact fact)
@@ -445,222 +409,21 @@ namespace FFVM.Debug.Lsp.Database
 				declaration);
 		}
 
-		private static bool TryResolveSymbolFromJson(JsonObject payload, DataFact fact, out SymbolIdentity symbol)
-		{
-			symbol = null;
-			if (payload == null)
-				return false;
-
-			string name = ReadString(payload, "name");
-			if (string.IsNullOrWhiteSpace(name))
-				name = ReadString(payload, "symbolName");
-			if (string.IsNullOrWhiteSpace(name))
-				name = ReadString(payload, "identifier");
-			if (string.IsNullOrWhiteSpace(name))
-				return false;
-
-			SymbolKindTag kind = SymbolKindTag.Unknown;
-			if (payload.ContainsKey("kind"))
-				TryResolveKind(payload.Get("kind"), out kind);
-
-			string scope = ReadString(payload, "scope");
-			string parentName = ReadString(payload, "parentName");
-			if (string.IsNullOrWhiteSpace(parentName))
-				parentName = ReadString(payload, "parent");
-
-			string origin = ReadString(payload, "origin");
-			if (string.IsNullOrWhiteSpace(origin))
-				origin = fact.DocumentKey.Value;
-
-			TextSpan declarationSpan = fact.Span;
-			JsonObject declaration = payload.GetObject("declarationSpan");
-			if (declaration != null)
-			{
-				if (TryGetInt(declaration, "start", out int start)
-					&& TryGetInt(declaration, "length", out int length)
-					&& length >= 0)
-				{
-					declarationSpan = new TextSpan(start, length);
-				}
-			}
-			else if (TryGetInt(payload, "declarationStart", out int declarationStart)
-				&& TryGetInt(payload, "declarationLength", out int declarationLength)
-				&& declarationLength >= 0)
-			{
-				declarationSpan = new TextSpan(declarationStart, declarationLength);
-			}
-
-			symbol = new SymbolIdentity(kind, name, scope, parentName, origin, declarationSpan);
-			return true;
-		}
-
-		private static bool TryResolveKind(object rawKind, out SymbolKindTag kind)
-		{
-			kind = SymbolKindTag.Unknown;
-			if (rawKind == null)
-				return false;
-
-			if (rawKind is string kindString)
-			{
-				if (Enum.TryParse(kindString, true, out SymbolKindTag parsed))
-				{
-					kind = parsed;
-					return true;
-				}
-
-				return false;
-			}
-
-			if (TryConvertInt(rawKind, out int kindValue)
-				&& Enum.IsDefined(typeof(SymbolKindTag), kindValue))
-			{
-				kind = (SymbolKindTag)kindValue;
-				return true;
-			}
-
-			return false;
-		}
-
 		private static bool TryResolvePositionRange(DataFact fact, out PositionRange range)
 		{
 			range = PositionRange.Empty;
-			if (fact == null)
+			if (fact == null || !(fact.Payload is SymbolDataFactPayload payload))
 				return false;
 
-			if (!(fact.Payload is JsonObject payload))
+			if (!payload.HasRange)
 				return false;
 
-			if (TryResolvePositionRangeFromJson(payload, out range))
-				return true;
-
-			JsonObject nestedSymbol = payload.GetObject("symbol");
-			if (nestedSymbol != null && TryResolvePositionRangeFromJson(nestedSymbol, out range))
-				return true;
-
-			return false;
-		}
-
-		private static bool TryResolvePositionRangeFromJson(JsonObject payload, out PositionRange range)
-		{
-			range = PositionRange.Empty;
-			if (payload == null)
-				return false;
-
-			JsonObject rangeObject = payload.GetObject("range");
-			if (rangeObject != null && TryParseRangeObject(rangeObject, out range))
-				return true;
-
-			JsonObject location = payload.GetObject("location");
-			if (location != null)
-			{
-				JsonObject locationRange = location.GetObject("range");
-				if (locationRange != null && TryParseRangeObject(locationRange, out range))
-					return true;
-			}
-
-			if (TryGetInt(payload, "line", out int line))
-			{
-				int startCharacter;
-				if (!TryGetInt(payload, "character", out startCharacter)
-					&& !TryGetInt(payload, "start", out startCharacter))
-				{
-					startCharacter = 0;
-				}
-
-				if (TryGetInt(payload, "length", out int length) && length > 0)
-				{
-					range = PositionRange.Create(line, startCharacter, line, startCharacter + length);
-					return true;
-				}
-			}
-
-			if (TryGetInt(payload, "startLine", out int startLine)
-				&& TryGetInt(payload, "startCharacter", out int startChar)
-				&& TryGetInt(payload, "endLine", out int endLine)
-				&& TryGetInt(payload, "endCharacter", out int endChar))
-			{
-				range = PositionRange.Create(startLine, startChar, endLine, endChar);
-				return true;
-			}
-
-			return false;
-		}
-
-		private static bool TryParseRangeObject(JsonObject rangeObject, out PositionRange range)
-		{
-			range = PositionRange.Empty;
-			if (rangeObject == null)
-				return false;
-
-			JsonObject start = rangeObject.GetObject("start");
-			JsonObject end = rangeObject.GetObject("end");
-			if (start == null || end == null)
-				return false;
-
-			if (!TryGetInt(start, "line", out int startLine)
-				|| !TryGetInt(start, "character", out int startCharacter)
-				|| !TryGetInt(end, "line", out int endLine)
-				|| !TryGetInt(end, "character", out int endCharacter))
-			{
-				return false;
-			}
-
-			range = PositionRange.Create(startLine, startCharacter, endLine, endCharacter);
+			range = PositionRange.Create(
+				payload.StartLine,
+				payload.StartCharacter,
+				payload.EndLine,
+				payload.EndCharacter);
 			return true;
-		}
-
-		private static bool TryGetInt(JsonObject payload, string key, out int value)
-		{
-			value = 0;
-			if (payload == null || string.IsNullOrWhiteSpace(key) || !payload.ContainsKey(key))
-				return false;
-
-			return TryConvertInt(payload.Get(key), out value);
-		}
-
-		private static bool TryConvertInt(object raw, out int value)
-		{
-			value = 0;
-			if (raw == null)
-				return false;
-
-			if (raw is int intValue)
-			{
-				value = intValue;
-				return true;
-			}
-
-			if (raw is long longValue && longValue >= int.MinValue && longValue <= int.MaxValue)
-			{
-				value = (int)longValue;
-				return true;
-			}
-
-			if (raw is double doubleValue)
-			{
-				value = (int)doubleValue;
-				return true;
-			}
-
-			if (raw is float floatValue)
-			{
-				value = (int)floatValue;
-				return true;
-			}
-
-			if (raw is string stringValue)
-				return int.TryParse(stringValue, out value);
-
-			return false;
-		}
-
-		private static string ReadString(JsonObject payload, string key)
-		{
-			if (payload == null || string.IsNullOrWhiteSpace(key) || !payload.ContainsKey(key))
-				return string.Empty;
-
-			string value = payload.GetString(key);
-			return value ?? string.Empty;
 		}
 
 		private static string NormalizeDocumentKey(string value)

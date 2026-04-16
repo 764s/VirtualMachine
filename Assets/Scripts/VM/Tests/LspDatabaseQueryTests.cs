@@ -219,30 +219,14 @@ public static class LspDatabaseQueryTests
 			var doc = new PathKey("file:///query/semantic.ffs");
 			var otherDoc = new PathKey("file:///query/other.ffs");
 
-			var jsonToken = new JsonObject();
-			jsonToken.Set("line", 2);
-			jsonToken.Set("character", 4);
-			jsonToken.Set("length", 3);
-			jsonToken.Set("tokenType", "function");
-			jsonToken.Set("tokenModifiers", 1);
-
-			var mapToken = new Dictionary<string, object>(StringComparer.Ordinal)
-			{
-				["line"] = 1,
-				["start"] = 1,
-				["length"] = 2,
-				["kind"] = "Variable",
-				["tokenModifiers"] = 0,
-			};
-
 			var facts = new List<DataFact>
 			{
-				new DataFact(new DataFactId("tok-json"), new DataAggregateId("agg-sem"), DataFactKind.Token, doc, new TextSpan(0, 0), 1, jsonToken),
-				new DataFact(new DataFactId("tok-map"), new DataAggregateId("agg-sem"), DataFactKind.Token, doc, new TextSpan(0, 0), 1, mapToken),
-				new DataFact(new DataFactId("tok-array"), new DataAggregateId("agg-sem"), DataFactKind.Token, doc, new TextSpan(0, 0), 1, new[] { 2, 10, 5, 15, 0 }),
-				new DataFact(new DataFactId("tok-dup"), new DataAggregateId("agg-sem"), DataFactKind.Token, doc, new TextSpan(0, 0), 1, new[] { 2, 10, 5, 15, 0 }),
-				new DataFact(new DataFactId("tok-invalid"), new DataAggregateId("agg-sem"), DataFactKind.Token, doc, new TextSpan(0, 0), 1, new[] { -1, 10, 5, 15, 0 }),
-				new DataFact(new DataFactId("tok-other-doc"), new DataAggregateId("agg-sem"), DataFactKind.Token, otherDoc, new TextSpan(0, 0), 1, new[] { 0, 0, 3, 8, 0 }),
+				new DataFact(new DataFactId("tok-func"), new DataAggregateId("agg-sem"), DataFactKind.Token, doc, new TextSpan(0, 0), 1, new TokenDataFactPayload(2, 4, 3, 12, 1)),
+				new DataFact(new DataFactId("tok-var"), new DataAggregateId("agg-sem"), DataFactKind.Token, doc, new TextSpan(0, 0), 1, new TokenDataFactPayload(1, 1, 2, 8, 0)),
+				new DataFact(new DataFactId("tok-keyword"), new DataAggregateId("agg-sem"), DataFactKind.Token, doc, new TextSpan(0, 0), 1, new TokenDataFactPayload(2, 10, 5, 15, 0)),
+				new DataFact(new DataFactId("tok-dup"), new DataAggregateId("agg-sem"), DataFactKind.Token, doc, new TextSpan(0, 0), 1, new TokenDataFactPayload(2, 10, 5, 15, 0)),
+				new DataFact(new DataFactId("tok-invalid"), new DataAggregateId("agg-sem"), DataFactKind.Token, doc, new TextSpan(0, 0), 1, new TokenDataFactPayload(-1, 10, 5, 15, 0)),
+				new DataFact(new DataFactId("tok-other-doc"), new DataAggregateId("agg-sem"), DataFactKind.Token, otherDoc, new TextSpan(0, 0), 1, new TokenDataFactPayload(0, 0, 3, 8, 0)),
 			};
 
 			CodeDatabaseSnapshot snapshot = BuildSnapshot(indexSnapshot: null, facts: facts);

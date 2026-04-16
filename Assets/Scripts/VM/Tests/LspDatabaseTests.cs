@@ -358,8 +358,8 @@ public static class LspDatabaseTests
 			var document = new PathKey("file:///tests/indexed.ffs");
 			var aggregateId = new DataAggregateId("agg:indexed");
 
-			JsonObject definitionPayload = CreateSymbolFactPayload(document.Value, "Function", "entry", 0, 0, 0, 5, 0, 5);
-			JsonObject referencePayload = CreateSymbolFactPayload(document.Value, "Function", "entry", 1, 2, 1, 7, 0, 5);
+			SymbolDataFactPayload definitionPayload = CreateSymbolFactPayload(document.Value, "Function", "entry", 0, 0, 0, 5, 0, 5);
+			SymbolDataFactPayload referencePayload = CreateSymbolFactPayload(document.Value, "Function", "entry", 1, 2, 1, 7, 0, 5);
 
 			var definitionFact = new DataFact(
 				new DataFactId("indexed-def"),
@@ -428,8 +428,7 @@ public static class LspDatabaseTests
 			var sourceDocument = new PathKey("file:///tests/include-a.ffs");
 			var targetDocument = new PathKey("file:///tests/include-b.ffs");
 
-			var includePayload = new JsonObject();
-			includePayload.Set("includeUri", targetDocument.Value);
+			IncludeEdgeDataFactPayload includePayload = CreateIncludePayload(targetDocument.Value);
 
 			var includeFact = new DataFact(
 				new DataFactId("include-edge"),
@@ -824,7 +823,7 @@ public static class LspDatabaseTests
 		return new DocumentClosedChangePayload(uri);
 	}
 
-	private static JsonObject CreateSymbolFactPayload(
+	private static SymbolDataFactPayload CreateSymbolFactPayload(
 		string origin,
 		string kind,
 		string name,
@@ -835,42 +834,29 @@ public static class LspDatabaseTests
 		int declarationStart,
 		int declarationLength)
 	{
-		var payload = new JsonObject();
+		SymbolKindTag resolvedKind = SymbolKindTag.Unknown;
+		if (!string.IsNullOrWhiteSpace(kind))
+			Enum.TryParse(kind, true, out resolvedKind);
 
-		var symbol = new JsonObject();
-		symbol.Set("kind", kind);
-		symbol.Set("name", name);
-		symbol.Set("scope", string.Empty);
-		symbol.Set("parentName", string.Empty);
-		symbol.Set("origin", origin);
+		var symbol = new SymbolIdentity(
+			resolvedKind,
+			name,
+			string.Empty,
+			string.Empty,
+			origin,
+			new TextSpan(declarationStart, declarationLength));
 
-		var declaration = new JsonObject();
-		declaration.Set("start", declarationStart);
-		declaration.Set("length", declarationLength);
-		symbol.Set("declarationSpan", declaration);
-		payload.Set("symbol", symbol);
-
-		var range = new JsonObject();
-		var start = new JsonObject();
-		start.Set("line", rangeStartLine);
-		start.Set("character", rangeStartCharacter);
-
-		var end = new JsonObject();
-		end.Set("line", rangeEndLine);
-		end.Set("character", rangeEndCharacter);
-
-		range.Set("start", start);
-		range.Set("end", end);
-		payload.Set("range", range);
-
-		return payload;
+		return new SymbolDataFactPayload(
+			symbol,
+			rangeStartLine,
+			rangeStartCharacter,
+			rangeEndLine,
+			rangeEndCharacter);
 	}
 
-	private static JsonObject CreateIncludePayload(string includeUri)
+	private static IncludeEdgeDataFactPayload CreateIncludePayload(string includeUri)
 	{
-		var payload = new JsonObject();
-		payload.Set("includeUri", includeUri ?? string.Empty);
-		return payload;
+		return new IncludeEdgeDataFactPayload(includeUri);
 	}
 
 	private static bool AreQueryResultsEquivalent(SymbolQueryResult left, SymbolQueryResult right)

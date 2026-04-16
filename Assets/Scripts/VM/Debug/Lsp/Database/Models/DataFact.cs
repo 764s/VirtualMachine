@@ -66,6 +66,94 @@ namespace FFVM.Debug.Lsp.Database
 		Token
 	}
 
+	public abstract class DataFactPayload
+	{
+		private sealed class EmptyDataFactPayload : DataFactPayload
+		{
+		}
+
+		public static DataFactPayload Empty { get; } = new EmptyDataFactPayload();
+	}
+
+	public sealed class SymbolDataFactPayload : DataFactPayload
+	{
+		public SymbolIdentity Symbol { get; }
+		public bool HasRange { get; }
+		public int StartLine { get; }
+		public int StartCharacter { get; }
+		public int EndLine { get; }
+		public int EndCharacter { get; }
+
+		public SymbolDataFactPayload(SymbolIdentity symbol)
+		{
+			Symbol = symbol;
+			HasRange = false;
+			StartLine = 0;
+			StartCharacter = 0;
+			EndLine = 0;
+			EndCharacter = 0;
+		}
+
+		public SymbolDataFactPayload(
+			SymbolIdentity symbol,
+			int startLine,
+			int startCharacter,
+			int endLine,
+			int endCharacter)
+		{
+			Symbol = symbol;
+
+			if (startLine < 0)
+				startLine = 0;
+
+			if (startCharacter < 0)
+				startCharacter = 0;
+
+			if (endLine < startLine)
+				endLine = startLine;
+
+			if (endCharacter < 0)
+				endCharacter = 0;
+
+			if (endLine == startLine && endCharacter <= startCharacter)
+				endCharacter = startCharacter + 1;
+
+			StartLine = startLine;
+			StartCharacter = startCharacter;
+			EndLine = endLine;
+			EndCharacter = endCharacter;
+			HasRange = true;
+		}
+	}
+
+	public sealed class IncludeEdgeDataFactPayload : DataFactPayload
+	{
+		public string TargetDocumentUri { get; }
+
+		public IncludeEdgeDataFactPayload(string targetDocumentUri)
+		{
+			TargetDocumentUri = targetDocumentUri ?? string.Empty;
+		}
+	}
+
+	public sealed class TokenDataFactPayload : DataFactPayload
+	{
+		public int Line { get; }
+		public int Start { get; }
+		public int Length { get; }
+		public int TokenType { get; }
+		public int TokenModifiers { get; }
+
+		public TokenDataFactPayload(int line, int start, int length, int tokenType, int tokenModifiers)
+		{
+			Line = line;
+			Start = start;
+			Length = length;
+			TokenType = tokenType;
+			TokenModifiers = tokenModifiers;
+		}
+	}
+
 	public sealed class DataFact
 	{
 		public DataFactId Id { get; }
@@ -74,7 +162,7 @@ namespace FFVM.Debug.Lsp.Database
 		public PathKey DocumentKey { get; }
 		public TextSpan Span { get; }
 		public long SnapshotVersion { get; }
-		public object Payload { get; }
+		public DataFactPayload Payload { get; }
 
 		public DataFact(
 			DataFactId id,
@@ -83,7 +171,7 @@ namespace FFVM.Debug.Lsp.Database
 			PathKey documentKey,
 			TextSpan span,
 			long snapshotVersion,
-			object payload)
+			DataFactPayload payload)
 		{
 			Id = id;
 			AggregateId = aggregateId;
@@ -91,7 +179,7 @@ namespace FFVM.Debug.Lsp.Database
 			DocumentKey = documentKey;
 			Span = span;
 			SnapshotVersion = snapshotVersion;
-			Payload = payload;
+			Payload = payload ?? DataFactPayload.Empty;
 		}
 	}
 }
