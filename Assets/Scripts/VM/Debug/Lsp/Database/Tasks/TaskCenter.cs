@@ -43,26 +43,54 @@ namespace FFVM.Debug.Lsp.Database
 		SkippedSuperseded
 	}
 
+	public enum DatabaseTaskOutputKind
+	{
+		None = 0,
+		Snapshot
+	}
+
+	public sealed class DatabaseTaskOutput
+	{
+		private DatabaseTaskOutput(DatabaseTaskOutputKind kind, CodeDatabaseSnapshot snapshot)
+		{
+			Kind = kind;
+			Snapshot = snapshot;
+		}
+
+		public static DatabaseTaskOutput None { get; } = new DatabaseTaskOutput(DatabaseTaskOutputKind.None, null);
+
+		public DatabaseTaskOutputKind Kind { get; }
+		public CodeDatabaseSnapshot Snapshot { get; }
+
+		public static DatabaseTaskOutput FromSnapshot(CodeDatabaseSnapshot snapshot)
+		{
+			if (snapshot == null)
+				return None;
+
+			return new DatabaseTaskOutput(DatabaseTaskOutputKind.Snapshot, snapshot);
+		}
+	}
+
 	public sealed class DatabaseTaskExecutionResult
 	{
 		public string TaskId { get; }
 		public DatabaseTaskKind Kind { get; }
 		public DatabaseTaskExecutionStatus Status { get; }
 		public string Message { get; }
-		public object Output { get; }
+		public DatabaseTaskOutput Output { get; }
 
 		public DatabaseTaskExecutionResult(
 			string taskId,
 			DatabaseTaskKind kind,
 			DatabaseTaskExecutionStatus status,
 			string message,
-			object output)
+			DatabaseTaskOutput output)
 		{
 			TaskId = taskId ?? string.Empty;
 			Kind = kind;
 			Status = status;
 			Message = message ?? string.Empty;
-			Output = output;
+			Output = output ?? DatabaseTaskOutput.None;
 		}
 	}
 
@@ -74,7 +102,7 @@ namespace FFVM.Debug.Lsp.Database
 		public string CommandId { get; }
 		public string CorrelationId { get; }
 		public IReadOnlyList<DatabaseTaskExecutionResult> Results { get; }
-		public object Output { get; }
+		public DatabaseTaskOutput Output { get; }
 		public string Message { get; }
 
 		public DatabaseTaskExecutionReport(
@@ -82,14 +110,14 @@ namespace FFVM.Debug.Lsp.Database
 			string commandId,
 			string correlationId,
 			IReadOnlyList<DatabaseTaskExecutionResult> results,
-			object output,
+			DatabaseTaskOutput output,
 			string message)
 		{
 			Succeeded = succeeded;
 			CommandId = commandId ?? string.Empty;
 			CorrelationId = correlationId ?? string.Empty;
 			Results = results ?? EmptyResults;
-			Output = output;
+			Output = output ?? DatabaseTaskOutput.None;
 			Message = message ?? string.Empty;
 		}
 	}

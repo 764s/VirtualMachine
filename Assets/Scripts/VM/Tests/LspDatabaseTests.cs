@@ -920,7 +920,9 @@ public static class LspDatabaseTests
 		if (result == null)
 			return string.Empty;
 
-		IReadOnlyList<LspCompletionItem> items = result.Payload as IReadOnlyList<LspCompletionItem>;
+		IReadOnlyList<LspCompletionItem> items = result.Payload != null
+			? result.Payload.CompletionItems
+			: null;
 		if (items == null || items.Count == 0)
 			return string.Empty;
 
@@ -942,7 +944,9 @@ public static class LspDatabaseTests
 		if (result == null || string.IsNullOrWhiteSpace(expectedLabel))
 			return false;
 
-		IReadOnlyList<LspCompletionItem> items = result.Payload as IReadOnlyList<LspCompletionItem>;
+		IReadOnlyList<LspCompletionItem> items = result.Payload != null
+			? result.Payload.CompletionItems
+			: null;
 		if (items == null)
 			return false;
 

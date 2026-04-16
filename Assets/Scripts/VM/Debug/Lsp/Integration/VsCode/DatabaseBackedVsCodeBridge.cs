@@ -235,9 +235,43 @@ namespace FFVM.Debug.Lsp.Integration.VsCode
 				return null;
 
 			if (result.Succeeded)
-				return result.Payload;
+				return ProjectResultPayload(result.Payload);
 
 			return null;
+		}
+
+		private static object ProjectResultPayload(SymbolQueryPayload payload)
+		{
+			if (payload == null)
+				return null;
+
+			switch (payload.Kind)
+			{
+				case SymbolQueryPayloadKind.Definition:
+					return payload.Definition;
+
+				case SymbolQueryPayloadKind.References:
+					return payload.References;
+
+				case SymbolQueryPayloadKind.Hover:
+					return payload.Hover;
+
+				case SymbolQueryPayloadKind.Completion:
+					return payload.CompletionItems;
+
+				case SymbolQueryPayloadKind.SignatureHelp:
+					return payload.SignatureHelp;
+
+				case SymbolQueryPayloadKind.PrepareRename:
+					return payload.PrepareRename;
+
+				case SymbolQueryPayloadKind.Rename:
+					return payload.Rename;
+
+				case SymbolQueryPayloadKind.None:
+				default:
+					return null;
+			}
 		}
 
 		private bool TryReadSnapshot(out CodeDatabaseSnapshot snapshot)

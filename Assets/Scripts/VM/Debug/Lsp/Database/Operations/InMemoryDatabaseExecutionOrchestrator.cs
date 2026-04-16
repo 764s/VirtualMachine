@@ -125,7 +125,7 @@ namespace FFVM.Debug.Lsp.Database
 				stopReason = "ExpectedVersion does not match current snapshot version.";
 				failureState = DatabaseCommandState.Rejected;
 				AddTrace(trace, DatabaseExecutionStage.ValidateVersionGate, false, stopReason);
-				WriteDecision(input, decisions, effectiveRequest, DatabaseExecutionStage.ValidateVersionGate, DatabaseDecisionCategory.Lifecycle, DatabaseDecisionSeverity.Warning, "VERSION_GATE_MISMATCH", stopReason, new { effectiveRequest.ExpectedVersion, currentVersion = currentSnapshot.Version });
+				WriteDecision(input, decisions, effectiveRequest, DatabaseExecutionStage.ValidateVersionGate, DatabaseDecisionCategory.Lifecycle, DatabaseDecisionSeverity.Warning, "VERSION_GATE_MISMATCH", stopReason, DatabaseDecisionPayload.ForVersionGate(effectiveRequest.ExpectedVersion, currentSnapshot.Version));
 
 				TryTransition(
 					input,
@@ -210,7 +210,7 @@ namespace FFVM.Debug.Lsp.Database
 				else
 				{
 					AddTrace(trace, DatabaseExecutionStage.PlanTasks, true, "Task plan created.");
-					WriteDecision(input, decisions, effectiveRequest, DatabaseExecutionStage.PlanTasks, DatabaseDecisionCategory.Planning, DatabaseDecisionSeverity.Info, "PLAN_CREATED", "Task plan created.", new { plannedTaskPlan.PlanId });
+					WriteDecision(input, decisions, effectiveRequest, DatabaseExecutionStage.PlanTasks, DatabaseDecisionCategory.Planning, DatabaseDecisionSeverity.Info, "PLAN_CREATED", "Task plan created.", DatabaseDecisionPayload.ForPlanIdentity(plannedTaskPlan.PlanId));
 				}
 			}
 
@@ -261,7 +261,7 @@ namespace FFVM.Debug.Lsp.Database
 				else
 				{
 					AddTrace(trace, DatabaseExecutionStage.EnqueueTasks, true, "Task enqueue accepted.");
-					WriteDecision(input, decisions, effectiveRequest, DatabaseExecutionStage.EnqueueTasks, DatabaseDecisionCategory.Queueing, DatabaseDecisionSeverity.Info, "QUEUE_ACCEPTED", "Task enqueue accepted.", new { enqueueResult.Disposition, enqueueResult.QueueTicket });
+					WriteDecision(input, decisions, effectiveRequest, DatabaseExecutionStage.EnqueueTasks, DatabaseDecisionCategory.Queueing, DatabaseDecisionSeverity.Info, "QUEUE_ACCEPTED", "Task enqueue accepted.", DatabaseDecisionPayload.ForQueueAcceptance(enqueueResult.Disposition, enqueueResult.QueueTicket));
 				}
 			}
 
@@ -356,7 +356,7 @@ namespace FFVM.Debug.Lsp.Database
 			{
 				nextSnapshot = ComposeSnapshot(currentSnapshot, executionReport, effectiveRequest, input.IndexMaintainer);
 				AddTrace(trace, DatabaseExecutionStage.ComposeSnapshot, true, "ComposeSnapshot completed.");
-				WriteDecision(input, decisions, effectiveRequest, DatabaseExecutionStage.ComposeSnapshot, DatabaseDecisionCategory.Compose, DatabaseDecisionSeverity.Info, "COMPOSE_COMPLETED", "ComposeSnapshot completed.", new { nextSnapshotVersion = nextSnapshot != null ? nextSnapshot.Version : 0L });
+				WriteDecision(input, decisions, effectiveRequest, DatabaseExecutionStage.ComposeSnapshot, DatabaseDecisionCategory.Compose, DatabaseDecisionSeverity.Info, "COMPOSE_COMPLETED", "ComposeSnapshot completed.", DatabaseDecisionPayload.ForSnapshotVersion(nextSnapshot != null ? nextSnapshot.Version : 0L));
 
 				if (!TryTransition(
 					input,
@@ -514,7 +514,7 @@ namespace FFVM.Debug.Lsp.Database
 					currentState);
 
 			AddTrace(trace, DatabaseExecutionStage.BuildOperationResult, true, "Operation result created.");
-			WriteDecision(input, decisions, effectiveRequest, DatabaseExecutionStage.BuildOperationResult, DatabaseDecisionCategory.Result, canProceed ? DatabaseDecisionSeverity.Info : DatabaseDecisionSeverity.Error, canProceed ? "RESULT_SUCCESS" : "RESULT_FAILURE", "Operation result created.", new { finalState = currentState, canProceed });
+			WriteDecision(input, decisions, effectiveRequest, DatabaseExecutionStage.BuildOperationResult, DatabaseDecisionCategory.Result, canProceed ? DatabaseDecisionSeverity.Info : DatabaseDecisionSeverity.Error, canProceed ? "RESULT_SUCCESS" : "RESULT_FAILURE", "Operation result created.", DatabaseDecisionPayload.ForResultState(currentState, canProceed));
 
 			var lifecycleTrace = new DatabaseCommandLifecycleTrace(
 				effectiveRequest?.CommandId,
@@ -592,7 +592,7 @@ namespace FFVM.Debug.Lsp.Database
 			DatabaseDecisionSeverity severity,
 			string code,
 			string message,
-			object payload)
+			DatabaseDecisionPayload payload)
 		{
 			var entry = new DatabaseDecisionLogEntry(
 				request?.CommandId,
@@ -603,7 +603,7 @@ namespace FFVM.Debug.Lsp.Database
 				code,
 				message,
 				DateTime.UtcNow,
-				payload);
+				payload ?? DatabaseDecisionPayload.None);
 
 			decisions.Add(entry);
 			if (input != null && input.DecisionLogSink != null)
@@ -676,7 +676,7 @@ namespace FFVM.Debug.Lsp.Database
 							message = string.IsNullOrEmpty(resolverDecision.Message)
 								? "Incoming command rejected by conflict resolver."
 								: resolverDecision.Message;
-							WriteDecision(input, decisions, incoming, DatabaseExecutionStage.HighFrequencyAdmission, DatabaseDecisionCategory.Conflict, DatabaseDecisionSeverity.Warning, "CONFLICT_REJECT_INCOMING", message, resolverDecision);
+							WriteDecision(input, decisions, incoming, DatabaseExecutionStage.HighFrequencyAdmission, DatabaseDecisionCategory.Conflict, DatabaseDecisionSeverity.Warning, "CONFLICT_REJECT_INCOMING", message, DatabaseDecisionPayload.ForConflictDecision(resolverDecision));
 							return incoming;
 
 						case DatabaseConflictResolutionAction.CoalesceIntoIncoming:
@@ -684,7 +684,7 @@ namespace FFVM.Debug.Lsp.Database
 							message = string.IsNullOrEmpty(resolverDecision.Message)
 								? "Incoming command replaced by conflict-merged command."
 								: resolverDecision.Message;
-							WriteDecision(input, decisions, effective, DatabaseExecutionStage.HighFrequencyAdmission, DatabaseDecisionCategory.Conflict, DatabaseDecisionSeverity.Info, "CONFLICT_COALESCE", message, resolverDecision);
+							WriteDecision(input, decisions, effective, DatabaseExecutionStage.HighFrequencyAdmission, DatabaseDecisionCategory.Conflict, DatabaseDecisionSeverity.Info, "CONFLICT_COALESCE", message, DatabaseDecisionPayload.ForConflictDecision(resolverDecision));
 							break;
 
 						case DatabaseConflictResolutionAction.CancelExistingAndAllowIncoming:
@@ -697,7 +697,7 @@ namespace FFVM.Debug.Lsp.Database
 							message = string.IsNullOrEmpty(resolverDecision.Message)
 								? "Conflict resolver canceled existing and accepted incoming."
 								: resolverDecision.Message;
-							WriteDecision(input, decisions, effective, DatabaseExecutionStage.HighFrequencyAdmission, DatabaseDecisionCategory.Conflict, DatabaseDecisionSeverity.Info, "CONFLICT_CANCEL_EXISTING", message, resolverDecision);
+							WriteDecision(input, decisions, effective, DatabaseExecutionStage.HighFrequencyAdmission, DatabaseDecisionCategory.Conflict, DatabaseDecisionSeverity.Info, "CONFLICT_CANCEL_EXISTING", message, DatabaseDecisionPayload.ForConflictDecision(resolverDecision));
 							break;
 
 						case DatabaseConflictResolutionAction.AllowIncoming:
@@ -707,7 +707,7 @@ namespace FFVM.Debug.Lsp.Database
 							message = string.IsNullOrEmpty(resolverDecision.Message)
 								? "Conflict resolver allowed incoming command."
 								: resolverDecision.Message;
-							WriteDecision(input, decisions, effective, DatabaseExecutionStage.HighFrequencyAdmission, DatabaseDecisionCategory.Conflict, DatabaseDecisionSeverity.Info, "CONFLICT_ALLOW_INCOMING", message, resolverDecision);
+							WriteDecision(input, decisions, effective, DatabaseExecutionStage.HighFrequencyAdmission, DatabaseDecisionCategory.Conflict, DatabaseDecisionSeverity.Info, "CONFLICT_ALLOW_INCOMING", message, DatabaseDecisionPayload.ForConflictDecision(resolverDecision));
 							break;
 					}
 				}
@@ -777,7 +777,7 @@ namespace FFVM.Debug.Lsp.Database
 						if (synthetic != null)
 						{
 							conflicts.Add(synthetic);
-							WriteDecision(input, decisions, effective, DatabaseExecutionStage.HighFrequencyAdmission, DatabaseDecisionCategory.Conflict, DatabaseDecisionSeverity.Info, "CONFLICT_COALESCER_DECISION", synthetic.Message, synthetic);
+							WriteDecision(input, decisions, effective, DatabaseExecutionStage.HighFrequencyAdmission, DatabaseDecisionCategory.Conflict, DatabaseDecisionSeverity.Info, "CONFLICT_COALESCER_DECISION", synthetic.Message, DatabaseDecisionPayload.ForConflictDecision(synthetic));
 						}
 					}
 				}
@@ -791,7 +791,7 @@ namespace FFVM.Debug.Lsp.Database
 					"Superseded by incoming stream command.");
 
 				message = message + " Canceled superseded pending commands: " + canceledCount + ".";
-				WriteDecision(input, decisions, effective, DatabaseExecutionStage.HighFrequencyAdmission, DatabaseDecisionCategory.Admission, DatabaseDecisionSeverity.Info, "ADMISSION_CANCEL_SUPERSEDED", "Canceled superseded pending commands in stream.", new { canceledCount, effective.StreamKey });
+				WriteDecision(input, decisions, effective, DatabaseExecutionStage.HighFrequencyAdmission, DatabaseDecisionCategory.Admission, DatabaseDecisionSeverity.Info, "ADMISSION_CANCEL_SUPERSEDED", "Canceled superseded pending commands in stream.", DatabaseDecisionPayload.ForStreamCancellation(canceledCount, effective.StreamKey));
 			}
 
 			if (hasExisting && existingPending != null && input.SupersessionPolicy != null)
@@ -805,7 +805,7 @@ namespace FFVM.Debug.Lsp.Database
 						"Canceled by supersession policy.");
 
 					message = message + " Policy canceled superseded pending commands: " + canceledByPolicy + ".";
-					WriteDecision(input, decisions, effective, DatabaseExecutionStage.HighFrequencyAdmission, DatabaseDecisionCategory.Admission, DatabaseDecisionSeverity.Info, "ADMISSION_POLICY_CANCEL", "Supersession policy canceled pending commands.", new { canceledByPolicy, effective.StreamKey });
+					WriteDecision(input, decisions, effective, DatabaseExecutionStage.HighFrequencyAdmission, DatabaseDecisionCategory.Admission, DatabaseDecisionSeverity.Info, "ADMISSION_POLICY_CANCEL", "Supersession policy canceled pending commands.", DatabaseDecisionPayload.ForStreamCancellation(canceledByPolicy, effective.StreamKey));
 				}
 			}
 
@@ -871,7 +871,7 @@ namespace FFVM.Debug.Lsp.Database
 					DatabaseTaskKind.FinalizeOperation,
 					DatabaseTaskExecutionStatus.Succeeded,
 					message,
-					null)
+					DatabaseTaskOutput.None)
 			};
 
 			return new DatabaseTaskExecutionReport(
@@ -879,7 +879,7 @@ namespace FFVM.Debug.Lsp.Database
 				request?.CommandId,
 				request?.CorrelationId,
 				results,
-				null,
+				DatabaseTaskOutput.None,
 				message);
 		}
 
@@ -892,8 +892,12 @@ namespace FFVM.Debug.Lsp.Database
 			CodeDatabaseSnapshot baseline = currentSnapshot ?? CodeDatabaseSnapshot.Empty();
 			CodeDatabaseSnapshot rawSnapshot;
 
-			if (executionReport != null && executionReport.Output is CodeDatabaseSnapshot fromReport)
+			if (executionReport != null
+				&& executionReport.Output != null
+				&& executionReport.Output.Kind == DatabaseTaskOutputKind.Snapshot
+				&& executionReport.Output.Snapshot != null)
 			{
+				CodeDatabaseSnapshot fromReport = executionReport.Output.Snapshot;
 				long reportVersion = request != null && request.Kind == DatabaseOperationKind.ReadSnapshot
 					? baseline.Version
 					: baseline.Version + 1;

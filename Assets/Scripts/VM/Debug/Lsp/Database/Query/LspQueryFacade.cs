@@ -19,6 +19,7 @@
 //   Downstream: response writer adapters.
 
 using FFVM.Debug.Lsp.Database.Contracts;
+using System.Collections.Generic;
 
 namespace FFVM.Debug.Lsp.Database
 {
@@ -38,8 +39,8 @@ namespace FFVM.Debug.Lsp.Database
 
 		SymbolQueryResult QueryRename(CodeDatabaseSnapshot snapshot, SymbolQueryRequest request);
 
-		object QueryDocumentSymbols(CodeDatabaseSnapshot snapshot, SymbolQueryRequest request);
+		IReadOnlyList<LspDocumentSymbolItem> QueryDocumentSymbols(CodeDatabaseSnapshot snapshot, SymbolQueryRequest request);
 
-		object QuerySemanticTokensFull(CodeDatabaseSnapshot snapshot, SymbolQueryRequest request);
+		LspSemanticTokensPayload QuerySemanticTokensFull(CodeDatabaseSnapshot snapshot, SymbolQueryRequest request);
 	}
 }

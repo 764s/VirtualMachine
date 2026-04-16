@@ -136,7 +136,7 @@ namespace FFVM.Debug.Lsp.Database
 						kind: DatabaseTaskKind.FinalizeOperation,
 						status: DatabaseTaskExecutionStatus.Failed,
 						message: "Plan/request missing for execution.",
-						output: null)
+						output: DatabaseTaskOutput.None)
 				};
 
 				return new DatabaseTaskExecutionReport(
@@ -144,7 +144,7 @@ namespace FFVM.Debug.Lsp.Database
 					commandId: request?.CommandId,
 					correlationId: request?.CorrelationId,
 					results: failedResults,
-					output: null,
+					output: DatabaseTaskOutput.None,
 					message: "Execution rejected due to missing inputs.");
 			}
 
@@ -160,7 +160,7 @@ namespace FFVM.Debug.Lsp.Database
 					kind: DatabaseTaskKind.FinalizeOperation,
 					status: DatabaseTaskExecutionStatus.Succeeded,
 					message: "Executed via in-memory task center.",
-					output: null)
+					output: DatabaseTaskOutput.None)
 			};
 
 			var report = new DatabaseTaskExecutionReport(
@@ -168,7 +168,7 @@ namespace FFVM.Debug.Lsp.Database
 				commandId: request.CommandId,
 				correlationId: request.CorrelationId,
 				results: successResults,
-				output: null,
+				output: DatabaseTaskOutput.None,
 				message: "Executed via in-memory task center.");
 
 			lock (_sync)
@@ -241,7 +241,7 @@ namespace FFVM.Debug.Lsp.Database
 						kind: DatabaseTaskKind.FinalizeOperation,
 						status: DatabaseTaskExecutionStatus.Canceled,
 						message: reason ?? "Canceled by supersession policy.",
-						output: null)
+						output: DatabaseTaskOutput.None)
 				};
 
 				_completed.Enqueue(new DatabaseTaskExecutionReport(
@@ -249,7 +249,7 @@ namespace FFVM.Debug.Lsp.Database
 					commandId: pending.Request.CommandId,
 					correlationId: pending.Request.CorrelationId,
 					results: canceledResults,
-					output: null,
+					output: DatabaseTaskOutput.None,
 					message: reason ?? "Canceled by supersession policy."));
 			}
 

@@ -74,7 +74,12 @@ public static class LspDatabaseQueryTests
 
 			Assert(result != null && result.Succeeded, "DBQ-01A: definition query succeeded");
 			Assert(result != null && result.Ranges.Count == 1 && result.Ranges[0].Start == 10, "DBQ-01B: definition range captured");
-			Assert(result != null && result.Payload is LspDefinitionPayload, "DBQ-01C: definition payload type");
+			Assert(
+				result != null
+				&& result.Payload != null
+				&& result.Payload.Kind == SymbolQueryPayloadKind.Definition
+				&& result.Payload.Definition != null,
+				"DBQ-01C: definition payload type");
 		}
 
 		// ================================================================
@@ -175,9 +180,15 @@ public static class LspDatabaseQueryTests
 			SymbolQueryResult result = facade.QueryRename(snapshot, request);
 
 			Assert(result != null && result.Succeeded, "DBQ-04A: rename query succeeded");
-			Assert(result != null && result.Payload is LspRenamePayload, "DBQ-04B: rename payload type");
-			if (result != null && result.Payload is LspRenamePayload renamePayload)
+			Assert(
+				result != null
+				&& result.Payload != null
+				&& result.Payload.Kind == SymbolQueryPayloadKind.Rename
+				&& result.Payload.Rename != null,
+				"DBQ-04B: rename payload type");
+			if (result != null && result.Payload != null && result.Payload.Rename != null)
 			{
+				LspRenamePayload renamePayload = result.Payload.Rename;
 				Assert(renamePayload.Edits.Count == 2, "DBQ-04C: rename generated two edits");
 				Assert(renamePayload.NewName == "totalScore", "DBQ-04D: rename target propagated");
 			}
@@ -205,8 +216,15 @@ public static class LspDatabaseQueryTests
 
 			SymbolQueryResult result = facade.QueryCompletion(snapshot, request);
 			Assert(result != null && result.Succeeded, "DBQ-05A: completion query succeeded");
-			Assert(result != null && result.Payload is List<LspCompletionItem>, "DBQ-05B: completion payload type");
-			if (result != null && result.Payload is List<LspCompletionItem> items)
+			Assert(
+				result != null
+				&& result.Payload != null
+				&& result.Payload.Kind == SymbolQueryPayloadKind.Completion,
+				"DBQ-05B: completion payload type");
+			IReadOnlyList<LspCompletionItem> items = result != null && result.Payload != null
+				? result.Payload.CompletionItems
+				: null;
+			if (items != null)
 			{
 				Assert(items.Count == 1 && items[0].Label == "Assist", "DBQ-05C: completion filtered by query token");
 			}
@@ -232,10 +250,10 @@ public static class LspDatabaseQueryTests
 			CodeDatabaseSnapshot snapshot = BuildSnapshot(indexSnapshot: null, facts: facts);
 			var request = new SymbolQueryRequest("semanticTokens/full", doc.Value, new TextPosition(0, 0), new TextSpan(0, 0), false, string.Empty);
 
-			object rawPayload = facade.QuerySemanticTokensFull(snapshot, request);
-			Assert(rawPayload is LspSemanticTokensPayload, "DBQ-06A: semantic token payload type");
+			LspSemanticTokensPayload payload = facade.QuerySemanticTokensFull(snapshot, request);
+			Assert(payload != null, "DBQ-06A: semantic token payload type");
 
-			if (rawPayload is LspSemanticTokensPayload payload)
+			if (payload != null)
 			{
 				Assert(payload.Data.Count == 15, "DBQ-06B: semantic token payload has 3 encoded tokens");
 				Assert(payload.Message == string.Empty, "DBQ-06C: semantic token success message empty");
@@ -259,10 +277,10 @@ public static class LspDatabaseQueryTests
 			CodeDatabaseSnapshot snapshot = BuildSnapshot(indexSnapshot: null, facts: new List<DataFact>(0));
 			var request = new SymbolQueryRequest("semanticTokens/full", string.Empty, new TextPosition(0, 0), new TextSpan(0, 0), false, string.Empty);
 
-			object rawPayload = facade.QuerySemanticTokensFull(snapshot, request);
-			Assert(rawPayload is LspSemanticTokensPayload, "DBQ-07A: semantic token payload type for invalid request");
+			LspSemanticTokensPayload payload = facade.QuerySemanticTokensFull(snapshot, request);
+			Assert(payload != null, "DBQ-07A: semantic token payload type for invalid request");
 
-			if (rawPayload is LspSemanticTokensPayload payload)
+			if (payload != null)
 			{
 				Assert(payload.Data.Count == 0, "DBQ-07B: invalid semantic token request returns empty data");
 				Assert(payload.Message.IndexOf("DocumentKey", StringComparison.OrdinalIgnoreCase) >= 0, "DBQ-07C: invalid semantic token request returns reason message");

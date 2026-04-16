@@ -47,14 +47,14 @@ namespace FFVM.Debug.Lsp.Database
 			{
 				var ranges = new List<TextSpan> { definitionFact.Span };
 				var payload = new LspDefinitionPayload(definitionFact.DocumentKey.Value, definitionFact.Span, definitionFact.Payload);
-				return SymbolQueryResult.Success(symbol, ranges, payload);
+				return SymbolQueryResult.Success(symbol, ranges, SymbolQueryPayload.ForDefinition(payload));
 			}
 
 			if (symbol.DeclarationSpan.Length > 0)
 			{
 				var ranges = new List<TextSpan> { symbol.DeclarationSpan };
 				var payload = new LspDefinitionPayload(symbol.Origin, symbol.DeclarationSpan, null);
-				return SymbolQueryResult.Success(symbol, ranges, payload);
+				return SymbolQueryResult.Success(symbol, ranges, SymbolQueryPayload.ForDefinition(payload));
 			}
 
 			return SymbolQueryResult.NotFound("Definition not found for resolved symbol.");
@@ -84,7 +84,7 @@ namespace FFVM.Debug.Lsp.Database
 				payload.Add(new LspReferenceItem(fact.DocumentKey.Value, fact.Span, fact.Payload));
 			}
 
-			return SymbolQueryResult.Success(symbol, ranges, payload);
+			return SymbolQueryResult.Success(symbol, ranges, SymbolQueryPayload.ForReferences(payload));
 		}
 
 		public SymbolQueryResult QueryHover(CodeDatabaseSnapshot snapshot, SymbolQueryRequest request)
@@ -102,7 +102,7 @@ namespace FFVM.Debug.Lsp.Database
 				? new List<TextSpan> { symbol.DeclarationSpan }
 				: new List<TextSpan>(0);
 
-			return SymbolQueryResult.Success(symbol, ranges, payload);
+			return SymbolQueryResult.Success(symbol, ranges, SymbolQueryPayload.ForHover(payload));
 		}
 
 		public SymbolQueryResult QueryCompletion(CodeDatabaseSnapshot snapshot, SymbolQueryRequest request)
@@ -135,7 +135,7 @@ namespace FFVM.Debug.Lsp.Database
 				? candidates[0]
 				: SymbolIdentity.CreateUnknown("completion");
 
-			return SymbolQueryResult.Success(anchor, null, items);
+			return SymbolQueryResult.Success(anchor, null, SymbolQueryPayload.ForCompletion(items));
 		}
 
 		public SymbolQueryResult QuerySignatureHelp(CodeDatabaseSnapshot snapshot, SymbolQueryRequest request)
@@ -157,7 +157,7 @@ namespace FFVM.Debug.Lsp.Database
 			};
 
 			var payload = new LspSignatureHelpPayload(signatures, 0, 0);
-			return SymbolQueryResult.Success(symbol, null, payload);
+			return SymbolQueryResult.Success(symbol, null, SymbolQueryPayload.ForSignatureHelp(payload));
 		}
 
 		public SymbolQueryResult QueryPrepareRename(CodeDatabaseSnapshot snapshot, SymbolQueryRequest request)
@@ -176,7 +176,7 @@ namespace FFVM.Debug.Lsp.Database
 				: new TextSpan(0, 0);
 
 			var payload = new LspPrepareRenamePayload(range, symbol.Name);
-			return SymbolQueryResult.Success(symbol, new List<TextSpan> { range }, payload);
+			return SymbolQueryResult.Success(symbol, new List<TextSpan> { range }, SymbolQueryPayload.ForPrepareRename(payload));
 		}
 
 		public SymbolQueryResult QueryRename(CodeDatabaseSnapshot snapshot, SymbolQueryRequest request)
@@ -201,7 +201,10 @@ namespace FFVM.Debug.Lsp.Database
 				return references;
 
 			var edits = new List<LspRenameEdit>();
-			if (references.Payload is IReadOnlyList<LspReferenceItem> typedItems)
+			IReadOnlyList<LspReferenceItem> typedItems = references.Payload != null
+				? references.Payload.References
+				: null;
+			if (typedItems != null)
 			{
 				for (int i = 0; i < typedItems.Count; i++)
 				{
@@ -211,10 +214,10 @@ namespace FFVM.Debug.Lsp.Database
 			}
 
 			var payload = new LspRenamePayload(request.NewName, edits);
-			return SymbolQueryResult.Success(references.Symbol, references.Ranges, payload);
+			return SymbolQueryResult.Success(references.Symbol, references.Ranges, SymbolQueryPayload.ForRename(payload));
 		}
 
-		public object QueryDocumentSymbols(CodeDatabaseSnapshot snapshot, SymbolQueryRequest request)
+		public IReadOnlyList<LspDocumentSymbolItem> QueryDocumentSymbols(CodeDatabaseSnapshot snapshot, SymbolQueryRequest request)
 		{
 			if (!TryGetIndex(snapshot, out IIndexSnapshot index, out _))
 				return new List<LspDocumentSymbolItem>(0);
@@ -242,7 +245,7 @@ namespace FFVM.Debug.Lsp.Database
 			return output;
 		}
 
-		public object QuerySemanticTokensFull(CodeDatabaseSnapshot snapshot, SymbolQueryRequest request)
+		public LspSemanticTokensPayload QuerySemanticTokensFull(CodeDatabaseSnapshot snapshot, SymbolQueryRequest request)
 		{
 			if (request == null || string.IsNullOrWhiteSpace(request.DocumentKey))
 			{
@@ -587,9 +590,9 @@ namespace FFVM.Debug.Lsp.Database
 	{
 		public string DocumentKey { get; }
 		public TextSpan Span { get; }
-		public object SourcePayload { get; }
+		public DataFactPayload SourcePayload { get; }
 
-		public LspDefinitionPayload(string documentKey, TextSpan span, object sourcePayload)
+		public LspDefinitionPayload(string documentKey, TextSpan span, DataFactPayload sourcePayload)
 		{
 			DocumentKey = documentKey ?? string.Empty;
 			Span = span;
@@ -601,9 +604,9 @@ namespace FFVM.Debug.Lsp.Database
 	{
 		public string DocumentKey { get; }
 		public TextSpan Span { get; }
-		public object SourcePayload { get; }
+		public DataFactPayload SourcePayload { get; }
 
-		public LspReferenceItem(string documentKey, TextSpan span, object sourcePayload)
+		public LspReferenceItem(string documentKey, TextSpan span, DataFactPayload sourcePayload)
 		{
 			DocumentKey = documentKey ?? string.Empty;
 			Span = span;
