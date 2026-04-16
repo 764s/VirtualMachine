@@ -1,6 +1,8 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using FFVM.Debug.Lsp.Database;
+using FFVM.Debug.Lsp.Database.Contracts;
 using FFVM.Debug.Lsp.Database.Paths;
 using FFVM.Debug.Lsp.Integration.VsCode;
 
@@ -263,70 +265,70 @@ namespace FFVM.Debug
 
         private object BridgeDocumentSymbol(JsonObject requestParams)
         {
-            object result = _bridge.QueryDocumentSymbol(requestParams);
+            IReadOnlyList<LspDocumentSymbolItem> result = _bridge.QueryDocumentSymbol(requestParams);
             FlushBridgeDiagnostics();
-            return result;
+            return ConvertDocumentSymbols(result);
         }
 
         private object BridgeHover(JsonObject requestParams)
         {
-            object result = _bridge.QueryHover(requestParams);
+            LspHoverPayload result = _bridge.QueryHover(requestParams);
             FlushBridgeDiagnostics();
-            return result;
+            return ConvertHover(result);
         }
 
         private object BridgeDefinition(JsonObject requestParams)
         {
-            object result = _bridge.QueryDefinition(requestParams);
+            LspDefinitionPayload result = _bridge.QueryDefinition(requestParams);
             FlushBridgeDiagnostics();
-            return result;
+            return ConvertDefinition(result);
         }
 
         private object BridgeReferences(JsonObject requestParams)
         {
-            object result = _bridge.QueryReferences(requestParams);
+            IReadOnlyList<LspReferenceItem> result = _bridge.QueryReferences(requestParams);
             FlushBridgeDiagnostics();
-            return result;
+            return ConvertReferences(result);
         }
 
         private object BridgeCompletion(JsonObject requestParams)
         {
-            object result = _bridge.QueryCompletion(requestParams);
+            IReadOnlyList<LspCompletionItem> result = _bridge.QueryCompletion(requestParams);
             FlushBridgeDiagnostics();
-            return result;
+            return ConvertCompletionItems(result);
         }
 
         private object BridgeSignatureHelp(JsonObject requestParams)
         {
-            object result = _bridge.QuerySignatureHelp(requestParams);
+            LspSignatureHelpPayload result = _bridge.QuerySignatureHelp(requestParams);
             FlushBridgeDiagnostics();
-            return result;
+            return ConvertSignatureHelp(result);
         }
 
         private object BridgeRename(JsonObject requestParams)
         {
-            object result = _bridge.QueryRename(requestParams);
+            LspRenamePayload result = _bridge.QueryRename(requestParams);
             FlushBridgeDiagnostics();
-            return result;
+            return ConvertRename(result);
         }
 
         private object BridgePrepareRename(JsonObject requestParams)
         {
-            object result = _bridge.QueryPrepareRename(requestParams);
+            LspPrepareRenamePayload result = _bridge.QueryPrepareRename(requestParams);
             FlushBridgeDiagnostics();
-            return result;
+            return ConvertPrepareRename(result);
         }
 
         private object BridgeSemanticTokensFull(JsonObject requestParams)
         {
-            object result = _bridge.QuerySemanticTokensFull(requestParams);
+            LspSemanticTokensPayload result = _bridge.QuerySemanticTokensFull(requestParams);
             FlushBridgeDiagnostics();
-            return result;
+            return ConvertSemanticTokens(result);
         }
 
         private object BridgeWillRenameFiles(JsonObject requestParams)
         {
-            object result = _bridge.QueryWillRenameFiles(requestParams);
+            JsonObject result = _bridge.QueryWillRenameFiles(requestParams);
             FlushBridgeDiagnostics();
             return result;
         }
@@ -365,6 +367,280 @@ namespace FFVM.Debug
         {
             _bridge.DidChangeWatchedFiles(didChangeWatchedFilesParams);
             FlushBridgeDiagnostics();
+        }
+
+        // ------------------------------------------------------------
+        // Typed payload -> protocol JSON projection
+        // ------------------------------------------------------------
+
+        private static List<object> ConvertDocumentSymbols(IReadOnlyList<LspDocumentSymbolItem> symbols)
+        {
+            if (symbols == null || symbols.Count == 0)
+                return new List<object>(0);
+
+            var output = new List<object>(symbols.Count);
+            for (int i = 0; i < symbols.Count; i++)
+            {
+                LspDocumentSymbolItem symbol = symbols[i];
+                if (symbol == null)
+                    continue;
+
+                JsonObject range = MakeRangeFromSpan(symbol.DeclarationSpan);
+                var item = new JsonObject();
+                item.Set("name", symbol.Name ?? string.Empty);
+                item.Set("kind", MapDocumentSymbolKind(symbol.Kind));
+                item.Set("range", range);
+                item.Set("selectionRange", range);
+                output.Add(item);
+            }
+
+            return output;
+        }
+
+        private static JsonObject ConvertHover(LspHoverPayload payload)
+        {
+            if (payload == null)
+                return null;
+
+            string summary = payload.Summary ?? string.Empty;
+            if (!string.IsNullOrWhiteSpace(payload.Scope))
+                summary += "\n\nScope: " + payload.Scope;
+            if (!string.IsNullOrWhiteSpace(payload.ParentName))
+                summary += "\nParent: " + payload.ParentName;
+
+            var contents = new JsonObject();
+            contents.Set("kind", "markdown");
+            contents.Set("value", summary);
+
+            var result = new JsonObject();
+            result.Set("contents", contents);
+            return result;
+        }
+
+        private static JsonObject ConvertDefinition(LspDefinitionPayload payload)
+        {
+            if (payload == null)
+                return null;
+
+            var result = new JsonObject();
+            result.Set("uri", DocumentKeyNormalizer.Normalize(payload.DocumentKey));
+            result.Set("range", MakeRangeFromPayload(payload.SourcePayload, payload.Span));
+            return result;
+        }
+
+        private static List<object> ConvertReferences(IReadOnlyList<LspReferenceItem> items)
+        {
+            if (items == null || items.Count == 0)
+                return new List<object>(0);
+
+            var output = new List<object>(items.Count);
+            for (int i = 0; i < items.Count; i++)
+            {
+                LspReferenceItem item = items[i];
+                if (item == null)
+                    continue;
+
+                var location = new JsonObject();
+                location.Set("uri", DocumentKeyNormalizer.Normalize(item.DocumentKey));
+                location.Set("range", MakeRangeFromPayload(item.SourcePayload, item.Span));
+                output.Add(location);
+            }
+
+            return output;
+        }
+
+        private static List<object> ConvertCompletionItems(IReadOnlyList<LspCompletionItem> items)
+        {
+            if (items == null || items.Count == 0)
+                return new List<object>(0);
+
+            var output = new List<object>(items.Count);
+            for (int i = 0; i < items.Count; i++)
+            {
+                LspCompletionItem item = items[i];
+                if (item == null)
+                    continue;
+
+                var projected = new JsonObject();
+                projected.Set("label", item.Label ?? string.Empty);
+                projected.Set("kind", MapCompletionKind(item.Kind));
+                if (!string.IsNullOrWhiteSpace(item.Detail))
+                    projected.Set("detail", item.Detail);
+                output.Add(projected);
+            }
+
+            return output;
+        }
+
+        private static JsonObject ConvertSignatureHelp(LspSignatureHelpPayload payload)
+        {
+            if (payload == null)
+                return null;
+
+            var signatures = new List<object>();
+            if (payload.Signatures != null)
+            {
+                for (int i = 0; i < payload.Signatures.Count; i++)
+                {
+                    LspSignatureItem signature = payload.Signatures[i];
+                    if (signature == null)
+                        continue;
+
+                    var projected = new JsonObject();
+                    projected.Set("label", signature.Label ?? string.Empty);
+                    if (!string.IsNullOrWhiteSpace(signature.Source))
+                    {
+                        var doc = new JsonObject();
+                        doc.Set("kind", "markdown");
+                        doc.Set("value", "Source: " + DocumentKeyNormalizer.Normalize(signature.Source));
+                        projected.Set("documentation", doc);
+                    }
+
+                    signatures.Add(projected);
+                }
+            }
+
+            var result = new JsonObject();
+            result.Set("signatures", signatures);
+            result.Set("activeSignature", payload.ActiveSignature);
+            result.Set("activeParameter", payload.ActiveParameter);
+            return result;
+        }
+
+        private static JsonObject ConvertPrepareRename(LspPrepareRenamePayload payload)
+        {
+            if (payload == null)
+                return null;
+
+            var result = new JsonObject();
+            result.Set("range", MakeRangeFromSpan(payload.Range));
+            result.Set("placeholder", payload.Placeholder ?? string.Empty);
+            return result;
+        }
+
+        private static JsonObject ConvertRename(LspRenamePayload payload)
+        {
+            if (payload == null || payload.Edits == null || payload.Edits.Count == 0)
+                return null;
+
+            var changes = new JsonObject();
+            var grouped = new Dictionary<string, List<object>>(StringComparer.OrdinalIgnoreCase);
+
+            for (int i = 0; i < payload.Edits.Count; i++)
+            {
+                LspRenameEdit edit = payload.Edits[i];
+                if (edit == null)
+                    continue;
+
+                string key = DocumentKeyNormalizer.Normalize(edit.DocumentKey);
+                if (string.IsNullOrWhiteSpace(key))
+                    continue;
+
+                if (!grouped.TryGetValue(key, out List<object> edits))
+                {
+                    edits = new List<object>();
+                    grouped[key] = edits;
+                }
+
+                var textEdit = new JsonObject();
+                textEdit.Set("range", MakeRangeFromSpan(edit.Range));
+                textEdit.Set("newText", edit.NewText ?? string.Empty);
+                edits.Add(textEdit);
+            }
+
+            foreach (KeyValuePair<string, List<object>> pair in grouped)
+                changes.Set(pair.Key, pair.Value);
+
+            var result = new JsonObject();
+            result.Set("changes", changes);
+            return result;
+        }
+
+        private static JsonObject ConvertSemanticTokens(LspSemanticTokensPayload payload)
+        {
+            if (payload == null)
+                return null;
+
+            var data = new List<object>();
+            if (payload.Data != null)
+            {
+                for (int i = 0; i < payload.Data.Count; i++)
+                    data.Add(payload.Data[i]);
+            }
+
+            var result = new JsonObject();
+            result.Set("data", data);
+            return result;
+        }
+
+        private static JsonObject MakeRangeFromPayload(DataFactPayload payload, TextSpan fallbackSpan)
+        {
+            if (payload is SymbolDataFactPayload symbol && symbol.HasRange)
+            {
+                return MakeRange(
+                    symbol.StartLine,
+                    symbol.StartCharacter,
+                    symbol.EndLine,
+                    symbol.EndCharacter);
+            }
+
+            return MakeRangeFromSpan(fallbackSpan);
+        }
+
+        private static JsonObject MakeRangeFromSpan(TextSpan span)
+        {
+            int start = span.Start < 0 ? 0 : span.Start;
+            int length = span.Length <= 0 ? 1 : span.Length;
+            return MakeRange(0, start, 0, start + length);
+        }
+
+        private static JsonObject MakeRange(int startLine, int startCharacter, int endLine, int endCharacter)
+        {
+            var start = new JsonObject();
+            start.Set("line", startLine < 0 ? 0 : startLine);
+            start.Set("character", startCharacter < 0 ? 0 : startCharacter);
+
+            var end = new JsonObject();
+            end.Set("line", endLine < 0 ? 0 : endLine);
+            end.Set("character", endCharacter < 0 ? 0 : endCharacter);
+
+            var range = new JsonObject();
+            range.Set("start", start);
+            range.Set("end", end);
+            return range;
+        }
+
+        private static int MapDocumentSymbolKind(string kind)
+        {
+            if (string.Equals(kind, "Function", StringComparison.OrdinalIgnoreCase))
+                return 12;
+            if (string.Equals(kind, "Struct", StringComparison.OrdinalIgnoreCase))
+                return 23;
+            if (string.Equals(kind, "Enum", StringComparison.OrdinalIgnoreCase))
+                return 10;
+            if (string.Equals(kind, "Variable", StringComparison.OrdinalIgnoreCase))
+                return 13;
+            if (string.Equals(kind, "Parameter", StringComparison.OrdinalIgnoreCase))
+                return 26;
+            return 13;
+        }
+
+        private static int MapCompletionKind(string kind)
+        {
+            if (string.Equals(kind, "Function", StringComparison.OrdinalIgnoreCase))
+                return 3;
+            if (string.Equals(kind, "Struct", StringComparison.OrdinalIgnoreCase))
+                return 22;
+            if (string.Equals(kind, "Enum", StringComparison.OrdinalIgnoreCase))
+                return 13;
+            if (string.Equals(kind, "StructField", StringComparison.OrdinalIgnoreCase))
+                return 5;
+            if (string.Equals(kind, "EnumMember", StringComparison.OrdinalIgnoreCase))
+                return 20;
+            if (string.Equals(kind, "Variable", StringComparison.OrdinalIgnoreCase)
+                || string.Equals(kind, "Parameter", StringComparison.OrdinalIgnoreCase))
+                return 6;
+            return 1;
         }
     }
 }

@@ -19,6 +19,7 @@
 //   Downstream: database operation/query components.
 
 using System.Collections.Generic;
+using FFVM.Debug.Lsp.Database;
 using FFVM.Debug.Lsp.Database.Paths;
 
 namespace FFVM.Debug.Lsp.Integration.VsCode
@@ -57,25 +58,25 @@ namespace FFVM.Debug.Lsp.Integration.VsCode
 
 		void DidChangeWatchedFiles(JsonObject didChangeWatchedFilesParams);
 
-		object QueryDocumentSymbol(JsonObject requestParams);
+		IReadOnlyList<LspDocumentSymbolItem> QueryDocumentSymbol(JsonObject requestParams);
 
-		object QueryHover(JsonObject requestParams);
+		LspHoverPayload QueryHover(JsonObject requestParams);
 
-		object QueryDefinition(JsonObject requestParams);
+		LspDefinitionPayload QueryDefinition(JsonObject requestParams);
 
-		object QueryReferences(JsonObject requestParams);
+		IReadOnlyList<LspReferenceItem> QueryReferences(JsonObject requestParams);
 
-		object QueryCompletion(JsonObject requestParams);
+		IReadOnlyList<LspCompletionItem> QueryCompletion(JsonObject requestParams);
 
-		object QuerySignatureHelp(JsonObject requestParams);
+		LspSignatureHelpPayload QuerySignatureHelp(JsonObject requestParams);
 
-		object QueryRename(JsonObject requestParams);
+		LspRenamePayload QueryRename(JsonObject requestParams);
 
-		object QueryPrepareRename(JsonObject requestParams);
+		LspPrepareRenamePayload QueryPrepareRename(JsonObject requestParams);
 
-		object QuerySemanticTokensFull(JsonObject requestParams);
+		LspSemanticTokensPayload QuerySemanticTokensFull(JsonObject requestParams);
 
-		object QueryWillRenameFiles(JsonObject requestParams);
+		JsonObject QueryWillRenameFiles(JsonObject requestParams);
 
 		bool TryDequeueDiagnostics(out LspPublishedDiagnostics diagnostics);
 	}
@@ -114,52 +115,52 @@ namespace FFVM.Debug.Lsp.Integration.VsCode
 		{
 		}
 
-		public object QueryDocumentSymbol(JsonObject requestParams)
+		public IReadOnlyList<LspDocumentSymbolItem> QueryDocumentSymbol(JsonObject requestParams)
+		{
+			return new List<LspDocumentSymbolItem>(0);
+		}
+
+		public LspHoverPayload QueryHover(JsonObject requestParams)
 		{
 			return null;
 		}
 
-		public object QueryHover(JsonObject requestParams)
+		public LspDefinitionPayload QueryDefinition(JsonObject requestParams)
 		{
 			return null;
 		}
 
-		public object QueryDefinition(JsonObject requestParams)
+		public IReadOnlyList<LspReferenceItem> QueryReferences(JsonObject requestParams)
+		{
+			return new List<LspReferenceItem>(0);
+		}
+
+		public IReadOnlyList<LspCompletionItem> QueryCompletion(JsonObject requestParams)
+		{
+			return new List<LspCompletionItem>(0);
+		}
+
+		public LspSignatureHelpPayload QuerySignatureHelp(JsonObject requestParams)
 		{
 			return null;
 		}
 
-		public object QueryReferences(JsonObject requestParams)
+		public LspRenamePayload QueryRename(JsonObject requestParams)
 		{
 			return null;
 		}
 
-		public object QueryCompletion(JsonObject requestParams)
+		public LspPrepareRenamePayload QueryPrepareRename(JsonObject requestParams)
 		{
 			return null;
 		}
 
-		public object QuerySignatureHelp(JsonObject requestParams)
+		public LspSemanticTokensPayload QuerySemanticTokensFull(JsonObject requestParams)
 		{
-			return null;
+			return new LspSemanticTokensPayload(new List<int>(0), string.Empty);
 		}
 
-		public object QueryRename(JsonObject requestParams)
-		{
-			return null;
-		}
-
-		public object QueryPrepareRename(JsonObject requestParams)
-		{
-			return null;
-		}
-
-		public object QuerySemanticTokensFull(JsonObject requestParams)
-		{
-			return null;
-		}
-
-		public object QueryWillRenameFiles(JsonObject requestParams)
+		public JsonObject QueryWillRenameFiles(JsonObject requestParams)
 		{
 			return null;
 		}

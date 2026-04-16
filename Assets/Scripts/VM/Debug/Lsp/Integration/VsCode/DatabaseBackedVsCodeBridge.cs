@@ -111,69 +111,79 @@ namespace FFVM.Debug.Lsp.Integration.VsCode
 				streamBehavior: DatabaseOperationStreamBehavior.None));
 		}
 
-		public object QueryDocumentSymbol(JsonObject requestParams)
+		public IReadOnlyList<LspDocumentSymbolItem> QueryDocumentSymbol(JsonObject requestParams)
 		{
 			if (!TryReadSnapshot(out CodeDatabaseSnapshot snapshot))
-				return null;
+				return new List<LspDocumentSymbolItem>(0);
 
 			SymbolQueryRequest query = BuildQueryRequest("documentSymbol", requestParams, false, string.Empty);
 			return NormalizeDocumentSymbols(_queryFacade.QueryDocumentSymbols(snapshot, query));
 		}
 
-		public object QueryHover(JsonObject requestParams)
+		public LspHoverPayload QueryHover(JsonObject requestParams)
 		{
-			return ExecuteResultQuery("hover", requestParams, false, string.Empty, (snapshot, query)
+			SymbolQueryPayload payload = ExecutePayloadQuery("hover", requestParams, false, string.Empty, (snapshot, query)
 				=> _queryFacade.QueryHover(snapshot, query));
+			return NormalizeHover(payload != null ? payload.Hover : null);
 		}
 
-		public object QueryDefinition(JsonObject requestParams)
+		public LspDefinitionPayload QueryDefinition(JsonObject requestParams)
 		{
-			return ExecuteResultQuery("definition", requestParams, false, string.Empty, (snapshot, query)
+			SymbolQueryPayload payload = ExecutePayloadQuery("definition", requestParams, false, string.Empty, (snapshot, query)
 				=> _queryFacade.QueryDefinition(snapshot, query));
+			return NormalizeDefinition(payload != null ? payload.Definition : null);
 		}
 
-		public object QueryReferences(JsonObject requestParams)
+		public IReadOnlyList<LspReferenceItem> QueryReferences(JsonObject requestParams)
 		{
 			bool includeDeclaration = requestParams?.GetObject("context")?.GetBool("includeDeclaration") == true;
-			return ExecuteResultQuery("references", requestParams, includeDeclaration, string.Empty, (snapshot, query)
+			SymbolQueryPayload payload = ExecutePayloadQuery("references", requestParams, includeDeclaration, string.Empty, (snapshot, query)
 				=> _queryFacade.QueryReferences(snapshot, query));
+			return NormalizeReferences(payload != null ? payload.References : null);
 		}
 
-		public object QueryCompletion(JsonObject requestParams)
+		public IReadOnlyList<LspCompletionItem> QueryCompletion(JsonObject requestParams)
 		{
-			return ExecuteResultQuery("completion", requestParams, false, string.Empty, (snapshot, query)
+			SymbolQueryPayload payload = ExecutePayloadQuery("completion", requestParams, false, string.Empty, (snapshot, query)
 				=> _queryFacade.QueryCompletion(snapshot, query));
+			return payload != null && payload.CompletionItems != null
+				? payload.CompletionItems
+				: new List<LspCompletionItem>(0);
 		}
 
-		public object QuerySignatureHelp(JsonObject requestParams)
+		public LspSignatureHelpPayload QuerySignatureHelp(JsonObject requestParams)
 		{
-			return ExecuteResultQuery("signatureHelp", requestParams, false, string.Empty, (snapshot, query)
+			SymbolQueryPayload payload = ExecutePayloadQuery("signatureHelp", requestParams, false, string.Empty, (snapshot, query)
 				=> _queryFacade.QuerySignatureHelp(snapshot, query));
+			return NormalizeSignatureHelp(payload != null ? payload.SignatureHelp : null);
 		}
 
-		public object QueryRename(JsonObject requestParams)
+		public LspRenamePayload QueryRename(JsonObject requestParams)
 		{
 			string newName = requestParams != null ? requestParams.GetString("newName") : string.Empty;
-			return ExecuteResultQuery("rename", requestParams, true, newName, (snapshot, query)
+			SymbolQueryPayload payload = ExecutePayloadQuery("rename", requestParams, true, newName, (snapshot, query)
 				=> _queryFacade.QueryRename(snapshot, query));
+			return NormalizeRename(payload != null ? payload.Rename : null);
 		}
 
-		public object QueryPrepareRename(JsonObject requestParams)
+		public LspPrepareRenamePayload QueryPrepareRename(JsonObject requestParams)
 		{
-			return ExecuteResultQuery("prepareRename", requestParams, false, string.Empty, (snapshot, query)
+			SymbolQueryPayload payload = ExecutePayloadQuery("prepareRename", requestParams, false, string.Empty, (snapshot, query)
 				=> _queryFacade.QueryPrepareRename(snapshot, query));
+			return payload != null ? payload.PrepareRename : null;
 		}
 
-		public object QuerySemanticTokensFull(JsonObject requestParams)
+		public LspSemanticTokensPayload QuerySemanticTokensFull(JsonObject requestParams)
 		{
 			if (!TryReadSnapshot(out CodeDatabaseSnapshot snapshot))
-				return null;
+				return new LspSemanticTokensPayload(new List<int>(0), "Snapshot is unavailable.");
 
 			SymbolQueryRequest query = BuildQueryRequest("semanticTokens/full", requestParams, false, string.Empty);
-			return _queryFacade.QuerySemanticTokensFull(snapshot, query);
+			return _queryFacade.QuerySemanticTokensFull(snapshot, query)
+				?? new LspSemanticTokensPayload(new List<int>(0), string.Empty);
 		}
 
-		public object QueryWillRenameFiles(JsonObject requestParams)
+		public JsonObject QueryWillRenameFiles(JsonObject requestParams)
 		{
 			// Workspace file-rename rewrite planning is intentionally deferred.
 			return null;
@@ -217,7 +227,7 @@ namespace FFVM.Debug.Lsp.Integration.VsCode
 					: DatabaseOperationStreamBehavior.CoalesceAndCancelSuperseded));
 		}
 
-		private object ExecuteResultQuery(
+		private SymbolQueryPayload ExecutePayloadQuery(
 			string operation,
 			JsonObject requestParams,
 			bool includeDeclaration,
@@ -236,44 +246,7 @@ namespace FFVM.Debug.Lsp.Integration.VsCode
 			if (result == null)
 				return null;
 
-			if (result.Succeeded)
-				return ProjectResultPayload(result.Payload);
-
-			return null;
-		}
-
-		private static object ProjectResultPayload(SymbolQueryPayload payload)
-		{
-			if (payload == null)
-				return null;
-
-			switch (payload.Kind)
-			{
-				case SymbolQueryPayloadKind.Definition:
-					return NormalizeDefinition(payload.Definition);
-
-				case SymbolQueryPayloadKind.References:
-					return NormalizeReferences(payload.References);
-
-				case SymbolQueryPayloadKind.Hover:
-					return NormalizeHover(payload.Hover);
-
-				case SymbolQueryPayloadKind.Completion:
-					return payload.CompletionItems;
-
-				case SymbolQueryPayloadKind.SignatureHelp:
-					return NormalizeSignatureHelp(payload.SignatureHelp);
-
-				case SymbolQueryPayloadKind.PrepareRename:
-					return payload.PrepareRename;
-
-				case SymbolQueryPayloadKind.Rename:
-					return NormalizeRename(payload.Rename);
-
-				case SymbolQueryPayloadKind.None:
-				default:
-					return null;
-			}
+			return result.Succeeded ? result.Payload : null;
 		}
 
 		private static LspDefinitionPayload NormalizeDefinition(LspDefinitionPayload payload)
