@@ -1,10 +1,9 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
-using FFVM.Debug.Lsp.Database;
-using FFVM.Debug.Lsp.Database.Contracts;
 using FFVM.Debug.Lsp.Database.Paths;
 using FFVM.Debug.Lsp.Integration.VsCode;
+using FFVM.Debug.Lsp.Protocol;
 
 namespace FFVM.Debug
 {
@@ -26,115 +25,6 @@ namespace FFVM.Debug
 
         private bool _running;
         private bool _shutdownRequested;
-
-        private static class JsonRpcFields
-        {
-            public const string JsonRpc = "jsonrpc";
-            public const string Version = "2.0";
-            public const string Method = "method";
-            public const string Id = "id";
-            public const string Params = "params";
-            public const string Result = "result";
-            public const string Error = "error";
-            public const string Code = "code";
-            public const string Message = "message";
-        }
-
-        private static class LspMethods
-        {
-            public const string Initialize = "initialize";
-            public const string Shutdown = "shutdown";
-            public const string DocumentSymbol = "textDocument/documentSymbol";
-            public const string Hover = "textDocument/hover";
-            public const string Definition = "textDocument/definition";
-            public const string References = "textDocument/references";
-            public const string Completion = "textDocument/completion";
-            public const string SignatureHelp = "textDocument/signatureHelp";
-            public const string Rename = "textDocument/rename";
-            public const string PrepareRename = "textDocument/prepareRename";
-            public const string SemanticTokensFull = "textDocument/semanticTokens/full";
-            public const string WillRenameFiles = "workspace/willRenameFiles";
-            public const string Initialized = "initialized";
-            public const string Exit = "exit";
-            public const string DidOpen = "textDocument/didOpen";
-            public const string DidChange = "textDocument/didChange";
-            public const string DidClose = "textDocument/didClose";
-            public const string DidChangeWatchedFiles = "workspace/didChangeWatchedFiles";
-            public const string PublishDiagnostics = "textDocument/publishDiagnostics";
-        }
-
-        private static class LspFields
-        {
-            public const string Capabilities = "capabilities";
-            public const string ServerInfo = "serverInfo";
-            public const string Name = "name";
-            public const string Version = "version";
-            public const string Uri = "uri";
-            public const string Diagnostics = "diagnostics";
-            public const string Contents = "contents";
-            public const string Kind = "kind";
-            public const string Value = "value";
-            public const string Range = "range";
-            public const string SelectionRange = "selectionRange";
-            public const string Label = "label";
-            public const string Detail = "detail";
-            public const string Documentation = "documentation";
-            public const string Signatures = "signatures";
-            public const string ActiveSignature = "activeSignature";
-            public const string ActiveParameter = "activeParameter";
-            public const string Placeholder = "placeholder";
-            public const string Changes = "changes";
-            public const string Data = "data";
-            public const string Start = "start";
-            public const string End = "end";
-            public const string Line = "line";
-            public const string Character = "character";
-            public const string NewText = "newText";
-        }
-
-        private static class LspValues
-        {
-            public const string ServerName = "FFVM LSP (New Scaffold)";
-            public const string ServerVersion = "0.1.0-placeholder";
-            public const string UnknownErrorMessage = "Unknown error";
-            public const string Markdown = "markdown";
-        }
-
-        private static class SymbolKindNames
-        {
-            public const string Function = "Function";
-            public const string Struct = "Struct";
-            public const string Enum = "Enum";
-            public const string Variable = "Variable";
-            public const string Parameter = "Parameter";
-            public const string StructField = "StructField";
-            public const string EnumMember = "EnumMember";
-        }
-
-        private static class JsonRpcErrorCodes
-        {
-            public const int MethodNotFound = -32601;
-        }
-
-        private enum LspDocumentSymbolKindCode
-        {
-            EnumType = 10,
-            Function = 12,
-            Variable = 13,
-            Struct = 23,
-            Parameter = 26
-        }
-
-        private enum LspCompletionItemKindCode
-        {
-            Text = 1,
-            Function = 3,
-            Field = 5,
-            Variable = 6,
-            EnumType = 13,
-            EnumMember = 20,
-            Struct = 22
-        }
 
         public LspServerNew(Stream input, Stream output, ILspVsCodeDatabaseBridge bridge = null)
         {
@@ -194,7 +84,7 @@ namespace FFVM.Debug
             {
                 case LspMethods.Initialize:
                     BridgeInitialize(requestParams);
-                    SendResponse(id, CreateInitializeResult());
+                    SendResponse(id, LspProtocolPayloadProjector.CreateInitializeResult());
                     break;
 
                 case LspMethods.Shutdown:
@@ -282,22 +172,6 @@ namespace FFVM.Debug
             }
         }
 
-        private JsonObject CreateInitializeResult()
-        {
-            var result = new JsonObject();
-
-            // Minimal capability payload to complete VS Code initialize handshake.
-            var capabilities = new JsonObject();
-            result.Set(LspFields.Capabilities, capabilities);
-
-            var serverInfo = new JsonObject();
-            serverInfo.Set(LspFields.Name, LspValues.ServerName);
-            serverInfo.Set(LspFields.Version, LspValues.ServerVersion);
-            result.Set(LspFields.ServerInfo, serverInfo);
-
-            return result;
-        }
-
         private void SendResponse(object id, object result)
         {
             var response = new JsonObject();
@@ -374,65 +248,65 @@ namespace FFVM.Debug
 
         private object BridgeDocumentSymbol(JsonObject requestParams)
         {
-            IReadOnlyList<LspDocumentSymbolItem> result = _bridge.QueryDocumentSymbol(requestParams);
+            var result = _bridge.QueryDocumentSymbol(requestParams);
             FlushBridgeDiagnostics();
-            return ConvertDocumentSymbols(result);
+            return LspProtocolPayloadProjector.ConvertDocumentSymbols(result);
         }
 
         private object BridgeHover(JsonObject requestParams)
         {
-            LspHoverPayload result = _bridge.QueryHover(requestParams);
+            var result = _bridge.QueryHover(requestParams);
             FlushBridgeDiagnostics();
-            return ConvertHover(result);
+            return LspProtocolPayloadProjector.ConvertHover(result);
         }
 
         private object BridgeDefinition(JsonObject requestParams)
         {
-            LspDefinitionPayload result = _bridge.QueryDefinition(requestParams);
+            var result = _bridge.QueryDefinition(requestParams);
             FlushBridgeDiagnostics();
-            return ConvertDefinition(result);
+            return LspProtocolPayloadProjector.ConvertDefinition(result);
         }
 
         private object BridgeReferences(JsonObject requestParams)
         {
-            IReadOnlyList<LspReferenceItem> result = _bridge.QueryReferences(requestParams);
+            var result = _bridge.QueryReferences(requestParams);
             FlushBridgeDiagnostics();
-            return ConvertReferences(result);
+            return LspProtocolPayloadProjector.ConvertReferences(result);
         }
 
         private object BridgeCompletion(JsonObject requestParams)
         {
-            IReadOnlyList<LspCompletionItem> result = _bridge.QueryCompletion(requestParams);
+            var result = _bridge.QueryCompletion(requestParams);
             FlushBridgeDiagnostics();
-            return ConvertCompletionItems(result);
+            return LspProtocolPayloadProjector.ConvertCompletionItems(result);
         }
 
         private object BridgeSignatureHelp(JsonObject requestParams)
         {
-            LspSignatureHelpPayload result = _bridge.QuerySignatureHelp(requestParams);
+            var result = _bridge.QuerySignatureHelp(requestParams);
             FlushBridgeDiagnostics();
-            return ConvertSignatureHelp(result);
+            return LspProtocolPayloadProjector.ConvertSignatureHelp(result);
         }
 
         private object BridgeRename(JsonObject requestParams)
         {
-            LspRenamePayload result = _bridge.QueryRename(requestParams);
+            var result = _bridge.QueryRename(requestParams);
             FlushBridgeDiagnostics();
-            return ConvertRename(result);
+            return LspProtocolPayloadProjector.ConvertRename(result);
         }
 
         private object BridgePrepareRename(JsonObject requestParams)
         {
-            LspPrepareRenamePayload result = _bridge.QueryPrepareRename(requestParams);
+            var result = _bridge.QueryPrepareRename(requestParams);
             FlushBridgeDiagnostics();
-            return ConvertPrepareRename(result);
+            return LspProtocolPayloadProjector.ConvertPrepareRename(result);
         }
 
         private object BridgeSemanticTokensFull(JsonObject requestParams)
         {
-            LspSemanticTokensPayload result = _bridge.QuerySemanticTokensFull(requestParams);
+            var result = _bridge.QuerySemanticTokensFull(requestParams);
             FlushBridgeDiagnostics();
-            return ConvertSemanticTokens(result);
+            return LspProtocolPayloadProjector.ConvertSemanticTokens(result);
         }
 
         private object BridgeWillRenameFiles(JsonObject requestParams)
@@ -476,280 +350,6 @@ namespace FFVM.Debug
         {
             _bridge.DidChangeWatchedFiles(didChangeWatchedFilesParams);
             FlushBridgeDiagnostics();
-        }
-
-        // ------------------------------------------------------------
-        // Typed payload -> protocol JSON projection
-        // ------------------------------------------------------------
-
-        private static List<object> ConvertDocumentSymbols(IReadOnlyList<LspDocumentSymbolItem> symbols)
-        {
-            if (symbols == null || symbols.Count == 0)
-                return new List<object>(0);
-
-            var output = new List<object>(symbols.Count);
-            for (int i = 0; i < symbols.Count; i++)
-            {
-                LspDocumentSymbolItem symbol = symbols[i];
-                if (symbol == null)
-                    continue;
-
-                JsonObject range = MakeRangeFromSpan(symbol.DeclarationSpan);
-                var item = new JsonObject();
-                item.Set(LspFields.Name, symbol.Name ?? string.Empty);
-                item.Set(LspFields.Kind, MapDocumentSymbolKind(symbol.Kind));
-                item.Set(LspFields.Range, range);
-                item.Set(LspFields.SelectionRange, range);
-                output.Add(item);
-            }
-
-            return output;
-        }
-
-        private static JsonObject ConvertHover(LspHoverPayload payload)
-        {
-            if (payload == null)
-                return null;
-
-            string summary = payload.Summary ?? string.Empty;
-            if (!string.IsNullOrWhiteSpace(payload.Scope))
-                summary += "\n\nScope: " + payload.Scope;
-            if (!string.IsNullOrWhiteSpace(payload.ParentName))
-                summary += "\nParent: " + payload.ParentName;
-
-            var contents = new JsonObject();
-            contents.Set(LspFields.Kind, LspValues.Markdown);
-            contents.Set(LspFields.Value, summary);
-
-            var result = new JsonObject();
-            result.Set(LspFields.Contents, contents);
-            return result;
-        }
-
-        private static JsonObject ConvertDefinition(LspDefinitionPayload payload)
-        {
-            if (payload == null)
-                return null;
-
-            var result = new JsonObject();
-            result.Set(LspFields.Uri, DocumentKeyNormalizer.Normalize(payload.DocumentKey));
-            result.Set(LspFields.Range, MakeRangeFromPayload(payload.SourcePayload, payload.Span));
-            return result;
-        }
-
-        private static List<object> ConvertReferences(IReadOnlyList<LspReferenceItem> items)
-        {
-            if (items == null || items.Count == 0)
-                return new List<object>(0);
-
-            var output = new List<object>(items.Count);
-            for (int i = 0; i < items.Count; i++)
-            {
-                LspReferenceItem item = items[i];
-                if (item == null)
-                    continue;
-
-                var location = new JsonObject();
-                location.Set(LspFields.Uri, DocumentKeyNormalizer.Normalize(item.DocumentKey));
-                location.Set(LspFields.Range, MakeRangeFromPayload(item.SourcePayload, item.Span));
-                output.Add(location);
-            }
-
-            return output;
-        }
-
-        private static List<object> ConvertCompletionItems(IReadOnlyList<LspCompletionItem> items)
-        {
-            if (items == null || items.Count == 0)
-                return new List<object>(0);
-
-            var output = new List<object>(items.Count);
-            for (int i = 0; i < items.Count; i++)
-            {
-                LspCompletionItem item = items[i];
-                if (item == null)
-                    continue;
-
-                var projected = new JsonObject();
-                projected.Set(LspFields.Label, item.Label ?? string.Empty);
-                projected.Set(LspFields.Kind, MapCompletionKind(item.Kind));
-                if (!string.IsNullOrWhiteSpace(item.Detail))
-                    projected.Set(LspFields.Detail, item.Detail);
-                output.Add(projected);
-            }
-
-            return output;
-        }
-
-        private static JsonObject ConvertSignatureHelp(LspSignatureHelpPayload payload)
-        {
-            if (payload == null)
-                return null;
-
-            var signatures = new List<object>();
-            if (payload.Signatures != null)
-            {
-                for (int i = 0; i < payload.Signatures.Count; i++)
-                {
-                    LspSignatureItem signature = payload.Signatures[i];
-                    if (signature == null)
-                        continue;
-
-                    var projected = new JsonObject();
-                    projected.Set(LspFields.Label, signature.Label ?? string.Empty);
-                    if (!string.IsNullOrWhiteSpace(signature.Source))
-                    {
-                        var doc = new JsonObject();
-                        doc.Set(LspFields.Kind, LspValues.Markdown);
-                        doc.Set(LspFields.Value, "Source: " + DocumentKeyNormalizer.Normalize(signature.Source));
-                        projected.Set(LspFields.Documentation, doc);
-                    }
-
-                    signatures.Add(projected);
-                }
-            }
-
-            var result = new JsonObject();
-            result.Set(LspFields.Signatures, signatures);
-            result.Set(LspFields.ActiveSignature, payload.ActiveSignature);
-            result.Set(LspFields.ActiveParameter, payload.ActiveParameter);
-            return result;
-        }
-
-        private static JsonObject ConvertPrepareRename(LspPrepareRenamePayload payload)
-        {
-            if (payload == null)
-                return null;
-
-            var result = new JsonObject();
-            result.Set(LspFields.Range, MakeRangeFromSpan(payload.Range));
-            result.Set(LspFields.Placeholder, payload.Placeholder ?? string.Empty);
-            return result;
-        }
-
-        private static JsonObject ConvertRename(LspRenamePayload payload)
-        {
-            if (payload == null || payload.Edits == null || payload.Edits.Count == 0)
-                return null;
-
-            var changes = new JsonObject();
-            var grouped = new Dictionary<string, List<object>>(StringComparer.OrdinalIgnoreCase);
-
-            for (int i = 0; i < payload.Edits.Count; i++)
-            {
-                LspRenameEdit edit = payload.Edits[i];
-                if (edit == null)
-                    continue;
-
-                string key = DocumentKeyNormalizer.Normalize(edit.DocumentKey);
-                if (string.IsNullOrWhiteSpace(key))
-                    continue;
-
-                if (!grouped.TryGetValue(key, out List<object> edits))
-                {
-                    edits = new List<object>();
-                    grouped[key] = edits;
-                }
-
-                var textEdit = new JsonObject();
-                textEdit.Set(LspFields.Range, MakeRangeFromSpan(edit.Range));
-                textEdit.Set(LspFields.NewText, edit.NewText ?? string.Empty);
-                edits.Add(textEdit);
-            }
-
-            foreach (KeyValuePair<string, List<object>> pair in grouped)
-                changes.Set(pair.Key, pair.Value);
-
-            var result = new JsonObject();
-            result.Set(LspFields.Changes, changes);
-            return result;
-        }
-
-        private static JsonObject ConvertSemanticTokens(LspSemanticTokensPayload payload)
-        {
-            if (payload == null)
-                return null;
-
-            var data = new List<object>();
-            if (payload.Data != null)
-            {
-                for (int i = 0; i < payload.Data.Count; i++)
-                    data.Add(payload.Data[i]);
-            }
-
-            var result = new JsonObject();
-            result.Set(LspFields.Data, data);
-            return result;
-        }
-
-        private static JsonObject MakeRangeFromPayload(DataFactPayload payload, TextSpan fallbackSpan)
-        {
-            if (payload is SymbolDataFactPayload symbol && symbol.HasRange)
-            {
-                return MakeRange(
-                    symbol.StartLine,
-                    symbol.StartCharacter,
-                    symbol.EndLine,
-                    symbol.EndCharacter);
-            }
-
-            return MakeRangeFromSpan(fallbackSpan);
-        }
-
-        private static JsonObject MakeRangeFromSpan(TextSpan span)
-        {
-            int start = span.Start < 0 ? 0 : span.Start;
-            int length = span.Length <= 0 ? 1 : span.Length;
-            return MakeRange(0, start, 0, start + length);
-        }
-
-        private static JsonObject MakeRange(int startLine, int startCharacter, int endLine, int endCharacter)
-        {
-            var start = new JsonObject();
-            start.Set(LspFields.Line, startLine < 0 ? 0 : startLine);
-            start.Set(LspFields.Character, startCharacter < 0 ? 0 : startCharacter);
-
-            var end = new JsonObject();
-            end.Set(LspFields.Line, endLine < 0 ? 0 : endLine);
-            end.Set(LspFields.Character, endCharacter < 0 ? 0 : endCharacter);
-
-            var range = new JsonObject();
-            range.Set(LspFields.Start, start);
-            range.Set(LspFields.End, end);
-            return range;
-        }
-
-        private static int MapDocumentSymbolKind(string kind)
-        {
-            if (string.Equals(kind, SymbolKindNames.Function, StringComparison.OrdinalIgnoreCase))
-                return (int)LspDocumentSymbolKindCode.Function;
-            if (string.Equals(kind, SymbolKindNames.Struct, StringComparison.OrdinalIgnoreCase))
-                return (int)LspDocumentSymbolKindCode.Struct;
-            if (string.Equals(kind, SymbolKindNames.Enum, StringComparison.OrdinalIgnoreCase))
-                return (int)LspDocumentSymbolKindCode.EnumType;
-            if (string.Equals(kind, SymbolKindNames.Variable, StringComparison.OrdinalIgnoreCase))
-                return (int)LspDocumentSymbolKindCode.Variable;
-            if (string.Equals(kind, SymbolKindNames.Parameter, StringComparison.OrdinalIgnoreCase))
-                return (int)LspDocumentSymbolKindCode.Parameter;
-            return (int)LspDocumentSymbolKindCode.Variable;
-        }
-
-        private static int MapCompletionKind(string kind)
-        {
-            if (string.Equals(kind, SymbolKindNames.Function, StringComparison.OrdinalIgnoreCase))
-                return (int)LspCompletionItemKindCode.Function;
-            if (string.Equals(kind, SymbolKindNames.Struct, StringComparison.OrdinalIgnoreCase))
-                return (int)LspCompletionItemKindCode.Struct;
-            if (string.Equals(kind, SymbolKindNames.Enum, StringComparison.OrdinalIgnoreCase))
-                return (int)LspCompletionItemKindCode.EnumType;
-            if (string.Equals(kind, SymbolKindNames.StructField, StringComparison.OrdinalIgnoreCase))
-                return (int)LspCompletionItemKindCode.Field;
-            if (string.Equals(kind, SymbolKindNames.EnumMember, StringComparison.OrdinalIgnoreCase))
-                return (int)LspCompletionItemKindCode.EnumMember;
-            if (string.Equals(kind, SymbolKindNames.Variable, StringComparison.OrdinalIgnoreCase)
-                || string.Equals(kind, SymbolKindNames.Parameter, StringComparison.OrdinalIgnoreCase))
-                return (int)LspCompletionItemKindCode.Variable;
-            return (int)LspCompletionItemKindCode.Text;
         }
     }
 }
