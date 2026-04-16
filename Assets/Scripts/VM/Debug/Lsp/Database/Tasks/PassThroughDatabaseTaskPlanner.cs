@@ -45,7 +45,7 @@ namespace FFVM.Debug.Lsp.Database
 					null),
 			};
 
-			int version = snapshot?.Version ?? CodeDatabaseSnapshot.Empty().Version;
+			long version = snapshot?.Version ?? CodeDatabaseSnapshot.Empty().Version;
 			return new DatabaseTaskPlan(planId, commandId, version, tasks, DateTime.UtcNow);
 		}
 	}

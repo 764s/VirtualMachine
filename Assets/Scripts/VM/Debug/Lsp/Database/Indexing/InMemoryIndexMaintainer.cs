@@ -38,32 +38,82 @@ namespace FFVM.Debug.Lsp.Database
 			CodeDatabaseSnapshot snapshot,
 			IReadOnlyList<PathKey> changedDocuments)
 		{
-			return Build(snapshot);
+			if (!(previous is InMemoryBuiltIndexSnapshot previousSnapshot))
+				return Build(snapshot);
+
+			HashSet<string> changedSet = BuildChangedDocumentSet(changedDocuments);
+			if (changedSet.Count == 0)
+				return Build(snapshot);
+
+			var mergedContributions = CloneContributions(previousSnapshot.ContributionsByDocument);
+			foreach (string changed in changedSet)
+				mergedContributions.Remove(changed);
+
+			Dictionary<string, DocumentIndexContribution> changedContributions = BuildContributions(snapshot, changedSet);
+			foreach (KeyValuePair<string, DocumentIndexContribution> pair in changedContributions)
+				mergedContributions[pair.Key] = pair.Value;
+
+			long nextVersion = snapshot != null ? snapshot.Version : previousSnapshot.SnapshotVersion;
+			return BuildFromContributions(nextVersion, mergedContributions);
 		}
 
 		private static IIndexSnapshot Build(CodeDatabaseSnapshot snapshot)
 		{
 			CodeDatabaseSnapshot source = snapshot ?? CodeDatabaseSnapshot.Empty();
+			Dictionary<string, DocumentIndexContribution> contributions = BuildContributions(source, includeDocuments: null);
+			return BuildFromContributions(source.Version, contributions);
+		}
+
+		private static HashSet<string> BuildChangedDocumentSet(IReadOnlyList<PathKey> changedDocuments)
+		{
+			var changedSet = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+			if (changedDocuments == null)
+				return changedSet;
+
+			for (int i = 0; i < changedDocuments.Count; i++)
+			{
+				string key = NormalizeDocumentKey(changedDocuments[i].Value);
+				if (!string.IsNullOrWhiteSpace(key))
+					changedSet.Add(key);
+			}
+
+			return changedSet;
+		}
+
+		private static Dictionary<string, DocumentIndexContribution> BuildContributions(
+			CodeDatabaseSnapshot snapshot,
+			HashSet<string> includeDocuments)
+		{
+			CodeDatabaseSnapshot source = snapshot ?? CodeDatabaseSnapshot.Empty();
 			IReadOnlyList<DataFact> facts = source.Facts ?? EmptyFacts;
 
-			var positionEntriesByDocument = new Dictionary<string, List<PositionEntry>>(StringComparer.OrdinalIgnoreCase);
-			var definitionsBySymbol = new Dictionary<string, DataFact>(StringComparer.Ordinal);
-			var referencesBySymbol = new Dictionary<string, List<DataFact>>(StringComparer.Ordinal);
-			var symbolsByKey = new Dictionary<string, SymbolIdentity>(StringComparer.Ordinal);
-			var includesByDocument = new Dictionary<string, HashSet<string>>(StringComparer.OrdinalIgnoreCase);
-			var dependentsByDocument = new Dictionary<string, HashSet<string>>(StringComparer.OrdinalIgnoreCase);
-
+			var contributions = new Dictionary<string, DocumentIndexContribution>(StringComparer.OrdinalIgnoreCase);
 			for (int i = 0; i < facts.Count; i++)
 			{
 				DataFact fact = facts[i];
 				if (fact == null)
 					continue;
 
+				string documentKey = NormalizeDocumentKey(fact.DocumentKey.Value);
+				if (string.IsNullOrWhiteSpace(documentKey))
+					continue;
+
+				if (includeDocuments != null && !includeDocuments.Contains(documentKey))
+					continue;
+
+				if (!contributions.TryGetValue(documentKey, out DocumentIndexContribution contribution))
+				{
+					contribution = new DocumentIndexContribution(documentKey);
+					contributions[documentKey] = contribution;
+				}
+
 				if (fact.Kind == DataFactKind.IncludeEdge)
 				{
 					if (TryResolveIncludeTarget(fact, out PathKey includeTarget))
 					{
-						AddIncludeEdge(includesByDocument, dependentsByDocument, fact.DocumentKey, includeTarget);
+						string includeTargetKey = NormalizeDocumentKey(includeTarget.Value);
+						if (!string.IsNullOrWhiteSpace(includeTargetKey))
+							contribution.IncludesTargets.Add(includeTargetKey);
 					}
 
 					continue;
@@ -79,35 +129,156 @@ namespace FFVM.Debug.Lsp.Database
 					continue;
 
 				string symbolKey = BuildSymbolKey(symbol);
-				if (!symbolsByKey.ContainsKey(symbolKey))
-					symbolsByKey[symbolKey] = symbol;
+				if (!contribution.SymbolsByKey.ContainsKey(symbolKey))
+					contribution.SymbolsByKey[symbolKey] = symbol;
 
 				if (fact.Kind == DataFactKind.SymbolDefinition)
 				{
-					if (!definitionsBySymbol.ContainsKey(symbolKey))
-						definitionsBySymbol[symbolKey] = fact;
+					if (!contribution.DefinitionsBySymbol.ContainsKey(symbolKey))
+						contribution.DefinitionsBySymbol[symbolKey] = fact;
 				}
 				else
 				{
-					if (!referencesBySymbol.TryGetValue(symbolKey, out List<DataFact> references))
+					if (!contribution.ReferencesBySymbol.TryGetValue(symbolKey, out List<DataFact> references))
 					{
 						references = new List<DataFact>();
-						referencesBySymbol[symbolKey] = references;
+						contribution.ReferencesBySymbol[symbolKey] = references;
 					}
 
 					references.Add(fact);
 				}
 
 				if (TryResolvePositionRange(fact, out PositionRange range))
+					contribution.PositionEntries.Add(new PositionEntry(range, symbol));
+			}
+
+			foreach (KeyValuePair<string, DocumentIndexContribution> pair in contributions)
+				pair.Value.PositionEntries.Sort(ComparePositionEntry);
+
+			return contributions;
+		}
+
+		private static IIndexSnapshot BuildFromContributions(
+			long snapshotVersion,
+			Dictionary<string, DocumentIndexContribution> contributionsByDocument)
+		{
+			var contributions = contributionsByDocument
+				?? new Dictionary<string, DocumentIndexContribution>(StringComparer.OrdinalIgnoreCase);
+
+			var orderedDocuments = new List<string>(contributions.Keys);
+			orderedDocuments.Sort(StringComparer.OrdinalIgnoreCase);
+
+			var positionEntriesByDocument = new Dictionary<string, List<PositionEntry>>(StringComparer.OrdinalIgnoreCase);
+			var definitionsBySymbol = new Dictionary<string, DataFact>(StringComparer.Ordinal);
+			var referencesBySymbol = new Dictionary<string, List<DataFact>>(StringComparer.Ordinal);
+			var symbolsByKey = new Dictionary<string, SymbolIdentity>(StringComparer.Ordinal);
+			var includesByDocument = new Dictionary<string, HashSet<string>>(StringComparer.OrdinalIgnoreCase);
+			var dependentsByDocument = new Dictionary<string, HashSet<string>>(StringComparer.OrdinalIgnoreCase);
+
+			for (int i = 0; i < orderedDocuments.Count; i++)
+			{
+				string documentKey = orderedDocuments[i];
+				if (!contributions.TryGetValue(documentKey, out DocumentIndexContribution contribution)
+					|| contribution == null)
 				{
-					AddPositionEntry(positionEntriesByDocument, fact.DocumentKey, range, symbol);
+					continue;
+				}
+
+				if (contribution.PositionEntries.Count > 0)
+					positionEntriesByDocument[documentKey] = new List<PositionEntry>(contribution.PositionEntries);
+
+				if (contribution.IncludesTargets.Count > 0)
+				{
+					var includeTargets = new HashSet<string>(contribution.IncludesTargets, StringComparer.OrdinalIgnoreCase);
+					includesByDocument[documentKey] = includeTargets;
+
+					foreach (string includeTarget in includeTargets)
+					{
+						if (!dependentsByDocument.TryGetValue(includeTarget, out HashSet<string> dependents))
+						{
+							dependents = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+							dependentsByDocument[includeTarget] = dependents;
+						}
+
+						dependents.Add(documentKey);
+					}
+				}
+
+				foreach (KeyValuePair<string, SymbolIdentity> symbolPair in contribution.SymbolsByKey)
+				{
+					if (!symbolsByKey.ContainsKey(symbolPair.Key) && symbolPair.Value != null)
+						symbolsByKey[symbolPair.Key] = symbolPair.Value;
+				}
+
+				foreach (KeyValuePair<string, DataFact> definitionPair in contribution.DefinitionsBySymbol)
+				{
+					if (!definitionsBySymbol.ContainsKey(definitionPair.Key) && definitionPair.Value != null)
+						definitionsBySymbol[definitionPair.Key] = definitionPair.Value;
+
+					if (!symbolsByKey.ContainsKey(definitionPair.Key)
+						&& definitionPair.Value != null
+						&& TryResolveSymbolFromFact(definitionPair.Value, out SymbolIdentity resolvedDefinitionSymbol)
+						&& resolvedDefinitionSymbol != null)
+					{
+						symbolsByKey[definitionPair.Key] = resolvedDefinitionSymbol;
+					}
+				}
+
+				foreach (KeyValuePair<string, List<DataFact>> referencePair in contribution.ReferencesBySymbol)
+				{
+					if (!referencesBySymbol.TryGetValue(referencePair.Key, out List<DataFact> references))
+					{
+						references = new List<DataFact>();
+						referencesBySymbol[referencePair.Key] = references;
+					}
+
+					if (referencePair.Value != null)
+					{
+						for (int refIndex = 0; refIndex < referencePair.Value.Count; refIndex++)
+						{
+							DataFact referenceFact = referencePair.Value[refIndex];
+							if (referenceFact != null)
+								references.Add(referenceFact);
+						}
+					}
+
+					if (!symbolsByKey.ContainsKey(referencePair.Key) && referencePair.Value != null)
+					{
+						for (int refIndex = 0; refIndex < referencePair.Value.Count; refIndex++)
+						{
+							DataFact referenceFact = referencePair.Value[refIndex];
+							if (referenceFact != null
+								&& TryResolveSymbolFromFact(referenceFact, out SymbolIdentity resolvedReferenceSymbol)
+								&& resolvedReferenceSymbol != null)
+							{
+								symbolsByKey[referencePair.Key] = resolvedReferenceSymbol;
+								break;
+							}
+						}
+					}
 				}
 			}
 
 			foreach (KeyValuePair<string, List<PositionEntry>> pair in positionEntriesByDocument)
-			{
 				pair.Value.Sort(ComparePositionEntry);
+
+			foreach (KeyValuePair<string, List<DataFact>> pair in referencesBySymbol)
+				pair.Value.Sort(CompareReferenceFact);
+
+			var danglingSymbolKeys = new List<string>();
+			foreach (KeyValuePair<string, SymbolIdentity> pair in symbolsByKey)
+			{
+				bool hasDefinition = definitionsBySymbol.ContainsKey(pair.Key);
+				bool hasReferences = referencesBySymbol.TryGetValue(pair.Key, out List<DataFact> refs)
+					&& refs != null
+					&& refs.Count > 0;
+
+				if (!hasDefinition && !hasReferences)
+					danglingSymbolKeys.Add(pair.Key);
 			}
+
+			for (int i = 0; i < danglingSymbolKeys.Count; i++)
+				symbolsByKey.Remove(danglingSymbolKeys[i]);
 
 			var positionIndex = new InMemoryPositionIndex(positionEntriesByDocument);
 			var symbolIndex = new InMemorySymbolIndex(definitionsBySymbol, referencesBySymbol);
@@ -115,21 +286,64 @@ namespace FFVM.Debug.Lsp.Database
 			var nameIndex = new InMemoryNameIndex(symbolsByKey);
 
 			return new InMemoryBuiltIndexSnapshot(
-				source.Version,
+				snapshotVersion,
 				positionIndex,
 				symbolIndex,
 				includeGraphIndex,
-				nameIndex);
+				nameIndex,
+				CloneContributions(contributions));
+		}
+
+		private static Dictionary<string, DocumentIndexContribution> CloneContributions(
+			IReadOnlyDictionary<string, DocumentIndexContribution> source)
+		{
+			var clone = new Dictionary<string, DocumentIndexContribution>(StringComparer.OrdinalIgnoreCase);
+			if (source == null)
+				return clone;
+
+			foreach (KeyValuePair<string, DocumentIndexContribution> pair in source)
+			{
+				if (!string.IsNullOrWhiteSpace(pair.Key) && pair.Value != null)
+					clone[pair.Key] = pair.Value.Clone();
+			}
+
+			return clone;
+		}
+
+		private static int CompareReferenceFact(DataFact left, DataFact right)
+		{
+			if (left == null && right == null)
+				return 0;
+
+			if (left == null)
+				return -1;
+
+			if (right == null)
+				return 1;
+
+			int byDocument = StringComparer.OrdinalIgnoreCase.Compare(left.DocumentKey.Value, right.DocumentKey.Value);
+			if (byDocument != 0)
+				return byDocument;
+
+			int bySpanStart = left.Span.Start.CompareTo(right.Span.Start);
+			if (bySpanStart != 0)
+				return bySpanStart;
+
+			int bySpanLength = left.Span.Length.CompareTo(right.Span.Length);
+			if (bySpanLength != 0)
+				return bySpanLength;
+
+			return StringComparer.Ordinal.Compare(left.Id.Value, right.Id.Value);
 		}
 
 		private static int ComparePositionEntry(PositionEntry left, PositionEntry right)
 		{
 			if (left == null && right == null)
 				return 0;
-+
+
 			if (left == null)
 				return -1;
-+
+
 			if (right == null)
 				return 1;
 
@@ -146,52 +360,6 @@ namespace FFVM.Debug.Lsp.Database
 				return byEndLine;
 
 			return left.Range.EndCharacter.CompareTo(right.Range.EndCharacter);
-		}
-
-		private static void AddPositionEntry(
-			Dictionary<string, List<PositionEntry>> positionEntriesByDocument,
-			PathKey documentKey,
-			PositionRange range,
-			SymbolIdentity symbol)
-		{
-			string normalizedDocument = NormalizeDocumentKey(documentKey.Value);
-			if (string.IsNullOrWhiteSpace(normalizedDocument) || symbol == null)
-				return;
-
-			if (!positionEntriesByDocument.TryGetValue(normalizedDocument, out List<PositionEntry> entries))
-			{
-				entries = new List<PositionEntry>();
-				positionEntriesByDocument[normalizedDocument] = entries;
-			}
-
-			entries.Add(new PositionEntry(range, symbol));
-		}
-
-		private static void AddIncludeEdge(
-			Dictionary<string, HashSet<string>> includesByDocument,
-			Dictionary<string, HashSet<string>> dependentsByDocument,
-			PathKey source,
-			PathKey target)
-		{
-			string sourceKey = NormalizeDocumentKey(source.Value);
-			string targetKey = NormalizeDocumentKey(target.Value);
-			if (string.IsNullOrWhiteSpace(sourceKey) || string.IsNullOrWhiteSpace(targetKey))
-				return;
-
-			if (!includesByDocument.TryGetValue(sourceKey, out HashSet<string> includes))
-			{
-				includes = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-				includesByDocument[sourceKey] = includes;
-			}
-
-			if (!dependentsByDocument.TryGetValue(targetKey, out HashSet<string> dependents))
-			{
-				dependents = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-				dependentsByDocument[targetKey] = dependents;
-			}
-
-			includes.Add(targetKey);
-			dependents.Add(sourceKey);
 		}
 
 		private static bool TryResolveIncludeTarget(DataFact fact, out PathKey includeTarget)
@@ -514,6 +682,52 @@ namespace FFVM.Debug.Lsp.Database
 				+ "|" + symbol.DeclarationSpan.Length;
 		}
 
+		private sealed class DocumentIndexContribution
+		{
+			public DocumentIndexContribution(string documentKey)
+			{
+				DocumentKey = documentKey ?? string.Empty;
+				PositionEntries = new List<PositionEntry>();
+				SymbolsByKey = new Dictionary<string, SymbolIdentity>(StringComparer.Ordinal);
+				DefinitionsBySymbol = new Dictionary<string, DataFact>(StringComparer.Ordinal);
+				ReferencesBySymbol = new Dictionary<string, List<DataFact>>(StringComparer.Ordinal);
+				IncludesTargets = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+			}
+
+			public string DocumentKey { get; }
+			public List<PositionEntry> PositionEntries { get; }
+			public Dictionary<string, SymbolIdentity> SymbolsByKey { get; }
+			public Dictionary<string, DataFact> DefinitionsBySymbol { get; }
+			public Dictionary<string, List<DataFact>> ReferencesBySymbol { get; }
+			public HashSet<string> IncludesTargets { get; }
+
+			public DocumentIndexContribution Clone()
+			{
+				var clone = new DocumentIndexContribution(DocumentKey);
+
+				for (int i = 0; i < PositionEntries.Count; i++)
+					clone.PositionEntries.Add(PositionEntries[i]);
+
+				foreach (KeyValuePair<string, SymbolIdentity> pair in SymbolsByKey)
+					clone.SymbolsByKey[pair.Key] = pair.Value;
+
+				foreach (KeyValuePair<string, DataFact> pair in DefinitionsBySymbol)
+					clone.DefinitionsBySymbol[pair.Key] = pair.Value;
+
+				foreach (KeyValuePair<string, List<DataFact>> pair in ReferencesBySymbol)
+				{
+					clone.ReferencesBySymbol[pair.Key] = pair.Value != null
+						? new List<DataFact>(pair.Value)
+						: new List<DataFact>(0);
+				}
+
+				foreach (string includeTarget in IncludesTargets)
+					clone.IncludesTargets.Add(includeTarget);
+
+				return clone;
+			}
+		}
+
 		private sealed class InMemoryBuiltIndexSnapshot : IIndexSnapshot
 		{
 			public InMemoryBuiltIndexSnapshot(
@@ -521,13 +735,16 @@ namespace FFVM.Debug.Lsp.Database
 				IPositionIndex positionIndex,
 				ISymbolIndex symbolIndex,
 				IIncludeGraphIndex includeGraphIndex,
-				INameIndex nameIndex)
+				INameIndex nameIndex,
+				IReadOnlyDictionary<string, DocumentIndexContribution> contributionsByDocument)
 			{
 				SnapshotVersion = snapshotVersion;
 				PositionIndex = positionIndex;
 				SymbolIndex = symbolIndex;
 				IncludeGraphIndex = includeGraphIndex;
 				NameIndex = nameIndex;
+				ContributionsByDocument = contributionsByDocument
+					?? new Dictionary<string, DocumentIndexContribution>(StringComparer.OrdinalIgnoreCase);
 			}
 
 			public long SnapshotVersion { get; }
@@ -535,6 +752,7 @@ namespace FFVM.Debug.Lsp.Database
 			public ISymbolIndex SymbolIndex { get; }
 			public IIncludeGraphIndex IncludeGraphIndex { get; }
 			public INameIndex NameIndex { get; }
+			public IReadOnlyDictionary<string, DocumentIndexContribution> ContributionsByDocument { get; }
 		}
 
 		private sealed class InMemoryPositionIndex : IPositionIndex
@@ -549,9 +767,7 @@ namespace FFVM.Debug.Lsp.Database
 					return;
 
 				foreach (KeyValuePair<string, List<PositionEntry>> pair in entriesByDocument)
-				{
 					_entriesByDocument[pair.Key] = pair.Value ?? EmptyEntries;
-				}
 			}
 
 			public bool TryResolveSymbol(PathKey documentKey, TextPosition position, out SymbolIdentity symbol)
@@ -595,7 +811,7 @@ namespace FFVM.Debug.Lsp.Database
 
 		private sealed class InMemorySymbolIndex : ISymbolIndex
 		{
-			private static readonly IReadOnlyList<DataFact> EmptyFacts = new List<DataFact>(0);
+			private static readonly IReadOnlyList<DataFact> EmptyReferences = new List<DataFact>(0);
 
 			private readonly Dictionary<string, DataFact> _definitions;
 			private readonly Dictionary<string, IReadOnlyList<DataFact>> _references;
@@ -611,9 +827,7 @@ namespace FFVM.Debug.Lsp.Database
 					return;
 
 				foreach (KeyValuePair<string, List<DataFact>> pair in references)
-				{
-					_references[pair.Key] = pair.Value ?? EmptyFacts;
-				}
+					_references[pair.Key] = pair.Value ?? EmptyReferences;
 			}
 
 			public bool TryGetDefinition(SymbolIdentity symbol, out DataFact definitionFact)
@@ -628,11 +842,11 @@ namespace FFVM.Debug.Lsp.Database
 			public IReadOnlyList<DataFact> GetReferences(SymbolIdentity symbol, bool includeDeclaration)
 			{
 				if (symbol == null)
-					return EmptyFacts;
+					return EmptyReferences;
 
 				string key = BuildSymbolKey(symbol);
 				_references.TryGetValue(key, out IReadOnlyList<DataFact> references);
-				references = references ?? EmptyFacts;
+				references = references ?? EmptyReferences;
 
 				if (!includeDeclaration)
 					return references;

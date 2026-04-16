@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using Stopwatch = System.Diagnostics.Stopwatch;
 using FFVM.Debug;
 using FFVM.Debug.Lsp.Database;
 using FFVM.Debug.Lsp.Database.Contracts;
@@ -470,6 +471,309 @@ public static class LspDatabaseTests
 			Assert(dependents.Count == 1 && dependents[0].Value == sourceDocument.Value, "DBMID-11C: dependent graph contains source document");
 		}
 
+		// ================================================================
+		// DBMID-12: ApplyChangeSet prefers incremental index Update
+		// ================================================================
+		{
+			var orchestrator = new InMemoryDatabaseExecutionOrchestrator();
+			var trackingMaintainer = new TrackingIndexMaintainer();
+			var database = new InMemoryWorkspaceCodeDatabase(orchestrator, indexMaintainer: trackingMaintainer);
+
+			var documentA = new PathKey("file:///tests/incremental-a.ffs");
+			var documentB = new PathKey("file:///tests/incremental-b.ffs");
+
+			var definitionA = new DataFact(
+				new DataFactId("inc-a-def"),
+				new DataAggregateId("agg-inc-a"),
+				DataFactKind.SymbolDefinition,
+				documentA,
+				new TextSpan(0, 5),
+				snapshotVersion: 1,
+				payload: CreateSymbolFactPayload(documentA.Value, "Function", "alpha", 0, 0, 0, 5, 0, 5));
+
+			var definitionB = new DataFact(
+				new DataFactId("inc-b-def"),
+				new DataAggregateId("agg-inc-b"),
+				DataFactKind.SymbolDefinition,
+				documentB,
+				new TextSpan(0, 6),
+				snapshotVersion: 1,
+				payload: CreateSymbolFactPayload(documentB.Value, "Function", "betaFn", 0, 0, 0, 6, 0, 6));
+
+			var aggregateA = new DataAggregate(
+				new DataAggregateId("agg-inc-a"),
+				DataAggregateKind.Document,
+				documentA,
+				"ffscript",
+				"HASH-A",
+				1,
+				new List<DataFact> { definitionA });
+
+			var aggregateB = new DataAggregate(
+				new DataAggregateId("agg-inc-b"),
+				DataAggregateKind.Document,
+				documentB,
+				"ffscript",
+				"HASH-B",
+				1,
+				new List<DataFact> { definitionB });
+
+			var replacementSnapshot = new CodeDatabaseSnapshot(
+				version: 9,
+				capturedAtUtc: DateTime.UtcNow,
+				aggregates: new List<DataAggregate> { aggregateA, aggregateB },
+				facts: new List<DataFact> { definitionA, definitionB },
+				indexSnapshot: null);
+
+			DatabaseOperationResult replaceResult = database.Execute(DatabaseOperationRequest.ReplaceSnapshot(
+				replacementSnapshot,
+				reason: "incremental-bootstrap",
+				correlationId: "corr-incremental-bootstrap",
+				priority: DatabaseOperationPriority.Normal,
+				timeout: TimeSpan.FromSeconds(15)));
+
+			Assert(replaceResult != null && replaceResult.Succeeded, "DBMID-12A: replace snapshot bootstrap succeeded");
+			Assert(trackingMaintainer.RebuildCallCount >= 1, "DBMID-12B: bootstrap triggered rebuild");
+
+			DatabaseOperationResult applyResult = database.Execute(CreateApplyChangesRequest(
+				streamKey: "stream://doc/incremental-a",
+				priority: DatabaseOperationPriority.Normal,
+				expectedVersion: null,
+				createdAtUtc: DateTime.UtcNow,
+				changes: new[]
+				{
+					new DatabaseChangeEvent(
+						DatabaseChangeKind.DocumentChanged,
+						documentA,
+						2,
+						CreateDidChangePayload(documentA.Value, 2, "func alpha() { wait 2 }")),
+				}));
+
+			Assert(applyResult != null && applyResult.Succeeded, "DBMID-12C: apply change succeeded");
+			Assert(trackingMaintainer.UpdateCallCount >= 1, "DBMID-12D: apply change used incremental update");
+			Assert(
+				trackingMaintainer.LastUpdatedDocuments != null
+				&& trackingMaintainer.LastUpdatedDocuments.Count > 0
+				&& trackingMaintainer.LastUpdatedDocuments[0].Value == documentA.Value,
+				"DBMID-12E: changed document hint forwarded to index update");
+
+			var facade = new InMemoryLspQueryFacade();
+			var completionRequest = new SymbolQueryRequest("completion", documentB.Value, new TextPosition(0, 0), new TextSpan(0, 0), false, "beta");
+			SymbolQueryResult completionResult = facade.QueryCompletion(applyResult?.Snapshot, completionRequest);
+			Assert(completionResult != null && completionResult.Succeeded, "DBMID-12F: query still works after incremental update");
+		}
+
+		// ================================================================
+		// DBMID-13: Incremental Update matches full Rebuild results
+		// ================================================================
+		{
+			var maintainer = new InMemoryIndexMaintainer();
+			var facade = new InMemoryLspQueryFacade();
+
+			var documentA = new PathKey("file:///tests/inc13-a.ffs");
+			var documentB = new PathKey("file:///tests/inc13-b.ffs");
+			var documentC = new PathKey("file:///tests/inc13-c.ffs");
+
+			var baseDefinitionA = new DataFact(
+				new DataFactId("inc13-a-def-v1"),
+				new DataAggregateId("agg-inc13-a"),
+				DataFactKind.SymbolDefinition,
+				documentA,
+				new TextSpan(0, 5),
+				snapshotVersion: 20,
+				payload: CreateSymbolFactPayload(documentA.Value, "Function", "alpha", 0, 0, 0, 5, 0, 5));
+
+			var baseReferenceA = new DataFact(
+				new DataFactId("inc13-a-ref-v1"),
+				new DataAggregateId("agg-inc13-a"),
+				DataFactKind.SymbolReference,
+				documentA,
+				new TextSpan(20, 5),
+				snapshotVersion: 20,
+				payload: CreateSymbolFactPayload(documentA.Value, "Function", "alpha", 1, 0, 1, 5, 0, 5));
+
+			var baseIncludeAtoB = new DataFact(
+				new DataFactId("inc13-a-include-v1"),
+				new DataAggregateId("agg-inc13-a"),
+				DataFactKind.IncludeEdge,
+				documentA,
+				new TextSpan(0, 0),
+				snapshotVersion: 20,
+				payload: CreateIncludePayload(documentB.Value));
+
+			var baseDefinitionB = new DataFact(
+				new DataFactId("inc13-b-def-v1"),
+				new DataAggregateId("agg-inc13-b"),
+				DataFactKind.SymbolDefinition,
+				documentB,
+				new TextSpan(0, 4),
+				snapshotVersion: 20,
+				payload: CreateSymbolFactPayload(documentB.Value, "Function", "beta", 0, 0, 0, 4, 0, 4));
+
+			var baselineSnapshot = new CodeDatabaseSnapshot(
+				version: 20,
+				capturedAtUtc: DateTime.UtcNow,
+				aggregates: new List<DataAggregate>
+				{
+					new DataAggregate(
+						new DataAggregateId("agg-inc13-a"),
+						DataAggregateKind.Document,
+						documentA,
+						"ffscript",
+						"HASH-INC13-A-V1",
+						1,
+						new List<DataFact> { baseDefinitionA, baseReferenceA, baseIncludeAtoB }),
+					new DataAggregate(
+						new DataAggregateId("agg-inc13-b"),
+						DataAggregateKind.Document,
+						documentB,
+						"ffscript",
+						"HASH-INC13-B-V1",
+						1,
+						new List<DataFact> { baseDefinitionB }),
+				},
+				facts: new List<DataFact> { baseDefinitionA, baseReferenceA, baseIncludeAtoB, baseDefinitionB },
+				indexSnapshot: null);
+
+			IIndexSnapshot baselineIndex = maintainer.Rebuild(baselineSnapshot);
+			Assert(baselineIndex != null, "DBMID-13A: baseline rebuild succeeded");
+
+			var nextDefinitionA = new DataFact(
+				new DataFactId("inc13-a-def-v2"),
+				new DataAggregateId("agg-inc13-a"),
+				DataFactKind.SymbolDefinition,
+				documentA,
+				new TextSpan(0, 6),
+				snapshotVersion: 21,
+				payload: CreateSymbolFactPayload(documentA.Value, "Function", "alpha2", 0, 0, 0, 6, 0, 6));
+
+			var nextReferenceA = new DataFact(
+				new DataFactId("inc13-a-ref-v2"),
+				new DataAggregateId("agg-inc13-a"),
+				DataFactKind.SymbolReference,
+				documentA,
+				new TextSpan(30, 6),
+				snapshotVersion: 21,
+				payload: CreateSymbolFactPayload(documentA.Value, "Function", "alpha2", 2, 1, 2, 7, 0, 6));
+
+			var nextDefinitionC = new DataFact(
+				new DataFactId("inc13-c-def-v1"),
+				new DataAggregateId("agg-inc13-c"),
+				DataFactKind.SymbolDefinition,
+				documentC,
+				new TextSpan(0, 5),
+				snapshotVersion: 21,
+				payload: CreateSymbolFactPayload(documentC.Value, "Function", "gamma", 0, 0, 0, 5, 0, 5));
+
+			var includeCtoA = new DataFact(
+				new DataFactId("inc13-c-include-v1"),
+				new DataAggregateId("agg-inc13-c"),
+				DataFactKind.IncludeEdge,
+				documentC,
+				new TextSpan(0, 0),
+				snapshotVersion: 21,
+				payload: CreateIncludePayload(documentA.Value));
+
+			var nextSnapshot = new CodeDatabaseSnapshot(
+				version: 21,
+				capturedAtUtc: DateTime.UtcNow,
+				aggregates: new List<DataAggregate>
+				{
+					new DataAggregate(
+						new DataAggregateId("agg-inc13-a"),
+						DataAggregateKind.Document,
+						documentA,
+						"ffscript",
+						"HASH-INC13-A-V2",
+						2,
+						new List<DataFact> { nextDefinitionA, nextReferenceA }),
+					new DataAggregate(
+						new DataAggregateId("agg-inc13-b"),
+						DataAggregateKind.Document,
+						documentB,
+						"ffscript",
+						"HASH-INC13-B-V1",
+						1,
+						new List<DataFact> { baseDefinitionB }),
+					new DataAggregate(
+						new DataAggregateId("agg-inc13-c"),
+						DataAggregateKind.Document,
+						documentC,
+						"ffscript",
+						"HASH-INC13-C-V1",
+						1,
+						new List<DataFact> { nextDefinitionC, includeCtoA }),
+				},
+				facts: new List<DataFact> { nextDefinitionA, nextReferenceA, baseDefinitionB, nextDefinitionC, includeCtoA },
+				indexSnapshot: null);
+
+			Stopwatch incrementalStopwatch = Stopwatch.StartNew();
+			IIndexSnapshot incrementalIndex = maintainer.Update(
+				baselineIndex,
+				nextSnapshot,
+				new List<PathKey> { documentA, documentC });
+			incrementalStopwatch.Stop();
+
+			Stopwatch rebuildStopwatch = Stopwatch.StartNew();
+			IIndexSnapshot rebuiltIndex = maintainer.Rebuild(nextSnapshot);
+			rebuildStopwatch.Stop();
+
+			Assert(incrementalIndex != null && rebuiltIndex != null, "DBMID-13B: incremental and rebuild snapshots produced");
+			Debug.Log($"[DBMID-13] IncrementalMs={incrementalStopwatch.Elapsed.TotalMilliseconds:F3}, RebuildMs={rebuildStopwatch.Elapsed.TotalMilliseconds:F3}");
+
+			var incrementalSnapshot = new CodeDatabaseSnapshot(
+				nextSnapshot.Version,
+				nextSnapshot.CapturedAtUtc,
+				nextSnapshot.Aggregates,
+				nextSnapshot.Facts,
+				incrementalIndex);
+
+			var rebuiltSnapshot = new CodeDatabaseSnapshot(
+				nextSnapshot.Version,
+				nextSnapshot.CapturedAtUtc,
+				nextSnapshot.Aggregates,
+				nextSnapshot.Facts,
+				rebuiltIndex);
+
+			var definitionRequest = SymbolQueryRequest.ForPosition("definition", documentA.Value, new TextPosition(0, 1));
+			SymbolQueryResult incrementalDefinition = facade.QueryDefinition(incrementalSnapshot, definitionRequest);
+			SymbolQueryResult rebuiltDefinition = facade.QueryDefinition(rebuiltSnapshot, definitionRequest);
+			Assert(AreQueryResultsEquivalent(incrementalDefinition, rebuiltDefinition), "DBMID-13C: definition query equivalent between update and rebuild");
+
+			var referencesRequest = new SymbolQueryRequest("references", documentA.Value, new TextPosition(0, 1), new TextSpan(0, 0), false, string.Empty);
+			SymbolQueryResult incrementalReferences = facade.QueryReferences(incrementalSnapshot, referencesRequest);
+			SymbolQueryResult rebuiltReferences = facade.QueryReferences(rebuiltSnapshot, referencesRequest);
+			Assert(AreQueryResultsEquivalent(incrementalReferences, rebuiltReferences), "DBMID-13D: references query equivalent between update and rebuild");
+
+			var completionAlphaRequest = new SymbolQueryRequest("completion", documentA.Value, new TextPosition(0, 0), new TextSpan(0, 0), false, "alpha2");
+			SymbolQueryResult incrementalCompletionAlpha = facade.QueryCompletion(incrementalSnapshot, completionAlphaRequest);
+			SymbolQueryResult rebuiltCompletionAlpha = facade.QueryCompletion(rebuiltSnapshot, completionAlphaRequest);
+			Assert(
+				BuildCompletionLabelSignature(incrementalCompletionAlpha) == BuildCompletionLabelSignature(rebuiltCompletionAlpha)
+				&& ContainsCompletionLabel(incrementalCompletionAlpha, "alpha2"),
+				"DBMID-13E: completion labels equivalent and include updated symbol");
+
+			var completionBetaRequest = new SymbolQueryRequest("completion", documentB.Value, new TextPosition(0, 0), new TextSpan(0, 0), false, "beta");
+			SymbolQueryResult incrementalCompletionBeta = facade.QueryCompletion(incrementalSnapshot, completionBetaRequest);
+			SymbolQueryResult rebuiltCompletionBeta = facade.QueryCompletion(rebuiltSnapshot, completionBetaRequest);
+			Assert(
+				BuildCompletionLabelSignature(incrementalCompletionBeta) == BuildCompletionLabelSignature(rebuiltCompletionBeta)
+				&& ContainsCompletionLabel(incrementalCompletionBeta, "beta"),
+				"DBMID-13F: unchanged document symbol remains queryable");
+
+			string includesAIncremental = BuildPathListSignature(incrementalIndex.IncludeGraphIndex.GetIncludes(documentA));
+			string includesARebuilt = BuildPathListSignature(rebuiltIndex.IncludeGraphIndex.GetIncludes(documentA));
+			Assert(includesAIncremental == includesARebuilt && string.IsNullOrEmpty(includesAIncremental), "DBMID-13G: removed include edge is consistently absent");
+
+			string includesCIncremental = BuildPathListSignature(incrementalIndex.IncludeGraphIndex.GetIncludes(documentC));
+			string includesCRebuilt = BuildPathListSignature(rebuiltIndex.IncludeGraphIndex.GetIncludes(documentC));
+			Assert(includesCIncremental == includesCRebuilt && includesCIncremental == documentA.Value, "DBMID-13H: new include edge is consistently present");
+
+			string dependentsAIncremental = BuildPathListSignature(incrementalIndex.IncludeGraphIndex.GetDependents(documentA));
+			string dependentsARebuilt = BuildPathListSignature(rebuiltIndex.IncludeGraphIndex.GetDependents(documentA));
+			Assert(dependentsAIncremental == dependentsARebuilt && dependentsAIncremental == documentC.Value, "DBMID-13I: dependents graph is consistent");
+		}
+
 		Debug.Log($"[LspDatabaseTests] Completed. Passed={passed}, Failed={failed}");
 	}
 
@@ -581,5 +885,134 @@ public static class LspDatabaseTests
 		payload.Set("range", range);
 
 		return payload;
+	}
+
+	private static JsonObject CreateIncludePayload(string includeUri)
+	{
+		var payload = new JsonObject();
+		payload.Set("includeUri", includeUri ?? string.Empty);
+		return payload;
+	}
+
+	private static bool AreQueryResultsEquivalent(SymbolQueryResult left, SymbolQueryResult right)
+	{
+		if (left == null || right == null)
+			return left == right;
+
+		return left.Succeeded == right.Succeeded
+			&& BuildSymbolSignature(left.Symbol) == BuildSymbolSignature(right.Symbol)
+			&& BuildRangesSignature(left.Ranges) == BuildRangesSignature(right.Ranges);
+	}
+
+	private static string BuildSymbolSignature(SymbolIdentity symbol)
+	{
+		if (symbol == null)
+			return string.Empty;
+
+		return symbol.Kind
+			+ "|" + (symbol.Name ?? string.Empty)
+			+ "|" + (symbol.Scope ?? string.Empty)
+			+ "|" + (symbol.ParentName ?? string.Empty)
+			+ "|" + (symbol.Origin ?? string.Empty)
+			+ "|" + symbol.DeclarationSpan.Start
+			+ "|" + symbol.DeclarationSpan.Length;
+	}
+
+	private static string BuildRangesSignature(IReadOnlyList<TextSpan> ranges)
+	{
+		if (ranges == null || ranges.Count == 0)
+			return string.Empty;
+
+		var parts = new List<string>(ranges.Count);
+		for (int i = 0; i < ranges.Count; i++)
+		{
+			TextSpan range = ranges[i];
+			parts.Add(range.Start + ":" + range.Length);
+		}
+
+		return string.Join("|", parts);
+	}
+
+	private static string BuildCompletionLabelSignature(SymbolQueryResult result)
+	{
+		if (result == null)
+			return string.Empty;
+
+		IReadOnlyList<LspCompletionItem> items = result.Payload as IReadOnlyList<LspCompletionItem>;
+		if (items == null || items.Count == 0)
+			return string.Empty;
+
+		var labels = new List<string>(items.Count);
+		for (int i = 0; i < items.Count; i++)
+		{
+			LspCompletionItem item = items[i];
+			if (item == null)
+				continue;
+
+			labels.Add(item.Label ?? string.Empty);
+		}
+
+		return string.Join("|", labels);
+	}
+
+	private static bool ContainsCompletionLabel(SymbolQueryResult result, string expectedLabel)
+	{
+		if (result == null || string.IsNullOrWhiteSpace(expectedLabel))
+			return false;
+
+		IReadOnlyList<LspCompletionItem> items = result.Payload as IReadOnlyList<LspCompletionItem>;
+		if (items == null)
+			return false;
+
+		for (int i = 0; i < items.Count; i++)
+		{
+			LspCompletionItem item = items[i];
+			if (item != null && string.Equals(item.Label, expectedLabel, StringComparison.OrdinalIgnoreCase))
+				return true;
+		}
+
+		return false;
+	}
+
+	private static string BuildPathListSignature(IReadOnlyList<PathKey> paths)
+	{
+		if (paths == null || paths.Count == 0)
+			return string.Empty;
+
+		var values = new List<string>(paths.Count);
+		for (int i = 0; i < paths.Count; i++)
+		{
+			string value = paths[i].Value;
+			if (!string.IsNullOrWhiteSpace(value))
+				values.Add(value);
+		}
+
+		values.Sort(StringComparer.OrdinalIgnoreCase);
+		return string.Join("|", values);
+	}
+
+	private sealed class TrackingIndexMaintainer : IIndexMaintainer
+	{
+		private readonly InMemoryIndexMaintainer _inner = new InMemoryIndexMaintainer();
+
+		public int RebuildCallCount { get; private set; }
+		public int UpdateCallCount { get; private set; }
+		public IReadOnlyList<PathKey> LastUpdatedDocuments { get; private set; } = new List<PathKey>(0);
+
+		public IIndexSnapshot Rebuild(CodeDatabaseSnapshot snapshot)
+		{
+			RebuildCallCount++;
+			return _inner.Rebuild(snapshot);
+		}
+
+		public IIndexSnapshot Update(
+			IIndexSnapshot previous,
+			CodeDatabaseSnapshot snapshot,
+			IReadOnlyList<PathKey> changedDocuments)
+		{
+			UpdateCallCount++;
+			LastUpdatedDocuments = changedDocuments ?? new List<PathKey>(0);
+			return _inner.Update(previous, snapshot, changedDocuments);
+		}
 	}
 }

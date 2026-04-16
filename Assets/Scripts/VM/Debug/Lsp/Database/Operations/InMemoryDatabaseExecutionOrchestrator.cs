@@ -21,6 +21,7 @@
 using System;
 using System.Collections.Generic;
 using FFVM.Debug;
+using PathKey = FFVM.Debug.Lsp.Database.Paths.PathKey;
 
 namespace FFVM.Debug.Lsp.Database
 {
@@ -898,11 +899,11 @@ namespace FFVM.Debug.Lsp.Database
 					: baseline.Version + 1;
 
 				rawSnapshot = StampSnapshotVersion(fromReport, reportVersion, fromReport.IndexSnapshot);
-				return EnsureIndexSnapshot(rawSnapshot, request, indexMaintainer);
+				return EnsureIndexSnapshot(rawSnapshot, baseline, request, indexMaintainer);
 			}
 
 			if (request == null)
-				return EnsureIndexSnapshot(baseline, null, indexMaintainer);
+				return EnsureIndexSnapshot(baseline, baseline, null, indexMaintainer);
 
 			switch (request.Kind)
 			{
@@ -935,11 +936,12 @@ namespace FFVM.Debug.Lsp.Database
 					break;
 			}
 
-			return EnsureIndexSnapshot(rawSnapshot, request, indexMaintainer);
+			return EnsureIndexSnapshot(rawSnapshot, baseline, request, indexMaintainer);
 		}
 
 		private static CodeDatabaseSnapshot EnsureIndexSnapshot(
 			CodeDatabaseSnapshot snapshot,
+			CodeDatabaseSnapshot previousSnapshot,
 			DatabaseOperationRequest request,
 			IIndexMaintainer indexMaintainer)
 		{
@@ -955,14 +957,108 @@ namespace FFVM.Debug.Lsp.Database
 			bool shouldRepair = candidate.IndexSnapshot == null
 				|| candidate.IndexSnapshot.SnapshotVersion != candidate.Version;
 
-			if (!shouldRebuild && kind != DatabaseOperationKind.ReadSnapshot)
+			if (kind != DatabaseOperationKind.ApplyChangeSet
+				&& !shouldRebuild
+				&& kind != DatabaseOperationKind.ReadSnapshot)
 				return candidate;
+
+			if (kind == DatabaseOperationKind.ReadSnapshot && !shouldRepair)
+				return candidate;
+
+			if (kind == DatabaseOperationKind.ApplyChangeSet)
+			{
+				bool fullResyncRequested;
+				IReadOnlyList<PathKey> changedDocuments = ExtractChangedDocumentsForIndexing(request, out fullResyncRequested);
+
+				if (!fullResyncRequested
+					&& previousSnapshot != null
+					&& previousSnapshot.IndexSnapshot != null
+					&& changedDocuments != null
+					&& changedDocuments.Count > 0)
+				{
+					IIndexSnapshot updated = indexMaintainer.Update(previousSnapshot.IndexSnapshot, candidate, changedDocuments);
+					if (updated != null)
+						return StampSnapshotVersion(candidate, candidate.Version, updated);
+				}
+
+				IIndexSnapshot rebuiltForApply = indexMaintainer.Rebuild(candidate);
+				return StampSnapshotVersion(candidate, candidate.Version, rebuiltForApply);
+			}
 
 			if (!shouldRebuild && !shouldRepair)
 				return candidate;
 
 			IIndexSnapshot rebuilt = indexMaintainer.Rebuild(candidate);
 			return StampSnapshotVersion(candidate, candidate.Version, rebuilt);
+		}
+
+		private static IReadOnlyList<PathKey> ExtractChangedDocumentsForIndexing(
+			DatabaseOperationRequest request,
+			out bool fullResyncRequested)
+		{
+			fullResyncRequested = false;
+			if (request == null || request.Changes == null || request.Changes.Count == 0)
+				return new List<PathKey>(0);
+
+			var changedSet = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+			for (int i = 0; i < request.Changes.Count; i++)
+			{
+				DatabaseChangeEvent change = request.Changes[i];
+				if (change == null)
+					continue;
+
+				if (change.Kind == DatabaseChangeKind.FullResyncRequested)
+				{
+					fullResyncRequested = true;
+					return new List<PathKey>(0);
+				}
+
+				string documentKey = NormalizeDocumentKey(change.DocumentKey.Value);
+				if (!string.IsNullOrWhiteSpace(documentKey))
+					changedSet.Add(documentKey);
+
+				if (change.Payload is JsonObject payload)
+				{
+					JsonObject textDocument = payload.GetObject("textDocument");
+					if (textDocument != null)
+					{
+						string uri = NormalizeDocumentKey(textDocument.GetString("uri"));
+						if (!string.IsNullOrWhiteSpace(uri))
+							changedSet.Add(uri);
+					}
+
+					string directUri = NormalizeDocumentKey(payload.GetString("uri"));
+					if (!string.IsNullOrWhiteSpace(directUri))
+						changedSet.Add(directUri);
+				}
+
+				if (change.Kind == DatabaseChangeKind.FileRenamed
+					&& TryExtractRename(change, out string oldDocumentKey, out string newDocumentKey))
+				{
+					if (!string.IsNullOrWhiteSpace(oldDocumentKey))
+						changedSet.Add(oldDocumentKey);
+
+					if (!string.IsNullOrWhiteSpace(newDocumentKey))
+						changedSet.Add(newDocumentKey);
+				}
+
+				if (change.Kind == DatabaseChangeKind.WatchedFilesChanged
+					&& TryShouldDeleteByWatcher(change, out string deletedDocumentKey)
+					&& !string.IsNullOrWhiteSpace(deletedDocumentKey))
+				{
+					changedSet.Add(deletedDocumentKey);
+				}
+			}
+
+			var ordered = new List<string>(changedSet);
+			ordered.Sort(StringComparer.OrdinalIgnoreCase);
+
+			var changedDocuments = new List<PathKey>(ordered.Count);
+			for (int i = 0; i < ordered.Count; i++)
+				changedDocuments.Add(new PathKey(ordered[i]));
+
+			return changedDocuments;
 		}
 
 		private static CodeDatabaseSnapshot ComposeApplyChangeSetSnapshot(
