@@ -4,6 +4,7 @@ using System.IO;
 using System.Text.RegularExpressions;
 using FFVM.AST;
 using FFVM.Compiler;
+using FFVM.Debug.Pathing;
 
 namespace FFVM.Debug
 {
@@ -87,12 +88,16 @@ namespace FFVM.Debug
                 {
                     foreach (string oldPath in oldImports)
                     {
+                        string oldKey = WorkspacePathTool.NormalizePath(oldPath);
+                        if (string.IsNullOrEmpty(oldKey))
+                            continue;
+
                         HashSet<string> dependents;
-                        if (_includeDependents.TryGetValue(oldPath, out dependents))
+                        if (_includeDependents.TryGetValue(oldKey, out dependents))
                         {
                             dependents.Remove(uri);
                             if (dependents.Count == 0)
-                                _includeDependents.Remove(oldPath);
+                                _includeDependents.Remove(oldKey);
                         }
                     }
                 }
@@ -103,12 +108,16 @@ namespace FFVM.Debug
                 {
                     foreach (string path in resolvedImportPaths)
                     {
-                        newImports.Add(path);
+                        string normalizedPath = WorkspacePathTool.NormalizePath(path);
+                        if (string.IsNullOrEmpty(normalizedPath))
+                            continue;
+
+                        newImports.Add(normalizedPath);
                         HashSet<string> dependents;
-                        if (!_includeDependents.TryGetValue(path, out dependents))
+                        if (!_includeDependents.TryGetValue(normalizedPath, out dependents))
                         {
                             dependents = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-                            _includeDependents[path] = dependents;
+                            _includeDependents[normalizedPath] = dependents;
                         }
                         dependents.Add(uri);
                     }
@@ -122,8 +131,12 @@ namespace FFVM.Debug
             /// </summary>
             public HashSet<string> GetDependents(string resolvedFilePath)
             {
+                string key = WorkspacePathTool.NormalizePath(resolvedFilePath);
+                if (key == null)
+                    return new HashSet<string>();
+
                 HashSet<string> result;
-                if (resolvedFilePath != null && _includeDependents.TryGetValue(resolvedFilePath, out result))
+                if (_includeDependents.TryGetValue(key, out result))
                     return result;
                 return new HashSet<string>();
             }
@@ -670,25 +683,7 @@ namespace FFVM.Debug
         /// </summary>
         internal static string UriToPath(string uri)
         {
-            if (uri == null) return null;
-            // file:///path/to/dir or file:///C:/path on Windows
-            if (uri.StartsWith("file:///", StringComparison.Ordinal))
-            {
-                string path = uri.Substring("file:///".Length);
-                // Decode percent-encoded characters
-                path = Uri.UnescapeDataString(path);
-                // On Unix, paths start with / — add it back
-                // On Windows, paths start with drive letter (e.g. C:/...)
-                if (path.Length >= 2 && path[1] == ':')
-                    return path; // Windows path: C:/...
-                return "/" + path; // Unix path: /home/...
-            }
-            // file://host/path (UNC) — unlikely but handle gracefully
-            if (uri.StartsWith("file://", StringComparison.Ordinal))
-            {
-                return Uri.UnescapeDataString(uri.Substring("file://".Length));
-            }
-            return uri; // fallback: return as-is
+            return WorkspacePathTool.UriToPath(uri);
         }
 
         /// <summary>
@@ -917,13 +912,7 @@ namespace FFVM.Debug
         /// </summary>
         internal static string PathToFileUri(string path)
         {
-            if (path == null) return null;
-            path = path.Replace('\\', '/');
-            // Windows path: C:/... → file:///C:/...
-            if (path.Length >= 2 && path[1] == ':')
-                return "file:///" + path;
-            // Unix path: /home/... → file:///home/...
-            return "file:///" + path.TrimStart('/');
+            return WorkspacePathTool.PathToFileUri(path);
         }
         /// Used as filePath parameter for include cycle detection and diagnostics.
         /// Returns the relative path if under rootPath, otherwise returns the absolute path as fallback.
@@ -933,14 +922,7 @@ namespace FFVM.Debug
         {
             string absPath = UriToPath(uri);
             if (absPath == null || rootPath == null) return null;
-            // Normalize separators
-            absPath = absPath.Replace('\\', '/');
-            string normalizedRoot = rootPath.Replace('\\', '/');
-            if (!normalizedRoot.EndsWith("/")) normalizedRoot += "/";
-            if (absPath.StartsWith(normalizedRoot, StringComparison.OrdinalIgnoreCase))
-                return absPath.Substring(normalizedRoot.Length);
-            // Not under workspace root — use full path as filePath
-            return absPath;
+            return WorkspacePathTool.ToRelativePathOrAbsolute(absPath, rootPath);
         }
 
         private void HandleShutdown()
@@ -1310,16 +1292,13 @@ namespace FFVM.Debug
         internal static string FilePathToUri(string originFile, string rootPath)
         {
             if (originFile == null) return null;
-            // Resolve relative paths against rootPath
-            string absPath;
-            if (rootPath != null && !Path.IsPathRooted(originFile))
-                absPath = Path.GetFullPath(Path.Combine(rootPath, originFile));
-            else if (Path.IsPathRooted(originFile))
-                absPath = originFile;
-            else
-                return null; // relative path without rootPath — cannot resolve
-            // Normalize separators for URI
-            absPath = absPath.Replace('\\', '/');
+            if (!WorkspacePathTool.IsAbsolutePath(originFile) && rootPath == null)
+                return null;
+
+            string absPath = WorkspacePathTool.ResolvePath(rootPath, originFile);
+            if (absPath == null)
+                return null;
+
             // Append .ffs extension if the file doesn't have one and the .ffs file exists
             if (!absPath.EndsWith(".ffs", StringComparison.OrdinalIgnoreCase))
             {
@@ -1327,10 +1306,8 @@ namespace FFVM.Debug
                 if (File.Exists(withExt))
                     absPath = withExt;
             }
-            // Build file:// URI
-            if (absPath.Length >= 2 && absPath[1] == ':')
-                return "file:///" + Uri.EscapeDataString(absPath).Replace("%2F", "/").Replace("%3A", ":");
-            return "file:///" + absPath.TrimStart('/');
+
+            return WorkspacePathTool.PathToFileUri(absPath);
         }
 
         private JsonObject HandleDocumentSymbol(JsonObject parameters)
@@ -3603,8 +3580,8 @@ namespace FFVM.Debug
             {
                 foreach (var candidate in candidates)
                 {
-                    string absPath = Path.GetFullPath(Path.Combine(_rootPath, candidate));
-                    if (File.Exists(absPath))
+                    string absPath = WorkspacePathTool.ResolvePath(_rootPath, candidate);
+                    if (absPath != null && File.Exists(absPath))
                         return PathToFileUri(absPath);
                 }
                 // Try via project file resolver paths
@@ -3612,11 +3589,11 @@ namespace FFVM.Debug
                 {
                     foreach (var incPath in _projectFile.IncludePaths)
                     {
-                        string basePath = Path.IsPathRooted(incPath) ? incPath : Path.Combine(_rootPath, incPath);
+                        string basePath = WorkspacePathTool.ResolvePath(_rootPath, incPath);
                         foreach (var candidate in candidates)
                         {
-                            string absPath = Path.GetFullPath(Path.Combine(basePath, candidate));
-                            if (File.Exists(absPath))
+                            string absPath = WorkspacePathTool.ResolvePath(basePath, candidate);
+                            if (absPath != null && File.Exists(absPath))
                                 return PathToFileUri(absPath);
                         }
                     }
@@ -3778,21 +3755,18 @@ namespace FFVM.Debug
             var result = new List<(string, string)>();
             if (absPath == null) return result;
 
-            absPath = Path.GetFullPath(absPath).Replace('\\', '/');
+            absPath = WorkspacePathTool.NormalizePath(absPath);
 
             // Collect all base directories to check: workspace root + project includePaths
             var baseDirs = new List<string>();
             if (_rootPath != null)
-                baseDirs.Add(Path.GetFullPath(_rootPath).Replace('\\', '/'));
+                baseDirs.Add(WorkspacePathTool.NormalizePath(_rootPath));
 
             if (_projectFile != null)
             {
                 foreach (var incPath in _projectFile.IncludePaths)
                 {
-                    string basePath = Path.IsPathRooted(incPath)
-                        ? incPath
-                        : Path.Combine(_rootPath, incPath);
-                    basePath = Path.GetFullPath(basePath).Replace('\\', '/');
+                    string basePath = WorkspacePathTool.ResolvePath(_rootPath, incPath);
                     if (!baseDirs.Contains(basePath))
                         baseDirs.Add(basePath);
                 }

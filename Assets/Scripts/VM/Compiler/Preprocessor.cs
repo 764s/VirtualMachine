@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using FFVM.AST;
+using FFVM.Debug.Pathing;
 
 namespace FFVM.Compiler
 {
@@ -61,7 +62,7 @@ namespace FFVM.Compiler
 
         public FileSystemFileResolver(string baseDir)
         {
-            _baseDir = Path.GetFullPath(baseDir);
+            _baseDir = WorkspacePathTool.NormalizePath(Path.GetFullPath(baseDir));
         }
 
         public string ReadFile(string path)
@@ -78,12 +79,12 @@ namespace FFVM.Compiler
 
         private string ResolveFullPath(string path)
         {
-            string fullPath = Path.GetFullPath(Path.Combine(_baseDir, path));
+            string fullPath = WorkspacePathTool.ResolvePath(_baseDir, path);
             // Append .ffs extension if not present (include "common/constants" → common/constants.ffs)
             if (!fullPath.EndsWith(".ffs", StringComparison.OrdinalIgnoreCase))
                 fullPath += ".ffs";
             // Validate path stays within base directory (prevent path traversal)
-            if (!fullPath.StartsWith(_baseDir, StringComparison.OrdinalIgnoreCase))
+            if (!WorkspacePathTool.IsUnderDirectory(fullPath, _baseDir))
                 return null;
             if (!File.Exists(fullPath)) return null;
             return fullPath;

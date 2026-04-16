@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using FFVM.Debug;
+using FFVM.Debug.Pathing;
 
 namespace FFVM.Compiler
 {
@@ -159,9 +160,8 @@ namespace FFVM.Compiler
         public string ResolvePath(string relativePath)
         {
             if (string.IsNullOrEmpty(relativePath)) return relativePath;
-            if (string.IsNullOrEmpty(ProjectDir)) return relativePath;
-            if (Path.IsPathRooted(relativePath)) return relativePath;
-            return Path.GetFullPath(Path.Combine(ProjectDir, relativePath));
+            if (string.IsNullOrEmpty(ProjectDir)) return WorkspacePathTool.NormalizePath(relativePath);
+            return WorkspacePathTool.ResolvePath(ProjectDir, relativePath);
         }
 
         /// <summary>
