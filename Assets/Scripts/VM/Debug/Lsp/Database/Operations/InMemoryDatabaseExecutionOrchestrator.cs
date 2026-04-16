@@ -829,7 +829,7 @@ namespace FFVM.Debug.Lsp.Database
 					DatabaseTaskKind.FinalizeOperation,
 					description,
 					null,
-					null)
+					new FinalizeOperationTaskPayload(description))
 			};
 
 			return new DatabaseTaskPlan(

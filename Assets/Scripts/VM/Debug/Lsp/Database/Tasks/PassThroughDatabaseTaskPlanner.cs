@@ -36,13 +36,17 @@ namespace FFVM.Debug.Lsp.Database
 					DatabaseTaskKind.ValidateOperation,
 					"Validate operation shape and admission assumptions.",
 					null,
-					null),
+					new ValidateOperationTaskPayload(
+						request != null ? request.Kind : DatabaseOperationKind.Unknown,
+						request != null ? request.StreamKey : string.Empty,
+						request != null ? request.ExpectedVersion : null,
+						request != null && request.Changes != null ? request.Changes.Count : 0)),
 				new DatabaseTaskDescriptor(
 					"task-finalize",
 					DatabaseTaskKind.FinalizeOperation,
 					"Finalize operation lifecycle state.",
 					new[] { "task-validate" },
-					null),
+					new FinalizeOperationTaskPayload("Finalize operation lifecycle state.")),
 			};
 
 			long version = snapshot?.Version ?? CodeDatabaseSnapshot.Empty().Version;

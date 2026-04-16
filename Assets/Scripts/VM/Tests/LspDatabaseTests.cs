@@ -171,21 +171,38 @@ public static class LspDatabaseTests
 			var planOlder = planner.Plan(CodeDatabaseSnapshot.Empty(), older);
 			var planNewer = planner.Plan(CodeDatabaseSnapshot.Empty(), newer);
 
+			ValidateOperationTaskPayload olderValidatePayload = planOlder != null && planOlder.Tasks.Count > 0
+				? planOlder.Tasks[0].Payload as ValidateOperationTaskPayload
+				: null;
+			FinalizeOperationTaskPayload newerFinalizePayload = planNewer != null && planNewer.Tasks.Count > 1
+				? planNewer.Tasks[1].Payload as FinalizeOperationTaskPayload
+				: null;
+
+			Assert(
+				olderValidatePayload != null
+				&& olderValidatePayload.OperationKind == DatabaseOperationKind.ApplyChangeSet
+				&& olderValidatePayload.StreamKey == older.StreamKey,
+				"DBMID-05A: planner emits typed validate payload");
+			Assert(
+				newerFinalizePayload != null
+				&& !string.IsNullOrWhiteSpace(newerFinalizePayload.FinalizationReason),
+				"DBMID-05B: planner emits typed finalize payload");
+
 			DatabaseTaskEnqueueResult enqueueOlder = center.Enqueue(planOlder, older);
 			DatabaseTaskEnqueueResult enqueueNewer = center.Enqueue(planNewer, newer);
 
-			Assert(enqueueOlder.Accepted, "DBMID-05A: older command enqueued");
-			Assert(enqueueNewer.Accepted, "DBMID-05B: newer command enqueued");
+			Assert(enqueueOlder.Accepted, "DBMID-05C: older command enqueued");
+			Assert(enqueueNewer.Accepted, "DBMID-05D: newer command enqueued");
 			Assert(
 				enqueueNewer.SupersededCanceledCount >= 1,
-				"DBMID-05C: newer enqueue canceled superseded pending command");
+				"DBMID-05E: newer enqueue canceled superseded pending command");
 
 			bool hasLatest = center.TryGetLatestPending("stream://doc/task-center", out DatabaseOperationRequest latest);
-			Assert(hasLatest && latest != null && latest.CommandId == newer.CommandId, "DBMID-05D: latest pending is newer command");
+			Assert(hasLatest && latest != null && latest.CommandId == newer.CommandId, "DBMID-05F: latest pending is newer command");
 
 			DatabaseTaskExecutionReport execution = center.Execute(planNewer, newer);
-			Assert(execution != null && execution.Succeeded, "DBMID-05E: execute returns success report");
-			Assert(center.TryDrainOne(out _), "DBMID-05F: drain exposes completed report");
+			Assert(execution != null && execution.Succeeded, "DBMID-05G: execute returns success report");
+			Assert(center.TryDrainOne(out _), "DBMID-05H: drain exposes completed report");
 		}
 
 		// ================================================================

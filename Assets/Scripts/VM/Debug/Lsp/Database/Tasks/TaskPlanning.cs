@@ -23,6 +23,40 @@ using System.Collections.Generic;
 
 namespace FFVM.Debug.Lsp.Database
 {
+	public abstract class DatabaseTaskPayload
+	{
+	}
+
+	public sealed class ValidateOperationTaskPayload : DatabaseTaskPayload
+	{
+		public DatabaseOperationKind OperationKind { get; }
+		public string StreamKey { get; }
+		public long? ExpectedVersion { get; }
+		public int ChangeCount { get; }
+
+		public ValidateOperationTaskPayload(
+			DatabaseOperationKind operationKind,
+			string streamKey,
+			long? expectedVersion,
+			int changeCount)
+		{
+			OperationKind = operationKind;
+			StreamKey = streamKey ?? string.Empty;
+			ExpectedVersion = expectedVersion;
+			ChangeCount = changeCount;
+		}
+	}
+
+	public sealed class FinalizeOperationTaskPayload : DatabaseTaskPayload
+	{
+		public string FinalizationReason { get; }
+
+		public FinalizeOperationTaskPayload(string finalizationReason)
+		{
+			FinalizationReason = finalizationReason ?? string.Empty;
+		}
+	}
+
 	public enum DatabaseTaskKind
 	{
 		Unknown = 0,
@@ -44,14 +78,14 @@ namespace FFVM.Debug.Lsp.Database
 		public DatabaseTaskKind Kind { get; }
 		public string Description { get; }
 		public IReadOnlyList<string> DependsOnTaskIds { get; }
-		public object Payload { get; }
+		public DatabaseTaskPayload Payload { get; }
 
 		public DatabaseTaskDescriptor(
 			string taskId,
 			DatabaseTaskKind kind,
 			string description,
 			IReadOnlyList<string> dependsOnTaskIds,
-			object payload)
+			DatabaseTaskPayload payload)
 		{
 			TaskId = taskId ?? string.Empty;
 			Kind = kind;
