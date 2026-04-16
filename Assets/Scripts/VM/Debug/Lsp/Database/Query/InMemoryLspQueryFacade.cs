@@ -34,6 +34,8 @@ namespace FFVM.Debug.Lsp.Database
 		private const int SemanticTokenTypeEnum = 10;
 		private const int SemanticTokenTypeFunction = 12;
 		private const int SemanticTokenTypeKeyword = 15;
+		private const int SemanticTokenTypeEnumDeclaration = 3;
+		private const int SemanticTokenTypeUnknown = -1;
 
 		public SymbolQueryResult QueryDefinition(CodeDatabaseSnapshot snapshot, SymbolQueryRequest request)
 		{
@@ -539,7 +541,7 @@ namespace FFVM.Debug.Lsp.Database
 				case SymbolKindTag.Parameter:
 					return SemanticTokenTypeParameter;
 				case SymbolKindTag.Enum:
-					return 3;
+					return SemanticTokenTypeEnumDeclaration;
 				case SymbolKindTag.StructField:
 					return SemanticTokenTypeProperty;
 				case SymbolKindTag.EnumMember:
@@ -547,7 +549,7 @@ namespace FFVM.Debug.Lsp.Database
 				case SymbolKindTag.IncludeFile:
 					return SemanticTokenTypeKeyword;
 				default:
-					return -1;
+					return SemanticTokenTypeUnknown;
 			}
 		}
 

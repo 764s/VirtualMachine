@@ -31,6 +31,72 @@ namespace FFVM.Debug.Lsp.Integration.VsCode
 		private readonly ILspQueryFacade _queryFacade;
 		private readonly object _sync = new object();
 		private readonly Queue<LspPublishedDiagnostics> _diagnosticsQueue = new Queue<LspPublishedDiagnostics>();
+		private const int DatabaseWriteTimeoutSeconds = 15;
+		private const int SnapshotReadTimeoutSeconds = 10;
+		private const string CorrelationPrefixLspNotify = "lsp-notify-";
+		private const string CorrelationLspNotifyWatchedFiles = "lsp-notify-watched-files";
+		private const string CorrelationLspReadSnapshot = "lsp-query-read-snapshot";
+		private const string DocumentStreamPrefix = "doc:";
+
+		private static class QueryOperationNames
+		{
+			public const string DocumentSymbol = "documentSymbol";
+			public const string Hover = "hover";
+			public const string Definition = "definition";
+			public const string References = "references";
+			public const string Completion = "completion";
+			public const string SignatureHelp = "signatureHelp";
+			public const string Rename = "rename";
+			public const string PrepareRename = "prepareRename";
+			public const string SemanticTokensFull = "semanticTokens/full";
+		}
+
+		private static class NotificationReasons
+		{
+			public const string DidOpen = "didOpen";
+			public const string DidChange = "didChange";
+			public const string DidClose = "didClose";
+			public const string DidChangeWatchedFiles = "didChangeWatchedFiles";
+		}
+
+		private static class JsonFields
+		{
+			public const string Changes = "changes";
+			public const string Uri = "uri";
+			public const string Type = "type";
+			public const string Context = "context";
+			public const string IncludeDeclaration = "includeDeclaration";
+			public const string NewName = "newName";
+			public const string Position = "position";
+			public const string Line = "line";
+			public const string Character = "character";
+			public const string TextDocument = "textDocument";
+			public const string Version = "version";
+			public const string LanguageId = "languageId";
+			public const string Text = "text";
+			public const string ContentChanges = "contentChanges";
+			public const string OldUri = "oldUri";
+			public const string OldPath = "oldPath";
+			public const string NewUri = "newUri";
+			public const string NewPath = "newPath";
+		}
+
+		private static class WatchedFileChangeTypeCodes
+		{
+			public const int Created = 1;
+			public const int Changed = 2;
+			public const int Deleted = 3;
+		}
+
+		private static class WatchedFileChangeTypeNames
+		{
+			public const string Created = "created";
+			public const string Create = "create";
+			public const string Changed = "changed";
+			public const string Change = "change";
+			public const string Deleted = "deleted";
+			public const string Delete = "delete";
+		}
 
 		public DatabaseBackedVsCodeBridge(
 			IWorkspaceCodeDatabase database,
@@ -59,17 +125,17 @@ namespace FFVM.Debug.Lsp.Integration.VsCode
 
 		public void DidOpen(JsonObject didOpenParams)
 		{
-			ApplySingleChange(DatabaseChangeKind.DocumentOpened, didOpenParams, "didOpen");
+			ApplySingleChange(DatabaseChangeKind.DocumentOpened, didOpenParams, NotificationReasons.DidOpen);
 		}
 
 		public void DidChange(JsonObject didChangeParams)
 		{
-			ApplySingleChange(DatabaseChangeKind.DocumentChanged, didChangeParams, "didChange");
+			ApplySingleChange(DatabaseChangeKind.DocumentChanged, didChangeParams, NotificationReasons.DidChange);
 		}
 
 		public void DidClose(JsonObject didCloseParams)
 		{
-			ApplySingleChange(DatabaseChangeKind.DocumentClosed, didCloseParams, "didClose");
+			ApplySingleChange(DatabaseChangeKind.DocumentClosed, didCloseParams, NotificationReasons.DidClose);
 		}
 
 		public void DidChangeWatchedFiles(JsonObject didChangeWatchedFilesParams)
@@ -77,7 +143,7 @@ namespace FFVM.Debug.Lsp.Integration.VsCode
 			if (didChangeWatchedFilesParams == null)
 				return;
 
-			List<object> rawChanges = didChangeWatchedFilesParams.GetArray("changes");
+			List<object> rawChanges = didChangeWatchedFilesParams.GetArray(JsonFields.Changes);
 			if (rawChanges == null || rawChanges.Count == 0)
 				return;
 
@@ -87,10 +153,10 @@ namespace FFVM.Debug.Lsp.Integration.VsCode
 				if (!(rawChanges[i] is JsonObject item))
 					continue;
 
-				string uri = DocumentKeyNormalizer.Normalize(item.GetString("uri"));
+				string uri = DocumentKeyNormalizer.Normalize(item.GetString(JsonFields.Uri));
 				if (string.IsNullOrWhiteSpace(uri))
 					continue;
-				WatchedFileChangeType changeType = ParseWatchedFileChangeType(item.Get("type"));
+				WatchedFileChangeType changeType = ParseWatchedFileChangeType(item.Get(JsonFields.Type));
 				changes.Add(new DatabaseChangeEvent(
 					DatabaseChangeKind.WatchedFilesChanged,
 					new PathKey(uri),
@@ -103,10 +169,10 @@ namespace FFVM.Debug.Lsp.Integration.VsCode
 
 			_database.Execute(DatabaseOperationRequest.ApplyChanges(
 				changes,
-				reason: "didChangeWatchedFiles",
-				correlationId: "lsp-notify-watched-files",
+				reason: NotificationReasons.DidChangeWatchedFiles,
+				correlationId: CorrelationLspNotifyWatchedFiles,
 				priority: DatabaseOperationPriority.Normal,
-				timeout: TimeSpan.FromSeconds(15),
+				timeout: TimeSpan.FromSeconds(DatabaseWriteTimeoutSeconds),
 				streamKey: string.Empty,
 				streamBehavior: DatabaseOperationStreamBehavior.None));
 		}
@@ -116,35 +182,35 @@ namespace FFVM.Debug.Lsp.Integration.VsCode
 			if (!TryReadSnapshot(out CodeDatabaseSnapshot snapshot))
 				return new List<LspDocumentSymbolItem>(0);
 
-			SymbolQueryRequest query = BuildQueryRequest("documentSymbol", requestParams, false, string.Empty);
+			SymbolQueryRequest query = BuildQueryRequest(QueryOperationNames.DocumentSymbol, requestParams, false, string.Empty);
 			return NormalizeDocumentSymbols(_queryFacade.QueryDocumentSymbols(snapshot, query));
 		}
 
 		public LspHoverPayload QueryHover(JsonObject requestParams)
 		{
-			SymbolQueryPayload payload = ExecutePayloadQuery("hover", requestParams, false, string.Empty, (snapshot, query)
+			SymbolQueryPayload payload = ExecutePayloadQuery(QueryOperationNames.Hover, requestParams, false, string.Empty, (snapshot, query)
 				=> _queryFacade.QueryHover(snapshot, query));
 			return NormalizeHover(payload != null ? payload.Hover : null);
 		}
 
 		public LspDefinitionPayload QueryDefinition(JsonObject requestParams)
 		{
-			SymbolQueryPayload payload = ExecutePayloadQuery("definition", requestParams, false, string.Empty, (snapshot, query)
+			SymbolQueryPayload payload = ExecutePayloadQuery(QueryOperationNames.Definition, requestParams, false, string.Empty, (snapshot, query)
 				=> _queryFacade.QueryDefinition(snapshot, query));
 			return NormalizeDefinition(payload != null ? payload.Definition : null);
 		}
 
 		public IReadOnlyList<LspReferenceItem> QueryReferences(JsonObject requestParams)
 		{
-			bool includeDeclaration = requestParams?.GetObject("context")?.GetBool("includeDeclaration") == true;
-			SymbolQueryPayload payload = ExecutePayloadQuery("references", requestParams, includeDeclaration, string.Empty, (snapshot, query)
+			bool includeDeclaration = requestParams?.GetObject(JsonFields.Context)?.GetBool(JsonFields.IncludeDeclaration) == true;
+			SymbolQueryPayload payload = ExecutePayloadQuery(QueryOperationNames.References, requestParams, includeDeclaration, string.Empty, (snapshot, query)
 				=> _queryFacade.QueryReferences(snapshot, query));
 			return NormalizeReferences(payload != null ? payload.References : null);
 		}
 
 		public IReadOnlyList<LspCompletionItem> QueryCompletion(JsonObject requestParams)
 		{
-			SymbolQueryPayload payload = ExecutePayloadQuery("completion", requestParams, false, string.Empty, (snapshot, query)
+			SymbolQueryPayload payload = ExecutePayloadQuery(QueryOperationNames.Completion, requestParams, false, string.Empty, (snapshot, query)
 				=> _queryFacade.QueryCompletion(snapshot, query));
 			return payload != null && payload.CompletionItems != null
 				? payload.CompletionItems
@@ -153,22 +219,22 @@ namespace FFVM.Debug.Lsp.Integration.VsCode
 
 		public LspSignatureHelpPayload QuerySignatureHelp(JsonObject requestParams)
 		{
-			SymbolQueryPayload payload = ExecutePayloadQuery("signatureHelp", requestParams, false, string.Empty, (snapshot, query)
+			SymbolQueryPayload payload = ExecutePayloadQuery(QueryOperationNames.SignatureHelp, requestParams, false, string.Empty, (snapshot, query)
 				=> _queryFacade.QuerySignatureHelp(snapshot, query));
 			return NormalizeSignatureHelp(payload != null ? payload.SignatureHelp : null);
 		}
 
 		public LspRenamePayload QueryRename(JsonObject requestParams)
 		{
-			string newName = requestParams != null ? requestParams.GetString("newName") : string.Empty;
-			SymbolQueryPayload payload = ExecutePayloadQuery("rename", requestParams, true, newName, (snapshot, query)
+			string newName = requestParams != null ? requestParams.GetString(JsonFields.NewName) : string.Empty;
+			SymbolQueryPayload payload = ExecutePayloadQuery(QueryOperationNames.Rename, requestParams, true, newName, (snapshot, query)
 				=> _queryFacade.QueryRename(snapshot, query));
 			return NormalizeRename(payload != null ? payload.Rename : null);
 		}
 
 		public LspPrepareRenamePayload QueryPrepareRename(JsonObject requestParams)
 		{
-			SymbolQueryPayload payload = ExecutePayloadQuery("prepareRename", requestParams, false, string.Empty, (snapshot, query)
+			SymbolQueryPayload payload = ExecutePayloadQuery(QueryOperationNames.PrepareRename, requestParams, false, string.Empty, (snapshot, query)
 				=> _queryFacade.QueryPrepareRename(snapshot, query));
 			return payload != null ? payload.PrepareRename : null;
 		}
@@ -178,7 +244,7 @@ namespace FFVM.Debug.Lsp.Integration.VsCode
 			if (!TryReadSnapshot(out CodeDatabaseSnapshot snapshot))
 				return new LspSemanticTokensPayload(new List<int>(0), "Snapshot is unavailable.");
 
-			SymbolQueryRequest query = BuildQueryRequest("semanticTokens/full", requestParams, false, string.Empty);
+			SymbolQueryRequest query = BuildQueryRequest(QueryOperationNames.SemanticTokensFull, requestParams, false, string.Empty);
 			return _queryFacade.QuerySemanticTokensFull(snapshot, query)
 				?? new LspSemanticTokensPayload(new List<int>(0), string.Empty);
 		}
@@ -218,10 +284,10 @@ namespace FFVM.Debug.Lsp.Integration.VsCode
 			_database.Execute(DatabaseOperationRequest.ApplyChanges(
 				new[] { change },
 				reason: reason,
-				correlationId: "lsp-notify-" + reason,
+				correlationId: CorrelationPrefixLspNotify + reason,
 				priority: DatabaseOperationPriority.Normal,
-				timeout: TimeSpan.FromSeconds(15),
-				streamKey: string.IsNullOrWhiteSpace(uri) ? string.Empty : "doc:" + uri,
+				timeout: TimeSpan.FromSeconds(DatabaseWriteTimeoutSeconds),
+				streamKey: string.IsNullOrWhiteSpace(uri) ? string.Empty : DocumentStreamPrefix + uri,
 				streamBehavior: string.IsNullOrWhiteSpace(uri)
 					? DatabaseOperationStreamBehavior.None
 					: DatabaseOperationStreamBehavior.CoalesceAndCancelSuperseded));
@@ -369,9 +435,9 @@ namespace FFVM.Debug.Lsp.Integration.VsCode
 			snapshot = null;
 
 			DatabaseOperationResult readResult = _database.Execute(DatabaseOperationRequest.ReadSnapshot(
-				correlationId: "lsp-query-read-snapshot",
+				correlationId: CorrelationLspReadSnapshot,
 				priority: DatabaseOperationPriority.Normal,
-				timeout: TimeSpan.FromSeconds(10)));
+				timeout: TimeSpan.FromSeconds(SnapshotReadTimeoutSeconds)));
 
 			if (readResult == null || !readResult.Succeeded || readResult.Snapshot == null)
 				return false;
@@ -388,9 +454,9 @@ namespace FFVM.Debug.Lsp.Integration.VsCode
 		{
 			string uri = ExtractDocumentUri(requestParams);
 
-			JsonObject position = requestParams != null ? requestParams.GetObject("position") : null;
-			int line = position != null ? position.GetInt("line") : 0;
-			int character = position != null ? position.GetInt("character") : 0;
+			JsonObject position = requestParams != null ? requestParams.GetObject(JsonFields.Position) : null;
+			int line = position != null ? position.GetInt(JsonFields.Line) : 0;
+			int character = position != null ? position.GetInt(JsonFields.Character) : 0;
 
 			var normalizedPosition = new TextPosition(line, character);
 			return new SymbolQueryRequest(
@@ -407,25 +473,25 @@ namespace FFVM.Debug.Lsp.Integration.VsCode
 			if (payload == null)
 				return string.Empty;
 
-			JsonObject textDocument = payload.GetObject("textDocument");
+			JsonObject textDocument = payload.GetObject(JsonFields.TextDocument);
 			if (textDocument != null)
 			{
-				string uri = DocumentKeyNormalizer.Normalize(textDocument.GetString("uri"));
+				string uri = DocumentKeyNormalizer.Normalize(textDocument.GetString(JsonFields.Uri));
 				if (!string.IsNullOrWhiteSpace(uri))
 					return uri;
 			}
 
-			return DocumentKeyNormalizer.Normalize(payload.GetString("uri"));
+			return DocumentKeyNormalizer.Normalize(payload.GetString(JsonFields.Uri));
 		}
 
 		private static int? ExtractVersion(JsonObject payload)
 		{
-			JsonObject textDocument = payload != null ? payload.GetObject("textDocument") : null;
-			if (textDocument != null && textDocument.ContainsKey("version"))
-				return textDocument.GetInt("version");
+			JsonObject textDocument = payload != null ? payload.GetObject(JsonFields.TextDocument) : null;
+			if (textDocument != null && textDocument.ContainsKey(JsonFields.Version))
+				return textDocument.GetInt(JsonFields.Version);
 
-			if (payload != null && payload.ContainsKey("version"))
-				return payload.GetInt("version");
+			if (payload != null && payload.ContainsKey(JsonFields.Version))
+				return payload.GetInt(JsonFields.Version);
 
 			return null;
 		}
@@ -458,11 +524,11 @@ namespace FFVM.Debug.Lsp.Integration.VsCode
 
 		private static string ExtractLanguageId(JsonObject payload)
 		{
-			JsonObject textDocument = payload != null ? payload.GetObject("textDocument") : null;
+			JsonObject textDocument = payload != null ? payload.GetObject(JsonFields.TextDocument) : null;
 			if (textDocument == null)
 				return string.Empty;
 
-			string languageId = textDocument.GetString("languageId");
+			string languageId = textDocument.GetString(JsonFields.LanguageId);
 			return languageId ?? string.Empty;
 		}
 
@@ -471,15 +537,15 @@ namespace FFVM.Debug.Lsp.Integration.VsCode
 			if (payload == null)
 				return string.Empty;
 
-			JsonObject textDocument = payload.GetObject("textDocument");
+			JsonObject textDocument = payload.GetObject(JsonFields.TextDocument);
 			if (textDocument != null)
 			{
-				string embeddedText = textDocument.GetString("text");
+				string embeddedText = textDocument.GetString(JsonFields.Text);
 				if (embeddedText != null)
 					return embeddedText;
 			}
 
-			List<object> contentChanges = payload.GetArray("contentChanges");
+			List<object> contentChanges = payload.GetArray(JsonFields.ContentChanges);
 			if (contentChanges != null && contentChanges.Count > 0)
 			{
 				for (int i = contentChanges.Count - 1; i >= 0; i--)
@@ -487,13 +553,13 @@ namespace FFVM.Debug.Lsp.Integration.VsCode
 					if (!(contentChanges[i] is JsonObject changed))
 						continue;
 
-					string candidate = changed.GetString("text");
+					string candidate = changed.GetString(JsonFields.Text);
 					if (candidate != null)
 						return candidate;
 				}
 			}
 
-			string directText = payload.GetString("text");
+			string directText = payload.GetString(JsonFields.Text);
 			return directText ?? string.Empty;
 		}
 
@@ -504,8 +570,8 @@ namespace FFVM.Debug.Lsp.Integration.VsCode
 			if (payload == null)
 				return false;
 
-			oldUri = DocumentKeyNormalizer.Normalize(payload.GetString("oldUri") ?? payload.GetString("oldPath"));
-			newUri = DocumentKeyNormalizer.Normalize(payload.GetString("newUri") ?? payload.GetString("newPath"));
+			oldUri = DocumentKeyNormalizer.Normalize(payload.GetString(JsonFields.OldUri) ?? payload.GetString(JsonFields.OldPath));
+			newUri = DocumentKeyNormalizer.Normalize(payload.GetString(JsonFields.NewUri) ?? payload.GetString(JsonFields.NewPath));
 			return !string.IsNullOrWhiteSpace(oldUri) && !string.IsNullOrWhiteSpace(newUri);
 		}
 
@@ -525,20 +591,20 @@ namespace FFVM.Debug.Lsp.Integration.VsCode
 				if (int.TryParse(textType, out int parsed))
 					return MapWatchedFileChangeType(parsed);
 
-				if (string.Equals(textType, "created", StringComparison.OrdinalIgnoreCase)
-					|| string.Equals(textType, "create", StringComparison.OrdinalIgnoreCase))
+				if (string.Equals(textType, WatchedFileChangeTypeNames.Created, StringComparison.OrdinalIgnoreCase)
+					|| string.Equals(textType, WatchedFileChangeTypeNames.Create, StringComparison.OrdinalIgnoreCase))
 				{
 					return WatchedFileChangeType.Created;
 				}
 
-				if (string.Equals(textType, "changed", StringComparison.OrdinalIgnoreCase)
-					|| string.Equals(textType, "change", StringComparison.OrdinalIgnoreCase))
+				if (string.Equals(textType, WatchedFileChangeTypeNames.Changed, StringComparison.OrdinalIgnoreCase)
+					|| string.Equals(textType, WatchedFileChangeTypeNames.Change, StringComparison.OrdinalIgnoreCase))
 				{
 					return WatchedFileChangeType.Changed;
 				}
 
-				if (string.Equals(textType, "deleted", StringComparison.OrdinalIgnoreCase)
-					|| string.Equals(textType, "delete", StringComparison.OrdinalIgnoreCase))
+				if (string.Equals(textType, WatchedFileChangeTypeNames.Deleted, StringComparison.OrdinalIgnoreCase)
+					|| string.Equals(textType, WatchedFileChangeTypeNames.Delete, StringComparison.OrdinalIgnoreCase))
 				{
 					return WatchedFileChangeType.Deleted;
 				}
@@ -551,11 +617,11 @@ namespace FFVM.Debug.Lsp.Integration.VsCode
 		{
 			switch (type)
 			{
-				case 1:
+				case WatchedFileChangeTypeCodes.Created:
 					return WatchedFileChangeType.Created;
-				case 2:
+				case WatchedFileChangeTypeCodes.Changed:
 					return WatchedFileChangeType.Changed;
-				case 3:
+				case WatchedFileChangeTypeCodes.Deleted:
 					return WatchedFileChangeType.Deleted;
 				default:
 					return WatchedFileChangeType.Unknown;

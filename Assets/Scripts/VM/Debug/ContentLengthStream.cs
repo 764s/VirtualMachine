@@ -11,8 +11,13 @@ namespace FFVM.Debug
     /// </summary>
     public static class ContentLengthStream
     {
-        private static readonly byte[] ContentLengthHeader = Encoding.ASCII.GetBytes("Content-Length: ");
-        private static readonly byte[] HeaderTerminator = Encoding.ASCII.GetBytes("\r\n\r\n");
+        private const string ContentLengthHeaderPrefix = "Content-Length:";
+        private const string ContentLengthHeaderWithSpace = "Content-Length: ";
+        private const string HeaderTerminator = "\r\n\r\n";
+        private const int UnknownContentLength = -1;
+        private const int EndOfStream = -1;
+        private const char CarriageReturn = '\r';
+        private const char LineFeed = '\n';
 
         /// <summary>
         /// Read one framed message from the input stream.
@@ -22,7 +27,7 @@ namespace FFVM.Debug
         {
             // Read header line: "Content-Length: N\r\n"
             // There may be additional headers, terminated by "\r\n\r\n"
-            int contentLength = -1;
+            int contentLength = UnknownContentLength;
             string line;
             while ((line = ReadLine(input)) != null)
             {
@@ -32,9 +37,9 @@ namespace FFVM.Debug
                     break;
                 }
 
-                if (line.StartsWith("Content-Length:", StringComparison.OrdinalIgnoreCase))
+                if (line.StartsWith(ContentLengthHeaderPrefix, StringComparison.OrdinalIgnoreCase))
                 {
-                    string value = line.Substring("Content-Length:".Length).Trim();
+                    string value = line.Substring(ContentLengthHeaderPrefix.Length).Trim();
                     if (int.TryParse(value, out int len))
                         contentLength = len;
                 }
@@ -64,7 +69,7 @@ namespace FFVM.Debug
         public static void WriteMessage(Stream output, string body)
         {
             byte[] bodyBytes = Encoding.UTF8.GetBytes(body);
-            byte[] header = Encoding.ASCII.GetBytes($"Content-Length: {bodyBytes.Length}\r\n\r\n");
+            byte[] header = Encoding.ASCII.GetBytes(ContentLengthHeaderWithSpace + bodyBytes.Length + HeaderTerminator);
             output.Write(header, 0, header.Length);
             output.Write(bodyBytes, 0, bodyBytes.Length);
             output.Flush();
@@ -77,18 +82,18 @@ namespace FFVM.Debug
         private static string ReadLine(Stream input)
         {
             var sb = new StringBuilder();
-            int prev = -1;
+            int prev = EndOfStream;
 
             while (true)
             {
                 int b = input.ReadByte();
-                if (b < 0)
+                if (b == EndOfStream)
                     return sb.Length > 0 ? sb.ToString() : null;
 
-                if (b == '\n' && prev == '\r')
+                if (b == LineFeed && prev == CarriageReturn)
                 {
                     // Remove the trailing \r we already appended
-                    if (sb.Length > 0 && sb[sb.Length - 1] == '\r')
+                    if (sb.Length > 0 && sb[sb.Length - 1] == CarriageReturn)
                         sb.Remove(sb.Length - 1, 1);
                     return sb.ToString();
                 }

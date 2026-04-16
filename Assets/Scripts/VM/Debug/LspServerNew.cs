@@ -27,6 +27,115 @@ namespace FFVM.Debug
         private bool _running;
         private bool _shutdownRequested;
 
+        private static class JsonRpcFields
+        {
+            public const string JsonRpc = "jsonrpc";
+            public const string Version = "2.0";
+            public const string Method = "method";
+            public const string Id = "id";
+            public const string Params = "params";
+            public const string Result = "result";
+            public const string Error = "error";
+            public const string Code = "code";
+            public const string Message = "message";
+        }
+
+        private static class LspMethods
+        {
+            public const string Initialize = "initialize";
+            public const string Shutdown = "shutdown";
+            public const string DocumentSymbol = "textDocument/documentSymbol";
+            public const string Hover = "textDocument/hover";
+            public const string Definition = "textDocument/definition";
+            public const string References = "textDocument/references";
+            public const string Completion = "textDocument/completion";
+            public const string SignatureHelp = "textDocument/signatureHelp";
+            public const string Rename = "textDocument/rename";
+            public const string PrepareRename = "textDocument/prepareRename";
+            public const string SemanticTokensFull = "textDocument/semanticTokens/full";
+            public const string WillRenameFiles = "workspace/willRenameFiles";
+            public const string Initialized = "initialized";
+            public const string Exit = "exit";
+            public const string DidOpen = "textDocument/didOpen";
+            public const string DidChange = "textDocument/didChange";
+            public const string DidClose = "textDocument/didClose";
+            public const string DidChangeWatchedFiles = "workspace/didChangeWatchedFiles";
+            public const string PublishDiagnostics = "textDocument/publishDiagnostics";
+        }
+
+        private static class LspFields
+        {
+            public const string Capabilities = "capabilities";
+            public const string ServerInfo = "serverInfo";
+            public const string Name = "name";
+            public const string Version = "version";
+            public const string Uri = "uri";
+            public const string Diagnostics = "diagnostics";
+            public const string Contents = "contents";
+            public const string Kind = "kind";
+            public const string Value = "value";
+            public const string Range = "range";
+            public const string SelectionRange = "selectionRange";
+            public const string Label = "label";
+            public const string Detail = "detail";
+            public const string Documentation = "documentation";
+            public const string Signatures = "signatures";
+            public const string ActiveSignature = "activeSignature";
+            public const string ActiveParameter = "activeParameter";
+            public const string Placeholder = "placeholder";
+            public const string Changes = "changes";
+            public const string Data = "data";
+            public const string Start = "start";
+            public const string End = "end";
+            public const string Line = "line";
+            public const string Character = "character";
+            public const string NewText = "newText";
+        }
+
+        private static class LspValues
+        {
+            public const string ServerName = "FFVM LSP (New Scaffold)";
+            public const string ServerVersion = "0.1.0-placeholder";
+            public const string UnknownErrorMessage = "Unknown error";
+            public const string Markdown = "markdown";
+        }
+
+        private static class SymbolKindNames
+        {
+            public const string Function = "Function";
+            public const string Struct = "Struct";
+            public const string Enum = "Enum";
+            public const string Variable = "Variable";
+            public const string Parameter = "Parameter";
+            public const string StructField = "StructField";
+            public const string EnumMember = "EnumMember";
+        }
+
+        private static class JsonRpcErrorCodes
+        {
+            public const int MethodNotFound = -32601;
+        }
+
+        private enum LspDocumentSymbolKindCode
+        {
+            EnumType = 10,
+            Function = 12,
+            Variable = 13,
+            Struct = 23,
+            Parameter = 26
+        }
+
+        private enum LspCompletionItemKindCode
+        {
+            Text = 1,
+            Function = 3,
+            Field = 5,
+            Variable = 6,
+            EnumType = 13,
+            EnumMember = 20,
+            Struct = 22
+        }
+
         public LspServerNew(Stream input, Stream output, ILspVsCodeDatabaseBridge bridge = null)
         {
             _input = input;
@@ -58,8 +167,8 @@ namespace FFVM.Debug
 
         private void HandleIncomingMessage(JsonObject message)
         {
-            string method = message.GetString("method");
-            object id = message.Get("id");
+            string method = message.GetString(JsonRpcFields.Method);
+            object id = message.Get(JsonRpcFields.Id);
 
             bool hasMethod = !string.IsNullOrEmpty(method);
             bool isRequest = hasMethod && id != null;
@@ -79,95 +188,95 @@ namespace FFVM.Debug
 
         private void HandleRequest(JsonObject request, string method, object id)
         {
-            JsonObject requestParams = request.GetObject("params");
+            JsonObject requestParams = request.GetObject(JsonRpcFields.Params);
 
             switch (method)
             {
-                case "initialize":
+                case LspMethods.Initialize:
                     BridgeInitialize(requestParams);
                     SendResponse(id, CreateInitializeResult());
                     break;
 
-                case "shutdown":
+                case LspMethods.Shutdown:
                     BridgeShutdown(requestParams);
                     _shutdownRequested = true;
                     SendResponse(id, null);
                     break;
 
-                case "textDocument/documentSymbol":
+                case LspMethods.DocumentSymbol:
                     SendResponse(id, BridgeDocumentSymbol(requestParams));
                     break;
 
-                case "textDocument/hover":
+                case LspMethods.Hover:
                     SendResponse(id, BridgeHover(requestParams));
                     break;
 
-                case "textDocument/definition":
+                case LspMethods.Definition:
                     SendResponse(id, BridgeDefinition(requestParams));
                     break;
 
-                case "textDocument/references":
+                case LspMethods.References:
                     SendResponse(id, BridgeReferences(requestParams));
                     break;
 
-                case "textDocument/completion":
+                case LspMethods.Completion:
                     SendResponse(id, BridgeCompletion(requestParams));
                     break;
 
-                case "textDocument/signatureHelp":
+                case LspMethods.SignatureHelp:
                     SendResponse(id, BridgeSignatureHelp(requestParams));
                     break;
 
-                case "textDocument/rename":
+                case LspMethods.Rename:
                     SendResponse(id, BridgeRename(requestParams));
                     break;
 
-                case "textDocument/prepareRename":
+                case LspMethods.PrepareRename:
                     SendResponse(id, BridgePrepareRename(requestParams));
                     break;
 
-                case "textDocument/semanticTokens/full":
+                case LspMethods.SemanticTokensFull:
                     SendResponse(id, BridgeSemanticTokensFull(requestParams));
                     break;
 
-                case "workspace/willRenameFiles":
+                case LspMethods.WillRenameFiles:
                     SendResponse(id, BridgeWillRenameFiles(requestParams));
                     break;
 
                 default:
-                    SendError(id, -32601, "Method not found: " + method);
+                    SendError(id, JsonRpcErrorCodes.MethodNotFound, "Method not found: " + method);
                     break;
             }
         }
 
         private void HandleNotification(JsonObject notification, string method)
         {
-            JsonObject notificationParams = notification.GetObject("params");
+            JsonObject notificationParams = notification.GetObject(JsonRpcFields.Params);
 
             switch (method)
             {
-                case "initialized":
+                case LspMethods.Initialized:
                     BridgeInitialized(notificationParams);
                     break;
 
-                case "exit":
+                case LspMethods.Exit:
                     BridgeExit(notificationParams);
                     _running = false;
                     break;
 
-                case "textDocument/didOpen":
+                case LspMethods.DidOpen:
                     BridgeDidOpen(notificationParams);
                     break;
 
-                case "textDocument/didChange":
+                case LspMethods.DidChange:
                     BridgeDidChange(notificationParams);
                     break;
 
-                case "textDocument/didClose":
+                case LspMethods.DidClose:
                     BridgeDidClose(notificationParams);
                     break;
 
-                case "workspace/didChangeWatchedFiles":
+                case LspMethods.DidChangeWatchedFiles:
                     BridgeDidChangeWatchedFiles(notificationParams);
                     break;
             }
@@ -179,12 +288,12 @@ namespace FFVM.Debug
 
             // Minimal capability payload to complete VS Code initialize handshake.
             var capabilities = new JsonObject();
-            result.Set("capabilities", capabilities);
+            result.Set(LspFields.Capabilities, capabilities);
 
             var serverInfo = new JsonObject();
-            serverInfo.Set("name", "FFVM LSP (New Scaffold)");
-            serverInfo.Set("version", "0.1.0-placeholder");
-            result.Set("serverInfo", serverInfo);
+            serverInfo.Set(LspFields.Name, LspValues.ServerName);
+            serverInfo.Set(LspFields.Version, LspValues.ServerVersion);
+            result.Set(LspFields.ServerInfo, serverInfo);
 
             return result;
         }
@@ -192,22 +301,22 @@ namespace FFVM.Debug
         private void SendResponse(object id, object result)
         {
             var response = new JsonObject();
-            response.Set("jsonrpc", "2.0");
-            response.Set("id", id);
-            response.Set("result", result);
+            response.Set(JsonRpcFields.JsonRpc, JsonRpcFields.Version);
+            response.Set(JsonRpcFields.Id, id);
+            response.Set(JsonRpcFields.Result, result);
             ContentLengthStream.WriteMessage(_output, response.ToJson());
         }
 
         private void SendError(object id, int code, string message)
         {
             var error = new JsonObject();
-            error.Set("code", code);
-            error.Set("message", message ?? "Unknown error");
+            error.Set(JsonRpcFields.Code, code);
+            error.Set(JsonRpcFields.Message, message ?? LspValues.UnknownErrorMessage);
 
             var response = new JsonObject();
-            response.Set("jsonrpc", "2.0");
-            response.Set("id", id);
-            response.Set("error", error);
+            response.Set(JsonRpcFields.JsonRpc, JsonRpcFields.Version);
+            response.Set(JsonRpcFields.Id, id);
+            response.Set(JsonRpcFields.Error, error);
 
             ContentLengthStream.WriteMessage(_output, response.ToJson());
         }
@@ -219,20 +328,20 @@ namespace FFVM.Debug
         public void PublishDiagnostics(string uri, List<object> diagnostics, int? version = null)
         {
             var payload = new JsonObject();
-            payload.Set("uri", DocumentKeyNormalizer.Normalize(uri));
-            payload.Set("diagnostics", diagnostics ?? new List<object>());
+            payload.Set(LspFields.Uri, DocumentKeyNormalizer.Normalize(uri));
+            payload.Set(LspFields.Diagnostics, diagnostics ?? new List<object>());
             if (version.HasValue)
-                payload.Set("version", version.Value);
+                payload.Set(LspFields.Version, version.Value);
 
-            SendNotification("textDocument/publishDiagnostics", payload);
+            SendNotification(LspMethods.PublishDiagnostics, payload);
         }
 
         private void SendNotification(string method, object notificationParams)
         {
             var notification = new JsonObject();
-            notification.Set("jsonrpc", "2.0");
-            notification.Set("method", method ?? string.Empty);
-            notification.Set("params", notificationParams ?? new JsonObject());
+            notification.Set(JsonRpcFields.JsonRpc, JsonRpcFields.Version);
+            notification.Set(JsonRpcFields.Method, method ?? string.Empty);
+            notification.Set(JsonRpcFields.Params, notificationParams ?? new JsonObject());
             ContentLengthStream.WriteMessage(_output, notification.ToJson());
         }
 
@@ -387,10 +496,10 @@ namespace FFVM.Debug
 
                 JsonObject range = MakeRangeFromSpan(symbol.DeclarationSpan);
                 var item = new JsonObject();
-                item.Set("name", symbol.Name ?? string.Empty);
-                item.Set("kind", MapDocumentSymbolKind(symbol.Kind));
-                item.Set("range", range);
-                item.Set("selectionRange", range);
+                item.Set(LspFields.Name, symbol.Name ?? string.Empty);
+                item.Set(LspFields.Kind, MapDocumentSymbolKind(symbol.Kind));
+                item.Set(LspFields.Range, range);
+                item.Set(LspFields.SelectionRange, range);
                 output.Add(item);
             }
 
@@ -409,11 +518,11 @@ namespace FFVM.Debug
                 summary += "\nParent: " + payload.ParentName;
 
             var contents = new JsonObject();
-            contents.Set("kind", "markdown");
-            contents.Set("value", summary);
+            contents.Set(LspFields.Kind, LspValues.Markdown);
+            contents.Set(LspFields.Value, summary);
 
             var result = new JsonObject();
-            result.Set("contents", contents);
+            result.Set(LspFields.Contents, contents);
             return result;
         }
 
@@ -423,8 +532,8 @@ namespace FFVM.Debug
                 return null;
 
             var result = new JsonObject();
-            result.Set("uri", DocumentKeyNormalizer.Normalize(payload.DocumentKey));
-            result.Set("range", MakeRangeFromPayload(payload.SourcePayload, payload.Span));
+            result.Set(LspFields.Uri, DocumentKeyNormalizer.Normalize(payload.DocumentKey));
+            result.Set(LspFields.Range, MakeRangeFromPayload(payload.SourcePayload, payload.Span));
             return result;
         }
 
@@ -441,8 +550,8 @@ namespace FFVM.Debug
                     continue;
 
                 var location = new JsonObject();
-                location.Set("uri", DocumentKeyNormalizer.Normalize(item.DocumentKey));
-                location.Set("range", MakeRangeFromPayload(item.SourcePayload, item.Span));
+                location.Set(LspFields.Uri, DocumentKeyNormalizer.Normalize(item.DocumentKey));
+                location.Set(LspFields.Range, MakeRangeFromPayload(item.SourcePayload, item.Span));
                 output.Add(location);
             }
 
@@ -462,10 +571,10 @@ namespace FFVM.Debug
                     continue;
 
                 var projected = new JsonObject();
-                projected.Set("label", item.Label ?? string.Empty);
-                projected.Set("kind", MapCompletionKind(item.Kind));
+                projected.Set(LspFields.Label, item.Label ?? string.Empty);
+                projected.Set(LspFields.Kind, MapCompletionKind(item.Kind));
                 if (!string.IsNullOrWhiteSpace(item.Detail))
-                    projected.Set("detail", item.Detail);
+                    projected.Set(LspFields.Detail, item.Detail);
                 output.Add(projected);
             }
 
@@ -487,13 +596,13 @@ namespace FFVM.Debug
                         continue;
 
                     var projected = new JsonObject();
-                    projected.Set("label", signature.Label ?? string.Empty);
+                    projected.Set(LspFields.Label, signature.Label ?? string.Empty);
                     if (!string.IsNullOrWhiteSpace(signature.Source))
                     {
                         var doc = new JsonObject();
-                        doc.Set("kind", "markdown");
-                        doc.Set("value", "Source: " + DocumentKeyNormalizer.Normalize(signature.Source));
-                        projected.Set("documentation", doc);
+                        doc.Set(LspFields.Kind, LspValues.Markdown);
+                        doc.Set(LspFields.Value, "Source: " + DocumentKeyNormalizer.Normalize(signature.Source));
+                        projected.Set(LspFields.Documentation, doc);
                     }
 
                     signatures.Add(projected);
@@ -501,9 +610,9 @@ namespace FFVM.Debug
             }
 
             var result = new JsonObject();
-            result.Set("signatures", signatures);
-            result.Set("activeSignature", payload.ActiveSignature);
-            result.Set("activeParameter", payload.ActiveParameter);
+            result.Set(LspFields.Signatures, signatures);
+            result.Set(LspFields.ActiveSignature, payload.ActiveSignature);
+            result.Set(LspFields.ActiveParameter, payload.ActiveParameter);
             return result;
         }
 
@@ -513,8 +622,8 @@ namespace FFVM.Debug
                 return null;
 
             var result = new JsonObject();
-            result.Set("range", MakeRangeFromSpan(payload.Range));
-            result.Set("placeholder", payload.Placeholder ?? string.Empty);
+            result.Set(LspFields.Range, MakeRangeFromSpan(payload.Range));
+            result.Set(LspFields.Placeholder, payload.Placeholder ?? string.Empty);
             return result;
         }
 
@@ -543,8 +652,8 @@ namespace FFVM.Debug
                 }
 
                 var textEdit = new JsonObject();
-                textEdit.Set("range", MakeRangeFromSpan(edit.Range));
-                textEdit.Set("newText", edit.NewText ?? string.Empty);
+                textEdit.Set(LspFields.Range, MakeRangeFromSpan(edit.Range));
+                textEdit.Set(LspFields.NewText, edit.NewText ?? string.Empty);
                 edits.Add(textEdit);
             }
 
@@ -552,7 +661,7 @@ namespace FFVM.Debug
                 changes.Set(pair.Key, pair.Value);
 
             var result = new JsonObject();
-            result.Set("changes", changes);
+            result.Set(LspFields.Changes, changes);
             return result;
         }
 
@@ -569,7 +678,7 @@ namespace FFVM.Debug
             }
 
             var result = new JsonObject();
-            result.Set("data", data);
+            result.Set(LspFields.Data, data);
             return result;
         }
 
@@ -597,50 +706,50 @@ namespace FFVM.Debug
         private static JsonObject MakeRange(int startLine, int startCharacter, int endLine, int endCharacter)
         {
             var start = new JsonObject();
-            start.Set("line", startLine < 0 ? 0 : startLine);
-            start.Set("character", startCharacter < 0 ? 0 : startCharacter);
+            start.Set(LspFields.Line, startLine < 0 ? 0 : startLine);
+            start.Set(LspFields.Character, startCharacter < 0 ? 0 : startCharacter);
 
             var end = new JsonObject();
-            end.Set("line", endLine < 0 ? 0 : endLine);
-            end.Set("character", endCharacter < 0 ? 0 : endCharacter);
+            end.Set(LspFields.Line, endLine < 0 ? 0 : endLine);
+            end.Set(LspFields.Character, endCharacter < 0 ? 0 : endCharacter);
 
             var range = new JsonObject();
-            range.Set("start", start);
-            range.Set("end", end);
+            range.Set(LspFields.Start, start);
+            range.Set(LspFields.End, end);
             return range;
         }
 
         private static int MapDocumentSymbolKind(string kind)
         {
-            if (string.Equals(kind, "Function", StringComparison.OrdinalIgnoreCase))
-                return 12;
-            if (string.Equals(kind, "Struct", StringComparison.OrdinalIgnoreCase))
-                return 23;
-            if (string.Equals(kind, "Enum", StringComparison.OrdinalIgnoreCase))
-                return 10;
-            if (string.Equals(kind, "Variable", StringComparison.OrdinalIgnoreCase))
-                return 13;
-            if (string.Equals(kind, "Parameter", StringComparison.OrdinalIgnoreCase))
-                return 26;
-            return 13;
+            if (string.Equals(kind, SymbolKindNames.Function, StringComparison.OrdinalIgnoreCase))
+                return (int)LspDocumentSymbolKindCode.Function;
+            if (string.Equals(kind, SymbolKindNames.Struct, StringComparison.OrdinalIgnoreCase))
+                return (int)LspDocumentSymbolKindCode.Struct;
+            if (string.Equals(kind, SymbolKindNames.Enum, StringComparison.OrdinalIgnoreCase))
+                return (int)LspDocumentSymbolKindCode.EnumType;
+            if (string.Equals(kind, SymbolKindNames.Variable, StringComparison.OrdinalIgnoreCase))
+                return (int)LspDocumentSymbolKindCode.Variable;
+            if (string.Equals(kind, SymbolKindNames.Parameter, StringComparison.OrdinalIgnoreCase))
+                return (int)LspDocumentSymbolKindCode.Parameter;
+            return (int)LspDocumentSymbolKindCode.Variable;
         }
 
         private static int MapCompletionKind(string kind)
         {
-            if (string.Equals(kind, "Function", StringComparison.OrdinalIgnoreCase))
-                return 3;
-            if (string.Equals(kind, "Struct", StringComparison.OrdinalIgnoreCase))
-                return 22;
-            if (string.Equals(kind, "Enum", StringComparison.OrdinalIgnoreCase))
-                return 13;
-            if (string.Equals(kind, "StructField", StringComparison.OrdinalIgnoreCase))
-                return 5;
-            if (string.Equals(kind, "EnumMember", StringComparison.OrdinalIgnoreCase))
-                return 20;
-            if (string.Equals(kind, "Variable", StringComparison.OrdinalIgnoreCase)
-                || string.Equals(kind, "Parameter", StringComparison.OrdinalIgnoreCase))
-                return 6;
-            return 1;
+            if (string.Equals(kind, SymbolKindNames.Function, StringComparison.OrdinalIgnoreCase))
+                return (int)LspCompletionItemKindCode.Function;
+            if (string.Equals(kind, SymbolKindNames.Struct, StringComparison.OrdinalIgnoreCase))
+                return (int)LspCompletionItemKindCode.Struct;
+            if (string.Equals(kind, SymbolKindNames.Enum, StringComparison.OrdinalIgnoreCase))
+                return (int)LspCompletionItemKindCode.EnumType;
+            if (string.Equals(kind, SymbolKindNames.StructField, StringComparison.OrdinalIgnoreCase))
+                return (int)LspCompletionItemKindCode.Field;
+            if (string.Equals(kind, SymbolKindNames.EnumMember, StringComparison.OrdinalIgnoreCase))
+                return (int)LspCompletionItemKindCode.EnumMember;
+            if (string.Equals(kind, SymbolKindNames.Variable, StringComparison.OrdinalIgnoreCase)
+                || string.Equals(kind, SymbolKindNames.Parameter, StringComparison.OrdinalIgnoreCase))
+                return (int)LspCompletionItemKindCode.Variable;
+            return (int)LspCompletionItemKindCode.Text;
         }
     }
 }
