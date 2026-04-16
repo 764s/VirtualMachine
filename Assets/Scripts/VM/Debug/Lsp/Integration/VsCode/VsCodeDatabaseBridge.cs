@@ -7,6 +7,7 @@
 //   Out: query payload objects and queued diagnostics payloads.
 // Allowed Dependencies:
 //   - JsonObject
+//   - DocumentKeyNormalizer
 // Forbidden Dependencies:
 //   - Direct stdio transport writes.
 //   - Protocol framing and JSON-RPC envelope concerns.
@@ -18,6 +19,7 @@
 //   Downstream: database operation/query components.
 
 using System.Collections.Generic;
+using FFVM.Debug.Lsp.Database.Paths;
 
 namespace FFVM.Debug.Lsp.Integration.VsCode
 {
@@ -31,7 +33,7 @@ namespace FFVM.Debug.Lsp.Integration.VsCode
 
 		public LspPublishedDiagnostics(string uri, IReadOnlyList<object> diagnostics, int? version)
 		{
-			Uri = uri ?? string.Empty;
+			Uri = DocumentKeyNormalizer.Normalize(uri);
 			Diagnostics = diagnostics ?? EmptyDiagnostics;
 			Version = version;
 		}

@@ -4,7 +4,7 @@ using System.IO;
 using System.Text.RegularExpressions;
 using FFVM.AST;
 using FFVM.Compiler;
-using FFVM.Debug.Pathing;
+using FFVM.Debug.Tooling;
 
 namespace FFVM.Debug
 {

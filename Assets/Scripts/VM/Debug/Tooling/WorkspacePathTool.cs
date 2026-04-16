@@ -1,16 +1,26 @@
 using System;
 using System.IO;
 
-namespace FFVM.Debug.Pathing
+namespace FFVM.Debug.Tooling
 {
     /// <summary>
-    /// Centralized path and file-URI normalization utility.
+    /// Workspace-level path and file-URI utility.
     ///
-    /// Usage constraints:
-    /// 1) Never compare raw path strings directly in dependency/index keys.
-    /// 2) Always normalize through NormalizePath before map lookup/storage.
-    /// 3) Use UriToPath/PathToFileUri for protocol boundary conversions.
-    /// 4) Use ResolvePath for base-path + relative-path composition.
+    /// This file is the single source of truth for path identity behavior used by
+    /// compiler, LSP handlers, and database bridge/orchestrator touchpoints.
+    ///
+    /// Mandatory rules:
+    /// 1) Never compare raw path strings directly for dependency/index keys.
+    /// 2) Always normalize with NormalizePath before storing or looking up path keys.
+    /// 3) Use UriToPath and PathToFileUri for protocol boundary conversion.
+    /// 4) Use ResolvePath for base + relative path resolution.
+    /// 5) Avoid direct Path.GetFullPath in LSP/DB dependency logic unless wrapped here.
+    ///
+    /// Review checklist:
+    /// 1) New file-identity map keys are normalized.
+    /// 2) didOpen/didChange/didClose/didChangeWatchedFiles use one normalized shape.
+    /// 3) Include dependency keys match compiler/preprocessor resolved paths.
+    /// 4) Relative paths and file:/// conversions are covered on Windows and Unix-like shapes.
     /// </summary>
     public static class WorkspacePathTool
     {

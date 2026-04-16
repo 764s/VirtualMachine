@@ -1,5 +1,5 @@
 using System;
-using FFVM.Debug.Pathing;
+using FFVM.Debug.Tooling;
 
 namespace FFVM.Debug.Lsp.Database.Paths
 {

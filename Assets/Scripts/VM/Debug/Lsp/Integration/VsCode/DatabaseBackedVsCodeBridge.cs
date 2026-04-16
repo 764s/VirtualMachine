@@ -117,7 +117,7 @@ namespace FFVM.Debug.Lsp.Integration.VsCode
 				return null;
 
 			SymbolQueryRequest query = BuildQueryRequest("documentSymbol", requestParams, false, string.Empty);
-			return _queryFacade.QueryDocumentSymbols(snapshot, query);
+			return NormalizeDocumentSymbols(_queryFacade.QueryDocumentSymbols(snapshot, query));
 		}
 
 		public object QueryHover(JsonObject requestParams)
@@ -250,30 +250,145 @@ namespace FFVM.Debug.Lsp.Integration.VsCode
 			switch (payload.Kind)
 			{
 				case SymbolQueryPayloadKind.Definition:
-					return payload.Definition;
+					return NormalizeDefinition(payload.Definition);
 
 				case SymbolQueryPayloadKind.References:
-					return payload.References;
+					return NormalizeReferences(payload.References);
 
 				case SymbolQueryPayloadKind.Hover:
-					return payload.Hover;
+					return NormalizeHover(payload.Hover);
 
 				case SymbolQueryPayloadKind.Completion:
 					return payload.CompletionItems;
 
 				case SymbolQueryPayloadKind.SignatureHelp:
-					return payload.SignatureHelp;
+					return NormalizeSignatureHelp(payload.SignatureHelp);
 
 				case SymbolQueryPayloadKind.PrepareRename:
 					return payload.PrepareRename;
 
 				case SymbolQueryPayloadKind.Rename:
-					return payload.Rename;
+					return NormalizeRename(payload.Rename);
 
 				case SymbolQueryPayloadKind.None:
 				default:
 					return null;
 			}
+		}
+
+		private static LspDefinitionPayload NormalizeDefinition(LspDefinitionPayload payload)
+		{
+			if (payload == null)
+				return null;
+
+			return new LspDefinitionPayload(
+				DocumentKeyNormalizer.Normalize(payload.DocumentKey),
+				payload.Span,
+				payload.SourcePayload);
+		}
+
+		private static IReadOnlyList<LspReferenceItem> NormalizeReferences(IReadOnlyList<LspReferenceItem> items)
+		{
+			if (items == null || items.Count == 0)
+				return new List<LspReferenceItem>(0);
+
+			var output = new List<LspReferenceItem>(items.Count);
+			for (int i = 0; i < items.Count; i++)
+			{
+				LspReferenceItem item = items[i];
+				if (item == null)
+					continue;
+
+				output.Add(new LspReferenceItem(
+					DocumentKeyNormalizer.Normalize(item.DocumentKey),
+					item.Span,
+					item.SourcePayload));
+			}
+
+			return output;
+		}
+
+		private static LspHoverPayload NormalizeHover(LspHoverPayload payload)
+		{
+			if (payload == null)
+				return null;
+
+			return new LspHoverPayload(
+				payload.Summary,
+				payload.Scope,
+				payload.ParentName,
+				DocumentKeyNormalizer.Normalize(payload.Origin));
+		}
+
+		private static LspSignatureHelpPayload NormalizeSignatureHelp(LspSignatureHelpPayload payload)
+		{
+			if (payload == null)
+				return null;
+
+			IReadOnlyList<LspSignatureItem> signatures = payload.Signatures;
+			if (signatures == null || signatures.Count == 0)
+				return new LspSignatureHelpPayload(new List<LspSignatureItem>(0), payload.ActiveSignature, payload.ActiveParameter);
+
+			var output = new List<LspSignatureItem>(signatures.Count);
+			for (int i = 0; i < signatures.Count; i++)
+			{
+				LspSignatureItem item = signatures[i];
+				if (item == null)
+					continue;
+
+				output.Add(new LspSignatureItem(item.Label, DocumentKeyNormalizer.Normalize(item.Source)));
+			}
+
+			return new LspSignatureHelpPayload(output, payload.ActiveSignature, payload.ActiveParameter);
+		}
+
+		private static LspRenamePayload NormalizeRename(LspRenamePayload payload)
+		{
+			if (payload == null)
+				return null;
+
+			IReadOnlyList<LspRenameEdit> edits = payload.Edits;
+			if (edits == null || edits.Count == 0)
+				return new LspRenamePayload(payload.NewName, new List<LspRenameEdit>(0));
+
+			var output = new List<LspRenameEdit>(edits.Count);
+			for (int i = 0; i < edits.Count; i++)
+			{
+				LspRenameEdit edit = edits[i];
+				if (edit == null)
+					continue;
+
+				output.Add(new LspRenameEdit(
+					DocumentKeyNormalizer.Normalize(edit.DocumentKey),
+					edit.Range,
+					edit.NewText));
+			}
+
+			return new LspRenamePayload(payload.NewName, output);
+		}
+
+		private static IReadOnlyList<LspDocumentSymbolItem> NormalizeDocumentSymbols(IReadOnlyList<LspDocumentSymbolItem> symbols)
+		{
+			if (symbols == null || symbols.Count == 0)
+				return new List<LspDocumentSymbolItem>(0);
+
+			var output = new List<LspDocumentSymbolItem>(symbols.Count);
+			for (int i = 0; i < symbols.Count; i++)
+			{
+				LspDocumentSymbolItem symbol = symbols[i];
+				if (symbol == null)
+					continue;
+
+				output.Add(new LspDocumentSymbolItem(
+					symbol.Name,
+					symbol.Kind,
+					symbol.Scope,
+					symbol.ParentName,
+					DocumentKeyNormalizer.Normalize(symbol.Origin),
+					symbol.DeclarationSpan));
+			}
+
+			return output;
 		}
 
 		private bool TryReadSnapshot(out CodeDatabaseSnapshot snapshot)

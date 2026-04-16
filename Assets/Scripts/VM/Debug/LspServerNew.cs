@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using FFVM.Debug.Lsp.Database.Paths;
 using FFVM.Debug.Lsp.Integration.VsCode;
 
 namespace FFVM.Debug
@@ -216,7 +217,7 @@ namespace FFVM.Debug
         public void PublishDiagnostics(string uri, List<object> diagnostics, int? version = null)
         {
             var payload = new JsonObject();
-            payload.Set("uri", uri ?? string.Empty);
+            payload.Set("uri", DocumentKeyNormalizer.Normalize(uri));
             payload.Set("diagnostics", diagnostics ?? new List<object>());
             if (version.HasValue)
                 payload.Set("version", version.Value);

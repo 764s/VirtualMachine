@@ -2,7 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using FFVM.Debug;
-using FFVM.Debug.Pathing;
+using FFVM.Debug.Tooling;
 
 namespace FFVM.Compiler
 {
