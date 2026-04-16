@@ -790,7 +790,7 @@ public static class LspDatabaseTests
 				DatabaseChangeKind.DocumentChanged,
 				new PathKey("file:///tests/virtual.ffs"),
 				versionHint: 1,
-				payload: "content")
+				payload: CreateDidChangePayload("file:///tests/virtual.ffs", 1, "content"))
 		};
 
 		DatabaseOperationStreamBehavior behavior = string.IsNullOrWhiteSpace(streamKey)
@@ -809,40 +809,19 @@ public static class LspDatabaseTests
 			createdAtUtc: createdAtUtc);
 	}
 
-	private static JsonObject CreateDidOpenPayload(string uri, string languageId, int version, string text)
+	private static DocumentOpenedChangePayload CreateDidOpenPayload(string uri, string languageId, int version, string text)
 	{
-		var payload = new JsonObject();
-		var textDocument = new JsonObject();
-		textDocument.Set("uri", uri);
-		textDocument.Set("languageId", languageId);
-		textDocument.Set("version", version);
-		textDocument.Set("text", text);
-		payload.Set("textDocument", textDocument);
-		return payload;
+		return new DocumentOpenedChangePayload(uri, languageId, text);
 	}
 
-	private static JsonObject CreateDidChangePayload(string uri, int version, string text)
+	private static DocumentChangedChangePayload CreateDidChangePayload(string uri, int version, string text)
 	{
-		var payload = new JsonObject();
-		var textDocument = new JsonObject();
-		textDocument.Set("uri", uri);
-		textDocument.Set("version", version);
-		payload.Set("textDocument", textDocument);
-
-		var change = new JsonObject();
-		change.Set("text", text);
-		payload.Set("contentChanges", new List<object> { change });
-		return payload;
+		return new DocumentChangedChangePayload(uri, text);
 	}
 
-	private static JsonObject CreateDidClosePayload(string uri, int version)
+	private static DocumentClosedChangePayload CreateDidClosePayload(string uri, int version)
 	{
-		var payload = new JsonObject();
-		var textDocument = new JsonObject();
-		textDocument.Set("uri", uri);
-		textDocument.Set("version", version);
-		payload.Set("textDocument", textDocument);
-		return payload;
+		return new DocumentClosedChangePayload(uri);
 	}
 
 	private static JsonObject CreateSymbolFactPayload(

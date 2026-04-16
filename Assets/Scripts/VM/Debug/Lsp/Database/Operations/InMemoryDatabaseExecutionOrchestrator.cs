@@ -1018,20 +1018,9 @@ namespace FFVM.Debug.Lsp.Database
 				if (!string.IsNullOrWhiteSpace(documentKey))
 					changedSet.Add(documentKey);
 
-				if (change.Payload is JsonObject payload)
-				{
-					JsonObject textDocument = payload.GetObject("textDocument");
-					if (textDocument != null)
-					{
-						string uri = NormalizeDocumentKey(textDocument.GetString("uri"));
-						if (!string.IsNullOrWhiteSpace(uri))
-							changedSet.Add(uri);
-					}
-
-					string directUri = NormalizeDocumentKey(payload.GetString("uri"));
-					if (!string.IsNullOrWhiteSpace(directUri))
-						changedSet.Add(directUri);
-				}
+				string payloadDocument = NormalizeDocumentKey(change.Payload != null ? change.Payload.DocumentUri : string.Empty);
+				if (!string.IsNullOrWhiteSpace(payloadDocument))
+					changedSet.Add(payloadDocument);
 
 				if (change.Kind == DatabaseChangeKind.FileRenamed
 					&& TryExtractRename(change, out string oldDocumentKey, out string newDocumentKey))
@@ -1292,85 +1281,51 @@ namespace FFVM.Debug.Lsp.Database
 			if (change.VersionHint.HasValue)
 				return change.VersionHint;
 
-			if (change.Payload is JsonObject payload)
-			{
-				JsonObject textDocument = payload.GetObject("textDocument");
-				if (textDocument != null && textDocument.ContainsKey("version"))
-					return textDocument.GetInt("version");
-
-				if (payload.ContainsKey("version"))
-					return payload.GetInt("version");
-			}
-
 			return fallback;
 		}
 
-		private static bool TryExtractLanguageId(object payload, out string languageId)
+		private static bool TryExtractLanguageId(DatabaseChangePayload payload, out string languageId)
 		{
 			languageId = string.Empty;
-			if (!(payload is JsonObject root))
-				return false;
+			if (payload is DocumentOpenedChangePayload opened
+				&& !string.IsNullOrWhiteSpace(opened.LanguageId))
+			{
+				languageId = opened.LanguageId;
+				return true;
+			}
 
-			JsonObject textDocument = root.GetObject("textDocument");
-			if (textDocument == null)
-				return false;
+			if (payload is DocumentMetadataChangePayload metadata
+				&& !string.IsNullOrWhiteSpace(metadata.LanguageId))
+			{
+				languageId = metadata.LanguageId;
+				return true;
+			}
 
-			string value = textDocument.GetString("languageId");
-			if (string.IsNullOrWhiteSpace(value))
-				return false;
-
-			languageId = value;
-			return true;
+			return false;
 		}
 
-		private static bool TryExtractText(object payload, out string text)
+		private static bool TryExtractText(DatabaseChangePayload payload, out string text)
 		{
 			text = string.Empty;
 			if (payload == null)
 				return false;
 
-			if (payload is string raw)
+			if (payload is DocumentOpenedChangePayload opened)
 			{
-				text = raw;
+				text = opened.Text;
 				return true;
 			}
 
-			if (!(payload is JsonObject root))
-				return false;
-
-			JsonObject textDocument = root.GetObject("textDocument");
-			if (textDocument != null)
+			if (payload is DocumentChangedChangePayload changed)
 			{
-				string embeddedText = textDocument.GetString("text");
-				if (embeddedText != null)
-				{
-					text = embeddedText;
-					return true;
-				}
-			}
-
-			List<object> contentChanges = root.GetArray("contentChanges");
-			if (contentChanges != null && contentChanges.Count > 0)
-			{
-				for (int i = contentChanges.Count - 1; i >= 0; i--)
-				{
-					if (contentChanges[i] is JsonObject change)
-					{
-						string candidate = change.GetString("text");
-						if (candidate != null)
-						{
-							text = candidate;
-							return true;
-						}
-					}
-				}
-			}
-
-			string directText = root.GetString("text");
-			if (directText != null)
-			{
-				text = directText;
+				text = changed.Text;
 				return true;
+			}
+
+			if (payload is DocumentMetadataChangePayload metadata)
+			{
+				text = metadata.Text;
+				return !string.IsNullOrEmpty(text);
 			}
 
 			return false;
@@ -1383,16 +1338,11 @@ namespace FFVM.Debug.Lsp.Database
 			if (change == null)
 				return false;
 
-			if (!(change.Payload is JsonObject payload))
+			if (!(change.Payload is FileRenamedChangePayload payload))
 				return false;
 
-			oldDocumentKey = NormalizeDocumentKey(payload.GetString("oldUri"));
-			if (string.IsNullOrWhiteSpace(oldDocumentKey))
-				oldDocumentKey = NormalizeDocumentKey(payload.GetString("oldPath"));
-
-			newDocumentKey = NormalizeDocumentKey(payload.GetString("newUri"));
-			if (string.IsNullOrWhiteSpace(newDocumentKey))
-				newDocumentKey = NormalizeDocumentKey(payload.GetString("newPath"));
+			oldDocumentKey = NormalizeDocumentKey(payload.OldDocumentUri);
+			newDocumentKey = NormalizeDocumentKey(payload.NewDocumentUri);
 
 			if (string.IsNullOrWhiteSpace(oldDocumentKey) || string.IsNullOrWhiteSpace(newDocumentKey))
 				return false;
@@ -1403,35 +1353,13 @@ namespace FFVM.Debug.Lsp.Database
 		private static bool TryShouldDeleteByWatcher(DatabaseChangeEvent change, out string documentKey)
 		{
 			documentKey = NormalizeDocumentKey(change != null ? change.DocumentKey.Value : string.Empty);
-			if (change == null || !(change.Payload is JsonObject payload))
+			if (change == null || !(change.Payload is WatchedFileChangedChangePayload payload))
 				return false;
 
-			if (payload.ContainsKey("uri"))
-				documentKey = NormalizeDocumentKey(payload.GetString("uri"));
+			if (!string.IsNullOrWhiteSpace(payload.DocumentUri))
+				documentKey = NormalizeDocumentKey(payload.DocumentUri);
 
-			if (!payload.ContainsKey("type"))
-				return false;
-
-			object typeObject = payload.Get("type");
-			if (typeObject is int typeInt)
-				return typeInt == 3;
-
-			if (typeObject is long typeLong)
-				return typeLong == 3L;
-
-			if (typeObject is double typeDouble)
-				return (int)typeDouble == 3;
-
-			if (typeObject is string typeString)
-			{
-				if (int.TryParse(typeString, out int parsedType))
-					return parsedType == 3;
-
-				return string.Equals(typeString, "deleted", StringComparison.OrdinalIgnoreCase)
-					|| string.Equals(typeString, "delete", StringComparison.OrdinalIgnoreCase);
-			}
-
-			return false;
+			return payload.ChangeType == WatchedFileChangeType.Deleted;
 		}
 
 		private static string NormalizeDocumentKey(string value)

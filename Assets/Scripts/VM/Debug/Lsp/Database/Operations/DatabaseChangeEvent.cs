@@ -31,19 +31,124 @@ namespace FFVM.Debug.Lsp.Database
 		FullResyncRequested
 	}
 
+	public enum WatchedFileChangeType
+	{
+		Unknown = 0,
+		Created = 1,
+		Changed = 2,
+		Deleted = 3
+	}
+
+	public abstract class DatabaseChangePayload
+	{
+		private sealed class EmptyDatabaseChangePayload : DatabaseChangePayload
+		{
+			public EmptyDatabaseChangePayload()
+				: base(string.Empty)
+			{
+			}
+		}
+
+		public static DatabaseChangePayload Empty { get; } = new EmptyDatabaseChangePayload();
+
+		public string DocumentUri { get; }
+
+		protected DatabaseChangePayload(string documentUri)
+		{
+			DocumentUri = documentUri ?? string.Empty;
+		}
+	}
+
+	public sealed class DocumentOpenedChangePayload : DatabaseChangePayload
+	{
+		public string LanguageId { get; }
+		public string Text { get; }
+
+		public DocumentOpenedChangePayload(string documentUri, string languageId, string text)
+			: base(documentUri)
+		{
+			LanguageId = languageId ?? string.Empty;
+			Text = text ?? string.Empty;
+		}
+	}
+
+	public sealed class DocumentChangedChangePayload : DatabaseChangePayload
+	{
+		public string Text { get; }
+
+		public DocumentChangedChangePayload(string documentUri, string text)
+			: base(documentUri)
+		{
+			Text = text ?? string.Empty;
+		}
+	}
+
+	public sealed class DocumentMetadataChangePayload : DatabaseChangePayload
+	{
+		public string LanguageId { get; }
+		public string Text { get; }
+
+		public DocumentMetadataChangePayload(string documentUri, string languageId, string text)
+			: base(documentUri)
+		{
+			LanguageId = languageId ?? string.Empty;
+			Text = text ?? string.Empty;
+		}
+	}
+
+	public sealed class DocumentClosedChangePayload : DatabaseChangePayload
+	{
+		public DocumentClosedChangePayload(string documentUri)
+			: base(documentUri)
+		{
+		}
+	}
+
+	public sealed class FileRenamedChangePayload : DatabaseChangePayload
+	{
+		public string OldDocumentUri { get; }
+		public string NewDocumentUri { get; }
+
+		public FileRenamedChangePayload(string oldDocumentUri, string newDocumentUri)
+			: base(newDocumentUri)
+		{
+			OldDocumentUri = oldDocumentUri ?? string.Empty;
+			NewDocumentUri = newDocumentUri ?? string.Empty;
+		}
+	}
+
+	public sealed class WatchedFileChangedChangePayload : DatabaseChangePayload
+	{
+		public WatchedFileChangeType ChangeType { get; }
+
+		public WatchedFileChangedChangePayload(string documentUri, WatchedFileChangeType changeType)
+			: base(documentUri)
+		{
+			ChangeType = changeType;
+		}
+	}
+
+	public sealed class FullResyncRequestedChangePayload : DatabaseChangePayload
+	{
+		public FullResyncRequestedChangePayload()
+			: base(string.Empty)
+		{
+		}
+	}
+
 	public sealed class DatabaseChangeEvent
 	{
 		public DatabaseChangeKind Kind { get; }
 		public PathKey DocumentKey { get; }
 		public int? VersionHint { get; }
-		public object Payload { get; }
+		public DatabaseChangePayload Payload { get; }
 
-		public DatabaseChangeEvent(DatabaseChangeKind kind, PathKey documentKey, int? versionHint, object payload)
+		public DatabaseChangeEvent(DatabaseChangeKind kind, PathKey documentKey, int? versionHint, DatabaseChangePayload payload)
 		{
 			Kind = kind;
 			DocumentKey = documentKey;
 			VersionHint = versionHint;
-			Payload = payload;
+			Payload = payload ?? DatabaseChangePayload.Empty;
 		}
 	}
 }

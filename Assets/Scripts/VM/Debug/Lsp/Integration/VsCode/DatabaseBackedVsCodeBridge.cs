@@ -88,11 +88,12 @@ namespace FFVM.Debug.Lsp.Integration.VsCode
 					continue;
 
 				string uri = item.GetString("uri") ?? string.Empty;
+				WatchedFileChangeType changeType = ParseWatchedFileChangeType(item.Get("type"));
 				changes.Add(new DatabaseChangeEvent(
 					DatabaseChangeKind.WatchedFilesChanged,
 					new PathKey(uri),
 					null,
-					item));
+					new WatchedFileChangedChangePayload(uri, changeType)));
 			}
 
 			if (changes.Count == 0)
@@ -200,7 +201,7 @@ namespace FFVM.Debug.Lsp.Integration.VsCode
 				kind,
 				new PathKey(uri),
 				version,
-				payload);
+				BuildChangePayload(kind, payload, uri));
 
 			_database.Execute(DatabaseOperationRequest.ApplyChanges(
 				new[] { change },
@@ -304,6 +305,138 @@ namespace FFVM.Debug.Lsp.Integration.VsCode
 				return payload.GetInt("version");
 
 			return null;
+		}
+
+		private static DatabaseChangePayload BuildChangePayload(DatabaseChangeKind kind, JsonObject payload, string uri)
+		{
+			switch (kind)
+			{
+				case DatabaseChangeKind.DocumentOpened:
+					return new DocumentOpenedChangePayload(uri, ExtractLanguageId(payload), ExtractText(payload));
+
+				case DatabaseChangeKind.DocumentChanged:
+					return new DocumentChangedChangePayload(uri, ExtractText(payload));
+
+				case DatabaseChangeKind.DocumentClosed:
+					return new DocumentClosedChangePayload(uri);
+
+				case DatabaseChangeKind.FileRenamed:
+					if (TryExtractRenamePayload(payload, out string oldUri, out string newUri))
+						return new FileRenamedChangePayload(oldUri, newUri);
+					return DatabaseChangePayload.Empty;
+
+				case DatabaseChangeKind.FullResyncRequested:
+					return new FullResyncRequestedChangePayload();
+
+				default:
+					return new DocumentMetadataChangePayload(uri, ExtractLanguageId(payload), ExtractText(payload));
+			}
+		}
+
+		private static string ExtractLanguageId(JsonObject payload)
+		{
+			JsonObject textDocument = payload != null ? payload.GetObject("textDocument") : null;
+			if (textDocument == null)
+				return string.Empty;
+
+			string languageId = textDocument.GetString("languageId");
+			return languageId ?? string.Empty;
+		}
+
+		private static string ExtractText(JsonObject payload)
+		{
+			if (payload == null)
+				return string.Empty;
+
+			JsonObject textDocument = payload.GetObject("textDocument");
+			if (textDocument != null)
+			{
+				string embeddedText = textDocument.GetString("text");
+				if (embeddedText != null)
+					return embeddedText;
+			}
+
+			List<object> contentChanges = payload.GetArray("contentChanges");
+			if (contentChanges != null && contentChanges.Count > 0)
+			{
+				for (int i = contentChanges.Count - 1; i >= 0; i--)
+				{
+					if (!(contentChanges[i] is JsonObject changed))
+						continue;
+
+					string candidate = changed.GetString("text");
+					if (candidate != null)
+						return candidate;
+				}
+			}
+
+			string directText = payload.GetString("text");
+			return directText ?? string.Empty;
+		}
+
+		private static bool TryExtractRenamePayload(JsonObject payload, out string oldUri, out string newUri)
+		{
+			oldUri = string.Empty;
+			newUri = string.Empty;
+			if (payload == null)
+				return false;
+
+			oldUri = payload.GetString("oldUri") ?? payload.GetString("oldPath") ?? string.Empty;
+			newUri = payload.GetString("newUri") ?? payload.GetString("newPath") ?? string.Empty;
+			return !string.IsNullOrWhiteSpace(oldUri) && !string.IsNullOrWhiteSpace(newUri);
+		}
+
+		private static WatchedFileChangeType ParseWatchedFileChangeType(object rawType)
+		{
+			if (rawType is int intType)
+				return MapWatchedFileChangeType(intType);
+
+			if (rawType is long longType)
+				return MapWatchedFileChangeType((int)longType);
+
+			if (rawType is double doubleType)
+				return MapWatchedFileChangeType((int)doubleType);
+
+			if (rawType is string textType)
+			{
+				if (int.TryParse(textType, out int parsed))
+					return MapWatchedFileChangeType(parsed);
+
+				if (string.Equals(textType, "created", StringComparison.OrdinalIgnoreCase)
+					|| string.Equals(textType, "create", StringComparison.OrdinalIgnoreCase))
+				{
+					return WatchedFileChangeType.Created;
+				}
+
+				if (string.Equals(textType, "changed", StringComparison.OrdinalIgnoreCase)
+					|| string.Equals(textType, "change", StringComparison.OrdinalIgnoreCase))
+				{
+					return WatchedFileChangeType.Changed;
+				}
+
+				if (string.Equals(textType, "deleted", StringComparison.OrdinalIgnoreCase)
+					|| string.Equals(textType, "delete", StringComparison.OrdinalIgnoreCase))
+				{
+					return WatchedFileChangeType.Deleted;
+				}
+			}
+
+			return WatchedFileChangeType.Unknown;
+		}
+
+		private static WatchedFileChangeType MapWatchedFileChangeType(int type)
+		{
+			switch (type)
+			{
+				case 1:
+					return WatchedFileChangeType.Created;
+				case 2:
+					return WatchedFileChangeType.Changed;
+				case 3:
+					return WatchedFileChangeType.Deleted;
+				default:
+					return WatchedFileChangeType.Unknown;
+			}
 		}
 	}
 }
