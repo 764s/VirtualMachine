@@ -1511,6 +1511,65 @@ public static class LspDatabaseTests
 			Assert(referencesResult != null && referencesResult.Succeeded && referencesResult.Ranges.Count >= 2, "DBMID-24D: references still include declaration and usage after watcher delete conflict");
 		}
 
+		// ================================================================
+		// DBMID-25 / LSPNEW-T2-00: AliasBinding fact consumed by index,
+		//   alias→target mapping queryable from snapshot
+		// ================================================================
+		{
+			var maintainer = new InMemoryIndexMaintainer();
+			var sourceDocument = new PathKey("file:///tests/alias-source.ffs");
+			var targetDocument = new PathKey("file:///tests/alias-target.ffs");
+
+			var includePayload = new IncludeEdgeDataFactPayload(targetDocument.Value);
+			var includeFact = new DataFact(
+				new DataFactId("inc-alias-src"),
+				new DataAggregateId("agg-alias-src"),
+				DataFactKind.IncludeEdge,
+				sourceDocument,
+				new TextSpan(0, 10),
+				snapshotVersion: 1,
+				payload: includePayload);
+
+			var aliasPayload = new AliasBindingDataFactPayload("Math", targetDocument.Value);
+			var aliasFact = new DataFact(
+				new DataFactId("alias-math"),
+				new DataAggregateId("agg-alias-src"),
+				DataFactKind.AliasBinding,
+				sourceDocument,
+				new TextSpan(0, 10),
+				snapshotVersion: 1,
+				payload: aliasPayload);
+
+			var sourceAggregate = new DataAggregate(
+				new DataAggregateId("agg-alias-src"),
+				DataAggregateKind.Document,
+				sourceDocument,
+				"ffscript",
+				string.Empty,
+				1,
+				new List<DataFact> { includeFact, aliasFact });
+
+			var snapshot = new CodeDatabaseSnapshot(
+				version: 1,
+				capturedAtUtc: DateTime.UtcNow,
+				aggregates: new List<DataAggregate> { sourceAggregate },
+				facts: new List<DataFact> { includeFact, aliasFact },
+				indexSnapshot: null);
+
+			IIndexSnapshot indexSnapshot = maintainer.Rebuild(snapshot);
+			Assert(indexSnapshot != null, "DBMID-25A: index snapshot rebuilt with alias facts");
+
+			bool aliasResolved = indexSnapshot.AliasIndex.TryResolveAlias(sourceDocument, "Math", out PathKey resolvedTarget);
+			Assert(aliasResolved && resolvedTarget.Value == targetDocument.Value, "DBMID-25B: TryResolveAlias returns correct target for alias 'Math'");
+
+			bool unknownNotResolved = !indexSnapshot.AliasIndex.TryResolveAlias(sourceDocument, "Unknown", out _);
+			Assert(unknownNotResolved, "DBMID-25C: TryResolveAlias returns false for unknown alias");
+
+			IReadOnlyDictionary<string, PathKey> aliases = indexSnapshot.AliasIndex.GetAliases(sourceDocument);
+			Assert(aliases != null && aliases.Count == 1, "DBMID-25D: GetAliases returns exactly one binding");
+			Assert(aliases.ContainsKey("Math"), "DBMID-25E: GetAliases contains 'Math' key");
+		}
+
 		Debug.Log($"[LspDatabaseTests] Completed. Passed={passed}, Failed={failed}");
 	}
 

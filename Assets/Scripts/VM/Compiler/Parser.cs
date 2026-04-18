@@ -1,3 +1,4 @@
+using System;
 using System.Collections.Generic;
 using FFVM.AST;
 
@@ -33,7 +34,19 @@ namespace FFVM.Compiler
             {
                 if (Check(TokenType.Include))
                 {
-                    module.Imports.Add(ParseIncludeDecl());
+                    var importDecl = ParseIncludeDecl();
+                    if (!string.IsNullOrEmpty(importDecl.Alias))
+                    {
+                        for (int k = 0; k < module.Imports.Count; k++)
+                        {
+                            if (string.Equals(module.Imports[k].Alias, importDecl.Alias, StringComparison.Ordinal))
+                            {
+                                _errors.Add($"Duplicate include alias '{importDecl.Alias}' (line {importDecl.Line})");
+                                break;
+                            }
+                        }
+                    }
+                    module.Imports.Add(importDecl);
                 }
                 else if (Check(TokenType.Override))
                 {
@@ -343,6 +356,8 @@ namespace FFVM.Compiler
             var decl = new ImportDecl(path, alias);
             decl.Line = line;
             decl.Column = col;
+            decl.PathLine = pathToken.Line;
+            decl.PathColumn = pathToken.Column;
             return decl;
         }
 
@@ -465,7 +480,9 @@ namespace FFVM.Compiler
         {
             int line = Current().Line, col = Current().Column;
             Advance(); // consume 'struct'
-            string name = Expect(TokenType.Identifier, "after 'struct'").Text ?? "?";
+            var nameToken = Expect(TokenType.Identifier, "after 'struct'");
+            string name = nameToken.Text ?? "?";
+            int nameLine = nameToken.Line, nameCol = nameToken.Column;
             // Lang-18: support dotted name for aliased override (override struct Alias.Name)
             string aliasTarget = null;
             if (Check(TokenType.Dot))
@@ -475,9 +492,12 @@ namespace FFVM.Compiler
                     Error($"Dotted struct name '{name}.<name>' is only valid with 'override' keyword");
                 }
                 Advance(); // consume '.'
-                string memberName = Expect(TokenType.Identifier, "after '.' in struct name").Text ?? "?";
+                var memberToken = Expect(TokenType.Identifier, "after '.' in struct name");
+                string memberName = memberToken.Text ?? "?";
                 aliasTarget = name;
                 name = memberName;
+                nameLine = memberToken.Line;
+                nameCol = memberToken.Column;
             }
             Expect(TokenType.LBrace, "after struct name");
 
@@ -513,6 +533,8 @@ namespace FFVM.Compiler
             decl.AliasTarget = aliasTarget;
             decl.Line = line;
             decl.Column = col;
+            decl.NameLine = nameLine;
+            decl.NameColumn = nameCol;
             var docLines = CollectDocLines(line);
             if (docLines != null) decl.DocComment = string.Join("\n", docLines);
             _structNames.Add(aliasTarget != null ? aliasTarget + "." + name : name);
@@ -527,7 +549,9 @@ namespace FFVM.Compiler
         {
             int line = Current().Line, col = Current().Column;
             Advance(); // consume 'enum'
-            string name = Expect(TokenType.Identifier, "after 'enum'").Text ?? "?";
+            var enumNameToken = Expect(TokenType.Identifier, "after 'enum'");
+            string name = enumNameToken.Text ?? "?";
+            int nameLine = enumNameToken.Line, nameCol = enumNameToken.Column;
             // Lang-18: support dotted name for aliased override (override enum Alias.Name)
             string aliasTarget = null;
             if (Check(TokenType.Dot))
@@ -537,9 +561,12 @@ namespace FFVM.Compiler
                     Error($"Dotted enum name '{name}.<name>' is only valid with 'override' keyword");
                 }
                 Advance(); // consume '.'
-                string memberName = Expect(TokenType.Identifier, "after '.' in enum name").Text ?? "?";
+                var enumMemberToken = Expect(TokenType.Identifier, "after '.' in enum name");
+                string memberName = enumMemberToken.Text ?? "?";
                 aliasTarget = name;
                 name = memberName;
+                nameLine = enumMemberToken.Line;
+                nameCol = enumMemberToken.Column;
             }
             Expect(TokenType.LBrace, "after enum name");
 
@@ -566,6 +593,8 @@ namespace FFVM.Compiler
             decl.AliasTarget = aliasTarget;
             decl.Line = line;
             decl.Column = col;
+            decl.NameLine = nameLine;
+            decl.NameColumn = nameCol;
             var enumDocLines = CollectDocLines(line);
             if (enumDocLines != null) decl.DocComment = string.Join("\n", enumDocLines);
             return decl;

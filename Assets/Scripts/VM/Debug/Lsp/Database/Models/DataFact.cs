@@ -136,6 +136,18 @@ namespace FFVM.Debug.Lsp.Database
 		}
 	}
 
+	public sealed class AliasBindingDataFactPayload : DataFactPayload
+	{
+		public string AliasName { get; }
+		public string TargetDocumentUri { get; }
+
+		public AliasBindingDataFactPayload(string aliasName, string targetDocumentUri)
+		{
+			AliasName = aliasName ?? string.Empty;
+			TargetDocumentUri = targetDocumentUri ?? string.Empty;
+		}
+	}
+
 	public sealed class TokenDataFactPayload : DataFactPayload
 	{
 		public int Line { get; }

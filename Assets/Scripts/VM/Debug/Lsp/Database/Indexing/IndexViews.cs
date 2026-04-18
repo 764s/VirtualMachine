@@ -36,6 +36,8 @@ namespace FFVM.Debug.Lsp.Database
 		IIncludeGraphIndex IncludeGraphIndex { get; }
 
 		INameIndex NameIndex { get; }
+
+		IAliasIndex AliasIndex { get; }
 	}
 
 	public interface IPositionIndex
@@ -60,5 +62,12 @@ namespace FFVM.Debug.Lsp.Database
 	public interface INameIndex
 	{
 		IReadOnlyList<SymbolIdentity> Search(string query, int limit);
+	}
+
+	public interface IAliasIndex
+	{
+		bool TryResolveAlias(PathKey documentKey, string aliasName, out PathKey targetDocument);
+
+		IReadOnlyDictionary<string, PathKey> GetAliases(PathKey documentKey);
 	}
 }

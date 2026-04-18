@@ -445,6 +445,7 @@ public static class LspDatabaseQueryTests
 			SymbolIndex = symbolIndex;
 			IncludeGraphIndex = includeGraphIndex;
 			NameIndex = nameIndex;
+			AliasIndex = new EmptyAliasIndex();
 		}
 
 		public long SnapshotVersion { get; }
@@ -452,6 +453,24 @@ public static class LspDatabaseQueryTests
 		public ISymbolIndex SymbolIndex { get; }
 		public IIncludeGraphIndex IncludeGraphIndex { get; }
 		public INameIndex NameIndex { get; }
+		public IAliasIndex AliasIndex { get; }
+	}
+
+	private sealed class EmptyAliasIndex : IAliasIndex
+	{
+		private static readonly IReadOnlyDictionary<string, PathKey> Empty =
+			new Dictionary<string, PathKey>(0);
+
+		public bool TryResolveAlias(PathKey documentKey, string aliasName, out PathKey targetDocument)
+		{
+			targetDocument = new PathKey(string.Empty);
+			return false;
+		}
+
+		public IReadOnlyDictionary<string, PathKey> GetAliases(PathKey documentKey)
+		{
+			return Empty;
+		}
 	}
 
 	private sealed class FakePositionIndex : IPositionIndex

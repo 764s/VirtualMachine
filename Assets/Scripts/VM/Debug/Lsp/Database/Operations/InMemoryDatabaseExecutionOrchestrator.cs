@@ -1411,7 +1411,11 @@ namespace FFVM.Debug.Lsp.Database
 			var documentPath = new PathKey(normalizedDocument);
 			DataAggregateId aggregateId = CreateAggregateId(documentPath);
 			var functionSymbols = new Dictionary<string, SymbolIdentity>(StringComparer.OrdinalIgnoreCase);
+			var nameSymbols = new Dictionary<string, SymbolIdentity>(StringComparer.OrdinalIgnoreCase);
 			Dictionary<string, SymbolIdentity> importedFunctionSymbols = BuildImportedFunctionSymbols(module, normalizedDocument);
+			Dictionary<string, SymbolIdentity> importedNameSymbols = BuildImportedNameSymbols(module, normalizedDocument);
+			Dictionary<string, Dictionary<string, SymbolIdentity>> aliasedFunctionSymbols = BuildAliasedFunctionSymbols(module, normalizedDocument);
+			Dictionary<string, Dictionary<string, SymbolIdentity>> aliasedNameSymbols = BuildAliasedNameSymbols(module, normalizedDocument);
 			Dictionary<string, Dictionary<string, StructFieldDescriptor>> importedStructFieldSymbols = BuildImportedStructFieldSymbols(module, normalizedDocument);
 
 			int definitionOrdinal = 0;
@@ -1419,6 +1423,8 @@ namespace FFVM.Debug.Lsp.Database
 			{
 				FuncDecl function = module.Functions[i];
 				if (function == null || string.IsNullOrWhiteSpace(function.Name))
+					continue;
+				if (!string.IsNullOrEmpty(function.AliasTarget))
 					continue;
 
 				int nameLine = function.Line;
@@ -1447,6 +1453,16 @@ namespace FFVM.Debug.Lsp.Database
 				if (!functionSymbols.ContainsKey(function.Name))
 					functionSymbols[function.Name] = symbol;
 			}
+
+			EmitModuleVarDefinitions(module, source, normalizedDocument, documentPath, aggregateId, snapshotVersion, output, nameSymbols, ref definitionOrdinal);
+			EmitStructNameDefinitions(module, source, normalizedDocument, documentPath, aggregateId, snapshotVersion, output, nameSymbols, ref definitionOrdinal);
+			EmitEnumDefinitions(module, source, normalizedDocument, documentPath, aggregateId, snapshotVersion, output, nameSymbols, ref definitionOrdinal);
+
+			var overrideFunctionSymbols = new Dictionary<string, SymbolIdentity>(StringComparer.OrdinalIgnoreCase);
+			var overrideNameSymbols = new Dictionary<string, SymbolIdentity>(StringComparer.OrdinalIgnoreCase);
+			EmitOverrideDefinitions(module, source, normalizedDocument, documentPath, aggregateId, snapshotVersion,
+				output, aliasedFunctionSymbols, aliasedNameSymbols,
+				overrideFunctionSymbols, overrideNameSymbols, ref definitionOrdinal);
 
 			Dictionary<string, Dictionary<string, StructFieldDescriptor>> localStructFieldSymbols = BuildLocalStructFieldSymbols(
 				module,
@@ -1494,6 +1510,18 @@ namespace FFVM.Debug.Lsp.Database
 				});
 			}
 
+			EmitAliasedCallReferenceFacts(
+				module,
+				source,
+				normalizedDocument,
+				documentPath,
+				aggregateId,
+				snapshotVersion,
+				output,
+				aliasedFunctionSymbols,
+				overrideFunctionSymbols,
+				ref referenceOrdinal);
+
 			EmitStructFieldReferenceFacts(
 				module,
 				source,
@@ -1503,6 +1531,30 @@ namespace FFVM.Debug.Lsp.Database
 				snapshotVersion,
 				output,
 				structFieldSymbolsByStruct,
+				ref referenceOrdinal);
+
+			EmitIdentifierReferenceFacts(
+				module,
+				source,
+				normalizedDocument,
+				documentPath,
+				aggregateId,
+				snapshotVersion,
+				output,
+				nameSymbols,
+				importedNameSymbols,
+				ref referenceOrdinal);
+
+			EmitAliasedIdentifierReferenceFacts(
+				module,
+				source,
+				normalizedDocument,
+				documentPath,
+				aggregateId,
+				snapshotVersion,
+				output,
+				aliasedNameSymbols,
+				overrideNameSymbols,
 				ref referenceOrdinal);
 
 			EmitIncludeEdgeFacts(module, source, normalizedDocument, documentPath, aggregateId, snapshotVersion, output);
@@ -1604,6 +1656,10 @@ namespace FFVM.Debug.Lsp.Database
 			{
 				ImportDecl import = module.Imports[i];
 				if (import == null || string.IsNullOrWhiteSpace(import.ModulePath))
+					continue;
+
+				// DX21 P0-3: skip aliased imports — they stay namespaced, not flat-merged
+				if (!string.IsNullOrEmpty(import.Alias))
 					continue;
 
 				List<string> candidates = IncludeTargetResolver.ResolveCandidates(normalizedDocument, import.ModulePath);
@@ -2512,6 +2568,10 @@ namespace FFVM.Debug.Lsp.Database
 				if (import == null || string.IsNullOrWhiteSpace(import.ModulePath))
 					continue;
 
+				// DX21 P0-3: skip aliased imports — they stay namespaced, not flat-merged
+				if (!string.IsNullOrEmpty(import.Alias))
+					continue;
+
 				List<string> candidates = IncludeTargetResolver.ResolveCandidates(normalizedDocument, import.ModulePath);
 				if (candidates == null || candidates.Count == 0)
 					continue;
@@ -2592,6 +2652,852 @@ namespace FFVM.Debug.Lsp.Database
 			return true;
 		}
 
+		private static void EmitModuleVarDefinitions(
+			ModuleNode module, string source, string normalizedDocument,
+			PathKey documentPath, DataAggregateId aggregateId, long snapshotVersion,
+			List<DataFact> output, Dictionary<string, SymbolIdentity> nameSymbols, ref int definitionOrdinal)
+		{
+			if (module == null || module.ModuleVariables == null) return;
+			for (int i = 0; i < module.ModuleVariables.Count; i++)
+			{
+				VarDeclStmt v = module.ModuleVariables[i];
+				if (v == null || string.IsNullOrWhiteSpace(v.Name)) continue;
+				if (!string.IsNullOrEmpty(v.AliasTarget)) continue;
+				int nameLine = v.NameLine > 0 ? v.NameLine : v.Line;
+				int nameColumn = v.NameColumn > 0 ? v.NameColumn : v.Column;
+				if (!TryCreateSpanFromLineColumn(source, nameLine, nameColumn, v.Name.Length,
+					out TextSpan span, out int sl, out int sc, out int el, out int ec))
+					continue;
+				var symbol = new SymbolIdentity(SymbolKindTag.Variable, v.Name, string.Empty, string.Empty, normalizedDocument, span);
+				output.Add(new DataFact(
+					new DataFactId(BuildFactId("def", normalizedDocument, definitionOrdinal++, v.Name, sl, sc)),
+					aggregateId, DataFactKind.SymbolDefinition, documentPath, span, snapshotVersion,
+					new SymbolDataFactPayload(symbol, sl, sc, el, ec)));
+				if (!nameSymbols.ContainsKey(v.Name)) nameSymbols[v.Name] = symbol;
+			}
+		}
+
+		private static void EmitStructNameDefinitions(
+			ModuleNode module, string source, string normalizedDocument,
+			PathKey documentPath, DataAggregateId aggregateId, long snapshotVersion,
+			List<DataFact> output, Dictionary<string, SymbolIdentity> nameSymbols, ref int definitionOrdinal)
+		{
+			if (module == null || module.Structs == null) return;
+			for (int i = 0; i < module.Structs.Count; i++)
+			{
+				StructDecl s = module.Structs[i];
+				if (s == null || string.IsNullOrWhiteSpace(s.Name)) continue;
+				if (!string.IsNullOrEmpty(s.AliasTarget)) continue;
+				int nameLine = s.NameLine > 0 ? s.NameLine : s.Line;
+				int nameColumn = s.NameColumn > 0 ? s.NameColumn : s.Column;
+				if (!TryCreateSpanFromLineColumn(source, nameLine, nameColumn, s.Name.Length,
+					out TextSpan span, out int sl, out int sc, out int el, out int ec))
+					continue;
+				var symbol = new SymbolIdentity(SymbolKindTag.Struct, s.Name, string.Empty, string.Empty, normalizedDocument, span);
+				output.Add(new DataFact(
+					new DataFactId(BuildFactId("def", normalizedDocument, definitionOrdinal++, s.Name, sl, sc)),
+					aggregateId, DataFactKind.SymbolDefinition, documentPath, span, snapshotVersion,
+					new SymbolDataFactPayload(symbol, sl, sc, el, ec)));
+				if (!nameSymbols.ContainsKey(s.Name)) nameSymbols[s.Name] = symbol;
+			}
+		}
+
+		private static void EmitEnumDefinitions(
+			ModuleNode module, string source, string normalizedDocument,
+			PathKey documentPath, DataAggregateId aggregateId, long snapshotVersion,
+			List<DataFact> output, Dictionary<string, SymbolIdentity> nameSymbols, ref int definitionOrdinal)
+		{
+			if (module == null || module.Enums == null) return;
+			for (int i = 0; i < module.Enums.Count; i++)
+			{
+				EnumDecl e = module.Enums[i];
+				if (e == null || string.IsNullOrWhiteSpace(e.Name)) continue;
+				if (!string.IsNullOrEmpty(e.AliasTarget)) continue;
+				int nameLine = e.NameLine > 0 ? e.NameLine : e.Line;
+				int nameColumn = e.NameColumn > 0 ? e.NameColumn : e.Column;
+				if (!TryCreateSpanFromLineColumn(source, nameLine, nameColumn, e.Name.Length,
+					out TextSpan span, out int sl, out int sc, out int el, out int ec))
+					continue;
+				var symbol = new SymbolIdentity(SymbolKindTag.Enum, e.Name, string.Empty, string.Empty, normalizedDocument, span);
+				output.Add(new DataFact(
+					new DataFactId(BuildFactId("def", normalizedDocument, definitionOrdinal++, e.Name, sl, sc)),
+					aggregateId, DataFactKind.SymbolDefinition, documentPath, span, snapshotVersion,
+					new SymbolDataFactPayload(symbol, sl, sc, el, ec)));
+				if (!nameSymbols.ContainsKey(e.Name)) nameSymbols[e.Name] = symbol;
+			}
+		}
+
+		private static void EmitIdentifierReferenceFacts(
+			ModuleNode module, string source, string normalizedDocument,
+			PathKey documentPath, DataAggregateId aggregateId, long snapshotVersion,
+			List<DataFact> output,
+			Dictionary<string, SymbolIdentity> localNameSymbols,
+			Dictionary<string, SymbolIdentity> importedNameSymbols,
+			ref int referenceOrdinal)
+		{
+			if (module == null || module.Functions == null) return;
+			int ordinal = referenceOrdinal;
+			for (int fi = 0; fi < module.Functions.Count; fi++)
+			{
+				FuncDecl function = module.Functions[fi];
+				if (function == null || function.Body == null) continue;
+				CollectIdentifierReferencesFromStatement(function.Body, ident =>
+				{
+					if (ident == null || string.IsNullOrWhiteSpace(ident.Name)) return;
+					if (!localNameSymbols.TryGetValue(ident.Name, out SymbolIdentity symbol) || symbol == null)
+					{
+						if (!importedNameSymbols.TryGetValue(ident.Name, out symbol) || symbol == null)
+							return;
+					}
+					if (!TryCreateSpanFromLineColumn(source, ident.Line, ident.Column, ident.Name.Length,
+						out TextSpan span, out int sl, out int sc, out int el, out int ec))
+						return;
+					output.Add(new DataFact(
+						new DataFactId(BuildFactId("ref", normalizedDocument, ordinal++, ident.Name, sl, sc)),
+						aggregateId, DataFactKind.SymbolReference, documentPath, span, snapshotVersion,
+						new SymbolDataFactPayload(symbol, sl, sc, el, ec)));
+				});
+			}
+			referenceOrdinal = ordinal;
+		}
+
+		private static void CollectIdentifierReferencesFromStatement(Stmt statement, Action<IdentifierExpr> onIdent)
+		{
+			if (statement == null || onIdent == null) return;
+			if (statement is BlockStmt block)
+			{
+				if (block.Statements == null) return;
+				for (int i = 0; i < block.Statements.Count; i++)
+					CollectIdentifierReferencesFromStatement(block.Statements[i], onIdent);
+				return;
+			}
+			if (statement is VarDeclStmt variable)
+			{
+				// DX21: emit type-annotation name as identifier reference
+				if (!string.IsNullOrWhiteSpace(variable.TypeName) && variable.TypeNameLine > 0 && variable.TypeNameColumn > 0)
+				{
+					var typeIdent = new IdentifierExpr(variable.TypeName);
+					typeIdent.Line = variable.TypeNameLine;
+					typeIdent.Column = variable.TypeNameColumn;
+					onIdent(typeIdent);
+				}
+				CollectIdentifierReferencesFromExpression(variable.Initializer, onIdent);
+				return;
+			}
+			if (statement is IfStmt conditional)
+			{
+				CollectIdentifierReferencesFromExpression(conditional.Condition, onIdent);
+				CollectIdentifierReferencesFromStatement(conditional.ThenBranch, onIdent);
+				CollectIdentifierReferencesFromStatement(conditional.ElseBranch, onIdent);
+				return;
+			}
+			if (statement is WhileStmt loop)
+			{
+				CollectIdentifierReferencesFromExpression(loop.Condition, onIdent);
+				CollectIdentifierReferencesFromStatement(loop.Body, onIdent);
+				return;
+			}
+			if (statement is ForStmt forLoop)
+			{
+				CollectIdentifierReferencesFromStatement(forLoop.Initializer, onIdent);
+				CollectIdentifierReferencesFromExpression(forLoop.Condition, onIdent);
+				CollectIdentifierReferencesFromExpression(forLoop.Increment, onIdent);
+				CollectIdentifierReferencesFromStatement(forLoop.Body, onIdent);
+				return;
+			}
+			if (statement is ReturnStmt returned)
+			{
+				CollectIdentifierReferencesFromExpression(returned.Value, onIdent);
+				return;
+			}
+			if (statement is WaitStmt waited)
+			{
+				CollectIdentifierReferencesFromExpression(waited.FrameCount, onIdent);
+				return;
+			}
+			if (statement is ExprStmt expression)
+			{
+				CollectIdentifierReferencesFromExpression(expression.Expression, onIdent);
+				return;
+			}
+		}
+
+		private static void CollectIdentifierReferencesFromExpression(Expr expression, Action<IdentifierExpr> onIdent)
+		{
+			if (expression == null || onIdent == null) return;
+			if (expression is IdentifierExpr ident)
+			{
+				onIdent(ident);
+				return;
+			}
+			if (expression is CallExpr call)
+			{
+				if (call.Arguments != null)
+					for (int i = 0; i < call.Arguments.Count; i++)
+						CollectIdentifierReferencesFromExpression(call.Arguments[i], onIdent);
+				return;
+			}
+			if (expression is BinaryExpr binary)
+			{
+				CollectIdentifierReferencesFromExpression(binary.Left, onIdent);
+				CollectIdentifierReferencesFromExpression(binary.Right, onIdent);
+				return;
+			}
+			if (expression is UnaryExpr unary)
+			{
+				CollectIdentifierReferencesFromExpression(unary.Operand, onIdent);
+				return;
+			}
+			if (expression is AssignExpr assign)
+			{
+				CollectIdentifierReferencesFromExpression(assign.Target, onIdent);
+				CollectIdentifierReferencesFromExpression(assign.Value, onIdent);
+				return;
+			}
+			if (expression is FieldAccessExpr fieldAccess)
+			{
+				CollectIdentifierReferencesFromExpression(fieldAccess.Target, onIdent);
+				return;
+			}
+			if (expression is StructLiteralExpr structLit)
+			{
+				if (structLit.Fields != null)
+					for (int i = 0; i < structLit.Fields.Count; i++)
+						CollectIdentifierReferencesFromExpression(structLit.Fields[i].Value, onIdent);
+				return;
+			}
+		}
+
+		private static Dictionary<string, SymbolIdentity> BuildImportedNameSymbols(ModuleNode module, string normalizedDocument)
+		{
+			var symbols = new Dictionary<string, SymbolIdentity>(StringComparer.OrdinalIgnoreCase);
+			if (module == null || module.Imports == null || module.Imports.Count == 0
+				|| string.IsNullOrWhiteSpace(normalizedDocument))
+				return symbols;
+
+			var visitedTargets = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+			for (int i = 0; i < module.Imports.Count; i++)
+			{
+				ImportDecl import = module.Imports[i];
+				if (import == null || string.IsNullOrWhiteSpace(import.ModulePath))
+					continue;
+				// DX21 P0-3: skip aliased imports
+				if (!string.IsNullOrEmpty(import.Alias))
+					continue;
+
+				List<string> candidates = IncludeTargetResolver.ResolveCandidates(normalizedDocument, import.ModulePath);
+				if (candidates == null || candidates.Count == 0) continue;
+
+				for (int ci = 0; ci < candidates.Count; ci++)
+				{
+					string candidateUri = NormalizeDocumentKey(candidates[ci]);
+					if (string.IsNullOrWhiteSpace(candidateUri) || !visitedTargets.Add(candidateUri))
+						continue;
+					if (!TryReadImportedNameSymbols(candidateUri, out Dictionary<string, SymbolIdentity> imported))
+						continue;
+					foreach (KeyValuePair<string, SymbolIdentity> pair in imported)
+					{
+						if (!symbols.ContainsKey(pair.Key) && pair.Value != null)
+							symbols[pair.Key] = pair.Value;
+					}
+					break;
+				}
+			}
+			return symbols;
+		}
+
+		private static bool TryReadImportedNameSymbols(
+			string importedDocumentUri,
+			out Dictionary<string, SymbolIdentity> symbols)
+		{
+			symbols = new Dictionary<string, SymbolIdentity>(StringComparer.OrdinalIgnoreCase);
+			string normalizedUri = NormalizeDocumentKey(importedDocumentUri);
+			if (string.IsNullOrWhiteSpace(normalizedUri)) return false;
+
+			string path = WorkspacePathTool.UriToPath(normalizedUri);
+			if (string.IsNullOrWhiteSpace(path) || !File.Exists(path)) return false;
+
+			string source;
+			try { source = File.ReadAllText(path); }
+			catch { return false; }
+
+			var parser = new Parser();
+			ModuleNode module = parser.Parse(source ?? string.Empty, out _);
+			if (module == null) return true;
+
+			if (module.ModuleVariables != null)
+			{
+				for (int i = 0; i < module.ModuleVariables.Count; i++)
+				{
+					VarDeclStmt v = module.ModuleVariables[i];
+					if (v == null || string.IsNullOrWhiteSpace(v.Name)) continue;
+					int nl = v.NameLine > 0 ? v.NameLine : v.Line;
+					int nc = v.NameColumn > 0 ? v.NameColumn : v.Column;
+					if (!TryCreateSpanFromLineColumn(source, nl, nc, v.Name.Length, out TextSpan span, out _, out _, out _, out _))
+						continue;
+					if (!symbols.ContainsKey(v.Name))
+						symbols[v.Name] = new SymbolIdentity(SymbolKindTag.Variable, v.Name, string.Empty, string.Empty, normalizedUri, span);
+				}
+			}
+
+			if (module.Structs != null)
+			{
+				for (int i = 0; i < module.Structs.Count; i++)
+				{
+					StructDecl s = module.Structs[i];
+					if (s == null || string.IsNullOrWhiteSpace(s.Name)) continue;
+					int snl = s.NameLine > 0 ? s.NameLine : s.Line;
+					int snc = s.NameColumn > 0 ? s.NameColumn : s.Column;
+					if (!TryCreateSpanFromLineColumn(source, snl, snc, s.Name.Length, out TextSpan span, out _, out _, out _, out _))
+						continue;
+					if (!symbols.ContainsKey(s.Name))
+						symbols[s.Name] = new SymbolIdentity(SymbolKindTag.Struct, s.Name, string.Empty, string.Empty, normalizedUri, span);
+				}
+			}
+
+			if (module.Enums != null)
+			{
+				for (int i = 0; i < module.Enums.Count; i++)
+				{
+					EnumDecl en = module.Enums[i];
+					if (en == null || string.IsNullOrWhiteSpace(en.Name)) continue;
+					int enl = en.NameLine > 0 ? en.NameLine : en.Line;
+					int enc = en.NameColumn > 0 ? en.NameColumn : en.Column;
+					if (!TryCreateSpanFromLineColumn(source, enl, enc, en.Name.Length, out TextSpan span, out _, out _, out _, out _))
+						continue;
+					if (!symbols.ContainsKey(en.Name))
+						symbols[en.Name] = new SymbolIdentity(SymbolKindTag.Enum, en.Name, string.Empty, string.Empty, normalizedUri, span);
+				}
+			}
+
+			return true;
+		}
+
+		private static Dictionary<string, Dictionary<string, SymbolIdentity>> BuildAliasedFunctionSymbols(
+			ModuleNode module, string normalizedDocument)
+		{
+			var result = new Dictionary<string, Dictionary<string, SymbolIdentity>>(StringComparer.OrdinalIgnoreCase);
+			if (module == null || module.Imports == null || module.Imports.Count == 0
+				|| string.IsNullOrWhiteSpace(normalizedDocument))
+				return result;
+
+			var visitedTargets = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+			for (int i = 0; i < module.Imports.Count; i++)
+			{
+				ImportDecl import = module.Imports[i];
+				if (import == null || string.IsNullOrWhiteSpace(import.ModulePath))
+					continue;
+				if (string.IsNullOrEmpty(import.Alias))
+					continue;
+
+				List<string> candidates = IncludeTargetResolver.ResolveCandidates(normalizedDocument, import.ModulePath);
+				if (candidates == null || candidates.Count == 0) continue;
+
+				for (int ci = 0; ci < candidates.Count; ci++)
+				{
+					string candidateUri = NormalizeDocumentKey(candidates[ci]);
+					if (string.IsNullOrWhiteSpace(candidateUri) || !visitedTargets.Add(candidateUri))
+						continue;
+					if (!TryReadImportedFunctionSymbols(candidateUri, out Dictionary<string, SymbolIdentity> imported))
+						continue;
+					if (!result.ContainsKey(import.Alias))
+						result[import.Alias] = imported;
+					break;
+				}
+			}
+			return result;
+		}
+
+		private static Dictionary<string, Dictionary<string, SymbolIdentity>> BuildAliasedNameSymbols(
+			ModuleNode module, string normalizedDocument)
+		{
+			var result = new Dictionary<string, Dictionary<string, SymbolIdentity>>(StringComparer.OrdinalIgnoreCase);
+			if (module == null || module.Imports == null || module.Imports.Count == 0
+				|| string.IsNullOrWhiteSpace(normalizedDocument))
+				return result;
+
+			var visitedTargets = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+			for (int i = 0; i < module.Imports.Count; i++)
+			{
+				ImportDecl import = module.Imports[i];
+				if (import == null || string.IsNullOrWhiteSpace(import.ModulePath))
+					continue;
+				if (string.IsNullOrEmpty(import.Alias))
+					continue;
+
+				List<string> candidates = IncludeTargetResolver.ResolveCandidates(normalizedDocument, import.ModulePath);
+				if (candidates == null || candidates.Count == 0) continue;
+
+				for (int ci = 0; ci < candidates.Count; ci++)
+				{
+					string candidateUri = NormalizeDocumentKey(candidates[ci]);
+					if (string.IsNullOrWhiteSpace(candidateUri) || !visitedTargets.Add(candidateUri))
+						continue;
+					if (!TryReadImportedNameSymbols(candidateUri, out Dictionary<string, SymbolIdentity> imported))
+						continue;
+					if (!result.ContainsKey(import.Alias))
+						result[import.Alias] = imported;
+					break;
+				}
+			}
+			return result;
+		}
+
+		private static void EmitAliasedCallReferenceFacts(
+			ModuleNode module, string source, string normalizedDocument,
+			PathKey documentPath, DataAggregateId aggregateId, long snapshotVersion,
+			List<DataFact> output,
+			Dictionary<string, Dictionary<string, SymbolIdentity>> aliasedFunctionSymbols,
+			Dictionary<string, SymbolIdentity> overrideFunctionSymbols,
+			ref int referenceOrdinal)
+		{
+			if (module == null || module.Functions == null || aliasedFunctionSymbols == null || aliasedFunctionSymbols.Count == 0)
+				return;
+			int ordinal = referenceOrdinal;
+			for (int fi = 0; fi < module.Functions.Count; fi++)
+			{
+				FuncDecl function = module.Functions[fi];
+				if (function == null || function.Body == null) continue;
+				CollectMemberCallReferencesFromStatement(function.Body, memberCall =>
+				{
+					if (memberCall == null || string.IsNullOrWhiteSpace(memberCall.TargetName)
+						|| string.IsNullOrWhiteSpace(memberCall.MemberName))
+						return;
+					// DX21 P3: check override symbols first
+					string overrideKey = memberCall.TargetName + "." + memberCall.MemberName;
+					SymbolIdentity symbol = null;
+					if (overrideFunctionSymbols != null)
+						overrideFunctionSymbols.TryGetValue(overrideKey, out symbol);
+					if (symbol == null)
+					{
+						if (!aliasedFunctionSymbols.TryGetValue(memberCall.TargetName, out Dictionary<string, SymbolIdentity> funcsByName)
+							|| funcsByName == null)
+							return;
+						if (!funcsByName.TryGetValue(memberCall.MemberName, out symbol) || symbol == null)
+							return;
+					}
+					int memberColumn = ResolveMemberCallMemberColumn(memberCall, source);
+					if (!TryCreateSpanFromLineColumn(source, memberCall.Line, memberColumn, memberCall.MemberName.Length,
+						out TextSpan span, out int sl, out int sc, out int el, out int ec))
+						return;
+					output.Add(new DataFact(
+						new DataFactId(BuildFactId("ref", normalizedDocument, ordinal++, memberCall.MemberName, sl, sc)),
+						aggregateId, DataFactKind.SymbolReference, documentPath, span, snapshotVersion,
+						new SymbolDataFactPayload(symbol, sl, sc, el, ec)));
+				});
+			}
+			referenceOrdinal = ordinal;
+		}
+
+		private static void CollectMemberCallReferencesFromStatement(Stmt statement, Action<MemberCallExpr> onMemberCall)
+		{
+			if (statement == null || onMemberCall == null) return;
+			if (statement is BlockStmt block)
+			{
+				if (block.Statements == null) return;
+				for (int i = 0; i < block.Statements.Count; i++)
+					CollectMemberCallReferencesFromStatement(block.Statements[i], onMemberCall);
+				return;
+			}
+			if (statement is VarDeclStmt variable)
+			{
+				CollectMemberCallReferencesFromExpression(variable.Initializer, onMemberCall);
+				return;
+			}
+			if (statement is IfStmt conditional)
+			{
+				CollectMemberCallReferencesFromExpression(conditional.Condition, onMemberCall);
+				CollectMemberCallReferencesFromStatement(conditional.ThenBranch, onMemberCall);
+				CollectMemberCallReferencesFromStatement(conditional.ElseBranch, onMemberCall);
+				return;
+			}
+			if (statement is WhileStmt loop)
+			{
+				CollectMemberCallReferencesFromExpression(loop.Condition, onMemberCall);
+				CollectMemberCallReferencesFromStatement(loop.Body, onMemberCall);
+				return;
+			}
+			if (statement is ForStmt forLoop)
+			{
+				CollectMemberCallReferencesFromStatement(forLoop.Initializer, onMemberCall);
+				CollectMemberCallReferencesFromExpression(forLoop.Condition, onMemberCall);
+				CollectMemberCallReferencesFromExpression(forLoop.Increment, onMemberCall);
+				CollectMemberCallReferencesFromStatement(forLoop.Body, onMemberCall);
+				return;
+			}
+			if (statement is ReturnStmt returned)
+			{
+				CollectMemberCallReferencesFromExpression(returned.Value, onMemberCall);
+				return;
+			}
+			if (statement is WaitStmt waited)
+			{
+				CollectMemberCallReferencesFromExpression(waited.FrameCount, onMemberCall);
+				return;
+			}
+			if (statement is ExprStmt expression)
+			{
+				CollectMemberCallReferencesFromExpression(expression.Expression, onMemberCall);
+				return;
+			}
+		}
+
+		private static void CollectMemberCallReferencesFromExpression(Expr expression, Action<MemberCallExpr> onMemberCall)
+		{
+			if (expression == null || onMemberCall == null) return;
+			if (expression is MemberCallExpr memberCall)
+			{
+				onMemberCall(memberCall);
+				if (memberCall.Arguments != null)
+					for (int i = 0; i < memberCall.Arguments.Count; i++)
+						CollectMemberCallReferencesFromExpression(memberCall.Arguments[i], onMemberCall);
+				return;
+			}
+			if (expression is CallExpr call)
+			{
+				if (call.Arguments != null)
+					for (int i = 0; i < call.Arguments.Count; i++)
+						CollectMemberCallReferencesFromExpression(call.Arguments[i], onMemberCall);
+				return;
+			}
+			if (expression is BinaryExpr binary)
+			{
+				CollectMemberCallReferencesFromExpression(binary.Left, onMemberCall);
+				CollectMemberCallReferencesFromExpression(binary.Right, onMemberCall);
+				return;
+			}
+			if (expression is UnaryExpr unary)
+			{
+				CollectMemberCallReferencesFromExpression(unary.Operand, onMemberCall);
+				return;
+			}
+			if (expression is FieldAccessExpr fieldAccess)
+			{
+				CollectMemberCallReferencesFromExpression(fieldAccess.Target, onMemberCall);
+				return;
+			}
+		}
+
+		private static void EmitAliasedIdentifierReferenceFacts(
+			ModuleNode module, string source, string normalizedDocument,
+			PathKey documentPath, DataAggregateId aggregateId, long snapshotVersion,
+			List<DataFact> output,
+			Dictionary<string, Dictionary<string, SymbolIdentity>> aliasedNameSymbols,
+			Dictionary<string, SymbolIdentity> overrideNameSymbols,
+			ref int referenceOrdinal)
+		{
+			if (module == null || module.Functions == null || aliasedNameSymbols == null || aliasedNameSymbols.Count == 0)
+				return;
+			int ordinal = referenceOrdinal;
+			for (int fi = 0; fi < module.Functions.Count; fi++)
+			{
+				FuncDecl function = module.Functions[fi];
+				if (function == null || function.Body == null) continue;
+				CollectAliasedFieldAccessFromStatement(function.Body, (aliasName, fieldName, fieldLine, fieldColumn) =>
+				{
+					// DX21 P3: check override symbols first
+					string overrideKey = aliasName + "." + fieldName;
+					SymbolIdentity symbol = null;
+					if (overrideNameSymbols != null)
+						overrideNameSymbols.TryGetValue(overrideKey, out symbol);
+					if (symbol == null)
+					{
+						if (!aliasedNameSymbols.TryGetValue(aliasName, out Dictionary<string, SymbolIdentity> namesByName)
+							|| namesByName == null)
+							return;
+						if (!namesByName.TryGetValue(fieldName, out symbol) || symbol == null)
+							return;
+					}
+					if (!TryCreateSpanFromLineColumn(source, fieldLine, fieldColumn, fieldName.Length,
+						out TextSpan span, out int sl, out int sc, out int el, out int ec))
+						return;
+					output.Add(new DataFact(
+						new DataFactId(BuildFactId("ref", normalizedDocument, ordinal++, fieldName, sl, sc)),
+						aggregateId, DataFactKind.SymbolReference, documentPath, span, snapshotVersion,
+						new SymbolDataFactPayload(symbol, sl, sc, el, ec)));
+				});
+			}
+			referenceOrdinal = ordinal;
+		}
+
+		private static void CollectAliasedFieldAccessFromStatement(Stmt statement, Action<string, string, int, int> onAliasedAccess)
+		{
+			if (statement == null || onAliasedAccess == null) return;
+			if (statement is BlockStmt block)
+			{
+				if (block.Statements == null) return;
+				for (int i = 0; i < block.Statements.Count; i++)
+					CollectAliasedFieldAccessFromStatement(block.Statements[i], onAliasedAccess);
+				return;
+			}
+			if (statement is VarDeclStmt variable)
+			{
+				// DX21: type annotation with dot (e.g. var v: U.Vec)
+				if (!string.IsNullOrWhiteSpace(variable.TypeName) && variable.TypeName.Contains("."))
+				{
+					int dotIndex = variable.TypeName.IndexOf('.');
+					string alias = variable.TypeName.Substring(0, dotIndex);
+					string typeName = variable.TypeName.Substring(dotIndex + 1);
+					if (variable.TypeNameLine > 0 && variable.TypeNameColumn > 0)
+						onAliasedAccess(alias, typeName, variable.TypeNameLine, variable.TypeNameColumn + dotIndex + 1);
+				}
+				CollectAliasedFieldAccessFromExpression(variable.Initializer, onAliasedAccess);
+				return;
+			}
+			if (statement is IfStmt conditional)
+			{
+				CollectAliasedFieldAccessFromExpression(conditional.Condition, onAliasedAccess);
+				CollectAliasedFieldAccessFromStatement(conditional.ThenBranch, onAliasedAccess);
+				CollectAliasedFieldAccessFromStatement(conditional.ElseBranch, onAliasedAccess);
+				return;
+			}
+			if (statement is WhileStmt loop)
+			{
+				CollectAliasedFieldAccessFromExpression(loop.Condition, onAliasedAccess);
+				CollectAliasedFieldAccessFromStatement(loop.Body, onAliasedAccess);
+				return;
+			}
+			if (statement is ForStmt forLoop)
+			{
+				CollectAliasedFieldAccessFromStatement(forLoop.Initializer, onAliasedAccess);
+				CollectAliasedFieldAccessFromExpression(forLoop.Condition, onAliasedAccess);
+				CollectAliasedFieldAccessFromExpression(forLoop.Increment, onAliasedAccess);
+				CollectAliasedFieldAccessFromStatement(forLoop.Body, onAliasedAccess);
+				return;
+			}
+			if (statement is ReturnStmt returned)
+			{
+				CollectAliasedFieldAccessFromExpression(returned.Value, onAliasedAccess);
+				return;
+			}
+			if (statement is WaitStmt waited)
+			{
+				CollectAliasedFieldAccessFromExpression(waited.FrameCount, onAliasedAccess);
+				return;
+			}
+			if (statement is ExprStmt expression)
+			{
+				CollectAliasedFieldAccessFromExpression(expression.Expression, onAliasedAccess);
+				return;
+			}
+		}
+
+		private static void CollectAliasedFieldAccessFromExpression(Expr expression, Action<string, string, int, int> onAliasedAccess)
+		{
+			if (expression == null || onAliasedAccess == null) return;
+			if (expression is FieldAccessExpr fieldAccess)
+			{
+				if (fieldAccess.Target is IdentifierExpr targetIdent
+					&& !string.IsNullOrWhiteSpace(targetIdent.Name)
+					&& !string.IsNullOrWhiteSpace(fieldAccess.FieldName)
+					&& fieldAccess.FieldNameLine > 0 && fieldAccess.FieldNameColumn > 0)
+				{
+					onAliasedAccess(targetIdent.Name, fieldAccess.FieldName, fieldAccess.FieldNameLine, fieldAccess.FieldNameColumn);
+				}
+				CollectAliasedFieldAccessFromExpression(fieldAccess.Target, onAliasedAccess);
+				return;
+			}
+			if (expression is StructLiteralExpr structLit)
+			{
+				// DX21: dotted struct literal (e.g. U.Vec { x: 1 })
+				if (!string.IsNullOrWhiteSpace(structLit.TypeName) && structLit.TypeName.Contains("."))
+				{
+					int dotIndex = structLit.TypeName.IndexOf('.');
+					string alias = structLit.TypeName.Substring(0, dotIndex);
+					string typeName = structLit.TypeName.Substring(dotIndex + 1);
+					if (structLit.Line > 0 && structLit.Column > 0)
+						onAliasedAccess(alias, typeName, structLit.Line, structLit.Column + dotIndex + 1);
+				}
+				if (structLit.Fields != null)
+					for (int i = 0; i < structLit.Fields.Count; i++)
+						CollectAliasedFieldAccessFromExpression(structLit.Fields[i].Value, onAliasedAccess);
+				return;
+			}
+			if (expression is CallExpr call)
+			{
+				if (call.Arguments != null)
+					for (int i = 0; i < call.Arguments.Count; i++)
+						CollectAliasedFieldAccessFromExpression(call.Arguments[i], onAliasedAccess);
+				return;
+			}
+			if (expression is MemberCallExpr memberCall)
+			{
+				if (memberCall.Arguments != null)
+					for (int i = 0; i < memberCall.Arguments.Count; i++)
+						CollectAliasedFieldAccessFromExpression(memberCall.Arguments[i], onAliasedAccess);
+				return;
+			}
+			if (expression is BinaryExpr binary)
+			{
+				CollectAliasedFieldAccessFromExpression(binary.Left, onAliasedAccess);
+				CollectAliasedFieldAccessFromExpression(binary.Right, onAliasedAccess);
+				return;
+			}
+			if (expression is UnaryExpr unary)
+			{
+				CollectAliasedFieldAccessFromExpression(unary.Operand, onAliasedAccess);
+				return;
+			}
+			if (expression is AssignExpr assign)
+			{
+				CollectAliasedFieldAccessFromExpression(assign.Target, onAliasedAccess);
+				CollectAliasedFieldAccessFromExpression(assign.Value, onAliasedAccess);
+				return;
+			}
+		}
+
+		private static void EmitOverrideDefinitions(
+			ModuleNode module, string source, string normalizedDocument,
+			PathKey documentPath, DataAggregateId aggregateId, long snapshotVersion,
+			List<DataFact> output,
+			Dictionary<string, Dictionary<string, SymbolIdentity>> aliasedFunctionSymbols,
+			Dictionary<string, Dictionary<string, SymbolIdentity>> aliasedNameSymbols,
+			Dictionary<string, SymbolIdentity> overrideFunctionSymbols,
+			Dictionary<string, SymbolIdentity> overrideNameSymbols,
+			ref int definitionOrdinal)
+		{
+			if (module == null) return;
+			int ordinal = definitionOrdinal;
+
+			if (module.Functions != null && aliasedFunctionSymbols != null)
+			{
+				for (int i = 0; i < module.Functions.Count; i++)
+				{
+					FuncDecl f = module.Functions[i];
+					if (f == null || string.IsNullOrEmpty(f.AliasTarget) || string.IsNullOrWhiteSpace(f.Name))
+						continue;
+					if (!aliasedFunctionSymbols.TryGetValue(f.AliasTarget, out var funcsByName) || funcsByName == null)
+						continue;
+					if (!funcsByName.TryGetValue(f.Name, out SymbolIdentity originalSymbol) || originalSymbol == null)
+						continue;
+					int nameLine = f.Line;
+					int nameColumn = ResolveFunctionNameColumn(f, source);
+					if (!TryCreateSpanFromLineColumn(source, nameLine, nameColumn, f.Name.Length,
+						out TextSpan span, out int sl, out int sc, out int el, out int ec))
+						continue;
+					var overrideSymbol = new SymbolIdentity(SymbolKindTag.Function, f.Name,
+						f.AliasTarget, string.Empty, normalizedDocument, span);
+					output.Add(new DataFact(
+						new DataFactId(BuildFactId("def", normalizedDocument, ordinal++, f.Name, sl, sc)),
+						aggregateId, DataFactKind.SymbolDefinition, documentPath, span, snapshotVersion,
+						new SymbolDataFactPayload(overrideSymbol, sl, sc, el, ec)));
+					string overrideKey = f.AliasTarget + "." + f.Name;
+					if (!overrideFunctionSymbols.ContainsKey(overrideKey))
+						overrideFunctionSymbols[overrideKey] = overrideSymbol;
+					EmitOverrideCrossReference(originalSymbol, overrideSymbol, normalizedDocument,
+						aggregateId, snapshotVersion, output, ref ordinal);
+				}
+			}
+
+			if (module.ModuleVariables != null && aliasedNameSymbols != null)
+			{
+				for (int i = 0; i < module.ModuleVariables.Count; i++)
+				{
+					VarDeclStmt v = module.ModuleVariables[i];
+					if (v == null || string.IsNullOrEmpty(v.AliasTarget) || string.IsNullOrWhiteSpace(v.Name))
+						continue;
+					if (!aliasedNameSymbols.TryGetValue(v.AliasTarget, out var namesByName) || namesByName == null)
+						continue;
+					if (!namesByName.TryGetValue(v.Name, out SymbolIdentity originalSymbol) || originalSymbol == null)
+						continue;
+					int nameLine = v.NameLine > 0 ? v.NameLine : v.Line;
+					int nameColumn = v.NameColumn > 0 ? v.NameColumn : v.Column;
+					if (!TryCreateSpanFromLineColumn(source, nameLine, nameColumn, v.Name.Length,
+						out TextSpan span, out int sl, out int sc, out int el, out int ec))
+						continue;
+					var overrideSymbol = new SymbolIdentity(SymbolKindTag.Variable, v.Name,
+						v.AliasTarget, string.Empty, normalizedDocument, span);
+					output.Add(new DataFact(
+						new DataFactId(BuildFactId("def", normalizedDocument, ordinal++, v.Name, sl, sc)),
+						aggregateId, DataFactKind.SymbolDefinition, documentPath, span, snapshotVersion,
+						new SymbolDataFactPayload(overrideSymbol, sl, sc, el, ec)));
+					string overrideKey = v.AliasTarget + "." + v.Name;
+					if (!overrideNameSymbols.ContainsKey(overrideKey))
+						overrideNameSymbols[overrideKey] = overrideSymbol;
+					EmitOverrideCrossReference(originalSymbol, overrideSymbol, normalizedDocument,
+						aggregateId, snapshotVersion, output, ref ordinal);
+				}
+			}
+
+			if (module.Structs != null && aliasedNameSymbols != null)
+			{
+				for (int i = 0; i < module.Structs.Count; i++)
+				{
+					StructDecl s = module.Structs[i];
+					if (s == null || string.IsNullOrEmpty(s.AliasTarget) || string.IsNullOrWhiteSpace(s.Name))
+						continue;
+					if (!aliasedNameSymbols.TryGetValue(s.AliasTarget, out var namesByName) || namesByName == null)
+						continue;
+					if (!namesByName.TryGetValue(s.Name, out SymbolIdentity originalSymbol) || originalSymbol == null)
+						continue;
+					int nameLine = s.NameLine > 0 ? s.NameLine : s.Line;
+					int nameColumn = s.NameColumn > 0 ? s.NameColumn : s.Column;
+					if (!TryCreateSpanFromLineColumn(source, nameLine, nameColumn, s.Name.Length,
+						out TextSpan span, out int sl, out int sc, out int el, out int ec))
+						continue;
+					var overrideSymbol = new SymbolIdentity(SymbolKindTag.Struct, s.Name,
+						s.AliasTarget, string.Empty, normalizedDocument, span);
+					output.Add(new DataFact(
+						new DataFactId(BuildFactId("def", normalizedDocument, ordinal++, s.Name, sl, sc)),
+						aggregateId, DataFactKind.SymbolDefinition, documentPath, span, snapshotVersion,
+						new SymbolDataFactPayload(overrideSymbol, sl, sc, el, ec)));
+					string overrideKey = s.AliasTarget + "." + s.Name;
+					if (!overrideNameSymbols.ContainsKey(overrideKey))
+						overrideNameSymbols[overrideKey] = overrideSymbol;
+					EmitOverrideCrossReference(originalSymbol, overrideSymbol, normalizedDocument,
+						aggregateId, snapshotVersion, output, ref ordinal);
+				}
+			}
+
+			if (module.Enums != null && aliasedNameSymbols != null)
+			{
+				for (int i = 0; i < module.Enums.Count; i++)
+				{
+					EnumDecl e = module.Enums[i];
+					if (e == null || string.IsNullOrEmpty(e.AliasTarget) || string.IsNullOrWhiteSpace(e.Name))
+						continue;
+					if (!aliasedNameSymbols.TryGetValue(e.AliasTarget, out var namesByName) || namesByName == null)
+						continue;
+					if (!namesByName.TryGetValue(e.Name, out SymbolIdentity originalSymbol) || originalSymbol == null)
+						continue;
+					int nameLine = e.NameLine > 0 ? e.NameLine : e.Line;
+					int nameColumn = e.NameColumn > 0 ? e.NameColumn : e.Column;
+					if (!TryCreateSpanFromLineColumn(source, nameLine, nameColumn, e.Name.Length,
+						out TextSpan span, out int sl, out int sc, out int el, out int ec))
+						continue;
+					var overrideSymbol = new SymbolIdentity(SymbolKindTag.Enum, e.Name,
+						e.AliasTarget, string.Empty, normalizedDocument, span);
+					output.Add(new DataFact(
+						new DataFactId(BuildFactId("def", normalizedDocument, ordinal++, e.Name, sl, sc)),
+						aggregateId, DataFactKind.SymbolDefinition, documentPath, span, snapshotVersion,
+						new SymbolDataFactPayload(overrideSymbol, sl, sc, el, ec)));
+					string overrideKey = e.AliasTarget + "." + e.Name;
+					if (!overrideNameSymbols.ContainsKey(overrideKey))
+						overrideNameSymbols[overrideKey] = overrideSymbol;
+					EmitOverrideCrossReference(originalSymbol, overrideSymbol, normalizedDocument,
+						aggregateId, snapshotVersion, output, ref ordinal);
+				}
+			}
+
+			definitionOrdinal = ordinal;
+		}
+
+		private static void EmitOverrideCrossReference(
+			SymbolIdentity originalSymbol, SymbolIdentity overrideSymbol,
+			string normalizedDocument, DataAggregateId aggregateId,
+			long snapshotVersion, List<DataFact> output, ref int ordinal)
+		{
+			string origDoc = originalSymbol.Origin ?? string.Empty;
+			if (string.IsNullOrWhiteSpace(origDoc)) return;
+			var origDocPath = new PathKey(origDoc);
+			output.Add(new DataFact(
+				new DataFactId(BuildFactId("ref", normalizedDocument, ordinal++,
+					overrideSymbol.Name + "_override_xref", 0, 0)),
+				aggregateId, DataFactKind.SymbolReference, origDocPath,
+				originalSymbol.DeclarationSpan, snapshotVersion,
+				new SymbolDataFactPayload(overrideSymbol)));
+		}
+
 		private static void EmitIncludeEdgeFacts(
 			ModuleNode module,
 			string source,
@@ -2636,6 +3542,61 @@ namespace FFVM.Debug.Lsp.Database
 					span,
 					snapshotVersion,
 					payload));
+
+				if (!string.IsNullOrEmpty(import.Alias) && !string.IsNullOrWhiteSpace(targetUri))
+				{
+					var aliasPayload = new AliasBindingDataFactPayload(import.Alias, targetUri);
+					output.Add(new DataFact(
+						new DataFactId(BuildFactId("alias", normalizedDocument, i, import.Alias, startLine, startCharacter)),
+						aggregateId,
+						DataFactKind.AliasBinding,
+						documentPath,
+						span,
+						snapshotVersion,
+						aliasPayload));
+				}
+
+				// Emit include path symbol for position-indexed definition + references
+				if (!string.IsNullOrWhiteSpace(targetUri))
+				{
+					string normalizedTarget = NormalizeDocumentKey(targetUri);
+					if (!string.IsNullOrWhiteSpace(normalizedTarget))
+					{
+						var includeSymbol = new SymbolIdentity(
+							SymbolKindTag.IncludeFile,
+							import.ModulePath,
+							string.Empty,
+							string.Empty,
+							normalizedTarget,
+							new TextSpan(0, 0));
+
+						// Path literal column: PathColumn points to opening quote, +1 = first char inside quotes
+						int pathColumn = import.PathColumn > 0 ? import.PathColumn + 1 : nameColumn;
+						int pathLine = import.PathLine > 0 ? import.PathLine : nameLine;
+						if (TryCreateSpanFromLineColumn(source, pathLine, pathColumn, import.ModulePath.Length,
+							out TextSpan pathSpan, out int psl, out int psc, out int pel, out int pec))
+						{
+							output.Add(new DataFact(
+								new DataFactId(BuildFactId("ref", normalizedDocument, includeOrdinal + 1000, import.ModulePath, psl, psc)),
+								aggregateId,
+								DataFactKind.SymbolReference,
+								documentPath,
+								pathSpan,
+								snapshotVersion,
+								new SymbolDataFactPayload(includeSymbol, psl, psc, pel, pec)));
+
+							var targetPath = new PathKey(normalizedTarget);
+							output.Add(new DataFact(
+								new DataFactId(BuildFactId("def", normalizedDocument, includeOrdinal + 2000, import.ModulePath, 0, 0)),
+								aggregateId,
+								DataFactKind.SymbolDefinition,
+								targetPath,
+								new TextSpan(0, 0),
+								snapshotVersion,
+								new SymbolDataFactPayload(includeSymbol, 0, 0, 0, 0)));
+						}
+					}
+				}
 			}
 		}
 

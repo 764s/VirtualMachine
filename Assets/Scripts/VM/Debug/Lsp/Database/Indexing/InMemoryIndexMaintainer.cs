@@ -119,6 +119,19 @@ namespace FFVM.Debug.Lsp.Database
 					continue;
 				}
 
+				if (fact.Kind == DataFactKind.AliasBinding)
+				{
+					if (fact.Payload is AliasBindingDataFactPayload aliasPayload
+						&& !string.IsNullOrEmpty(aliasPayload.AliasName))
+					{
+						string targetKey = NormalizeDocumentKey(aliasPayload.TargetDocumentUri);
+						if (!string.IsNullOrWhiteSpace(targetKey))
+							contribution.AliasBindings[aliasPayload.AliasName] = targetKey;
+					}
+
+					continue;
+				}
+
 				if (fact.Kind != DataFactKind.SymbolDefinition
 					&& fact.Kind != DataFactKind.SymbolReference)
 				{
@@ -174,6 +187,7 @@ namespace FFVM.Debug.Lsp.Database
 			var symbolsByKey = new Dictionary<string, SymbolIdentity>(StringComparer.Ordinal);
 			var includesByDocument = new Dictionary<string, HashSet<string>>(StringComparer.OrdinalIgnoreCase);
 			var dependentsByDocument = new Dictionary<string, HashSet<string>>(StringComparer.OrdinalIgnoreCase);
+			var aliasByDocument = new Dictionary<string, Dictionary<string, string>>(StringComparer.OrdinalIgnoreCase);
 
 			for (int i = 0; i < orderedDocuments.Count; i++)
 			{
@@ -203,6 +217,9 @@ namespace FFVM.Debug.Lsp.Database
 						dependents.Add(documentKey);
 					}
 				}
+
+				if (contribution.AliasBindings.Count > 0)
+					aliasByDocument[documentKey] = new Dictionary<string, string>(contribution.AliasBindings, StringComparer.OrdinalIgnoreCase);
 
 				foreach (KeyValuePair<string, SymbolIdentity> symbolPair in contribution.SymbolsByKey)
 				{
@@ -284,6 +301,7 @@ namespace FFVM.Debug.Lsp.Database
 			var symbolIndex = new InMemorySymbolIndex(definitionsBySymbol, referencesBySymbol);
 			var includeGraphIndex = new InMemoryIncludeGraphIndex(includesByDocument, dependentsByDocument);
 			var nameIndex = new InMemoryNameIndex(symbolsByKey);
+			var aliasIndex = new InMemoryAliasIndex(aliasByDocument);
 
 			return new InMemoryBuiltIndexSnapshot(
 				snapshotVersion,
@@ -291,6 +309,7 @@ namespace FFVM.Debug.Lsp.Database
 				symbolIndex,
 				includeGraphIndex,
 				nameIndex,
+				aliasIndex,
 				CloneContributions(contributions));
 		}
 
@@ -458,6 +477,7 @@ namespace FFVM.Debug.Lsp.Database
 				DefinitionsBySymbol = new Dictionary<string, DataFact>(StringComparer.Ordinal);
 				ReferencesBySymbol = new Dictionary<string, List<DataFact>>(StringComparer.Ordinal);
 				IncludesTargets = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+				AliasBindings = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
 			}
 
 			public string DocumentKey { get; }
@@ -466,6 +486,7 @@ namespace FFVM.Debug.Lsp.Database
 			public Dictionary<string, DataFact> DefinitionsBySymbol { get; }
 			public Dictionary<string, List<DataFact>> ReferencesBySymbol { get; }
 			public HashSet<string> IncludesTargets { get; }
+			public Dictionary<string, string> AliasBindings { get; }
 
 			public DocumentIndexContribution Clone()
 			{
@@ -490,6 +511,9 @@ namespace FFVM.Debug.Lsp.Database
 				foreach (string includeTarget in IncludesTargets)
 					clone.IncludesTargets.Add(includeTarget);
 
+				foreach (KeyValuePair<string, string> alias in AliasBindings)
+					clone.AliasBindings[alias.Key] = alias.Value;
+
 				return clone;
 			}
 		}
@@ -502,6 +526,7 @@ namespace FFVM.Debug.Lsp.Database
 				ISymbolIndex symbolIndex,
 				IIncludeGraphIndex includeGraphIndex,
 				INameIndex nameIndex,
+				IAliasIndex aliasIndex,
 				IReadOnlyDictionary<string, DocumentIndexContribution> contributionsByDocument)
 			{
 				SnapshotVersion = snapshotVersion;
@@ -509,6 +534,7 @@ namespace FFVM.Debug.Lsp.Database
 				SymbolIndex = symbolIndex;
 				IncludeGraphIndex = includeGraphIndex;
 				NameIndex = nameIndex;
+				AliasIndex = aliasIndex;
 				ContributionsByDocument = contributionsByDocument
 					?? new Dictionary<string, DocumentIndexContribution>(StringComparer.OrdinalIgnoreCase);
 			}
@@ -518,6 +544,7 @@ namespace FFVM.Debug.Lsp.Database
 			public ISymbolIndex SymbolIndex { get; }
 			public IIncludeGraphIndex IncludeGraphIndex { get; }
 			public INameIndex NameIndex { get; }
+			public IAliasIndex AliasIndex { get; }
 			public IReadOnlyDictionary<string, DocumentIndexContribution> ContributionsByDocument { get; }
 		}
 
@@ -781,6 +808,59 @@ namespace FFVM.Debug.Lsp.Database
 					return byScope;
 
 				return StringComparer.OrdinalIgnoreCase.Compare(left.ParentName, right.ParentName);
+			}
+		}
+
+		private sealed class InMemoryAliasIndex : IAliasIndex
+		{
+			private static readonly IReadOnlyDictionary<string, PathKey> EmptyAliases =
+				new Dictionary<string, PathKey>(0);
+
+			private readonly Dictionary<string, Dictionary<string, string>> _aliasByDocument;
+
+			public InMemoryAliasIndex(Dictionary<string, Dictionary<string, string>> aliasByDocument)
+			{
+				_aliasByDocument = aliasByDocument
+					?? new Dictionary<string, Dictionary<string, string>>(StringComparer.OrdinalIgnoreCase);
+			}
+
+			public bool TryResolveAlias(PathKey documentKey, string aliasName, out PathKey targetDocument)
+			{
+				targetDocument = new PathKey(string.Empty);
+				string key = NormalizeDocumentKey(documentKey.Value);
+				if (string.IsNullOrWhiteSpace(key) || string.IsNullOrEmpty(aliasName))
+					return false;
+
+				if (!_aliasByDocument.TryGetValue(key, out Dictionary<string, string> aliases))
+					return false;
+
+				if (!aliases.TryGetValue(aliasName, out string target) || string.IsNullOrWhiteSpace(target))
+					return false;
+
+				targetDocument = new PathKey(target);
+				return true;
+			}
+
+			public IReadOnlyDictionary<string, PathKey> GetAliases(PathKey documentKey)
+			{
+				string key = NormalizeDocumentKey(documentKey.Value);
+				if (string.IsNullOrWhiteSpace(key))
+					return EmptyAliases;
+
+				if (!_aliasByDocument.TryGetValue(key, out Dictionary<string, string> aliases)
+					|| aliases == null || aliases.Count == 0)
+				{
+					return EmptyAliases;
+				}
+
+				var result = new Dictionary<string, PathKey>(aliases.Count, StringComparer.OrdinalIgnoreCase);
+				foreach (KeyValuePair<string, string> pair in aliases)
+				{
+					if (!string.IsNullOrWhiteSpace(pair.Value))
+						result[pair.Key] = new PathKey(pair.Value);
+				}
+
+				return result;
 			}
 		}
 

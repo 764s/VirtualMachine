@@ -120,6 +120,41 @@ namespace FFVM.Debug.Lsp.Database
 			if (string.IsNullOrWhiteSpace(query))
 				query = string.Empty;
 
+			// DX21 P2-3: alias-scoped completion — "U." prefix triggers alias resolution
+			if (query.Contains(".") && index.AliasIndex != null && request != null && !string.IsNullOrWhiteSpace(request.DocumentKey))
+			{
+				int dotIndex = query.IndexOf('.');
+				string aliasPrefix = query.Substring(0, dotIndex);
+				string memberQuery = query.Substring(dotIndex + 1);
+				string normalizedDocKey = NormalizeDocumentKey(request.DocumentKey);
+				if (!string.IsNullOrWhiteSpace(normalizedDocKey)
+					&& index.AliasIndex.TryResolveAlias(new PathKey(normalizedDocKey), aliasPrefix, out PathKey targetDoc))
+				{
+					IReadOnlyList<SymbolIdentity> allSymbols = index.NameIndex.Search(string.Empty, CompletionLimit * 2);
+					var aliasItems = new List<LspCompletionItem>();
+					string targetDocPath = targetDoc.Value ?? string.Empty;
+					for (int i = 0; i < allSymbols.Count && aliasItems.Count < CompletionLimit; i++)
+					{
+						SymbolIdentity candidate = allSymbols[i];
+						if (candidate == null) continue;
+						string origin = candidate.Origin ?? string.Empty;
+						if (!string.Equals(NormalizeDocumentKey(origin), NormalizeDocumentKey(targetDocPath), System.StringComparison.OrdinalIgnoreCase))
+							continue;
+						if (!string.IsNullOrEmpty(memberQuery)
+							&& (candidate.Name == null || candidate.Name.IndexOf(memberQuery, System.StringComparison.OrdinalIgnoreCase) < 0))
+							continue;
+						aliasItems.Add(new LspCompletionItem(
+							aliasPrefix + "." + candidate.Name,
+							candidate.Kind.ToString(),
+							BuildSymbolDetail(candidate)));
+					}
+					SymbolIdentity aliasAnchor = aliasItems.Count > 0
+						? SymbolIdentity.CreateUnknown(aliasPrefix)
+						: SymbolIdentity.CreateUnknown("completion");
+					return SymbolQueryResult.Success(aliasAnchor, null, SymbolQueryPayload.ForCompletion(aliasItems));
+				}
+			}
+
 			IReadOnlyList<SymbolIdentity> candidates = index.NameIndex.Search(query, CompletionLimit);
 			if (candidates == null)
 				candidates = new List<SymbolIdentity>(0);

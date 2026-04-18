@@ -473,6 +473,10 @@ namespace FFVM.AST
         public string AliasTarget { get; set; }
         /// <summary>Lang-15: Source file this declaration originated from. Set by Preprocessor during merge.</summary>
         public string OriginFile { get; set; }
+        /// <summary>DX21: 1-based line of the struct name token.</summary>
+        public int NameLine { get; set; }
+        /// <summary>DX21: 1-based column of the struct name token.</summary>
+        public int NameColumn { get; set; }
         public StructDecl(string name, List<StructField> fields, bool isPrivate = false, bool isOverride = false) : base(NodeKind.StructDecl)
         {
             Name = name;
@@ -510,6 +514,10 @@ namespace FFVM.AST
         public string AliasTarget { get; set; }
         /// <summary>Lang-15: Source file this declaration originated from. Set by Preprocessor during merge.</summary>
         public string OriginFile { get; set; }
+        /// <summary>DX21: 1-based line of the enum name token.</summary>
+        public int NameLine { get; set; }
+        /// <summary>DX21: 1-based column of the enum name token.</summary>
+        public int NameColumn { get; set; }
         public EnumDecl(string name, List<EnumMember> members, bool isPrivate = false, bool isOverride = false) : base(NodeKind.EnumDecl)
         {
             Name = name;
@@ -523,6 +531,10 @@ namespace FFVM.AST
     {
         public string ModulePath { get; }
         public string Alias { get; }  // Lang-17: null = mixin, non-null = namespace
+        /// <summary>1-based line of the opening quote of the path literal.</summary>
+        public int PathLine { get; set; }
+        /// <summary>1-based column of the opening quote of the path literal.</summary>
+        public int PathColumn { get; set; }
         public ImportDecl(string modulePath, string alias = null) : base(NodeKind.Import) { ModulePath = modulePath; Alias = alias; }
     }
 
