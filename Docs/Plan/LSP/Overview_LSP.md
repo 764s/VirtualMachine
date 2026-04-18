@@ -146,7 +146,8 @@ private/public、同名冲突、override 仲裁。
 | DX18 | 统一引用收集 | ✅ 完成 | [Step_DX18_UnifiedRefCollection.md](Step_DX18_UnifiedRefCollection.md) |
 | DX19 | ResolveSymbol 候选仲裁修复 | ✅ 完成 | [Step_DX19_ResolveSymbolCandidateResolution.md](Step_DX19_ResolveSymbolCandidateResolution.md) |
 | DX20 | 全局工作区 Find All References | ✅ 完成 | [Step_DX20_GlobalWorkspace_FindAllReferences_Checklist.md](Step_DX20_GlobalWorkspace_FindAllReferences_Checklist.md) |
-| DX21 | T2 内联/include as/别名 LSP 语义 | ⚪ 未开始 | [Step_DX21_T2_IncludeAlias_Checklist.md](Step_DX21_T2_IncludeAlias_Checklist.md) |
+| DX21 | T2 内联/include as/别名 LSP 语义 | ✅ 完成 | [Step_DX21_T2_IncludeAlias_Checklist.md](Step_DX21_T2_IncludeAlias_Checklist.md) |
+| DX22 | T3 语法结构覆盖矩阵 | ⚪ 未开始 | [Step_DX22_T3_SyntaxStructure_Checklist.md](Step_DX22_T3_SyntaxStructure_Checklist.md) |
 
 ## 七、文件结构索引
 
@@ -181,6 +182,7 @@ private/public、同名冲突、override 仲裁。
 - [Step_DX19_ResolveSymbolCandidateResolution.md](Step_DX19_ResolveSymbolCandidateResolution.md) — 候选仲裁
 - [Step_DX20_GlobalWorkspace_FindAllReferences_Checklist.md](Step_DX20_GlobalWorkspace_FindAllReferences_Checklist.md) — 全局引用
 - [Step_DX21_T2_IncludeAlias_Checklist.md](Step_DX21_T2_IncludeAlias_Checklist.md) — T2 别名 LSP 语义
+- [Step_DX22_T3_SyntaxStructure_Checklist.md](Step_DX22_T3_SyntaxStructure_Checklist.md) — T3 语法结构覆盖矩阵
 
 ### 辅助地图
 

@@ -2911,6 +2911,227 @@ public static class LspServerNewTests
             }
         }
 
+        // ================================================================
+        // LSPNEW-T3-VAR-01: module variable cross-file definition + references (CFR-11)
+        // ================================================================
+        {
+            string tmpDir = Path.Combine(Path.GetTempPath(), "lspnew_t3var01_" + Guid.NewGuid().ToString("N").Substring(0, 8));
+            try
+            {
+                Directory.CreateDirectory(tmpDir);
+                string libSource = "var hp: int = 100";
+                string mainSource =
+                    "include \"lib\"\n"
+                    + "func test() {\n"
+                    + "    var x: int = hp + 1\n"
+                    + "    hp = x\n"
+                    + "    wait hp\n"
+                    + "}";
+                File.WriteAllText(Path.Combine(tmpDir, "lib.ffs"), libSource);
+                File.WriteAllText(Path.Combine(tmpDir, "main.ffs"), mainSource);
+
+                string rootUri = "file:///" + tmpDir.TrimStart('/').Replace("\\", "/");
+                string libUri = rootUri + "/lib.ffs";
+                string mainUri = rootUri + "/main.ffs";
+
+                var bridge = new DatabaseBackedVsCodeBridge(
+                    new InMemoryWorkspaceCodeDatabase(new InMemoryDatabaseExecutionOrchestrator()));
+                var session = new LspServerNewBatchSession();
+                session.AddRequest(LspMethods.Initialize, BuildInitializeParams(tmpDir));
+                session.AddNotification(LspMethods.Initialized, new JsonObject());
+
+                // Definition on "hp" in main.ffs line 2 col 17
+                int defId = session.AddRequest(LspMethods.Definition, BuildTextDocumentPositionParams(mainUri, 2, 17));
+                // References on "hp" from lib.ffs line 0 col 4
+                int refId = session.AddRequest(LspMethods.References, BuildReferencesParams(libUri, 0, 4, true));
+                session.AddNotification(LspMethods.Exit, new JsonObject());
+                session.Run(bridge);
+
+                // Definition should point to lib.ffs line 0
+                JsonObject defResult = session.FindResponse(defId)?.GetObject(JsonRpcFields.Result);
+                string defUri = defResult != null ? defResult.GetString(LspFields.Uri) ?? string.Empty : string.Empty;
+                JsonObject defStart = defResult?.GetObject(LspFields.Range)?.GetObject(LspFields.Start);
+                int defLine = defStart != null ? defStart.GetInt(LspFields.Line, -1) : -1;
+
+                Assert(
+                    defUri.IndexOf("/lib.ffs", StringComparison.OrdinalIgnoreCase) >= 0 && defLine == 0,
+                    "LSPNEW-T3-VAR-01A: go-to-definition on hp in main resolves to lib.ffs line 0");
+
+                // References should include lib definition + main usages
+                List<object> refLocs = session.FindResponse(refId)?.GetArray(JsonRpcFields.Result);
+                bool hasLibDef = false;
+                int mainUsageCount = 0;
+                if (refLocs != null)
+                {
+                    for (int i = 0; i < refLocs.Count; i++)
+                    {
+                        if (!(refLocs[i] is JsonObject loc)) continue;
+                        string u = loc.GetString(LspFields.Uri) ?? string.Empty;
+                        JsonObject s = loc.GetObject(LspFields.Range)?.GetObject(LspFields.Start);
+                        int ln = s != null ? s.GetInt(LspFields.Line, -1) : -1;
+                        if (u.IndexOf("/lib.ffs", StringComparison.OrdinalIgnoreCase) >= 0 && ln == 0) hasLibDef = true;
+                        if (u.IndexOf("/main.ffs", StringComparison.OrdinalIgnoreCase) >= 0 && ln >= 2) mainUsageCount++;
+                    }
+                }
+
+                Assert(
+                    refLocs != null && hasLibDef && mainUsageCount >= 3,
+                    "LSPNEW-T3-VAR-01B: references on hp include lib definition + 3 main usages");
+            }
+            finally
+            {
+                try { Directory.Delete(tmpDir, true); } catch { }
+            }
+        }
+
+        // ================================================================
+        // LSPNEW-T3-STR-01: struct type cross-file definition + references (CFR-12)
+        // ================================================================
+        {
+            string tmpDir = Path.Combine(Path.GetTempPath(), "lspnew_t3str01_" + Guid.NewGuid().ToString("N").Substring(0, 8));
+            try
+            {
+                Directory.CreateDirectory(tmpDir);
+                string libSource = "struct Vec { x: int, y: int }";
+                string mainSource =
+                    "include \"lib\"\n"
+                    + "func test() {\n"
+                    + "    var v: Vec = Vec { x: 1, y: 2 }\n"
+                    + "    wait v.x\n"
+                    + "}";
+                File.WriteAllText(Path.Combine(tmpDir, "lib.ffs"), libSource);
+                File.WriteAllText(Path.Combine(tmpDir, "main.ffs"), mainSource);
+
+                string rootUri = "file:///" + tmpDir.TrimStart('/').Replace("\\", "/");
+                string libUri = rootUri + "/lib.ffs";
+                string mainUri = rootUri + "/main.ffs";
+
+                var bridge = new DatabaseBackedVsCodeBridge(
+                    new InMemoryWorkspaceCodeDatabase(new InMemoryDatabaseExecutionOrchestrator()));
+                var session = new LspServerNewBatchSession();
+                session.AddRequest(LspMethods.Initialize, BuildInitializeParams(tmpDir));
+                session.AddNotification(LspMethods.Initialized, new JsonObject());
+
+                // Definition on "Vec" in type annotation — main.ffs line 2 col 11
+                int defId = session.AddRequest(LspMethods.Definition, BuildTextDocumentPositionParams(mainUri, 2, 11));
+                // References on "Vec" from lib.ffs line 0 col 7
+                int refId = session.AddRequest(LspMethods.References, BuildReferencesParams(libUri, 0, 7, true));
+                session.AddNotification(LspMethods.Exit, new JsonObject());
+                session.Run(bridge);
+
+                // Definition should point to lib.ffs line 0
+                JsonObject defResult = session.FindResponse(defId)?.GetObject(JsonRpcFields.Result);
+                string defUri = defResult != null ? defResult.GetString(LspFields.Uri) ?? string.Empty : string.Empty;
+                JsonObject defStart = defResult?.GetObject(LspFields.Range)?.GetObject(LspFields.Start);
+                int defLine = defStart != null ? defStart.GetInt(LspFields.Line, -1) : -1;
+
+                Assert(
+                    defUri.IndexOf("/lib.ffs", StringComparison.OrdinalIgnoreCase) >= 0 && defLine == 0,
+                    "LSPNEW-T3-STR-01A: go-to-definition on Vec type annotation resolves to lib.ffs line 0");
+
+                // References should include lib definition + main usages (type annotation + struct literal)
+                List<object> refLocs = session.FindResponse(refId)?.GetArray(JsonRpcFields.Result);
+                bool hasLibDef = false;
+                int mainUsageCount = 0;
+                if (refLocs != null)
+                {
+                    for (int i = 0; i < refLocs.Count; i++)
+                    {
+                        if (!(refLocs[i] is JsonObject loc)) continue;
+                        string u = loc.GetString(LspFields.Uri) ?? string.Empty;
+                        JsonObject s = loc.GetObject(LspFields.Range)?.GetObject(LspFields.Start);
+                        int ln = s != null ? s.GetInt(LspFields.Line, -1) : -1;
+                        if (u.IndexOf("/lib.ffs", StringComparison.OrdinalIgnoreCase) >= 0 && ln == 0) hasLibDef = true;
+                        if (u.IndexOf("/main.ffs", StringComparison.OrdinalIgnoreCase) >= 0 && ln >= 2) mainUsageCount++;
+                    }
+                }
+
+                Assert(
+                    refLocs != null && hasLibDef && mainUsageCount >= 1,
+                    "LSPNEW-T3-STR-01B: references on Vec include lib definition + main type-annotation usage");
+            }
+            finally
+            {
+                try { Directory.Delete(tmpDir, true); } catch { }
+            }
+        }
+
+        // ================================================================
+        // LSPNEW-T3-FLD-01: same-name fields in different structs do not merge (CFR-15)
+        // ================================================================
+        {
+            string uri = "file:///tests/lspnew_t3fld01.ffs";
+            string source =
+                "struct Player { hp: int }\n"
+                + "struct Enemy { hp: int }\n"
+                + "func test() {\n"
+                + "    var p: Player = Player { hp: 50 }\n"
+                + "    var e: Enemy = Enemy { hp: 30 }\n"
+                + "    var a: int = p.hp\n"
+                + "    var b: int = e.hp\n"
+                + "    wait a + b\n"
+                + "}";
+
+            var bridge = new DatabaseBackedVsCodeBridge(
+                new InMemoryWorkspaceCodeDatabase(new InMemoryDatabaseExecutionOrchestrator()));
+            var session = new LspServerNewBatchSession();
+            session.AddRequest(LspMethods.Initialize, new JsonObject());
+            session.AddNotification(LspMethods.Initialized, new JsonObject());
+            session.AddNotification(LspMethods.DidOpen, BuildDidOpenParams(uri, "ffscript", 1, source));
+
+            // References on Player.hp definition — line 0 col 16
+            int playerHpRefId = session.AddRequest(LspMethods.References, BuildReferencesParams(uri, 0, 16, true));
+            // References on Enemy.hp definition — line 1 col 15
+            int enemyHpRefId = session.AddRequest(LspMethods.References, BuildReferencesParams(uri, 1, 15, true));
+            session.AddNotification(LspMethods.Exit, new JsonObject());
+            session.Run(bridge);
+
+            List<object> playerHpLocs = session.FindResponse(playerHpRefId)?.GetArray(JsonRpcFields.Result);
+            List<object> enemyHpLocs = session.FindResponse(enemyHpRefId)?.GetArray(JsonRpcFields.Result);
+
+            // Player.hp references should NOT include lines belonging to Enemy.hp
+            bool playerHpHasDef = false;
+            bool playerHpHasUsage = false;
+            bool playerHpHasEnemyLine = false;
+            if (playerHpLocs != null)
+            {
+                for (int i = 0; i < playerHpLocs.Count; i++)
+                {
+                    if (!(playerHpLocs[i] is JsonObject loc)) continue;
+                    JsonObject s = loc.GetObject(LspFields.Range)?.GetObject(LspFields.Start);
+                    int ln = s != null ? s.GetInt(LspFields.Line, -1) : -1;
+                    int ch = s != null ? s.GetInt(LspFields.Character, -1) : -1;
+                    if (ln == 0) playerHpHasDef = true;
+                    if (ln == 5) playerHpHasUsage = true;  // p.hp at line 5
+                    if (ln == 1 || ln == 6) playerHpHasEnemyLine = true;  // Enemy def or e.hp
+                }
+            }
+
+            bool enemyHpHasDef = false;
+            bool enemyHpHasUsage = false;
+            bool enemyHpHasPlayerLine = false;
+            if (enemyHpLocs != null)
+            {
+                for (int i = 0; i < enemyHpLocs.Count; i++)
+                {
+                    if (!(enemyHpLocs[i] is JsonObject loc)) continue;
+                    JsonObject s = loc.GetObject(LspFields.Range)?.GetObject(LspFields.Start);
+                    int ln = s != null ? s.GetInt(LspFields.Line, -1) : -1;
+                    if (ln == 1) enemyHpHasDef = true;
+                    if (ln == 6) enemyHpHasUsage = true;  // e.hp at line 6
+                    if (ln == 0 || ln == 5) enemyHpHasPlayerLine = true;  // Player def or p.hp
+                }
+            }
+
+            Assert(
+                playerHpLocs != null && playerHpHasDef && playerHpHasUsage && !playerHpHasEnemyLine,
+                "LSPNEW-T3-FLD-01A: Player.hp references include definition + p.hp but NOT Enemy.hp");
+
+            Assert(
+                enemyHpLocs != null && enemyHpHasDef && enemyHpHasUsage && !enemyHpHasPlayerLine,
+                "LSPNEW-T3-FLD-01B: Enemy.hp references include definition + e.hp but NOT Player.hp");
+        }
+
         Debug.Log($"[LspServerNewTests] Completed. Passed={passed}, Failed={failed}");
     }
 
