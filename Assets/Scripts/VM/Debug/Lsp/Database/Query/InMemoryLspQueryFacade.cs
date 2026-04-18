@@ -74,14 +74,15 @@ namespace FFVM.Debug.Lsp.Database
 				return SymbolQueryResult.Failure("SymbolIndex is not available for references query.");
 
 			IReadOnlyList<DataFact> references = index.SymbolIndex.GetReferences(symbol, request != null && request.IncludeDeclaration);
-			if (references == null || references.Count == 0)
+			List<DataFact> orderedReferences = NormalizeReferences(references);
+			if (orderedReferences.Count == 0)
 				return SymbolQueryResult.NotFound("No references found for resolved symbol.");
 
-			var ranges = new List<TextSpan>(references.Count);
-			var payload = new List<LspReferenceItem>(references.Count);
-			for (int i = 0; i < references.Count; i++)
+			var ranges = new List<TextSpan>(orderedReferences.Count);
+			var payload = new List<LspReferenceItem>(orderedReferences.Count);
+			for (int i = 0; i < orderedReferences.Count; i++)
 			{
-				DataFact fact = references[i];
+				DataFact fact = orderedReferences[i];
 				ranges.Add(fact.Span);
 				payload.Add(new LspReferenceItem(NormalizeDocumentKey(fact.DocumentKey.Value), fact.Span, fact.Payload));
 			}
@@ -526,6 +527,108 @@ namespace FFVM.Debug.Lsp.Database
 				tokenType,
 				0);
 			return true;
+		}
+
+		private static List<DataFact> NormalizeReferences(IReadOnlyList<DataFact> references)
+		{
+			if (references == null || references.Count == 0)
+				return new List<DataFact>(0);
+
+			var filtered = new List<DataFact>(references.Count);
+			for (int i = 0; i < references.Count; i++)
+			{
+				DataFact fact = references[i];
+				if (fact != null)
+					filtered.Add(fact);
+			}
+
+			filtered.Sort(CompareReferenceFact);
+
+			var deduped = new List<DataFact>(filtered.Count);
+			var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+			for (int i = 0; i < filtered.Count; i++)
+			{
+				DataFact fact = filtered[i];
+				if (fact == null)
+					continue;
+
+				string dedupeKey = BuildReferenceDedupeKey(fact);
+				if (seen.Add(dedupeKey))
+					deduped.Add(fact);
+			}
+
+			return deduped;
+		}
+
+		private static int CompareReferenceFact(DataFact left, DataFact right)
+		{
+			if (ReferenceEquals(left, right))
+				return 0;
+
+			if (left == null)
+				return -1;
+
+			if (right == null)
+				return 1;
+
+			string leftDocument = NormalizeDocumentKey(left.DocumentKey.Value);
+			string rightDocument = NormalizeDocumentKey(right.DocumentKey.Value);
+			int byDocument = StringComparer.OrdinalIgnoreCase.Compare(leftDocument, rightDocument);
+			if (byDocument != 0)
+				return byDocument;
+
+			ExtractReferenceStart(left, out int leftLine, out int leftCharacter);
+			ExtractReferenceStart(right, out int rightLine, out int rightCharacter);
+
+			int byLine = leftLine.CompareTo(rightLine);
+			if (byLine != 0)
+				return byLine;
+
+			int byCharacter = leftCharacter.CompareTo(rightCharacter);
+			if (byCharacter != 0)
+				return byCharacter;
+
+			int byLength = left.Span.Length.CompareTo(right.Span.Length);
+			if (byLength != 0)
+				return byLength;
+
+			int bySpanStart = left.Span.Start.CompareTo(right.Span.Start);
+			if (bySpanStart != 0)
+				return bySpanStart;
+
+			return StringComparer.Ordinal.Compare(left.Id.Value, right.Id.Value);
+		}
+
+		private static string BuildReferenceDedupeKey(DataFact fact)
+		{
+			if (fact == null)
+				return string.Empty;
+
+			string document = NormalizeDocumentKey(fact.DocumentKey.Value);
+			ExtractReferenceStart(fact, out int line, out int character);
+			return document
+				+ "|" + line
+				+ "|" + character
+				+ "|" + fact.Span.Length;
+		}
+
+		private static void ExtractReferenceStart(DataFact fact, out int line, out int character)
+		{
+			line = 0;
+			character = 0;
+
+			if (fact != null && fact.Payload is SymbolDataFactPayload payload && payload.HasRange)
+			{
+				line = payload.StartLine;
+				character = payload.StartCharacter;
+				return;
+			}
+
+			if (fact == null)
+				return;
+
+			line = fact.Span.Start;
+			character = 0;
 		}
 
 		private static int MapSymbolKindToSemanticType(SymbolKindTag kind)

@@ -5,6 +5,8 @@ using System.Threading;
 using FFVM;
 using FFVM.Compiler;
 using FFVM.Debug;
+using FFVM.Debug.Lsp.Database;
+using FFVM.Debug.Lsp.Integration.VsCode;
 
 namespace FFVM.Cli
 {
@@ -32,7 +34,11 @@ namespace FFVM.Cli
                 case "compile":
                     return CmdCompile(subArgs);
                 case "lsp":
-                    return CmdLsp();
+                    return CmdLsp(subArgs);
+                case "lsp-new":
+                    return CmdLspNew();
+                case "lsp-legacy":
+                    return CmdLspLegacy();
                 case "dap":
                     return CmdDap(subArgs);
                 case "version":
@@ -60,7 +66,9 @@ namespace FFVM.Cli
             Console.WriteLine("  ffvm init [--host <preset>]                Create a .ffproj project file");
             Console.WriteLine("  ffvm run <script.ffs> [options]            Compile and run a script");
             Console.WriteLine("  ffvm compile <script.ffs> [options]        Compile a script (check only)");
-            Console.WriteLine("  ffvm lsp                                   Start LSP server (stdio)");
+            Console.WriteLine("  ffvm lsp [--new|--legacy]                  Start LSP server (stdio, default: new)");
+            Console.WriteLine("  ffvm lsp-new                               Start database-backed LSP server");
+            Console.WriteLine("  ffvm lsp-legacy                            Start legacy LSP server");
             Console.WriteLine("  ffvm dap [--port <N>]                      Start DAP server (stdio or TCP)");
             Console.WriteLine("  ffvm version                               Show version");
             Console.WriteLine("  ffvm help                                  Show this help");
@@ -400,7 +408,53 @@ namespace FFVM.Cli
 
         // ─── lsp ──────────────────────────────────────────────────────────
 
-        private static int CmdLsp()
+        private static int CmdLsp(string[] args)
+        {
+            bool useLegacy = false;
+
+            for (int i = 0; i < args.Length; i++)
+            {
+                string option = args[i] ?? string.Empty;
+                if (string.Equals(option, "--legacy", StringComparison.OrdinalIgnoreCase))
+                {
+                    useLegacy = true;
+                }
+                else if (string.Equals(option, "--new", StringComparison.OrdinalIgnoreCase))
+                {
+                    useLegacy = false;
+                }
+                else
+                {
+                    Console.Error.WriteLine($"Unknown option for lsp: {option}");
+                    Console.Error.WriteLine("Usage: ffvm lsp [--new|--legacy]");
+                    return 1;
+                }
+            }
+
+            return useLegacy ? CmdLspLegacy() : CmdLspNew();
+        }
+
+        private static int CmdLspNew()
+        {
+            try
+            {
+                var input = Console.OpenStandardInput();
+                var output = Console.OpenStandardOutput();
+                var database = new InMemoryWorkspaceCodeDatabase(new InMemoryDatabaseExecutionOrchestrator());
+                var bridge = new DatabaseBackedVsCodeBridge(database);
+                var server = new LspServerNew(input, output, bridge);
+                server.Run();
+                return 0;
+            }
+            catch (Exception ex)
+            {
+                Console.Error.WriteLine("Error: failed to start database-backed LSP server.");
+                Console.Error.WriteLine(ex.Message);
+                return 1;
+            }
+        }
+
+        private static int CmdLspLegacy()
         {
             var input = Console.OpenStandardInput();
             var output = Console.OpenStandardOutput();

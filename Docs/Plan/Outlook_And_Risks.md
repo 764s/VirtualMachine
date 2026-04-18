@@ -1,4 +1,4 @@
-# 功能展望、优化展望与风险点汇总
+﻿# 功能展望、优化展望与风险点汇总
 
 > **定位**：本文件汇总散布于各步骤子计划中的全部**功能展望**、**优化展望**和**已识别风险**，
 > 按类别整理并统一编号，便于在进入步骤 10（编辑器流程图投影）前进行全局评估与排序。
@@ -240,8 +240,8 @@ DBG7（DAP 适配器）                ← DBG3-DBG6 的 DAP 协议封装 → �
 | **LSP3** | 实时诊断（Diagnostics） | 编译器 | 中 | 增量编译 → 错误/警告实时推送（`textDocument/publishDiagnostics`）；复用 `BytecodeCompiler._errors` 列表 + Source Map 定位 |
 | **LSP4** | 符号分析（Go-to-Definition / References / Hover / Document Symbols） | 编译器 | 中 | 基于 AST + Symbol Table 实现 `textDocument/definition`、`textDocument/references`、`textDocument/hover`、`textDocument/documentSymbol` | ✅ 已完成 |
 | **LSP5** | 代码补全（Completion） | 编译器 | 中 | 关键字 + 作用域内变量 + 函数名 + Syscall 名 + struct 字段补全（`textDocument/completion`）；当 LSP6 声明可用时，补全项包含 Syscall 参数签名 | ✅ 已完成 |
-| **LSP6** | Syscall 声明协议（Declaration Protocol） | 基础设施 | 中 | 允许宿主通过声明文件（`.ffvm.d.json`）或注册 API 声明 Syscall 签名（参数名、参数类型、返回类型、说明文本），为 LSP5/LSP7 提供宿主方法元数据 | ✅ 已完成 → [B-α1](Step_B_Alpha1_LSP6_SyscallDecl.md) |
-| **LSP7** | 参数提示（Signature Help） | 编译器 | 中 | 输入 `funcName(` 或 `,` 时显示参数列表与当前参数高亮（`textDocument/signatureHelp`）；覆盖用户函数 + Syscall（需 LSP6 声明） | ✅ 已完成 → [B-α2](Step_B_Alpha2_LSP7_SignatureHelp.md) |
+| **LSP6** | Syscall 声明协议（Declaration Protocol） | 基础设施 | 中 | 允许宿主通过声明文件（`.ffvm.d.json`）或注册 API 声明 Syscall 签名（参数名、参数类型、返回类型、说明文本），为 LSP5/LSP7 提供宿主方法元数据 | ✅ 已完成 → [B-α1](LSP/Step_B_Alpha1_LSP6_SyscallDecl.md) |
+| **LSP7** | 参数提示（Signature Help） | 编译器 | 中 | 输入 `funcName(` 或 `,` 时显示参数列表与当前参数高亮（`textDocument/signatureHelp`）；覆盖用户函数 + Syscall（需 LSP6 声明） | ✅ 已完成 → [B-α2](LSP/Step_B_Alpha2_LSP7_SignatureHelp.md) |
 
 #### 前置任务与依赖关系
 
@@ -508,8 +508,8 @@ LSP1（LSP Server 核心框架）           ← 所有 LSP 功能的通信基础
 
 | ID | 风险 | 影响 | 来源 |
 |----|------|------|------|
-| **R-LSP6-1** | `.ffvm.d.json` 仅通过 API 加载，无文件系统自动发现 | 宿主需显式调用 `LoadDeclarationJson`；编辑器扩展需配置路径 | [B-α1](Step_B_Alpha1_LSP6_SyscallDecl.md) |
-| **R-LSP6-2** | 声明文件 slot 与运行时 SyscallTable slot 的一致性由宿主保证 | slot 不匹配时补全签名与实际行为不符 | [B-α1](Step_B_Alpha1_LSP6_SyscallDecl.md) |
+| **R-LSP6-1** | `.ffvm.d.json` 仅通过 API 加载，无文件系统自动发现 | 宿主需显式调用 `LoadDeclarationJson`；编辑器扩展需配置路径 | [B-α1](LSP/Step_B_Alpha1_LSP6_SyscallDecl.md) |
+| **R-LSP6-2** | 声明文件 slot 与运行时 SyscallTable slot 的一致性由宿主保证 | slot 不匹配时补全签名与实际行为不符 | [B-α1](LSP/Step_B_Alpha1_LSP6_SyscallDecl.md) |
 
 ### 4.5 B-β3 风险（O9 活跃实例链表）
 
@@ -894,13 +894,13 @@ Gate 3: Unity Editor 内嵌 DAP（可选）             ← DBG7 Phase C
 | **DX10** | 依赖图 + 全项目诊断 | ✅ 完成 | Include 依赖图双向追踪（`_includeDependents`/`_includeForward` + `Preprocessor.ResolvedFilePaths` 传递性）+ `OverlayFileResolver` 内存内容可见 + `RecompileDependents` 级联 + `workspace/didChangeWatchedFiles` 磁盘变更。DX10-01~08 全通过（14 asserts），2127 测试总计 | E004 ✅ |
 | **DX11** | VFS + Rename 状态更新 | ✅ 完成 | DocumentStore.RenameUri URI key 迁移 + ApplyTextEdits 内存文本编辑 + ApplyRenameState willRenameFiles 后状态同步 → 修复连续重命名失败。DX11-01~05 全通过（13 asserts），2140 测试总計。讨论来源 → [D_LspArchitecture.md](../Discussion/D_LspArchitecture.md) | DX10 ✅ |
 | **DX12** | 后台编译调度 | ⚪ | debounce + 取消机制 + 编译结果缓存。讨论来源 → [D_LspArchitecture.md](../Discussion/D_LspArchitecture.md) | DX11 ✅ |
-| **DX13** | 参数 LSP 完整支持 | ✅ 完成 | KL-01 参数引用包含声明位置（CollectReferencesWithOrigin Parameter 分支 + scopeFunc 作用域）+ KL-02 参数重命名支持（FindSymbolAtPosition 签名检测 + HandleRename 参数符号类型）+ FindDefinitionLocation 精确参数位置 + FindHoverText 签名参数悬停。DX13-01~09 全通过（16 asserts），DX12-08/09 升级断言。2228 测试总计（608 LSP）。计划 → [Step_DX13_ParameterLsp.md](Step_DX13_ParameterLsp.md)　讨论来源 → [D_LspUsabilityAudit.md](../Discussion/D_LspUsabilityAudit.md) §七/§九 | DX11 ✅ |
-| **DX14** | Rename 完整性补全 | ✅ 完成 | KL-03 struct 字面量名 `Vec2 { ... }` 中的 `Vec2` 计入 struct rename 编辑（CollectReferencesWithOrigin Struct 分支追加 StructLiteralTypeRefsWalker 函数体走查）。DX14-01~05 全通过（14 asserts），DX12-12 升级 ≥3 断言。2248 测试总计（622 LSP）。计划 → [Step_DX14_RenameCompleteness.md](Step_DX14_RenameCompleteness.md)　讨论来源 → [D_LspUsabilityAudit.md](../Discussion/D_LspUsabilityAudit.md) §七 | DX13 ✅ |
-| **DX15** | Private 跨文件补全过滤 | ✅ 完成 | KL-04 `private func/struct/enum/var` 不出现在 include 文件的 completion 列表中（HandleCompletion 过滤 IsPrivate + IsFromOtherFile 守卫，dot-context 同步过滤）。DX15-01~07 全通过（16 asserts），DX12-23 升级严格断言。2264 测试总计（638 LSP）。计划 → [Step_DX15_PrivateCompletionFilter.md](Step_DX15_PrivateCompletionFilter.md)　讨论来源 → [D_LspUsabilityAudit.md](../Discussion/D_LspUsabilityAudit.md) §七 | DX14 ✅ |
-| **DX16** | 变量引用作用域隔离 | ✅ 完成 | KL-05 同名变量 references 按作用域精确匹配（FindSymbolWalker 块级 _activeDecls save/restore + ScopedIdentRefsWalker 精确声明匹配收集 + FindDefinitionLocation declLine 直达）。DX16-01~08 全通过（16 asserts），DX12-22 升级严格断言。2278 测试总计（652 LSP）。计划 → [Step_DX16_ScopeIsolatedRefs.md](Step_DX16_ScopeIsolatedRefs.md)　讨论来源 → [D_LspUsabilityAudit.md](../Discussion/D_LspUsabilityAudit.md) §七 | DX15 ✅ |
-| **DX17** | 统一符号解析 | ✅ 完成 | 合并 SymbolAtPosition + FindDefinitionLocation 返回值为 ResolvedSymbol。HandleDefinition/HandleReferences/HandleRename/HandleHover/HandlePrepareRename 共享 ResolveSymbol 调用。消除 ResolveSymbolDualAst 二次查找。修复 AstWalker WaitForStmt 子表达式遗漏。DX17-01~02 全通过（4 asserts）。2282 测试总计（656 LSP）。计划 → [Step_DX17_UnifiedSymbolResolution.md](Step_DX17_UnifiedSymbolResolution.md)　讨论来源 → [D_LspStructuralAudit.md](../Discussion/D_LspStructuralAudit.md) §五 P1 + §八 | DX16 ✅ |
-| **DX18** | 统一引用收集 | ✅ 完成 | 8 个引用 Walker（CallRefs/IdentRefs/ScopedIdentRefs/TypeRefs/StructLiteralTypeRefs/EnumIdentRefs/FieldAccessRefs/EnumMemberAccessRefs）→ 1 个 UnifiedRefsWalker。CollectReferencesWithOrigin 8 个 SymbolKindTag 分支 → CollectDeclarationLocations + 统一遍历 4 分支。死代码 CollectReferences 删除。LspServer.cs −242 行（4799→4557）。2282 测试总计（656 LSP）。计划 → [Step_DX18_UnifiedRefCollection.md](Step_DX18_UnifiedRefCollection.md)　讨论来源 → [D_LspStructuralAudit.md](../Discussion/D_LspStructuralAudit.md) §五 P2+P3 | DX17 ✅ |
-| **DX19** | ResolveSymbol 候选仲裁修复 | ✅ 完成 | VERIFY-01 长期回归测试保留。ResolveSymbol 从"变量强制 merged fallback"升级为"条件化候选仲裁"：per-file 有完整作用域身份（scopeFunc+declLine>0）时保留，否则 merged 接管。修复 include/main 同 line+col 冲突误跳。DX19-01~05 全通过（16 asserts）。2301 测试总计（675 LSP）。计划 → [Step_DX19_ResolveSymbolCandidateResolution.md](Step_DX19_ResolveSymbolCandidateResolution.md)　讨论来源 → [D_ResolveSymbolCollisionTopDown.md](../Discussion/D_ResolveSymbolCollisionTopDown.md) | DX18 ✅ |
+| **DX13** | 参数 LSP 完整支持 | ✅ 完成 | KL-01 参数引用包含声明位置（CollectReferencesWithOrigin Parameter 分支 + scopeFunc 作用域）+ KL-02 参数重命名支持（FindSymbolAtPosition 签名检测 + HandleRename 参数符号类型）+ FindDefinitionLocation 精确参数位置 + FindHoverText 签名参数悬停。DX13-01~09 全通过（16 asserts），DX12-08/09 升级断言。2228 测试总计（608 LSP）。计划 → [Step_DX13_ParameterLsp.md](LSP/Step_DX13_ParameterLsp.md)　讨论来源 → [D_LspUsabilityAudit.md](../Discussion/D_LspUsabilityAudit.md) §七/§九 | DX11 ✅ |
+| **DX14** | Rename 完整性补全 | ✅ 完成 | KL-03 struct 字面量名 `Vec2 { ... }` 中的 `Vec2` 计入 struct rename 编辑（CollectReferencesWithOrigin Struct 分支追加 StructLiteralTypeRefsWalker 函数体走查）。DX14-01~05 全通过（14 asserts），DX12-12 升级 ≥3 断言。2248 测试总计（622 LSP）。计划 → [Step_DX14_RenameCompleteness.md](LSP/Step_DX14_RenameCompleteness.md)　讨论来源 → [D_LspUsabilityAudit.md](../Discussion/D_LspUsabilityAudit.md) §七 | DX13 ✅ |
+| **DX15** | Private 跨文件补全过滤 | ✅ 完成 | KL-04 `private func/struct/enum/var` 不出现在 include 文件的 completion 列表中（HandleCompletion 过滤 IsPrivate + IsFromOtherFile 守卫，dot-context 同步过滤）。DX15-01~07 全通过（16 asserts），DX12-23 升级严格断言。2264 测试总计（638 LSP）。计划 → [Step_DX15_PrivateCompletionFilter.md](LSP/Step_DX15_PrivateCompletionFilter.md)　讨论来源 → [D_LspUsabilityAudit.md](../Discussion/D_LspUsabilityAudit.md) §七 | DX14 ✅ |
+| **DX16** | 变量引用作用域隔离 | ✅ 完成 | KL-05 同名变量 references 按作用域精确匹配（FindSymbolWalker 块级 _activeDecls save/restore + ScopedIdentRefsWalker 精确声明匹配收集 + FindDefinitionLocation declLine 直达）。DX16-01~08 全通过（16 asserts），DX12-22 升级严格断言。2278 测试总计（652 LSP）。计划 → [Step_DX16_ScopeIsolatedRefs.md](LSP/Step_DX16_ScopeIsolatedRefs.md)　讨论来源 → [D_LspUsabilityAudit.md](../Discussion/D_LspUsabilityAudit.md) §七 | DX15 ✅ |
+| **DX17** | 统一符号解析 | ✅ 完成 | 合并 SymbolAtPosition + FindDefinitionLocation 返回值为 ResolvedSymbol。HandleDefinition/HandleReferences/HandleRename/HandleHover/HandlePrepareRename 共享 ResolveSymbol 调用。消除 ResolveSymbolDualAst 二次查找。修复 AstWalker WaitForStmt 子表达式遗漏。DX17-01~02 全通过（4 asserts）。2282 测试总计（656 LSP）。计划 → [Step_DX17_UnifiedSymbolResolution.md](LSP/Step_DX17_UnifiedSymbolResolution.md)　讨论来源 → [D_LspStructuralAudit.md](../Discussion/D_LspStructuralAudit.md) §五 P1 + §八 | DX16 ✅ |
+| **DX18** | 统一引用收集 | ✅ 完成 | 8 个引用 Walker（CallRefs/IdentRefs/ScopedIdentRefs/TypeRefs/StructLiteralTypeRefs/EnumIdentRefs/FieldAccessRefs/EnumMemberAccessRefs）→ 1 个 UnifiedRefsWalker。CollectReferencesWithOrigin 8 个 SymbolKindTag 分支 → CollectDeclarationLocations + 统一遍历 4 分支。死代码 CollectReferences 删除。LspServer.cs −242 行（4799→4557）。2282 测试总计（656 LSP）。计划 → [Step_DX18_UnifiedRefCollection.md](LSP/Step_DX18_UnifiedRefCollection.md)　讨论来源 → [D_LspStructuralAudit.md](../Discussion/D_LspStructuralAudit.md) §五 P2+P3 | DX17 ✅ |
+| **DX19** | ResolveSymbol 候选仲裁修复 | ✅ 完成 | VERIFY-01 长期回归测试保留。ResolveSymbol 从"变量强制 merged fallback"升级为"条件化候选仲裁"：per-file 有完整作用域身份（scopeFunc+declLine>0）时保留，否则 merged 接管。修复 include/main 同 line+col 冲突误跳。DX19-01~05 全通过（16 asserts）。2301 测试总计（675 LSP）。计划 → [Step_DX19_ResolveSymbolCandidateResolution.md](LSP/Step_DX19_ResolveSymbolCandidateResolution.md)　讨论来源 → [D_ResolveSymbolCollisionTopDown.md](../Discussion/D_ResolveSymbolCollisionTopDown.md) | DX18 ✅ |
 
 > Lang-18 ✅ 完成。DX4-P0 ✅ 完成。DX4-P1 ✅ 完成。DX4-P2 ✅ 完成。DX4-P3 ✅ 完成。DX4-P4 ✅ 完成。DX5 ✅ 完成。DX6 ✅ 完成。DX7 ✅ 完成。DX8 ✅ 完成。DX9 ✅ 完成。E003 ✅ 完成。R1 ✅ 完成。E004 ✅ 完成。DX10 ✅ 完成。DX11 ✅ 完成。DX13 ✅ 完成。DX14 ✅ 完成。DX15 ✅ 完成。DX16 ✅ 完成。DX17 ✅ 完成。DX18 ✅ 完成。DX19 ✅ 完成。2301 测试总计（675 LSP）。DX12 ⚪ 远期待激活。
 > **DX13~DX19 ALL ✅。无待执行 DX 步骤。DX12 ⚪ 远期。**

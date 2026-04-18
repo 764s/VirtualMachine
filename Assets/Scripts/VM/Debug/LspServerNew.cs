@@ -19,12 +19,26 @@ namespace FFVM.Debug
     /// </summary>
     public class LspServerNew
     {
+        private sealed class PendingClientRequest
+        {
+            public PendingClientRequest(string method, string requestToken)
+            {
+                Method = method ?? string.Empty;
+                RequestToken = requestToken ?? string.Empty;
+            }
+
+            public string Method { get; }
+            public string RequestToken { get; }
+        }
+
         private readonly Stream _input;
         private readonly Stream _output;
         private readonly ILspVsCodeDatabaseBridge _bridge;
+        private readonly Dictionary<int, PendingClientRequest> _pendingClientRequests = new Dictionary<int, PendingClientRequest>();
 
         private bool _running;
         private bool _shutdownRequested;
+        private int _nextClientRequestId = 900000;
 
         public LspServerNew(Stream input, Stream output, ILspVsCodeDatabaseBridge bridge = null)
         {
@@ -63,6 +77,13 @@ namespace FFVM.Debug
             bool hasMethod = !string.IsNullOrEmpty(method);
             bool isRequest = hasMethod && id != null;
             bool isNotification = hasMethod && id == null;
+            bool isResponse = !hasMethod && id != null;
+
+            if (isResponse)
+            {
+                HandleClientResponse(message);
+                return;
+            }
 
             if (isRequest)
             {
@@ -74,6 +95,23 @@ namespace FFVM.Debug
             {
                 HandleNotification(message, method);
             }
+        }
+
+        private void HandleClientResponse(JsonObject response)
+        {
+            int requestId = response != null ? response.GetInt(JsonRpcFields.Id, -1) : -1;
+            if (requestId < 0)
+                return;
+
+            if (!_pendingClientRequests.TryGetValue(requestId, out PendingClientRequest pending) || pending == null)
+                return;
+
+            _pendingClientRequests.Remove(requestId);
+
+            object result = response.Get(JsonRpcFields.Result);
+            JsonObject error = response.GetObject(JsonRpcFields.Error);
+            _bridge.HandleClientRequestResponse(pending.Method, pending.RequestToken, result, error);
+            FlushBridgeFeedback();
         }
 
         private void HandleRequest(JsonObject request, string method, object id)
@@ -219,6 +257,25 @@ namespace FFVM.Debug
             ContentLengthStream.WriteMessage(_output, notification.ToJson());
         }
 
+        private int SendClientRequest(string method, JsonObject requestParams, string requestToken)
+        {
+            string normalizedMethod = method ?? string.Empty;
+            if (string.IsNullOrWhiteSpace(normalizedMethod))
+                return -1;
+
+            int id = ++_nextClientRequestId;
+
+            var request = new JsonObject();
+            request.Set(JsonRpcFields.JsonRpc, JsonRpcFields.Version);
+            request.Set(JsonRpcFields.Id, id);
+            request.Set(JsonRpcFields.Method, normalizedMethod);
+            request.Set(JsonRpcFields.Params, requestParams ?? new JsonObject());
+
+            _pendingClientRequests[id] = new PendingClientRequest(normalizedMethod, requestToken);
+            ContentLengthStream.WriteMessage(_output, request.ToJson());
+            return id;
+        }
+
         private void FlushBridgeDiagnostics()
         {
             while (_bridge.TryDequeueDiagnostics(out LspPublishedDiagnostics diagnostics) && diagnostics != null)
@@ -230,6 +287,23 @@ namespace FFVM.Debug
             }
         }
 
+        private void FlushBridgeClientRequests()
+        {
+            while (_bridge.TryDequeueClientRequest(out LspClientRequest request) && request != null)
+            {
+                if (string.IsNullOrWhiteSpace(request.Method))
+                    continue;
+
+                SendClientRequest(request.Method, request.Parameters, request.RequestToken);
+            }
+        }
+
+        private void FlushBridgeFeedback()
+        {
+            FlushBridgeDiagnostics();
+            FlushBridgeClientRequests();
+        }
+
         // ------------------------------------------------------------
         // VS Code bridge points (delegated to ILspVsCodeDatabaseBridge)
         // ------------------------------------------------------------
@@ -237,119 +311,119 @@ namespace FFVM.Debug
         private void BridgeInitialize(JsonObject initializeParams)
         {
             _bridge.Initialize(initializeParams);
-            FlushBridgeDiagnostics();
+            FlushBridgeFeedback();
         }
 
         private void BridgeShutdown(JsonObject shutdownParams)
         {
             _bridge.Shutdown(shutdownParams);
-            FlushBridgeDiagnostics();
+            FlushBridgeFeedback();
         }
 
         private object BridgeDocumentSymbol(JsonObject requestParams)
         {
             var result = _bridge.QueryDocumentSymbol(requestParams);
-            FlushBridgeDiagnostics();
+            FlushBridgeFeedback();
             return LspProtocolPayloadProjector.ConvertDocumentSymbols(result);
         }
 
         private object BridgeHover(JsonObject requestParams)
         {
             var result = _bridge.QueryHover(requestParams);
-            FlushBridgeDiagnostics();
+            FlushBridgeFeedback();
             return LspProtocolPayloadProjector.ConvertHover(result);
         }
 
         private object BridgeDefinition(JsonObject requestParams)
         {
             var result = _bridge.QueryDefinition(requestParams);
-            FlushBridgeDiagnostics();
+            FlushBridgeFeedback();
             return LspProtocolPayloadProjector.ConvertDefinition(result);
         }
 
         private object BridgeReferences(JsonObject requestParams)
         {
             var result = _bridge.QueryReferences(requestParams);
-            FlushBridgeDiagnostics();
+            FlushBridgeFeedback();
             return LspProtocolPayloadProjector.ConvertReferences(result);
         }
 
         private object BridgeCompletion(JsonObject requestParams)
         {
             var result = _bridge.QueryCompletion(requestParams);
-            FlushBridgeDiagnostics();
+            FlushBridgeFeedback();
             return LspProtocolPayloadProjector.ConvertCompletionItems(result);
         }
 
         private object BridgeSignatureHelp(JsonObject requestParams)
         {
             var result = _bridge.QuerySignatureHelp(requestParams);
-            FlushBridgeDiagnostics();
+            FlushBridgeFeedback();
             return LspProtocolPayloadProjector.ConvertSignatureHelp(result);
         }
 
         private object BridgeRename(JsonObject requestParams)
         {
             var result = _bridge.QueryRename(requestParams);
-            FlushBridgeDiagnostics();
+            FlushBridgeFeedback();
             return LspProtocolPayloadProjector.ConvertRename(result);
         }
 
         private object BridgePrepareRename(JsonObject requestParams)
         {
             var result = _bridge.QueryPrepareRename(requestParams);
-            FlushBridgeDiagnostics();
+            FlushBridgeFeedback();
             return LspProtocolPayloadProjector.ConvertPrepareRename(result);
         }
 
         private object BridgeSemanticTokensFull(JsonObject requestParams)
         {
             var result = _bridge.QuerySemanticTokensFull(requestParams);
-            FlushBridgeDiagnostics();
+            FlushBridgeFeedback();
             return LspProtocolPayloadProjector.ConvertSemanticTokens(result);
         }
 
         private object BridgeWillRenameFiles(JsonObject requestParams)
         {
             JsonObject result = _bridge.QueryWillRenameFiles(requestParams);
-            FlushBridgeDiagnostics();
+            FlushBridgeFeedback();
             return result;
         }
 
         private void BridgeInitialized(JsonObject initializedParams)
         {
             _bridge.Initialized(initializedParams);
-            FlushBridgeDiagnostics();
+            FlushBridgeFeedback();
         }
 
         private void BridgeExit(JsonObject exitParams)
         {
             _bridge.Exit(exitParams);
-            FlushBridgeDiagnostics();
+            FlushBridgeFeedback();
         }
 
         private void BridgeDidOpen(JsonObject didOpenParams)
         {
             _bridge.DidOpen(didOpenParams);
-            FlushBridgeDiagnostics();
+            FlushBridgeFeedback();
         }
 
         private void BridgeDidChange(JsonObject didChangeParams)
         {
             _bridge.DidChange(didChangeParams);
-            FlushBridgeDiagnostics();
+            FlushBridgeFeedback();
         }
 
         private void BridgeDidClose(JsonObject didCloseParams)
         {
             _bridge.DidClose(didCloseParams);
-            FlushBridgeDiagnostics();
+            FlushBridgeFeedback();
         }
 
         private void BridgeDidChangeWatchedFiles(JsonObject didChangeWatchedFilesParams)
         {
             _bridge.DidChangeWatchedFiles(didChangeWatchedFilesParams);
-            FlushBridgeDiagnostics();
+            FlushBridgeFeedback();
         }
     }
 }

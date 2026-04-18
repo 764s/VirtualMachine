@@ -1,9 +1,12 @@
 using System;
 using System.Collections.Generic;
+using System.IO;
 using Stopwatch = System.Diagnostics.Stopwatch;
 using FFVM.Debug;
+using FFVM.Compiler;
 using FFVM.Debug.Lsp.Database;
 using FFVM.Debug.Lsp.Database.Contracts;
+using FFVM.Debug.Lsp.Integration.VsCode;
 using FFVM.Debug.Lsp.Database.Paths;
 using UnityEngine;
 
@@ -897,6 +900,617 @@ public static class LspDatabaseTests
 			Assert(result != null && result.Symbol != null && result.Symbol.Origin == canonicalUri, "DBMID-15C: resolved symbol origin normalized to canonical URI");
 		}
 
+		// ================================================================
+		// DBMID-16: Intent contract coverage and request intent propagation
+		// ================================================================
+		{
+			Assert(LspIntentContractRegistry.Count == 24, "DBMID-16A: intent registry has complete 24-item protocol surface");
+
+			bool coverageValid = LspIntentContractRegistry.ValidateBridgeCoverage(out string coverageError);
+			Assert(coverageValid && string.IsNullOrEmpty(coverageError), "DBMID-16B: bridge-routed intents have valid contract coverage");
+
+			LspIntentContract didOpenIntent = LspIntentContractRegistry.Require(LspUserIntentId.IntDs01DidOpen);
+			Assert(
+				didOpenIntent.OperationKind == DatabaseOperationKind.ApplyChangeSet
+				&& didOpenIntent.RequiresWriteOperation
+				&& didOpenIntent.WriteReason == "didOpen",
+				"DBMID-16C: didOpen intent contract is write-routed with expected reason");
+
+			LspIntentContract referencesIntent = LspIntentContractRegistry.Require(LspUserIntentId.IntQr04References);
+			Assert(
+				referencesIntent.OperationKind == DatabaseOperationKind.ReadSnapshot
+				&& referencesIntent.RequiresReadSnapshot
+				&& referencesIntent.QueryOperationName == "references",
+				"DBMID-16D: references intent contract is read-routed with expected query operation");
+
+			var database = new InMemoryWorkspaceCodeDatabase(new InMemoryDatabaseExecutionOrchestrator());
+			DatabaseOperationResult result = database.Execute(CreateApplyChangesRequest(
+				streamKey: "stream://doc/intent-code",
+				priority: DatabaseOperationPriority.Normal,
+				expectedVersion: null,
+				createdAtUtc: DateTime.UtcNow,
+				intentCode: didOpenIntent.IntentCode,
+				changes: new[]
+				{
+					new DatabaseChangeEvent(
+						DatabaseChangeKind.DocumentOpened,
+						new PathKey("file:///tests/intent-code.ffs"),
+						1,
+						CreateDidOpenPayload("file:///tests/intent-code.ffs", "ffscript", 1, "func entry() { wait 1 }")),
+				}));
+
+			Assert(result != null && result.Succeeded, "DBMID-16E: intent-tagged operation succeeds");
+			Assert(result != null && result.IntentCode == didOpenIntent.IntentCode, "DBMID-16F: operation result preserves intent code metadata");
+		}
+
+		// ================================================================
+		// DBMID-17: willRenameFiles bridge planning + consecutive rename state
+		// ================================================================
+		{
+			string tmpDir = Path.Combine(Path.GetTempPath(), "dbmid17_" + Guid.NewGuid().ToString("N").Substring(0, 8));
+			try
+			{
+				Directory.CreateDirectory(tmpDir);
+				File.WriteAllText(Path.Combine(tmpDir, "lib.ffs"), "func helper(): int { return 1 }");
+				string mainSource = "include \"lib\"\nfunc main() {\n  wait 1\n}";
+				File.WriteAllText(Path.Combine(tmpDir, "main.ffs"), mainSource);
+				File.WriteAllText(Path.Combine(tmpDir, "project.ffproj"), "{ \"includePaths\": [\".\"] }");
+
+				string rootUri = "file:///" + tmpDir.TrimStart('/').Replace("\\", "/");
+				string mainUri = rootUri + "/main.ffs";
+				string oldUri = rootUri + "/lib.ffs";
+				string renamed1Uri = rootUri + "/lib_new.ffs";
+				string renamed2Uri = rootUri + "/lib_newer.ffs";
+
+				var database = new InMemoryWorkspaceCodeDatabase(new InMemoryDatabaseExecutionOrchestrator());
+				var bridge = new DatabaseBackedVsCodeBridge(database);
+
+				var initializeParams = new JsonObject();
+				initializeParams.Set("rootUri", rootUri);
+				bridge.Initialize(initializeParams);
+
+				var didOpenParams = new JsonObject();
+				var textDocument = new JsonObject();
+				textDocument.Set("uri", mainUri);
+				textDocument.Set("languageId", "ffscript");
+				textDocument.Set("version", 1);
+				textDocument.Set("text", mainSource);
+				didOpenParams.Set("textDocument", textDocument);
+				bridge.DidOpen(didOpenParams);
+
+				var firstRenameParams = new JsonObject();
+				var firstFiles = new List<object>();
+				var firstRenameItem = new JsonObject();
+				firstRenameItem.Set("oldUri", oldUri);
+				firstRenameItem.Set("newUri", renamed1Uri);
+				firstFiles.Add(firstRenameItem);
+				firstRenameParams.Set("files", firstFiles);
+
+				JsonObject firstResult = bridge.QueryWillRenameFiles(firstRenameParams);
+				JsonObject firstChanges = firstResult != null ? firstResult.GetObject("changes") : null;
+				List<object> firstMainEdits = firstChanges != null ? firstChanges.GetArray(mainUri) : null;
+				bool firstRenameHasEdit = firstMainEdits != null && firstMainEdits.Count >= 1;
+				string firstNewText = string.Empty;
+				if (firstRenameHasEdit && firstMainEdits[0] is JsonObject firstEdit)
+					firstNewText = firstEdit.GetString("newText") ?? string.Empty;
+
+				Assert(firstRenameHasEdit, "DBMID-17A: first willRenameFiles returns workspace edits");
+				Assert(firstNewText == "lib_new", "DBMID-17B: first willRenameFiles rewrites include to lib_new");
+
+				var secondRenameParams = new JsonObject();
+				var secondFiles = new List<object>();
+				var secondRenameItem = new JsonObject();
+				secondRenameItem.Set("oldUri", renamed1Uri);
+				secondRenameItem.Set("newUri", renamed2Uri);
+				secondFiles.Add(secondRenameItem);
+				secondRenameParams.Set("files", secondFiles);
+
+				JsonObject secondResult = bridge.QueryWillRenameFiles(secondRenameParams);
+				JsonObject secondChanges = secondResult != null ? secondResult.GetObject("changes") : null;
+				List<object> secondMainEdits = secondChanges != null ? secondChanges.GetArray(mainUri) : null;
+				bool secondRenameHasEdit = secondMainEdits != null && secondMainEdits.Count >= 1;
+				bool foundSecondText = false;
+				if (secondMainEdits != null)
+				{
+					for (int i = 0; i < secondMainEdits.Count; i++)
+					{
+						if (secondMainEdits[i] is JsonObject secondEdit)
+						{
+							string candidate = secondEdit.GetString("newText") ?? string.Empty;
+							if (candidate == "lib_newer")
+							{
+								foundSecondText = true;
+								break;
+							}
+						}
+					}
+				}
+
+				Assert(secondRenameHasEdit, "DBMID-17C: second consecutive willRenameFiles still returns edits");
+				Assert(foundSecondText, "DBMID-17D: second willRenameFiles rewrites include to lib_newer");
+			}
+			finally
+			{
+				try { Directory.Delete(tmpDir, true); } catch { }
+			}
+		}
+
+		// ================================================================
+		// DBMID-18: diagnostics enqueue/dequeue behavior in DB-backed bridge
+		// ================================================================
+		{
+			string uri = "file:///tests/dbmid18_diag.ffs";
+			var database = new InMemoryWorkspaceCodeDatabase(new InMemoryDatabaseExecutionOrchestrator());
+			var bridge = new DatabaseBackedVsCodeBridge(database);
+
+			var didOpenParams = new JsonObject();
+			var openDoc = new JsonObject();
+			openDoc.Set("uri", uri);
+			openDoc.Set("languageId", "ffscript");
+			openDoc.Set("version", 1);
+			openDoc.Set("text", "func broken(");
+			didOpenParams.Set("textDocument", openDoc);
+			bridge.DidOpen(didOpenParams);
+
+			bool hasOpenDiagnostics = bridge.TryDequeueDiagnostics(out LspPublishedDiagnostics openDiagnostics)
+				&& openDiagnostics != null
+				&& openDiagnostics.Uri == uri
+				&& openDiagnostics.Diagnostics != null
+				&& openDiagnostics.Diagnostics.Count > 0;
+			Assert(hasOpenDiagnostics, "DBMID-18A: didOpen with invalid source enqueues diagnostics");
+
+			var didChangeParams = new JsonObject();
+			var changeDoc = new JsonObject();
+			changeDoc.Set("uri", uri);
+			changeDoc.Set("version", 2);
+			didChangeParams.Set("textDocument", changeDoc);
+			var changes = new List<object>();
+			var fullTextChange = new JsonObject();
+			fullTextChange.Set("text", "func entry() { wait 1 }");
+			changes.Add(fullTextChange);
+			didChangeParams.Set("contentChanges", changes);
+			bridge.DidChange(didChangeParams);
+
+			bool hasCleanDiagnostics = bridge.TryDequeueDiagnostics(out LspPublishedDiagnostics changedDiagnostics)
+				&& changedDiagnostics != null
+				&& changedDiagnostics.Uri == uri
+				&& changedDiagnostics.Diagnostics != null
+				&& changedDiagnostics.Diagnostics.Count == 0
+				&& changedDiagnostics.Version == 2;
+			Assert(hasCleanDiagnostics, "DBMID-18B: didChange with valid source emits empty diagnostics for clear");
+
+			var didCloseParams = new JsonObject();
+			var closeDoc = new JsonObject();
+			closeDoc.Set("uri", uri);
+			didCloseParams.Set("textDocument", closeDoc);
+			bridge.DidClose(didCloseParams);
+
+			bool hasCloseDiagnostics = bridge.TryDequeueDiagnostics(out LspPublishedDiagnostics closedDiagnostics)
+				&& closedDiagnostics != null
+				&& closedDiagnostics.Uri == uri
+				&& closedDiagnostics.Diagnostics != null
+				&& closedDiagnostics.Diagnostics.Count == 0;
+			Assert(hasCloseDiagnostics, "DBMID-18C: didClose emits empty diagnostics to clear stale entries");
+
+			Assert(!bridge.TryDequeueDiagnostics(out _), "DBMID-18D: diagnostics queue is drained after expected events");
+		}
+
+		// ================================================================
+		// DBMID-19: diagnostics normalization contract
+		// ================================================================
+		{
+			string uri = "file:///tests/dbmid19_diag_norm.ffs";
+			var database = new InMemoryWorkspaceCodeDatabase(new InMemoryDatabaseExecutionOrchestrator());
+			var bridge = new DatabaseBackedVsCodeBridge(database);
+
+			var didOpenParams = new JsonObject();
+			var openDoc = new JsonObject();
+			openDoc.Set("uri", uri);
+			openDoc.Set("languageId", "ffscript");
+			openDoc.Set("version", 1);
+			openDoc.Set("text", "func broken(");
+			didOpenParams.Set("textDocument", openDoc);
+			bridge.DidOpen(didOpenParams);
+
+			bool received = bridge.TryDequeueDiagnostics(out LspPublishedDiagnostics diagnosticsPacket)
+				&& diagnosticsPacket != null
+				&& diagnosticsPacket.Uri == uri
+				&& diagnosticsPacket.Diagnostics != null
+				&& diagnosticsPacket.Diagnostics.Count > 0;
+			Assert(received, "DBMID-19A: diagnostics packet is produced for invalid source");
+
+			JsonObject firstDiagnostic = received ? diagnosticsPacket.Diagnostics[0] as JsonObject : null;
+			JsonObject range = firstDiagnostic != null ? firstDiagnostic.GetObject("range") : null;
+			JsonObject start = range != null ? range.GetObject("start") : null;
+			JsonObject end = range != null ? range.GetObject("end") : null;
+
+			int severity = firstDiagnostic != null ? firstDiagnostic.GetInt("severity", 0) : 0;
+			string source = firstDiagnostic != null ? firstDiagnostic.GetString("source") : null;
+			string message = firstDiagnostic != null ? firstDiagnostic.GetString("message") : null;
+
+			int startLine = start != null ? start.GetInt("line", -1) : -1;
+			int startCharacter = start != null ? start.GetInt("character", -1) : -1;
+			int endLine = end != null ? end.GetInt("line", -1) : -1;
+			int endCharacter = end != null ? end.GetInt("character", -1) : -1;
+
+			bool normalizedRange = startLine >= 0
+				&& startCharacter >= 0
+				&& endLine >= startLine
+				&& (endLine > startLine || endCharacter > startCharacter);
+
+			bool normalizedDiagnostic = firstDiagnostic != null
+				&& severity >= 1
+				&& severity <= 4
+				&& source == "ffvm"
+				&& !string.IsNullOrWhiteSpace(message)
+				&& range != null
+				&& normalizedRange;
+
+			Assert(normalizedDiagnostic, "DBMID-19B: diagnostics are normalized (range/source/severity/message)");
+		}
+
+		// ================================================================
+		// DBMID-20: workspace context initialization via rootPath
+		// ================================================================
+		{
+			string tmpDir = Path.Combine(Path.GetTempPath(), "dbmid20_" + Guid.NewGuid().ToString("N").Substring(0, 8));
+			try
+			{
+				Directory.CreateDirectory(tmpDir);
+				File.WriteAllText(Path.Combine(tmpDir, "lib.ffs"), "func helper(): int { return 1 }");
+				string mainSource = "include \"lib\"\nfunc main() {\n  wait 1\n}";
+				File.WriteAllText(Path.Combine(tmpDir, "main.ffs"), mainSource);
+				File.WriteAllText(Path.Combine(tmpDir, "project.ffproj"), "{ \"includePaths\": [\".\"] }");
+
+				string rootUri = "file:///" + tmpDir.TrimStart('/').Replace("\\", "/");
+				string mainUri = rootUri + "/main.ffs";
+				string oldUri = rootUri + "/lib.ffs";
+				string newUri = rootUri + "/lib_new.ffs";
+
+				var database = new InMemoryWorkspaceCodeDatabase(new InMemoryDatabaseExecutionOrchestrator());
+				var bridge = new DatabaseBackedVsCodeBridge(database);
+
+				var initializeParams = new JsonObject();
+				initializeParams.Set("rootPath", tmpDir);
+				bridge.Initialize(initializeParams);
+
+				var requestParams = new JsonObject();
+				var files = new List<object>();
+				var renameItem = new JsonObject();
+				renameItem.Set("oldUri", oldUri);
+				renameItem.Set("newUri", newUri);
+				files.Add(renameItem);
+				requestParams.Set("files", files);
+
+				JsonObject result = bridge.QueryWillRenameFiles(requestParams);
+				JsonObject changes = result != null ? result.GetObject("changes") : null;
+				List<object> edits = changes != null ? changes.GetArray(mainUri) : null;
+				bool hasEdit = edits != null && edits.Count > 0;
+
+				string rewritten = string.Empty;
+				if (hasEdit)
+				{
+					for (int i = 0; i < edits.Count; i++)
+					{
+						if (edits[i] is JsonObject edit)
+						{
+							string candidate = edit.GetString("newText") ?? string.Empty;
+							if (candidate == "lib_new")
+							{
+								rewritten = candidate;
+								break;
+							}
+						}
+					}
+				}
+
+				Assert(hasEdit, "DBMID-20A: initialize(rootPath) enables workspace rename planning");
+				Assert(rewritten == "lib_new", "DBMID-20B: rootPath initialization uses workspace/project context correctly");
+			}
+			finally
+			{
+				try { Directory.Delete(tmpDir, true); } catch { }
+			}
+		}
+
+		// ================================================================
+		// DBMID-21: feedback bridge flow (showMessageRequest -> applyEdit)
+		// ================================================================
+		{
+			string tmpDir = Path.Combine(Path.GetTempPath(), "dbmid21_" + Guid.NewGuid().ToString("N").Substring(0, 8));
+			try
+			{
+				Directory.CreateDirectory(tmpDir);
+				File.WriteAllText(Path.Combine(tmpDir, "main.ffs"), "func main() { wait 1 }");
+
+				var database = new InMemoryWorkspaceCodeDatabase(new InMemoryDatabaseExecutionOrchestrator());
+				var bridge = new DatabaseBackedVsCodeBridge(database);
+
+				var initializeParams = new JsonObject();
+				initializeParams.Set("rootPath", tmpDir);
+				bridge.Initialize(initializeParams);
+				bridge.Initialized(new JsonObject());
+
+				bool hasShowMessageRequest = bridge.TryDequeueClientRequest(out LspClientRequest showRequest)
+					&& showRequest != null
+					&& showRequest.Method == "window/showMessageRequest"
+					&& showRequest.Parameters != null
+					&& showRequest.Parameters.GetArray("actions") != null
+					&& showRequest.Parameters.GetArray("actions").Count == 3;
+				Assert(hasShowMessageRequest, "DBMID-21A: initialized workspace without ffproj enqueues showMessageRequest");
+
+				var createResult = new JsonObject();
+				createResult.Set("title", "Create");
+				bridge.HandleClientRequestResponse("window/showMessageRequest", showRequest != null ? showRequest.RequestToken : string.Empty, createResult, null);
+
+				bool hasApplyEditRequest = bridge.TryDequeueClientRequest(out LspClientRequest applyEditRequest)
+					&& applyEditRequest != null
+					&& applyEditRequest.Method == "workspace/applyEdit";
+				Assert(hasApplyEditRequest, "DBMID-21B: Create action response enqueues workspace/applyEdit request");
+
+				JsonObject edit = applyEditRequest != null ? applyEditRequest.Parameters.GetObject("edit") : null;
+				List<object> documentChanges = edit != null ? edit.GetArray("documentChanges") : null;
+				JsonObject createFile = documentChanges != null && documentChanges.Count > 0 ? documentChanges[0] as JsonObject : null;
+				JsonObject textDocumentEdit = documentChanges != null && documentChanges.Count > 1 ? documentChanges[1] as JsonObject : null;
+				JsonObject textDocument = textDocumentEdit != null ? textDocumentEdit.GetObject("textDocument") : null;
+				List<object> edits = textDocumentEdit != null ? textDocumentEdit.GetArray("edits") : null;
+				JsonObject firstTextEdit = edits != null && edits.Count > 0 ? edits[0] as JsonObject : null;
+
+				string createUri = createFile != null ? createFile.GetString("uri") : string.Empty;
+				string textDocUri = textDocument != null ? textDocument.GetString("uri") : string.Empty;
+				string newText = firstTextEdit != null ? firstTextEdit.GetString("newText") : string.Empty;
+				string expectedTemplate = ProjectFile.GenerateTemplate(null);
+
+				bool applyEditStructureValid = createFile != null
+					&& createFile.GetString("kind") == "create"
+					&& !string.IsNullOrWhiteSpace(createUri)
+					&& createUri.EndsWith(".ffproj", StringComparison.OrdinalIgnoreCase)
+					&& textDocument != null
+					&& string.Equals(createUri, textDocUri, StringComparison.OrdinalIgnoreCase)
+					&& firstTextEdit != null
+					&& newText == expectedTemplate;
+				Assert(applyEditStructureValid, "DBMID-21C: applyEdit payload contains create+template text edits for .ffproj");
+
+				File.WriteAllText(Path.Combine(tmpDir, "existing.ffproj"), "{\n  \"includePaths\": [\".\"],\n  \"hostDeclarations\": [],\n  \"entry\": null,\n  \"compileOptions\": {}\n}\n");
+
+				var bridgeWithExistingProject = new DatabaseBackedVsCodeBridge(new InMemoryWorkspaceCodeDatabase(new InMemoryDatabaseExecutionOrchestrator()));
+				bridgeWithExistingProject.Initialize(initializeParams);
+				bridgeWithExistingProject.Initialized(new JsonObject());
+
+				Assert(!bridgeWithExistingProject.TryDequeueClientRequest(out _), "DBMID-21D: existing ffproj suppresses showMessageRequest bootstrap prompt");
+			}
+			finally
+			{
+				try { Directory.Delete(tmpDir, true); } catch { }
+			}
+		}
+
+		// ================================================================
+		// DBMID-22: implemented-intent contract consistency hardening
+		// ================================================================
+		{
+			IReadOnlyList<LspIntentContract> contracts = LspIntentContractRegistry.All;
+			bool allImplemented = true;
+			bool implementedShapeConsistent = true;
+
+			for (int i = 0; i < contracts.Count; i++)
+			{
+				LspIntentContract contract = contracts[i];
+				if (contract == null)
+				{
+					allImplemented = false;
+					implementedShapeConsistent = false;
+					continue;
+				}
+
+				if (!contract.Implemented)
+				{
+					allImplemented = false;
+					continue;
+				}
+
+				bool basicFieldsValid = contract.IntentId != LspUserIntentId.Unknown
+					&& !string.IsNullOrWhiteSpace(contract.IntentCode)
+					&& !string.IsNullOrWhiteSpace(contract.ProtocolMethod)
+					&& !string.IsNullOrWhiteSpace(contract.BridgeMember)
+					&& contract.Shape != LspIntentExecutionShape.Unknown;
+
+				if (!basicFieldsValid)
+				{
+					implementedShapeConsistent = false;
+					continue;
+				}
+
+				if (contract.RequiresWriteOperation)
+				{
+					if (contract.OperationKind != DatabaseOperationKind.ApplyChangeSet
+						|| string.IsNullOrWhiteSpace(contract.WriteReason))
+					{
+						implementedShapeConsistent = false;
+					}
+				}
+
+				if (contract.RequiresReadSnapshot)
+				{
+					if (contract.OperationKind != DatabaseOperationKind.ReadSnapshot)
+						implementedShapeConsistent = false;
+				}
+
+				if (contract.Shape == LspIntentExecutionShape.DocumentWrite && !contract.RequiresWriteOperation)
+					implementedShapeConsistent = false;
+
+				if (contract.Shape == LspIntentExecutionShape.QueryRead
+					&& (contract.OperationKind == DatabaseOperationKind.Unknown
+						|| string.IsNullOrWhiteSpace(contract.QueryOperationName)))
+				{
+					implementedShapeConsistent = false;
+				}
+			}
+
+			Assert(allImplemented, "DBMID-22A: all registered intents are implemented");
+			Assert(implementedShapeConsistent, "DBMID-22B: implemented intents satisfy shape and operation invariants");
+
+			bool coverageValid = LspIntentContractRegistry.ValidateBridgeCoverage(out string coverageError);
+			Assert(coverageValid && string.IsNullOrWhiteSpace(coverageError), "DBMID-22C: hardened bridge coverage validation passes for implemented intents");
+		}
+
+		// ================================================================
+		// DBMID-23: changedDocuments expands to include dependent closure
+		// ================================================================
+		{
+			var orchestrator = new InMemoryDatabaseExecutionOrchestrator();
+			var trackingMaintainer = new TrackingIndexMaintainer();
+			var database = new InMemoryWorkspaceCodeDatabase(orchestrator, indexMaintainer: trackingMaintainer);
+
+			var documentA = new PathKey("file:///tests/dbmid23-a.ffs");
+			var documentB = new PathKey("file:///tests/dbmid23-b.ffs");
+			var documentC = new PathKey("file:///tests/dbmid23-c.ffs");
+
+			var includeAtoB = new DataFact(
+				new DataFactId("dbmid23-a-include-b"),
+				new DataAggregateId("agg-dbmid23-a"),
+				DataFactKind.IncludeEdge,
+				documentA,
+				new TextSpan(0, 0),
+				snapshotVersion: 30,
+				payload: CreateIncludePayload(documentB.Value));
+
+			var includeBtoC = new DataFact(
+				new DataFactId("dbmid23-b-include-c"),
+				new DataAggregateId("agg-dbmid23-b"),
+				DataFactKind.IncludeEdge,
+				documentB,
+				new TextSpan(0, 0),
+				snapshotVersion: 30,
+				payload: CreateIncludePayload(documentC.Value));
+
+			var aggregateA = new DataAggregate(
+				new DataAggregateId("agg-dbmid23-a"),
+				DataAggregateKind.Document,
+				documentA,
+				"ffscript",
+				"HASH-DBMID23-A",
+				1,
+				new List<DataFact> { includeAtoB });
+
+			var aggregateB = new DataAggregate(
+				new DataAggregateId("agg-dbmid23-b"),
+				DataAggregateKind.Document,
+				documentB,
+				"ffscript",
+				"HASH-DBMID23-B",
+				1,
+				new List<DataFact> { includeBtoC });
+
+			var aggregateC = new DataAggregate(
+				new DataAggregateId("agg-dbmid23-c"),
+				DataAggregateKind.Document,
+				documentC,
+				"ffscript",
+				"HASH-DBMID23-C",
+				1,
+				new List<DataFact>());
+
+			var replacementSnapshot = new CodeDatabaseSnapshot(
+				version: 30,
+				capturedAtUtc: DateTime.UtcNow,
+				aggregates: new List<DataAggregate> { aggregateA, aggregateB, aggregateC },
+				facts: new List<DataFact> { includeAtoB, includeBtoC },
+				indexSnapshot: null);
+
+			DatabaseOperationResult replaceResult = database.Execute(DatabaseOperationRequest.ReplaceSnapshot(
+				replacementSnapshot,
+				reason: "dbmid23-bootstrap",
+				correlationId: "corr-dbmid23-bootstrap",
+				priority: DatabaseOperationPriority.Normal,
+				timeout: TimeSpan.FromSeconds(15)));
+
+			Assert(replaceResult != null && replaceResult.Succeeded, "DBMID-23A: replace snapshot bootstrap succeeded");
+
+			DatabaseOperationResult applyResult = database.Execute(CreateApplyChangesRequest(
+				streamKey: "stream://doc/dbmid23-c",
+				priority: DatabaseOperationPriority.Normal,
+				expectedVersion: null,
+				createdAtUtc: DateTime.UtcNow,
+				changes: new[]
+				{
+					new DatabaseChangeEvent(
+						DatabaseChangeKind.DocumentChanged,
+						documentC,
+						2,
+						new DocumentChangedWithTierChangePayload(documentC.Value, "func leaf(): int { return 2 }", DocumentSourceTier.OpenBuffer)),
+				}));
+
+			string changedSignature = BuildPathListSignature(trackingMaintainer.LastUpdatedDocuments);
+			bool hasA = changedSignature.IndexOf(documentA.Value, StringComparison.OrdinalIgnoreCase) >= 0;
+			bool hasB = changedSignature.IndexOf(documentB.Value, StringComparison.OrdinalIgnoreCase) >= 0;
+			bool hasC = changedSignature.IndexOf(documentC.Value, StringComparison.OrdinalIgnoreCase) >= 0;
+
+			Assert(applyResult != null && applyResult.Succeeded, "DBMID-23B: apply change on leaf document succeeded");
+			Assert(trackingMaintainer.UpdateCallCount >= 1, "DBMID-23C: apply change used incremental index update");
+			Assert(hasA && hasB && hasC, "DBMID-23D: changedDocuments includes transitive dependent closure (A/B/C)");
+		}
+
+		// ================================================================
+		// DBMID-24: open-buffer tier wins against watcher delete in same batch
+		// ================================================================
+		{
+			var database = new InMemoryWorkspaceCodeDatabase(new InMemoryDatabaseExecutionOrchestrator());
+			var document = new PathKey("file:///tests/dbmid24-tier.ffs");
+			string openBufferText = "func kept(): int { return 1 }\nfunc main() {\n    var v: int = kept()\n    wait v\n}";
+
+			DatabaseOperationResult applyResult = database.Execute(CreateApplyChangesRequest(
+				streamKey: "stream://doc/dbmid24-tier",
+				priority: DatabaseOperationPriority.Normal,
+				expectedVersion: null,
+				createdAtUtc: DateTime.UtcNow,
+				changes: new[]
+				{
+					new DatabaseChangeEvent(
+						DatabaseChangeKind.DocumentChanged,
+						document,
+						2,
+						new DocumentChangedWithTierChangePayload(document.Value, openBufferText, DocumentSourceTier.OpenBuffer)),
+					new DatabaseChangeEvent(
+						DatabaseChangeKind.WatchedFilesChanged,
+						document,
+						null,
+						new WatchedFileChangedChangePayload(document.Value, WatchedFileChangeType.Deleted)),
+				}));
+
+			bool hasDocumentAggregate = false;
+			IReadOnlyList<DataAggregate> aggregates = applyResult != null && applyResult.Snapshot != null
+				? applyResult.Snapshot.Aggregates
+				: null;
+			if (aggregates != null)
+			{
+				for (int i = 0; i < aggregates.Count; i++)
+				{
+					DataAggregate aggregate = aggregates[i];
+					if (aggregate != null
+						&& string.Equals(aggregate.DocumentKey.Value, document.Value, StringComparison.OrdinalIgnoreCase))
+					{
+						hasDocumentAggregate = true;
+						break;
+					}
+				}
+			}
+
+			var facade = new InMemoryLspQueryFacade();
+			SymbolQueryResult definitionResult = facade.QueryDefinition(
+				applyResult != null ? applyResult.Snapshot : null,
+				SymbolQueryRequest.ForPosition("definition", document.Value, new TextPosition(0, 6)));
+
+			SymbolQueryResult referencesResult = facade.QueryReferences(
+				applyResult != null ? applyResult.Snapshot : null,
+				new SymbolQueryRequest("references", document.Value, new TextPosition(0, 6), new TextSpan(0, 0), true, string.Empty));
+
+			Assert(applyResult != null && applyResult.Succeeded, "DBMID-24A: mixed open-buffer+watcher-delete apply succeeded");
+			Assert(hasDocumentAggregate, "DBMID-24B: watcher delete did not remove higher-tier open-buffer aggregate");
+			Assert(definitionResult != null && definitionResult.Succeeded, "DBMID-24C: definition query remains available after tier arbitration");
+			Assert(referencesResult != null && referencesResult.Succeeded && referencesResult.Ranges.Count >= 2, "DBMID-24D: references still include declaration and usage after watcher delete conflict");
+		}
+
 		Debug.Log($"[LspDatabaseTests] Completed. Passed={passed}, Failed={failed}");
 	}
 
@@ -905,6 +1519,7 @@ public static class LspDatabaseTests
 		DatabaseOperationPriority priority,
 		long? expectedVersion,
 		DateTime createdAtUtc,
+		string intentCode = null,
 		IReadOnlyList<DatabaseChangeEvent> changes = null)
 	{
 		IReadOnlyList<DatabaseChangeEvent> effectiveChanges = changes ?? new List<DatabaseChangeEvent>
@@ -929,7 +1544,8 @@ public static class LspDatabaseTests
 			timeout: TimeSpan.FromSeconds(15),
 			streamKey: streamKey,
 			streamBehavior: behavior,
-			createdAtUtc: createdAtUtc);
+			createdAtUtc: createdAtUtc,
+			intentCode: intentCode);
 	}
 
 	private static DocumentOpenedChangePayload CreateDidOpenPayload(string uri, string languageId, int version, string text)

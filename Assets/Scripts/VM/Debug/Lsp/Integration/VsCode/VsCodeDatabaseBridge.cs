@@ -40,6 +40,20 @@ namespace FFVM.Debug.Lsp.Integration.VsCode
 		}
 	}
 
+	public sealed class LspClientRequest
+	{
+		public string Method { get; }
+		public JsonObject Parameters { get; }
+		public string RequestToken { get; }
+
+		public LspClientRequest(string method, JsonObject parameters, string requestToken)
+		{
+			Method = method ?? string.Empty;
+			Parameters = parameters ?? new JsonObject();
+			RequestToken = requestToken ?? string.Empty;
+		}
+	}
+
 	public interface ILspVsCodeDatabaseBridge
 	{
 		void Initialize(JsonObject initializeParams);
@@ -79,6 +93,10 @@ namespace FFVM.Debug.Lsp.Integration.VsCode
 		JsonObject QueryWillRenameFiles(JsonObject requestParams);
 
 		bool TryDequeueDiagnostics(out LspPublishedDiagnostics diagnostics);
+
+		bool TryDequeueClientRequest(out LspClientRequest request);
+
+		void HandleClientRequestResponse(string method, string requestToken, object result, JsonObject error);
 	}
 
 	public sealed class NoOpLspVsCodeDatabaseBridge : ILspVsCodeDatabaseBridge
@@ -169,6 +187,16 @@ namespace FFVM.Debug.Lsp.Integration.VsCode
 		{
 			diagnostics = null;
 			return false;
+		}
+
+		public bool TryDequeueClientRequest(out LspClientRequest request)
+		{
+			request = null;
+			return false;
+		}
+
+		public void HandleClientRequestResponse(string method, string requestToken, object result, JsonObject error)
+		{
 		}
 	}
 }

@@ -55,6 +55,7 @@ namespace FFVM.Debug.Lsp.Database
 
 		public string CommandId { get; }
 		public string CorrelationId { get; }
+		public string IntentCode { get; }
 		public DatabaseOperationPriority Priority { get; }
 		public TimeSpan? Timeout { get; }
 		public DateTime CreatedAtUtc { get; }
@@ -69,6 +70,7 @@ namespace FFVM.Debug.Lsp.Database
 		private DatabaseOperationRequest(
 			string commandId,
 			string correlationId,
+			string intentCode,
 			DatabaseOperationPriority priority,
 			TimeSpan? timeout,
 			DateTime createdAtUtc,
@@ -82,6 +84,7 @@ namespace FFVM.Debug.Lsp.Database
 		{
 			CommandId = commandId ?? string.Empty;
 			CorrelationId = correlationId ?? string.Empty;
+			IntentCode = intentCode ?? string.Empty;
 			Priority = priority;
 			Timeout = timeout;
 			CreatedAtUtc = createdAtUtc;
@@ -98,11 +101,13 @@ namespace FFVM.Debug.Lsp.Database
 			long? expectedVersion = null,
 			string correlationId = null,
 			DatabaseOperationPriority priority = DatabaseOperationPriority.Normal,
-			TimeSpan? timeout = null)
+			TimeSpan? timeout = null,
+			string intentCode = null)
 		{
 			return new DatabaseOperationRequest(
 				CreateCommandId(),
 				correlationId,
+				intentCode,
 				priority,
 				timeout,
 				DateTime.UtcNow,
@@ -124,11 +129,13 @@ namespace FFVM.Debug.Lsp.Database
 			TimeSpan? timeout = null,
 			string streamKey = null,
 			DatabaseOperationStreamBehavior streamBehavior = DatabaseOperationStreamBehavior.CoalesceAndCancelSuperseded,
-			DateTime? createdAtUtc = null)
+			DateTime? createdAtUtc = null,
+			string intentCode = null)
 		{
 			return new DatabaseOperationRequest(
 				CreateCommandId(),
 				correlationId,
+				intentCode,
 				priority,
 				timeout,
 				createdAtUtc ?? DateTime.UtcNow,
@@ -147,11 +154,13 @@ namespace FFVM.Debug.Lsp.Database
 			string reason = null,
 			string correlationId = null,
 			DatabaseOperationPriority priority = DatabaseOperationPriority.Normal,
-			TimeSpan? timeout = null)
+			TimeSpan? timeout = null,
+			string intentCode = null)
 		{
 			return new DatabaseOperationRequest(
 				CreateCommandId(),
 				correlationId,
+				intentCode,
 				priority,
 				timeout,
 				DateTime.UtcNow,
@@ -168,11 +177,13 @@ namespace FFVM.Debug.Lsp.Database
 			string reason = null,
 			string correlationId = null,
 			DatabaseOperationPriority priority = DatabaseOperationPriority.Normal,
-			TimeSpan? timeout = null)
+			TimeSpan? timeout = null,
+			string intentCode = null)
 		{
 			return new DatabaseOperationRequest(
 				CreateCommandId(),
 				correlationId,
+				intentCode,
 				priority,
 				timeout,
 				DateTime.UtcNow,
@@ -278,6 +289,7 @@ namespace FFVM.Debug.Lsp.Database
 		public bool Succeeded { get; }
 		public string CommandId { get; }
 		public string CorrelationId { get; }
+		public string IntentCode { get; }
 		public string StreamKey { get; }
 		public DatabaseOperationPriority Priority { get; }
 		public DatabaseOperationKind Kind { get; }
@@ -291,6 +303,7 @@ namespace FFVM.Debug.Lsp.Database
 			bool succeeded,
 			string commandId,
 			string correlationId,
+			string intentCode,
 			string streamKey,
 			DatabaseOperationPriority priority,
 			DatabaseOperationKind kind,
@@ -303,6 +316,7 @@ namespace FFVM.Debug.Lsp.Database
 			Succeeded = succeeded;
 			CommandId = commandId ?? string.Empty;
 			CorrelationId = correlationId ?? string.Empty;
+			IntentCode = intentCode ?? string.Empty;
 			StreamKey = streamKey ?? string.Empty;
 			Priority = priority;
 			Kind = kind;
@@ -325,6 +339,7 @@ namespace FFVM.Debug.Lsp.Database
 				true,
 				request?.CommandId,
 				request?.CorrelationId,
+				request?.IntentCode,
 				request?.StreamKey,
 				request != null ? request.Priority : DatabaseOperationPriority.Normal,
 				request != null ? request.Kind : DatabaseOperationKind.Unknown,
@@ -346,6 +361,7 @@ namespace FFVM.Debug.Lsp.Database
 				false,
 				request?.CommandId,
 				request?.CorrelationId,
+				request?.IntentCode,
 				request?.StreamKey,
 				request != null ? request.Priority : DatabaseOperationPriority.Normal,
 				request != null ? request.Kind : DatabaseOperationKind.Unknown,

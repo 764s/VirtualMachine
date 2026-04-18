@@ -287,6 +287,110 @@ public static class LspDatabaseQueryTests
 			}
 		}
 
+		// ================================================================
+		// DBQ-08: QueryReferences is deduped and stable-ordered
+		// ================================================================
+		{
+			var docA = new PathKey("file:///query/refs-sort-a.ffs");
+			var docB = new PathKey("file:///query/refs-sort-b.ffs");
+			var position = new TextPosition(0, 2);
+
+			var symbol = new SymbolIdentity(
+				SymbolKindTag.Function,
+				"helper",
+				string.Empty,
+				string.Empty,
+				docA.Value,
+				new TextSpan(0, 6));
+
+			var decl = new DataFact(
+				new DataFactId("dbq8-decl"),
+				new DataAggregateId("agg-dbq8"),
+				DataFactKind.SymbolDefinition,
+				docA,
+				new TextSpan(0, 6),
+				snapshotVersion: 8,
+				payload: new SymbolDataFactPayload(symbol, 0, 0, 0, 6));
+
+			var refA = new DataFact(
+				new DataFactId("dbq8-ref-a"),
+				new DataAggregateId("agg-dbq8"),
+				DataFactKind.SymbolReference,
+				docA,
+				new TextSpan(40, 6),
+				snapshotVersion: 8,
+				payload: new SymbolDataFactPayload(symbol, 3, 4, 3, 10));
+
+			var refADuplicate = new DataFact(
+				new DataFactId("dbq8-ref-a-dup"),
+				new DataAggregateId("agg-dbq8"),
+				DataFactKind.SymbolReference,
+				docA,
+				new TextSpan(41, 6),
+				snapshotVersion: 8,
+				payload: new SymbolDataFactPayload(symbol, 3, 4, 3, 10));
+
+			var refB = new DataFact(
+				new DataFactId("dbq8-ref-b"),
+				new DataAggregateId("agg-dbq8"),
+				DataFactKind.SymbolReference,
+				docB,
+				new TextSpan(10, 6),
+				snapshotVersion: 8,
+				payload: new SymbolDataFactPayload(symbol, 1, 2, 1, 8));
+
+			var refsWithDecl = new List<DataFact> { refB, refADuplicate, decl, refA };
+			var refsWithoutDecl = new List<DataFact> { refB, refADuplicate, refA };
+
+			var index = BuildIndex(
+				tuple: (docA, position, symbol),
+				definition: (symbol, decl),
+				referencesIncludeDecl: refsWithDecl,
+				referencesExcludeDecl: refsWithoutDecl,
+				nameSymbols: new List<SymbolIdentity> { symbol });
+
+			CodeDatabaseSnapshot snapshot = BuildSnapshot(index);
+
+			SymbolQueryResult withDecl = facade.QueryReferences(
+				snapshot,
+				new SymbolQueryRequest("references", docA.Value, position, new TextSpan(0, 0), true, string.Empty));
+
+			SymbolQueryResult withoutDecl = facade.QueryReferences(
+				snapshot,
+				new SymbolQueryRequest("references", docA.Value, position, new TextSpan(0, 0), false, string.Empty));
+
+			Assert(withDecl != null && withDecl.Succeeded && withDecl.Ranges.Count == 3, "DBQ-08A: includeDeclaration result is deduped");
+			Assert(withoutDecl != null && withoutDecl.Succeeded && withoutDecl.Ranges.Count == 2, "DBQ-08B: excludeDeclaration result is deduped");
+
+			IReadOnlyList<LspReferenceItem> withDeclItems = withDecl != null && withDecl.Payload != null
+				? withDecl.Payload.References
+				: null;
+
+			bool withDeclSorted = withDeclItems != null
+				&& withDeclItems.Count == 3
+				&& string.Equals(withDeclItems[0].DocumentKey, docA.Value, StringComparison.OrdinalIgnoreCase)
+				&& ((withDeclItems[0].SourcePayload as SymbolDataFactPayload)?.StartLine ?? -1) == 0
+				&& string.Equals(withDeclItems[1].DocumentKey, docA.Value, StringComparison.OrdinalIgnoreCase)
+				&& ((withDeclItems[1].SourcePayload as SymbolDataFactPayload)?.StartLine ?? -1) == 3
+				&& string.Equals(withDeclItems[2].DocumentKey, docB.Value, StringComparison.OrdinalIgnoreCase)
+				&& ((withDeclItems[2].SourcePayload as SymbolDataFactPayload)?.StartLine ?? -1) == 1;
+
+			Assert(withDeclSorted, "DBQ-08C: includeDeclaration references are stable-ordered by doc/line");
+
+			IReadOnlyList<LspReferenceItem> withoutDeclItems = withoutDecl != null && withoutDecl.Payload != null
+				? withoutDecl.Payload.References
+				: null;
+
+			bool withoutDeclSorted = withoutDeclItems != null
+				&& withoutDeclItems.Count == 2
+				&& string.Equals(withoutDeclItems[0].DocumentKey, docA.Value, StringComparison.OrdinalIgnoreCase)
+				&& ((withoutDeclItems[0].SourcePayload as SymbolDataFactPayload)?.StartLine ?? -1) == 3
+				&& string.Equals(withoutDeclItems[1].DocumentKey, docB.Value, StringComparison.OrdinalIgnoreCase)
+				&& ((withoutDeclItems[1].SourcePayload as SymbolDataFactPayload)?.StartLine ?? -1) == 1;
+
+			Assert(withoutDeclSorted, "DBQ-08D: excludeDeclaration references are stable-ordered by doc/line");
+		}
+
 		Debug.Log($"[LspDatabaseQueryTests] Completed. Passed={passed}, Failed={failed}");
 	}
 

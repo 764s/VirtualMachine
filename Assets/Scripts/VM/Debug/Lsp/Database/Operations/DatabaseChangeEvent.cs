@@ -72,7 +72,7 @@ namespace FFVM.Debug.Lsp.Database
 		}
 	}
 
-	public sealed class DocumentChangedChangePayload : DatabaseChangePayload
+	public class DocumentChangedChangePayload : DatabaseChangePayload
 	{
 		public string Text { get; }
 
