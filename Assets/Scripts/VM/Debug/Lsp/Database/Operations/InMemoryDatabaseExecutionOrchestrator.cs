@@ -1417,6 +1417,7 @@ namespace FFVM.Debug.Lsp.Database
 			Dictionary<string, Dictionary<string, SymbolIdentity>> aliasedFunctionSymbols = BuildAliasedFunctionSymbols(module, normalizedDocument);
 			Dictionary<string, Dictionary<string, SymbolIdentity>> aliasedNameSymbols = BuildAliasedNameSymbols(module, normalizedDocument);
 			Dictionary<string, Dictionary<string, StructFieldDescriptor>> importedStructFieldSymbols = BuildImportedStructFieldSymbols(module, normalizedDocument);
+			Dictionary<string, Dictionary<string, SymbolIdentity>> importedEnumMemberSymbols = BuildImportedEnumMemberSymbols(module, normalizedDocument);
 
 			int definitionOrdinal = 0;
 			for (int i = 0; i < module.Functions.Count; i++)
@@ -1477,6 +1478,25 @@ namespace FFVM.Debug.Lsp.Database
 				localStructFieldSymbols,
 				importedStructFieldSymbols);
 
+			Dictionary<string, Dictionary<string, SymbolIdentity>> localEnumMemberSymbols = BuildLocalEnumMemberSymbols(
+				module,
+				normalizedDocument,
+				source,
+				aggregateId,
+				snapshotVersion,
+				output,
+				ref definitionOrdinal);
+
+			Dictionary<string, Dictionary<string, SymbolIdentity>> enumMemberSymbolsByEnum = MergeEnumMemberSymbols(
+				localEnumMemberSymbols,
+				importedEnumMemberSymbols);
+
+			Dictionary<string, Dictionary<string, SymbolIdentity>> parameterSymbolsByFunc = EmitParameterDefinitionFacts(
+				module, source, normalizedDocument, documentPath, aggregateId, snapshotVersion, output, ref definitionOrdinal);
+
+			Dictionary<string, Dictionary<string, SymbolIdentity>> localVarSymbolsByFunc = EmitLocalVarDefinitionFacts(
+				module, source, normalizedDocument, documentPath, aggregateId, snapshotVersion, output, ref definitionOrdinal);
+
 			int referenceOrdinal = 0;
 			for (int i = 0; i < module.Functions.Count; i++)
 			{
@@ -1533,6 +1553,17 @@ namespace FFVM.Debug.Lsp.Database
 				structFieldSymbolsByStruct,
 				ref referenceOrdinal);
 
+			EmitEnumMemberReferenceFacts(
+				module,
+				source,
+				normalizedDocument,
+				documentPath,
+				aggregateId,
+				snapshotVersion,
+				output,
+				enumMemberSymbolsByEnum,
+				ref referenceOrdinal);
+
 			EmitIdentifierReferenceFacts(
 				module,
 				source,
@@ -1543,6 +1574,8 @@ namespace FFVM.Debug.Lsp.Database
 				output,
 				nameSymbols,
 				importedNameSymbols,
+				parameterSymbolsByFunc,
+				localVarSymbolsByFunc,
 				ref referenceOrdinal);
 
 			EmitAliasedIdentifierReferenceFacts(
@@ -2677,6 +2710,111 @@ namespace FFVM.Debug.Lsp.Database
 			}
 		}
 
+		private static Dictionary<string, Dictionary<string, SymbolIdentity>> EmitParameterDefinitionFacts(
+			ModuleNode module, string source, string normalizedDocument,
+			PathKey documentPath, DataAggregateId aggregateId, long snapshotVersion,
+			List<DataFact> output, ref int definitionOrdinal)
+		{
+			var result = new Dictionary<string, Dictionary<string, SymbolIdentity>>(StringComparer.OrdinalIgnoreCase);
+			if (module == null || module.Functions == null) return result;
+			for (int fi = 0; fi < module.Functions.Count; fi++)
+			{
+				FuncDecl function = module.Functions[fi];
+				if (function == null || string.IsNullOrWhiteSpace(function.Name)) continue;
+				if (function.Parameters == null || function.Parameters.Count == 0) continue;
+				var paramSymbols = new Dictionary<string, SymbolIdentity>(StringComparer.OrdinalIgnoreCase);
+				for (int pi = 0; pi < function.Parameters.Count; pi++)
+				{
+					ParamDecl param = function.Parameters[pi];
+					if (param == null || string.IsNullOrWhiteSpace(param.Name)) continue;
+					int nameLine = param.NameLine;
+					int nameColumn = param.NameColumn;
+					if (!TryCreateSpanFromLineColumn(source, nameLine, nameColumn, param.Name.Length,
+						out TextSpan span, out int sl, out int sc, out int el, out int ec))
+						continue;
+					var symbol = new SymbolIdentity(SymbolKindTag.Parameter, param.Name,
+						function.Name + "." + param.Name, function.Name, normalizedDocument, span);
+					output.Add(new DataFact(
+						new DataFactId(BuildFactId("def", normalizedDocument, definitionOrdinal++, param.Name, sl, sc)),
+						aggregateId, DataFactKind.SymbolDefinition, documentPath, span, snapshotVersion,
+						new SymbolDataFactPayload(symbol, sl, sc, el, ec)));
+					if (!paramSymbols.ContainsKey(param.Name))
+						paramSymbols[param.Name] = symbol;
+				}
+				if (paramSymbols.Count > 0 && !result.ContainsKey(function.Name))
+					result[function.Name] = paramSymbols;
+			}
+			return result;
+		}
+
+		private static Dictionary<string, Dictionary<string, SymbolIdentity>> EmitLocalVarDefinitionFacts(
+			ModuleNode module, string source, string normalizedDocument,
+			PathKey documentPath, DataAggregateId aggregateId, long snapshotVersion,
+			List<DataFact> output, ref int definitionOrdinal)
+		{
+			var result = new Dictionary<string, Dictionary<string, SymbolIdentity>>(StringComparer.OrdinalIgnoreCase);
+			if (module == null || module.Functions == null) return result;
+			var varDeclCollector = new List<VarDeclStmt>();
+			for (int fi = 0; fi < module.Functions.Count; fi++)
+			{
+				FuncDecl function = module.Functions[fi];
+				if (function == null || string.IsNullOrWhiteSpace(function.Name) || function.Body == null) continue;
+				varDeclCollector.Clear();
+				CollectVarDeclStmtsFromBody(function.Body, varDeclCollector);
+				if (varDeclCollector.Count == 0) continue;
+				var localSymbols = new Dictionary<string, SymbolIdentity>(StringComparer.OrdinalIgnoreCase);
+				for (int vi = 0; vi < varDeclCollector.Count; vi++)
+				{
+					VarDeclStmt v = varDeclCollector[vi];
+					if (v == null || string.IsNullOrWhiteSpace(v.Name)) continue;
+					int nameLine = v.NameLine > 0 ? v.NameLine : v.Line;
+					int nameColumn = v.NameColumn > 0 ? v.NameColumn : v.Column;
+					if (!TryCreateSpanFromLineColumn(source, nameLine, nameColumn, v.Name.Length,
+						out TextSpan span, out int sl, out int sc, out int el, out int ec))
+						continue;
+					var symbol = new SymbolIdentity(SymbolKindTag.Variable, v.Name,
+						function.Name + "." + v.Name, function.Name, normalizedDocument, span);
+					output.Add(new DataFact(
+						new DataFactId(BuildFactId("def", normalizedDocument, definitionOrdinal++, v.Name, sl, sc)),
+						aggregateId, DataFactKind.SymbolDefinition, documentPath, span, snapshotVersion,
+						new SymbolDataFactPayload(symbol, sl, sc, el, ec)));
+					if (!localSymbols.ContainsKey(v.Name))
+						localSymbols[v.Name] = symbol;
+				}
+				if (localSymbols.Count > 0 && !result.ContainsKey(function.Name))
+					result[function.Name] = localSymbols;
+			}
+			return result;
+		}
+
+		private static void CollectVarDeclStmtsFromBody(Stmt stmt, List<VarDeclStmt> result)
+		{
+			if (stmt == null) return;
+			if (stmt is VarDeclStmt v) { result.Add(v); return; }
+			if (stmt is BlockStmt block)
+			{
+				if (block.Statements != null)
+					for (int i = 0; i < block.Statements.Count; i++)
+						CollectVarDeclStmtsFromBody(block.Statements[i], result);
+				return;
+			}
+			if (stmt is IfStmt ifS)
+			{
+				CollectVarDeclStmtsFromBody(ifS.ThenBranch, result);
+				CollectVarDeclStmtsFromBody(ifS.ElseBranch, result);
+				return;
+			}
+			if (stmt is WhileStmt wh) { CollectVarDeclStmtsFromBody(wh.Body, result); return; }
+			if (stmt is ForStmt fs)
+			{
+				CollectVarDeclStmtsFromBody(fs.Initializer, result);
+				CollectVarDeclStmtsFromBody(fs.Body, result);
+				return;
+			}
+			if (stmt is DeferStmt ds) { CollectVarDeclStmtsFromBody(ds.Body, result); return; }
+			if (stmt is UsingStmt us) { CollectVarDeclStmtsFromBody(us.Body, result); return; }
+		}
+
 		private static void EmitStructNameDefinitions(
 			ModuleNode module, string source, string normalizedDocument,
 			PathKey documentPath, DataAggregateId aggregateId, long snapshotVersion,
@@ -2727,12 +2865,296 @@ namespace FFVM.Debug.Lsp.Database
 			}
 		}
 
+		private static Dictionary<string, Dictionary<string, SymbolIdentity>> BuildLocalEnumMemberSymbols(
+			ModuleNode module,
+			string normalizedDocument,
+			string source,
+			DataAggregateId aggregateId,
+			long snapshotVersion,
+			List<DataFact> output,
+			ref int definitionOrdinal)
+		{
+			var symbolsByEnum = new Dictionary<string, Dictionary<string, SymbolIdentity>>(StringComparer.OrdinalIgnoreCase);
+			if (module == null || module.Enums == null || module.Enums.Count == 0)
+				return symbolsByEnum;
+
+			for (int i = 0; i < module.Enums.Count; i++)
+			{
+				EnumDecl enumDecl = module.Enums[i];
+				if (enumDecl == null || string.IsNullOrWhiteSpace(enumDecl.Name) || enumDecl.Members == null)
+					continue;
+				if (!string.IsNullOrEmpty(enumDecl.AliasTarget))
+					continue;
+
+				string enumName = enumDecl.Name;
+				if (!symbolsByEnum.TryGetValue(enumName, out Dictionary<string, SymbolIdentity> membersByName))
+				{
+					membersByName = new Dictionary<string, SymbolIdentity>(StringComparer.OrdinalIgnoreCase);
+					symbolsByEnum[enumName] = membersByName;
+				}
+
+				for (int mi = 0; mi < enumDecl.Members.Count; mi++)
+				{
+					EnumMember member = enumDecl.Members[mi];
+					if (member == null || string.IsNullOrWhiteSpace(member.Name))
+						continue;
+
+					int memberLine = member.Line > 0 ? member.Line : enumDecl.Line;
+					int memberColumn = member.Column > 0 ? member.Column : enumDecl.Column;
+					if (!TryCreateSpanFromLineColumn(source, memberLine, memberColumn, member.Name.Length,
+						out TextSpan span, out int sl, out int sc, out int el, out int ec))
+						continue;
+
+					if (!membersByName.ContainsKey(member.Name))
+					{
+						var symbol = new SymbolIdentity(
+							SymbolKindTag.EnumMember,
+							member.Name,
+							enumName + "." + member.Name,
+							enumName,
+							normalizedDocument,
+							span);
+						membersByName[member.Name] = symbol;
+					}
+
+					SymbolIdentity memberSymbol = membersByName[member.Name];
+					output.Add(new DataFact(
+						new DataFactId(BuildFactId("def", normalizedDocument, definitionOrdinal++, member.Name, sl, sc)),
+						aggregateId, DataFactKind.SymbolDefinition, new PathKey(normalizedDocument), span, snapshotVersion,
+						new SymbolDataFactPayload(memberSymbol, sl, sc, el, ec)));
+				}
+			}
+
+			return symbolsByEnum;
+		}
+
+		private static Dictionary<string, Dictionary<string, SymbolIdentity>> BuildImportedEnumMemberSymbols(
+			ModuleNode module, string normalizedDocument)
+		{
+			var symbols = new Dictionary<string, Dictionary<string, SymbolIdentity>>(StringComparer.OrdinalIgnoreCase);
+			if (module == null || module.Imports == null || module.Imports.Count == 0
+				|| string.IsNullOrWhiteSpace(normalizedDocument))
+				return symbols;
+
+			var visitedTargets = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+			for (int i = 0; i < module.Imports.Count; i++)
+			{
+				ImportDecl import = module.Imports[i];
+				if (import == null || string.IsNullOrWhiteSpace(import.ModulePath))
+					continue;
+				if (!string.IsNullOrEmpty(import.Alias))
+					continue;
+
+				List<string> candidates = IncludeTargetResolver.ResolveCandidates(normalizedDocument, import.ModulePath);
+				if (candidates == null || candidates.Count == 0)
+					continue;
+
+				for (int ci = 0; ci < candidates.Count; ci++)
+				{
+					string candidateUri = NormalizeDocumentKey(candidates[ci]);
+					if (string.IsNullOrWhiteSpace(candidateUri) || !visitedTargets.Add(candidateUri))
+						continue;
+
+					string path = WorkspacePathTool.UriToPath(candidateUri);
+					if (string.IsNullOrWhiteSpace(path) || !File.Exists(path))
+						continue;
+
+					string importedSource;
+					try { importedSource = File.ReadAllText(path); }
+					catch { continue; }
+
+					var parser = new Parser();
+					ModuleNode importedModule = parser.Parse(importedSource, out _);
+					if (importedModule == null || importedModule.Enums == null)
+						continue;
+
+					string importedNormalized = candidateUri;
+					for (int ei = 0; ei < importedModule.Enums.Count; ei++)
+					{
+						EnumDecl enumDecl = importedModule.Enums[ei];
+						if (enumDecl == null || string.IsNullOrWhiteSpace(enumDecl.Name) || enumDecl.Members == null)
+							continue;
+
+						if (!symbols.TryGetValue(enumDecl.Name, out Dictionary<string, SymbolIdentity> membersByName))
+						{
+							membersByName = new Dictionary<string, SymbolIdentity>(StringComparer.OrdinalIgnoreCase);
+							symbols[enumDecl.Name] = membersByName;
+						}
+
+						for (int mi = 0; mi < enumDecl.Members.Count; mi++)
+						{
+							EnumMember member = enumDecl.Members[mi];
+							if (member == null || string.IsNullOrWhiteSpace(member.Name) || membersByName.ContainsKey(member.Name))
+								continue;
+
+							int memberLine = member.Line > 0 ? member.Line : enumDecl.Line;
+							int memberColumn = member.Column > 0 ? member.Column : enumDecl.Column;
+							if (!TryCreateSpanFromLineColumn(importedSource, memberLine, memberColumn, member.Name.Length,
+								out TextSpan span, out _, out _, out _, out _))
+								continue;
+
+							membersByName[member.Name] = new SymbolIdentity(
+								SymbolKindTag.EnumMember,
+								member.Name,
+								enumDecl.Name + "." + member.Name,
+								enumDecl.Name,
+								importedNormalized,
+								span);
+						}
+					}
+					break;
+				}
+			}
+			return symbols;
+		}
+
+		private static Dictionary<string, Dictionary<string, SymbolIdentity>> MergeEnumMemberSymbols(
+			Dictionary<string, Dictionary<string, SymbolIdentity>> localSymbols,
+			Dictionary<string, Dictionary<string, SymbolIdentity>> importedSymbols)
+		{
+			var merged = new Dictionary<string, Dictionary<string, SymbolIdentity>>(StringComparer.OrdinalIgnoreCase);
+			if (importedSymbols != null)
+			{
+				foreach (KeyValuePair<string, Dictionary<string, SymbolIdentity>> enumPair in importedSymbols)
+				{
+					if (string.IsNullOrWhiteSpace(enumPair.Key) || enumPair.Value == null) continue;
+					merged[enumPair.Key] = new Dictionary<string, SymbolIdentity>(enumPair.Value, StringComparer.OrdinalIgnoreCase);
+				}
+			}
+			if (localSymbols != null)
+			{
+				foreach (KeyValuePair<string, Dictionary<string, SymbolIdentity>> enumPair in localSymbols)
+				{
+					if (string.IsNullOrWhiteSpace(enumPair.Key) || enumPair.Value == null) continue;
+					if (!merged.TryGetValue(enumPair.Key, out Dictionary<string, SymbolIdentity> existing))
+					{
+						merged[enumPair.Key] = new Dictionary<string, SymbolIdentity>(enumPair.Value, StringComparer.OrdinalIgnoreCase);
+					}
+					else
+					{
+						foreach (KeyValuePair<string, SymbolIdentity> memberPair in enumPair.Value)
+						{
+							if (!string.IsNullOrWhiteSpace(memberPair.Key) && memberPair.Value != null)
+								existing[memberPair.Key] = memberPair.Value;
+						}
+					}
+				}
+			}
+			return merged;
+		}
+
+		private static void EmitEnumMemberReferenceFacts(
+			ModuleNode module,
+			string source,
+			string normalizedDocument,
+			PathKey documentPath,
+			DataAggregateId aggregateId,
+			long snapshotVersion,
+			List<DataFact> output,
+			Dictionary<string, Dictionary<string, SymbolIdentity>> enumMemberSymbolsByEnum,
+			ref int referenceOrdinal)
+		{
+			if (module == null || enumMemberSymbolsByEnum == null || enumMemberSymbolsByEnum.Count == 0)
+				return;
+
+			Action<Expr> walkExpr = null;
+			Action<Stmt> walkStmt = null;
+
+			int ordinal = referenceOrdinal;
+
+			walkExpr = expr =>
+			{
+				if (expr == null) return;
+				if (expr is FieldAccessExpr fieldAccess)
+				{
+					if (fieldAccess.Target is IdentifierExpr targetIdent
+						&& !string.IsNullOrWhiteSpace(targetIdent.Name)
+						&& !string.IsNullOrWhiteSpace(fieldAccess.FieldName)
+						&& enumMemberSymbolsByEnum.TryGetValue(targetIdent.Name, out Dictionary<string, SymbolIdentity> members)
+						&& members.TryGetValue(fieldAccess.FieldName, out SymbolIdentity memberSymbol))
+					{
+						int fieldLine = fieldAccess.FieldNameLine > 0 ? fieldAccess.FieldNameLine : fieldAccess.Line;
+						int fieldColumn = fieldAccess.FieldNameColumn > 0 ? fieldAccess.FieldNameColumn : fieldAccess.Column;
+						if (TryCreateSpanFromLineColumn(source, fieldLine, fieldColumn, fieldAccess.FieldName.Length,
+							out TextSpan span, out int sl, out int sc, out int el, out int ec))
+						{
+							output.Add(new DataFact(
+								new DataFactId(BuildFactId("ref", normalizedDocument, ordinal++, fieldAccess.FieldName, sl, sc)),
+								aggregateId, DataFactKind.SymbolReference, documentPath, span, snapshotVersion,
+								new SymbolDataFactPayload(memberSymbol, sl, sc, el, ec)));
+						}
+					}
+					walkExpr(fieldAccess.Target);
+					return;
+				}
+				if (expr is CallExpr call)
+				{
+					if (call.Arguments != null)
+						for (int i = 0; i < call.Arguments.Count; i++)
+							walkExpr(call.Arguments[i]);
+					return;
+				}
+				if (expr is BinaryExpr binary) { walkExpr(binary.Left); walkExpr(binary.Right); return; }
+				if (expr is UnaryExpr unary) { walkExpr(unary.Operand); return; }
+				if (expr is AssignExpr assign) { walkExpr(assign.Target); walkExpr(assign.Value); return; }
+				if (expr is StructLiteralExpr structLit)
+				{
+					if (structLit.Fields != null)
+						for (int i = 0; i < structLit.Fields.Count; i++)
+							walkExpr(structLit.Fields[i].Value);
+					return;
+				}
+			};
+
+			walkStmt = stmt =>
+			{
+				if (stmt == null) return;
+				if (stmt is BlockStmt block)
+				{
+					if (block.Statements != null)
+						for (int i = 0; i < block.Statements.Count; i++)
+							walkStmt(block.Statements[i]);
+					return;
+				}
+				if (stmt is VarDeclStmt variable) { walkExpr(variable.Initializer); return; }
+				if (stmt is IfStmt cond) { walkExpr(cond.Condition); walkStmt(cond.ThenBranch); walkStmt(cond.ElseBranch); return; }
+				if (stmt is WhileStmt loop) { walkExpr(loop.Condition); walkStmt(loop.Body); return; }
+				if (stmt is ForStmt forLoop) { walkStmt(forLoop.Initializer); walkExpr(forLoop.Condition); walkExpr(forLoop.Increment); walkStmt(forLoop.Body); return; }
+				if (stmt is ReturnStmt ret) { walkExpr(ret.Value); return; }
+				if (stmt is WaitStmt waited) { walkExpr(waited.FrameCount); return; }
+				if (stmt is ExprStmt exprStmt) { walkExpr(exprStmt.Expression); return; }
+			};
+
+			if (module.Functions != null)
+			{
+				for (int fi = 0; fi < module.Functions.Count; fi++)
+				{
+					FuncDecl function = module.Functions[fi];
+					if (function == null || function.Body == null) continue;
+					walkStmt(function.Body);
+				}
+			}
+
+			if (module.ModuleVariables != null)
+			{
+				for (int vi = 0; vi < module.ModuleVariables.Count; vi++)
+				{
+					VarDeclStmt variable = module.ModuleVariables[vi];
+					if (variable != null) walkExpr(variable.Initializer);
+				}
+			}
+
+			referenceOrdinal = ordinal;
+		}
+
 		private static void EmitIdentifierReferenceFacts(
 			ModuleNode module, string source, string normalizedDocument,
 			PathKey documentPath, DataAggregateId aggregateId, long snapshotVersion,
 			List<DataFact> output,
 			Dictionary<string, SymbolIdentity> localNameSymbols,
 			Dictionary<string, SymbolIdentity> importedNameSymbols,
+			Dictionary<string, Dictionary<string, SymbolIdentity>> parameterSymbolsByFunc,
+			Dictionary<string, Dictionary<string, SymbolIdentity>> localVarSymbolsByFunc,
 			ref int referenceOrdinal)
 		{
 			if (module == null || module.Functions == null) return;
@@ -2741,14 +3163,22 @@ namespace FFVM.Debug.Lsp.Database
 			{
 				FuncDecl function = module.Functions[fi];
 				if (function == null || function.Body == null) continue;
+				Dictionary<string, SymbolIdentity> paramSymbols = null;
+				Dictionary<string, SymbolIdentity> localSymbols = null;
+				if (function.Name != null)
+				{
+					parameterSymbolsByFunc?.TryGetValue(function.Name, out paramSymbols);
+					localVarSymbolsByFunc?.TryGetValue(function.Name, out localSymbols);
+				}
 				CollectIdentifierReferencesFromStatement(function.Body, ident =>
 				{
 					if (ident == null || string.IsNullOrWhiteSpace(ident.Name)) return;
-					if (!localNameSymbols.TryGetValue(ident.Name, out SymbolIdentity symbol) || symbol == null)
-					{
-						if (!importedNameSymbols.TryGetValue(ident.Name, out symbol) || symbol == null)
-							return;
-					}
+					SymbolIdentity symbol = null;
+					if (localSymbols != null) localSymbols.TryGetValue(ident.Name, out symbol);
+					if (symbol == null && paramSymbols != null) paramSymbols.TryGetValue(ident.Name, out symbol);
+					if (symbol == null && !localNameSymbols.TryGetValue(ident.Name, out symbol))
+						importedNameSymbols.TryGetValue(ident.Name, out symbol);
+					if (symbol == null) return;
 					if (!TryCreateSpanFromLineColumn(source, ident.Line, ident.Column, ident.Name.Length,
 						out TextSpan span, out int sl, out int sc, out int el, out int ec))
 						return;

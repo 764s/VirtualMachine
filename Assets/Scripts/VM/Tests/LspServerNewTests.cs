@@ -3132,6 +3132,520 @@ public static class LspServerNewTests
                 "LSPNEW-T3-FLD-01B: Enemy.hp references include definition + e.hp but NOT Player.hp");
         }
 
+        // ================================================================
+        // LSPNEW-T3-ENM-01: enum member cross-file definition + references (CFR-16)
+        // ================================================================
+        {
+            string tmpDir = Path.Combine(Path.GetTempPath(), "lspnew_t3enm01_" + Guid.NewGuid().ToString("N").Substring(0, 8));
+            try
+            {
+                Directory.CreateDirectory(tmpDir);
+                string libSource = "enum Dir { Up, Down, Left, Right }";
+                string mainSource =
+                    "include \"lib\"\n"
+                    + "func test() {\n"
+                    + "    var d: Dir = Dir.Up\n"
+                    + "    var e: Dir = Dir.Down\n"
+                    + "    wait 1\n"
+                    + "}";
+                File.WriteAllText(Path.Combine(tmpDir, "lib.ffs"), libSource);
+                File.WriteAllText(Path.Combine(tmpDir, "main.ffs"), mainSource);
+
+                string rootUri = "file:///" + tmpDir.TrimStart('/').Replace("\\", "/");
+                string libUri = rootUri + "/lib.ffs";
+                string mainUri = rootUri + "/main.ffs";
+
+                var bridge = new DatabaseBackedVsCodeBridge(
+                    new InMemoryWorkspaceCodeDatabase(new InMemoryDatabaseExecutionOrchestrator()));
+                var session = new LspServerNewBatchSession();
+                session.AddRequest(LspMethods.Initialize, BuildInitializeParams(tmpDir));
+                session.AddNotification(LspMethods.Initialized, new JsonObject());
+
+                // Definition on "Up" in Dir.Up — main.ffs line 2, col 21 (0-based)
+                int defUpId = session.AddRequest(LspMethods.Definition, BuildTextDocumentPositionParams(mainUri, 2, 21));
+                // References on "Up" from lib.ffs enum member definition — line 0, col 11
+                int refUpId = session.AddRequest(LspMethods.References, BuildReferencesParams(libUri, 0, 11, true));
+                // References on enum type "Dir" from lib.ffs — line 0, col 5
+                int refDirId = session.AddRequest(LspMethods.References, BuildReferencesParams(libUri, 0, 5, true));
+                session.AddNotification(LspMethods.Exit, new JsonObject());
+                session.Run(bridge);
+
+                // Definition of "Up" should point to lib.ffs line 0
+                JsonObject defUpResult = session.FindResponse(defUpId)?.GetObject(JsonRpcFields.Result);
+                string defUpUri = defUpResult != null ? defUpResult.GetString(LspFields.Uri) ?? string.Empty : string.Empty;
+                JsonObject defUpStart = defUpResult?.GetObject(LspFields.Range)?.GetObject(LspFields.Start);
+                int defUpLine = defUpStart != null ? defUpStart.GetInt(LspFields.Line, -1) : -1;
+
+                Assert(
+                    defUpUri.IndexOf("/lib.ffs", StringComparison.OrdinalIgnoreCase) >= 0 && defUpLine == 0,
+                    "LSPNEW-T3-ENM-01A: go-to-definition on Dir.Up resolves to lib.ffs enum member");
+
+                // References on "Up" should include lib definition + main usage
+                List<object> refUpLocs = session.FindResponse(refUpId)?.GetArray(JsonRpcFields.Result);
+                bool upHasLibDef = false;
+                bool upHasMainUse = false;
+                if (refUpLocs != null)
+                {
+                    for (int i = 0; i < refUpLocs.Count; i++)
+                    {
+                        if (!(refUpLocs[i] is JsonObject loc)) continue;
+                        string u = loc.GetString(LspFields.Uri) ?? string.Empty;
+                        JsonObject s = loc.GetObject(LspFields.Range)?.GetObject(LspFields.Start);
+                        int ln = s != null ? s.GetInt(LspFields.Line, -1) : -1;
+                        if (u.IndexOf("/lib.ffs", StringComparison.OrdinalIgnoreCase) >= 0 && ln == 0) upHasLibDef = true;
+                        if (u.IndexOf("/main.ffs", StringComparison.OrdinalIgnoreCase) >= 0 && ln == 2) upHasMainUse = true;
+                    }
+                }
+
+                Assert(
+                    refUpLocs != null && upHasLibDef && upHasMainUse,
+                    "LSPNEW-T3-ENM-01B: references on Up include lib definition + main usage");
+
+                // References on enum type "Dir" should include lib + main usages
+                List<object> refDirLocs = session.FindResponse(refDirId)?.GetArray(JsonRpcFields.Result);
+                bool dirHasLibDef = false;
+                int dirMainUseCount = 0;
+                if (refDirLocs != null)
+                {
+                    for (int i = 0; i < refDirLocs.Count; i++)
+                    {
+                        if (!(refDirLocs[i] is JsonObject loc)) continue;
+                        string u = loc.GetString(LspFields.Uri) ?? string.Empty;
+                        JsonObject s = loc.GetObject(LspFields.Range)?.GetObject(LspFields.Start);
+                        int ln = s != null ? s.GetInt(LspFields.Line, -1) : -1;
+                        if (u.IndexOf("/lib.ffs", StringComparison.OrdinalIgnoreCase) >= 0 && ln == 0) dirHasLibDef = true;
+                        if (u.IndexOf("/main.ffs", StringComparison.OrdinalIgnoreCase) >= 0 && ln >= 2) dirMainUseCount++;
+                    }
+                }
+
+                Assert(
+                    refDirLocs != null && dirHasLibDef && dirMainUseCount >= 2,
+                    "LSPNEW-T3-ENM-01C: references on Dir enum type include lib definition + main type annotations");
+            }
+            finally
+            {
+                try { Directory.Delete(tmpDir, true); } catch { }
+            }
+        }
+
+        // ================================================================
+        // LSPNEW-T3-ENM-02: same-name enum members in different enums do not merge
+        // ================================================================
+        {
+            string uri = "file:///tests/lspnew_t3enm02.ffs";
+            string source =
+                "enum Color { Red, Blue }\n"
+                + "enum Priority { Red, Green }\n"
+                + "func test() {\n"
+                + "    var c: Color = Color.Red\n"
+                + "    var p: Priority = Priority.Red\n"
+                + "    wait 1\n"
+                + "}";
+
+            var bridge = new DatabaseBackedVsCodeBridge(
+                new InMemoryWorkspaceCodeDatabase(new InMemoryDatabaseExecutionOrchestrator()));
+            var session = new LspServerNewBatchSession();
+            session.AddRequest(LspMethods.Initialize, new JsonObject());
+            session.AddNotification(LspMethods.Initialized, new JsonObject());
+            session.AddNotification(LspMethods.DidOpen, BuildDidOpenParams(uri, "ffscript", 1, source));
+
+            // References on Color.Red — line 0, col 13
+            int colorRedRefId = session.AddRequest(LspMethods.References, BuildReferencesParams(uri, 0, 13, true));
+            // References on Priority.Red — line 1, col 16
+            int prioRedRefId = session.AddRequest(LspMethods.References, BuildReferencesParams(uri, 1, 16, true));
+            session.AddNotification(LspMethods.Exit, new JsonObject());
+            session.Run(bridge);
+
+            List<object> colorRedLocs = session.FindResponse(colorRedRefId)?.GetArray(JsonRpcFields.Result);
+            List<object> prioRedLocs = session.FindResponse(prioRedRefId)?.GetArray(JsonRpcFields.Result);
+
+            bool colorRedHasDef = false;
+            bool colorRedHasUsage = false;
+            bool colorRedHasPrioLine = false;
+            if (colorRedLocs != null)
+            {
+                for (int i = 0; i < colorRedLocs.Count; i++)
+                {
+                    if (!(colorRedLocs[i] is JsonObject loc)) continue;
+                    JsonObject s = loc.GetObject(LspFields.Range)?.GetObject(LspFields.Start);
+                    int ln = s != null ? s.GetInt(LspFields.Line, -1) : -1;
+                    if (ln == 0) colorRedHasDef = true;
+                    if (ln == 3) colorRedHasUsage = true;
+                    if (ln == 1 || ln == 4) colorRedHasPrioLine = true;
+                }
+            }
+
+            bool prioRedHasDef = false;
+            bool prioRedHasUsage = false;
+            bool prioRedHasColorLine = false;
+            if (prioRedLocs != null)
+            {
+                for (int i = 0; i < prioRedLocs.Count; i++)
+                {
+                    if (!(prioRedLocs[i] is JsonObject loc)) continue;
+                    JsonObject s = loc.GetObject(LspFields.Range)?.GetObject(LspFields.Start);
+                    int ln = s != null ? s.GetInt(LspFields.Line, -1) : -1;
+                    if (ln == 1) prioRedHasDef = true;
+                    if (ln == 4) prioRedHasUsage = true;
+                    if (ln == 0 || ln == 3) prioRedHasColorLine = true;
+                }
+            }
+
+            Assert(
+                colorRedLocs != null && colorRedHasDef && colorRedHasUsage && !colorRedHasPrioLine,
+                "LSPNEW-T3-ENM-02A: Color.Red references include definition + Color.Red usage but NOT Priority.Red");
+
+            Assert(
+                prioRedLocs != null && prioRedHasDef && prioRedHasUsage && !prioRedHasColorLine,
+                "LSPNEW-T3-ENM-02B: Priority.Red references include definition + Priority.Red usage but NOT Color.Red");
+        }
+
+        // ================================================================
+        // LSPNEW-T3-EXT-01: external func declaration + cross-file call references (CFR-17)
+        // ================================================================
+        {
+            string tmpDir = Path.Combine(Path.GetTempPath(), "lspnew_t3ext01_" + Guid.NewGuid().ToString("N").Substring(0, 8));
+            try
+            {
+                Directory.CreateDirectory(tmpDir);
+                string libSource = "external func print(msg: string)";
+                string mainSource =
+                    "include \"lib\"\n"
+                    + "func test() {\n"
+                    + "    print(\"hello\")\n"
+                    + "    print(\"world\")\n"
+                    + "    wait 1\n"
+                    + "}";
+                File.WriteAllText(Path.Combine(tmpDir, "lib.ffs"), libSource);
+                File.WriteAllText(Path.Combine(tmpDir, "main.ffs"), mainSource);
+
+                string rootUri = "file:///" + tmpDir.TrimStart('/').Replace("\\", "/");
+                string libUri = rootUri + "/lib.ffs";
+                string mainUri = rootUri + "/main.ffs";
+
+                var bridge = new DatabaseBackedVsCodeBridge(
+                    new InMemoryWorkspaceCodeDatabase(new InMemoryDatabaseExecutionOrchestrator()));
+                var session = new LspServerNewBatchSession();
+                session.AddRequest(LspMethods.Initialize, BuildInitializeParams(tmpDir));
+                session.AddNotification(LspMethods.Initialized, new JsonObject());
+
+                // Definition on "print" call — main.ffs line 2 col 4
+                int defId = session.AddRequest(LspMethods.Definition, BuildTextDocumentPositionParams(mainUri, 2, 4));
+                // References on "print" from lib.ffs external declaration — line 0
+                int refId = session.AddRequest(LspMethods.References, BuildReferencesParams(libUri, 0, 15, true));
+                session.AddNotification(LspMethods.Exit, new JsonObject());
+                session.Run(bridge);
+
+                // Definition should point to lib.ffs line 0 (external declaration)
+                JsonObject defResult = session.FindResponse(defId)?.GetObject(JsonRpcFields.Result);
+                string defUri = defResult != null ? defResult.GetString(LspFields.Uri) ?? string.Empty : string.Empty;
+                JsonObject defStart = defResult?.GetObject(LspFields.Range)?.GetObject(LspFields.Start);
+                int defLine = defStart != null ? defStart.GetInt(LspFields.Line, -1) : -1;
+
+                Assert(
+                    defUri.IndexOf("/lib.ffs", StringComparison.OrdinalIgnoreCase) >= 0 && defLine == 0,
+                    "LSPNEW-T3-EXT-01A: go-to-definition on print() call resolves to lib.ffs external declaration");
+
+                // References should include lib declaration + main call sites
+                List<object> refLocs = session.FindResponse(refId)?.GetArray(JsonRpcFields.Result);
+                bool hasLibDecl = false;
+                int mainCallCount = 0;
+                if (refLocs != null)
+                {
+                    for (int i = 0; i < refLocs.Count; i++)
+                    {
+                        if (!(refLocs[i] is JsonObject loc)) continue;
+                        string u = loc.GetString(LspFields.Uri) ?? string.Empty;
+                        JsonObject s = loc.GetObject(LspFields.Range)?.GetObject(LspFields.Start);
+                        int ln = s != null ? s.GetInt(LspFields.Line, -1) : -1;
+                        if (u.IndexOf("/lib.ffs", StringComparison.OrdinalIgnoreCase) >= 0 && ln == 0) hasLibDecl = true;
+                        if (u.IndexOf("/main.ffs", StringComparison.OrdinalIgnoreCase) >= 0 && ln >= 2) mainCallCount++;
+                    }
+                }
+
+                Assert(
+                    refLocs != null && hasLibDecl && mainCallCount >= 2,
+                    "LSPNEW-T3-EXT-01B: references on print include lib declaration + 2 main call sites");
+            }
+            finally
+            {
+                try { Directory.Delete(tmpDir, true); } catch { }
+            }
+        }
+
+        // ================================================================
+        // LSPNEW-T3-PRM-01: parameter definition + references (same file)
+        // ================================================================
+        {
+            string uri = "file:///tests/lspnew_t3prm01.ffs";
+            string source =
+                "func add(a: int, b: int) {\n"
+                + "    var sum: int = a + b\n"
+                + "    wait 1\n"
+                + "}";
+            // Line 0: func add(a: int, b: int) {   → a at col 9, b at col 17
+            // Line 1:     var sum: int = a + b      → a at col 19, b at col 23
+
+            var bridge = new DatabaseBackedVsCodeBridge(
+                new InMemoryWorkspaceCodeDatabase(new InMemoryDatabaseExecutionOrchestrator()));
+            var session = new LspServerNewBatchSession();
+            session.AddRequest(LspMethods.Initialize, new JsonObject());
+            session.AddNotification(LspMethods.Initialized, new JsonObject());
+            session.AddNotification(LspMethods.DidOpen, BuildDidOpenParams(uri, "ffscript", 1, source));
+
+            int defAId = session.AddRequest(LspMethods.Definition, BuildTextDocumentPositionParams(uri, 1, 19));
+            int refAId = session.AddRequest(LspMethods.References, BuildReferencesParams(uri, 0, 9, true));
+            session.AddNotification(LspMethods.Exit, new JsonObject());
+            session.Run(bridge);
+
+            JsonObject defAResult = session.FindResponse(defAId)?.GetObject(JsonRpcFields.Result);
+            JsonObject defAStart = defAResult?.GetObject(LspFields.Range)?.GetObject(LspFields.Start);
+            int defALine = defAStart != null ? defAStart.GetInt(LspFields.Line, -1) : -1;
+            int defACol = defAStart != null ? defAStart.GetInt(LspFields.Character, -1) : -1;
+
+            Assert(
+                defALine == 0 && defACol == 9,
+                "LSPNEW-T3-PRM-01A: go-to-definition on param 'a' usage resolves to param declaration");
+
+            List<object> refALocs = session.FindResponse(refAId)?.GetArray(JsonRpcFields.Result);
+            bool prmHasParamDef = false;
+            bool prmHasBodyUsage = false;
+            if (refALocs != null)
+            {
+                for (int i = 0; i < refALocs.Count; i++)
+                {
+                    if (!(refALocs[i] is JsonObject loc)) continue;
+                    JsonObject s = loc.GetObject(LspFields.Range)?.GetObject(LspFields.Start);
+                    int ln = s != null ? s.GetInt(LspFields.Line, -1) : -1;
+                    int col = s != null ? s.GetInt(LspFields.Character, -1) : -1;
+                    if (ln == 0 && col == 9) prmHasParamDef = true;
+                    if (ln == 1 && col == 19) prmHasBodyUsage = true;
+                }
+            }
+
+            Assert(
+                refALocs != null && prmHasParamDef && prmHasBodyUsage,
+                "LSPNEW-T3-PRM-01B: references on param 'a' include declaration + body usage");
+        }
+
+        // ================================================================
+        // LSPNEW-T3-PRM-02: parameter shadows module variable
+        // ================================================================
+        {
+            string uri = "file:///tests/lspnew_t3prm02.ffs";
+            string source =
+                "var x: int = 1\n"
+                + "func f(x: int) {\n"
+                + "    return x\n"
+                + "    wait 1\n"
+                + "}\n"
+                + "func g() {\n"
+                + "    return x\n"
+                + "    wait 1\n"
+                + "}";
+            // Line 0: var x: int = 1        → module var x at col 4
+            // Line 1: func f(x: int) {      → param x at col 7
+            // Line 2:     return x           → x at col 11 (should match param)
+            // Line 5: func g() {
+            // Line 6:     return x           → x at col 11 (should match module var)
+
+            var bridge = new DatabaseBackedVsCodeBridge(
+                new InMemoryWorkspaceCodeDatabase(new InMemoryDatabaseExecutionOrchestrator()));
+            var session = new LspServerNewBatchSession();
+            session.AddRequest(LspMethods.Initialize, new JsonObject());
+            session.AddNotification(LspMethods.Initialized, new JsonObject());
+            session.AddNotification(LspMethods.DidOpen, BuildDidOpenParams(uri, "ffscript", 1, source));
+
+            int refParamId = session.AddRequest(LspMethods.References, BuildReferencesParams(uri, 1, 7, true));
+            int refModuleId = session.AddRequest(LspMethods.References, BuildReferencesParams(uri, 0, 4, true));
+            session.AddNotification(LspMethods.Exit, new JsonObject());
+            session.Run(bridge);
+
+            List<object> paramLocs = session.FindResponse(refParamId)?.GetArray(JsonRpcFields.Result);
+            bool paramHasDef = false;
+            bool paramHasUsage = false;
+            bool paramHasModuleLine = false;
+            bool paramHasGLine = false;
+            if (paramLocs != null)
+            {
+                for (int i = 0; i < paramLocs.Count; i++)
+                {
+                    if (!(paramLocs[i] is JsonObject loc)) continue;
+                    JsonObject s = loc.GetObject(LspFields.Range)?.GetObject(LspFields.Start);
+                    int ln = s != null ? s.GetInt(LspFields.Line, -1) : -1;
+                    if (ln == 1) paramHasDef = true;
+                    if (ln == 2) paramHasUsage = true;
+                    if (ln == 0) paramHasModuleLine = true;
+                    if (ln == 6) paramHasGLine = true;
+                }
+            }
+
+            Assert(
+                paramLocs != null && paramHasDef && paramHasUsage && !paramHasModuleLine && !paramHasGLine,
+                "LSPNEW-T3-PRM-02A: param x refs include param decl + f body, NOT module var or g body");
+
+            List<object> moduleLocs = session.FindResponse(refModuleId)?.GetArray(JsonRpcFields.Result);
+            bool moduleHasDef = false;
+            bool moduleHasGUsage = false;
+            bool moduleHasParamLine = false;
+            bool moduleHasFLine = false;
+            if (moduleLocs != null)
+            {
+                for (int i = 0; i < moduleLocs.Count; i++)
+                {
+                    if (!(moduleLocs[i] is JsonObject loc)) continue;
+                    JsonObject s = loc.GetObject(LspFields.Range)?.GetObject(LspFields.Start);
+                    int ln = s != null ? s.GetInt(LspFields.Line, -1) : -1;
+                    if (ln == 0) moduleHasDef = true;
+                    if (ln == 6) moduleHasGUsage = true;
+                    if (ln == 1) moduleHasParamLine = true;
+                    if (ln == 2) moduleHasFLine = true;
+                }
+            }
+
+            Assert(
+                moduleLocs != null && moduleHasDef && moduleHasGUsage && !moduleHasParamLine && !moduleHasFLine,
+                "LSPNEW-T3-PRM-02B: module var x refs include module def + g body, NOT param decl or f body");
+        }
+
+        // ================================================================
+        // LSPNEW-T3-LOC-01: local var definition + references (same file)
+        // ================================================================
+        {
+            string uri = "file:///tests/lspnew_t3loc01.ffs";
+            string source =
+                "func f() {\n"
+                + "    var count: int = 0\n"
+                + "    count = count + 1\n"
+                + "    wait 1\n"
+                + "}";
+            // Line 1:     var count: int = 0   → local var count at col 8
+            // Line 2:     count = count + 1    → count at col 4 and col 12
+
+            var bridge = new DatabaseBackedVsCodeBridge(
+                new InMemoryWorkspaceCodeDatabase(new InMemoryDatabaseExecutionOrchestrator()));
+            var session = new LspServerNewBatchSession();
+            session.AddRequest(LspMethods.Initialize, new JsonObject());
+            session.AddNotification(LspMethods.Initialized, new JsonObject());
+            session.AddNotification(LspMethods.DidOpen, BuildDidOpenParams(uri, "ffscript", 1, source));
+
+            int defId = session.AddRequest(LspMethods.Definition, BuildTextDocumentPositionParams(uri, 2, 4));
+            int refId = session.AddRequest(LspMethods.References, BuildReferencesParams(uri, 1, 8, true));
+            session.AddNotification(LspMethods.Exit, new JsonObject());
+            session.Run(bridge);
+
+            JsonObject defResult = session.FindResponse(defId)?.GetObject(JsonRpcFields.Result);
+            JsonObject defStart = defResult?.GetObject(LspFields.Range)?.GetObject(LspFields.Start);
+            int defLine = defStart != null ? defStart.GetInt(LspFields.Line, -1) : -1;
+            int defCol = defStart != null ? defStart.GetInt(LspFields.Character, -1) : -1;
+
+            Assert(
+                defLine == 1 && defCol == 8,
+                "LSPNEW-T3-LOC-01A: go-to-definition on local var usage resolves to var declaration");
+
+            List<object> refLocs = session.FindResponse(refId)?.GetArray(JsonRpcFields.Result);
+            bool locHasDef = false;
+            bool locHasAssignTarget = false;
+            bool locHasExprUsage = false;
+            if (refLocs != null)
+            {
+                for (int i = 0; i < refLocs.Count; i++)
+                {
+                    if (!(refLocs[i] is JsonObject loc)) continue;
+                    JsonObject s = loc.GetObject(LspFields.Range)?.GetObject(LspFields.Start);
+                    int ln = s != null ? s.GetInt(LspFields.Line, -1) : -1;
+                    int col = s != null ? s.GetInt(LspFields.Character, -1) : -1;
+                    if (ln == 1 && col == 8) locHasDef = true;
+                    if (ln == 2 && col == 4) locHasAssignTarget = true;
+                    if (ln == 2 && col == 12) locHasExprUsage = true;
+                }
+            }
+
+            Assert(
+                refLocs != null && locHasDef && locHasAssignTarget && locHasExprUsage,
+                "LSPNEW-T3-LOC-01B: references on local var include def + assign target + expression usage");
+        }
+
+        // ================================================================
+        // LSPNEW-T3-LOC-02: local var shadows module variable
+        // ================================================================
+        {
+            string uri = "file:///tests/lspnew_t3loc02.ffs";
+            string source =
+                "var n: int = 1\n"
+                + "func f() {\n"
+                + "    var n: int = 2\n"
+                + "    return n\n"
+                + "    wait 1\n"
+                + "}\n"
+                + "func g() {\n"
+                + "    return n\n"
+                + "    wait 1\n"
+                + "}";
+            // Line 0: var n: int = 1     → module var n at col 4
+            // Line 2:     var n: int = 2 → local var n at col 8
+            // Line 3:     return n       → n at col 11 (should match local)
+            // Line 7:     return n       → n at col 11 (should match module)
+
+            var bridge = new DatabaseBackedVsCodeBridge(
+                new InMemoryWorkspaceCodeDatabase(new InMemoryDatabaseExecutionOrchestrator()));
+            var session = new LspServerNewBatchSession();
+            session.AddRequest(LspMethods.Initialize, new JsonObject());
+            session.AddNotification(LspMethods.Initialized, new JsonObject());
+            session.AddNotification(LspMethods.DidOpen, BuildDidOpenParams(uri, "ffscript", 1, source));
+
+            int refLocalId = session.AddRequest(LspMethods.References, BuildReferencesParams(uri, 2, 8, true));
+            int refModuleId = session.AddRequest(LspMethods.References, BuildReferencesParams(uri, 0, 4, true));
+            session.AddNotification(LspMethods.Exit, new JsonObject());
+            session.Run(bridge);
+
+            List<object> localLocs = session.FindResponse(refLocalId)?.GetArray(JsonRpcFields.Result);
+            bool localHasDef = false;
+            bool localHasUsage = false;
+            bool localHasModuleLine = false;
+            bool localHasGLine = false;
+            if (localLocs != null)
+            {
+                for (int i = 0; i < localLocs.Count; i++)
+                {
+                    if (!(localLocs[i] is JsonObject loc)) continue;
+                    JsonObject s = loc.GetObject(LspFields.Range)?.GetObject(LspFields.Start);
+                    int ln = s != null ? s.GetInt(LspFields.Line, -1) : -1;
+                    if (ln == 2) localHasDef = true;
+                    if (ln == 3) localHasUsage = true;
+                    if (ln == 0) localHasModuleLine = true;
+                    if (ln == 7) localHasGLine = true;
+                }
+            }
+
+            Assert(
+                localLocs != null && localHasDef && localHasUsage && !localHasModuleLine && !localHasGLine,
+                "LSPNEW-T3-LOC-02A: local var n refs include local def + f body, NOT module var or g body");
+
+            List<object> moduleLocs = session.FindResponse(refModuleId)?.GetArray(JsonRpcFields.Result);
+            bool modHasDef = false;
+            bool modHasGUsage = false;
+            bool modHasLocalLine = false;
+            bool modHasFLine = false;
+            if (moduleLocs != null)
+            {
+                for (int i = 0; i < moduleLocs.Count; i++)
+                {
+                    if (!(moduleLocs[i] is JsonObject loc)) continue;
+                    JsonObject s = loc.GetObject(LspFields.Range)?.GetObject(LspFields.Start);
+                    int ln = s != null ? s.GetInt(LspFields.Line, -1) : -1;
+                    if (ln == 0) modHasDef = true;
+                    if (ln == 7) modHasGUsage = true;
+                    if (ln == 2) modHasLocalLine = true;
+                    if (ln == 3) modHasFLine = true;
+                }
+            }
+
+            Assert(
+                moduleLocs != null && modHasDef && modHasGUsage && !modHasLocalLine && !modHasFLine,
+                "LSPNEW-T3-LOC-02B: module var n refs include module def + g body, NOT local def or f body");
+        }
+
         Debug.Log($"[LspServerNewTests] Completed. Passed={passed}, Failed={failed}");
     }
 
