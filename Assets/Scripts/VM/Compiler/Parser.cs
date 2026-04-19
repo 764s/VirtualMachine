@@ -1146,14 +1146,17 @@ namespace FFVM.Compiler
                     {
                         string qualType = aliasExpr.Name + "." + faExpr.FieldName;
                         Advance(); // consume '{'
-                        var fields = new List<(string FieldName, Expr Value)>();
+                        var fields = new List<(string FieldName, Expr Value, int FieldNameLine, int FieldNameColumn)>();
                         while (!Check(TokenType.RBrace) && !IsAtEnd())
                         {
                             int savedPos = _pos;
-                            string fn = Expect(TokenType.Identifier, "for field name in struct literal").Text ?? "?";
+                            Token fnTok = Expect(TokenType.Identifier, "for field name in struct literal");
+                            string fn = fnTok.Text ?? "?";
+                            int fnLine = fnTok.Line;
+                            int fnCol = fnTok.Column;
                             Expect(TokenType.Colon, "after field name in struct literal");
                             Expr val = ParseExpression();
-                            fields.Add((fn, val));
+                            fields.Add((fn, val, fnLine, fnCol));
                             Match(TokenType.Comma);
                             // B002: safety guard — if no progress was made, skip token to avoid infinite loop
                             if (_pos == savedPos)
@@ -1275,14 +1278,17 @@ namespace FFVM.Compiler
         private StructLiteralExpr ParseStructLiteral(Token typeToken)
         {
             Advance(); // consume '{'
-            var fields = new List<(string FieldName, Expr Value)>();
+            var fields = new List<(string FieldName, Expr Value, int FieldNameLine, int FieldNameColumn)>();
             while (!Check(TokenType.RBrace) && !IsAtEnd())
             {
                 int savedPos = _pos;
-                string fieldName = Expect(TokenType.Identifier, "for field name in struct literal").Text ?? "?";
+                Token fieldToken = Expect(TokenType.Identifier, "for field name in struct literal");
+                string fieldName = fieldToken.Text ?? "?";
+                int fieldLine = fieldToken.Line;
+                int fieldCol = fieldToken.Column;
                 Expect(TokenType.Colon, "after field name in struct literal");
                 Expr value = ParseExpression();
-                fields.Add((fieldName, value));
+                fields.Add((fieldName, value, fieldLine, fieldCol));
                 // allow optional comma between fields
                 Match(TokenType.Comma);
                 // B002: safety guard — if no progress was made, skip token to avoid infinite loop

@@ -3915,6 +3915,60 @@ public static class LspServerNewTests
         }
 
         // ================================================================
+        // LSPNEW-T3-STR-03: struct literal field name — definition, references, hover
+        // Matrix: 结构体字段 R in 右值 column
+        // ================================================================
+        {
+            string uri = "file:///tests/lspnew_t3str03.ffs";
+            string source =
+                "struct Vec { x: float, y: float }\n"                             // L0: field defs at col 13 (x), col 23 (y)
+                + "const origin: Vec = Vec { x: 0.0, y: 0.0 }\n"                 // L1: field init x at col 26, y at col 33
+                + "func main() {\n"                                               // L2
+                + "    var p: Vec = Vec { x: 1.0, y: 2.0 }\n"                    // L3: field init x at col 25, y at col 32 (adjusted)
+                + "    var px: float = p.x\n"                                     // L4: field access x
+                + "    wait 1\n"                                                  // L5
+                + "}";
+
+            var bridge = new DatabaseBackedVsCodeBridge(
+                new InMemoryWorkspaceCodeDatabase(new InMemoryDatabaseExecutionOrchestrator()));
+            var session = new LspServerNewBatchSession();
+            session.AddRequest(LspMethods.Initialize, BuildInitializeParams(null));
+            session.AddNotification(LspMethods.Initialized, new JsonObject());
+            session.AddNotification(LspMethods.DidOpen, BuildDidOpenParams(uri, "ffvm", 1, source));
+
+            // Definition on "x" in struct literal L1 col 26
+            int defId = session.AddRequest(LspMethods.Definition, BuildTextDocumentPositionParams(uri, 1, 26));
+            // References on "x" field from struct definition L0 col 13
+            int refId = session.AddRequest(LspMethods.References, BuildReferencesParams(uri, 0, 13, true));
+            // Hover on "x" in struct literal L1 col 26
+            int hovId = session.AddRequest(LspMethods.Hover, BuildTextDocumentPositionParams(uri, 1, 26));
+            session.AddNotification(LspMethods.Exit, new JsonObject());
+            session.Run(bridge);
+
+            // Definition should resolve to L0 (struct field definition)
+            JsonObject defResult = session.FindResponse(defId)?.GetObject(JsonRpcFields.Result);
+            JsonObject defStart = defResult?.GetObject(LspFields.Range)?.GetObject(LspFields.Start);
+            int defLine = defStart != null ? defStart.GetInt(LspFields.Line, -1) : -1;
+            Assert(
+                defLine == 0,
+                "LSPNEW-T3-STR-03A: definition on struct literal field name resolves to struct def (got line=" + defLine + ")");
+
+            // References on "x" should include: struct def + L1 init + L3 init + L4 access = at least 4
+            List<object> refLocs = session.FindResponse(refId)?.GetArray(JsonRpcFields.Result);
+            int refCount = refLocs != null ? refLocs.Count : 0;
+            Assert(
+                refCount >= 3,
+                "LSPNEW-T3-STR-03B: references on struct field include def + literal inits + access (got " + refCount + ")");
+
+            // Hover should return content with field name
+            JsonObject hoverResult = session.FindResponse(hovId)?.GetObject(JsonRpcFields.Result);
+            string hoverValue = hoverResult?.GetObject("contents")?.GetString("value") ?? string.Empty;
+            Assert(
+                hoverValue.Length > 0,
+                "LSPNEW-T3-STR-03C: hover on struct literal field name returns content");
+        }
+
+        // ================================================================
         // LSPNEW-T3-ENM-03: enum type at L4 (module var), L5 (param), L6 (local var)
         // ================================================================
         {
@@ -3973,6 +4027,171 @@ public static class LspServerNewTests
             Assert(
                 hasLocalTypeAnn,
                 "LSPNEW-T3-ENM-03C: enum type references include L6 local var type annotation");
+        }
+
+        // ================================================================
+        // LSPNEW-T3-ENM-04: enum member dot-access through deep include chain (depth 3+)
+        // ================================================================
+        {
+            string tmpDir = Path.Combine(Path.GetTempPath(), "lspnew_t3enm04_" + Guid.NewGuid().ToString("N").Substring(0, 8));
+            try
+            {
+                Directory.CreateDirectory(tmpDir);
+                // depth 0: main.ffs  → include "mid"
+                // depth 1: mid.ffs   → include "deep"
+                // depth 2: deep.ffs  → include "leaf"
+                // depth 3: leaf.ffs  → enum DamageType { NORMAL_LOWER = 101 }
+                string leafSource = "enum DamageType { NORMAL_LOWER = 101, HIGH = 202 }";
+                string deepSource = "include \"leaf\"";
+                string midSource = "include \"deep\"";
+                string mainSource =
+                    "include \"mid\"\n"
+                    + "func test() {\n"
+                    + "    var d = DamageType.NORMAL_LOWER\n"
+                    + "    wait 1\n"
+                    + "}";
+                File.WriteAllText(Path.Combine(tmpDir, "leaf.ffs"), leafSource);
+                File.WriteAllText(Path.Combine(tmpDir, "deep.ffs"), deepSource);
+                File.WriteAllText(Path.Combine(tmpDir, "mid.ffs"), midSource);
+                File.WriteAllText(Path.Combine(tmpDir, "main.ffs"), mainSource);
+
+                string rootUri = "file:///" + tmpDir.TrimStart('/').Replace("\\", "/");
+                string leafUri = rootUri + "/leaf.ffs";
+                string mainUri = rootUri + "/main.ffs";
+
+                var bridge = new DatabaseBackedVsCodeBridge(
+                    new InMemoryWorkspaceCodeDatabase(new InMemoryDatabaseExecutionOrchestrator()));
+                var session = new LspServerNewBatchSession();
+                session.AddRequest(LspMethods.Initialize, BuildInitializeParams(tmpDir));
+                session.AddNotification(LspMethods.Initialized, new JsonObject());
+
+                // Definition on "NORMAL_LOWER" in DamageType.NORMAL_LOWER — main.ffs line 2, col 27
+                int defId = session.AddRequest(LspMethods.Definition, BuildTextDocumentPositionParams(mainUri, 2, 27));
+                // References on "NORMAL_LOWER" from leaf.ffs enum member definition — line 0, col 18
+                int refId = session.AddRequest(LspMethods.References, BuildReferencesParams(leafUri, 0, 18, true));
+                // Hover on "NORMAL_LOWER" in main.ffs — line 2, col 27
+                int hoverId = session.AddRequest(LspMethods.Hover, BuildTextDocumentPositionParams(mainUri, 2, 27));
+                session.AddNotification(LspMethods.Exit, new JsonObject());
+                session.Run(bridge);
+
+                // Definition should point to leaf.ffs line 0
+                JsonObject defResult = session.FindResponse(defId)?.GetObject(JsonRpcFields.Result);
+                string defUri = defResult != null ? defResult.GetString(LspFields.Uri) ?? string.Empty : string.Empty;
+                JsonObject defStart = defResult?.GetObject(LspFields.Range)?.GetObject(LspFields.Start);
+                int defLine = defStart != null ? defStart.GetInt(LspFields.Line, -1) : -1;
+
+                Assert(
+                    defUri.IndexOf("/leaf.ffs", StringComparison.OrdinalIgnoreCase) >= 0 && defLine == 0,
+                    "LSPNEW-T3-ENM-04A: definition on DamageType.NORMAL_LOWER at depth 3 resolves to leaf.ffs (got uri=" + defUri + " line=" + defLine + ")");
+
+                // References should include leaf definition + main usage
+                List<object> refLocs = session.FindResponse(refId)?.GetArray(JsonRpcFields.Result);
+                bool hasLeafDef = false;
+                bool hasMainUse = false;
+                if (refLocs != null)
+                {
+                    for (int i = 0; i < refLocs.Count; i++)
+                    {
+                        if (!(refLocs[i] is JsonObject loc)) continue;
+                        string u = loc.GetString(LspFields.Uri) ?? string.Empty;
+                        JsonObject s = loc.GetObject(LspFields.Range)?.GetObject(LspFields.Start);
+                        int ln = s != null ? s.GetInt(LspFields.Line, -1) : -1;
+                        if (u.IndexOf("/leaf.ffs", StringComparison.OrdinalIgnoreCase) >= 0 && ln == 0) hasLeafDef = true;
+                        if (u.IndexOf("/main.ffs", StringComparison.OrdinalIgnoreCase) >= 0 && ln == 2) hasMainUse = true;
+                    }
+                }
+
+                Assert(
+                    refLocs != null && hasLeafDef && hasMainUse,
+                    "LSPNEW-T3-ENM-04B: references on NORMAL_LOWER include leaf def + main usage at depth 3 (got count=" + (refLocs?.Count ?? 0) + ")");
+
+                // Hover should return content
+                JsonObject hoverResult = session.FindResponse(hoverId)?.GetObject(JsonRpcFields.Result);
+                JsonObject hoverContents = hoverResult?.GetObject(LspFields.Contents);
+                string hoverValue = hoverContents?.GetString(LspFields.Value) ?? string.Empty;
+
+                Assert(
+                    hoverValue.Length > 0,
+                    "LSPNEW-T3-ENM-04C: hover on NORMAL_LOWER at depth 3 returns content (got len=" + hoverValue.Length + ")");
+            }
+            finally
+            {
+                try { Directory.Delete(tmpDir, true); } catch { }
+            }
+        }
+
+        // ================================================================
+        // LSPNEW-T3-CS01: case-sensitive function resolution (clearHitbox vs ClearHitbox)
+        // ================================================================
+        {
+            string tmpDir = Path.Combine(Path.GetTempPath(), "lspnew_t3cs01_" + Guid.NewGuid().ToString("N").Substring(0, 8));
+            try
+            {
+                Directory.CreateDirectory(tmpDir);
+                // syscalls.ffs: external func ClearHitbox()  (PascalCase)
+                // collision.ffs: func clearHitbox() { ClearHitbox() }  (camelCase wrapper)
+                // main.ffs: calls clearHitbox() — should resolve to collision.ffs, NOT syscalls.ffs
+                string syscallsSource = "external func ClearHitbox()";
+                string collisionSource =
+                    "include \"syscalls\"\n"
+                    + "func clearHitbox() {\n"
+                    + "    ClearHitbox()\n"
+                    + "    wait 1\n"
+                    + "}";
+                string mainSource =
+                    "include \"collision\"\n"
+                    + "func test() {\n"
+                    + "    clearHitbox()\n"
+                    + "    wait 1\n"
+                    + "}";
+                File.WriteAllText(Path.Combine(tmpDir, "syscalls.ffs"), syscallsSource);
+                File.WriteAllText(Path.Combine(tmpDir, "collision.ffs"), collisionSource);
+                File.WriteAllText(Path.Combine(tmpDir, "main.ffs"), mainSource);
+
+                string rootUri = "file:///" + tmpDir.TrimStart('/').Replace("\\", "/");
+                string syscallsUri = rootUri + "/syscalls.ffs";
+                string collisionUri = rootUri + "/collision.ffs";
+                string mainUri = rootUri + "/main.ffs";
+
+                var bridge = new DatabaseBackedVsCodeBridge(
+                    new InMemoryWorkspaceCodeDatabase(new InMemoryDatabaseExecutionOrchestrator()));
+                var session = new LspServerNewBatchSession();
+                session.AddRequest(LspMethods.Initialize, BuildInitializeParams(tmpDir));
+                session.AddNotification(LspMethods.Initialized, new JsonObject());
+
+                // Definition on clearHitbox() in main.ffs — line 2, col 4
+                int defCamelId = session.AddRequest(LspMethods.Definition, BuildTextDocumentPositionParams(mainUri, 2, 6));
+                // Definition on ClearHitbox() in collision.ffs — line 2, col 4
+                int defPascalId = session.AddRequest(LspMethods.Definition, BuildTextDocumentPositionParams(collisionUri, 2, 6));
+                session.AddNotification(LspMethods.Exit, new JsonObject());
+                session.Run(bridge);
+
+                // clearHitbox() should resolve to collision.ffs line 1 (func clearHitbox)
+                JsonObject defCamelResult = session.FindResponse(defCamelId)?.GetObject(JsonRpcFields.Result);
+                string defCamelUri = defCamelResult != null ? defCamelResult.GetString(LspFields.Uri) ?? string.Empty : string.Empty;
+                JsonObject defCamelStart = defCamelResult?.GetObject(LspFields.Range)?.GetObject(LspFields.Start);
+                int defCamelLine = defCamelStart != null ? defCamelStart.GetInt(LspFields.Line, -1) : -1;
+
+                Assert(
+                    defCamelUri.IndexOf("/collision.ffs", StringComparison.OrdinalIgnoreCase) >= 0 && defCamelLine == 1,
+                    "LSPNEW-T3-CS01-A: clearHitbox() resolves to collision.ffs (camelCase func), not syscalls.ffs (got uri="
+                    + defCamelUri + " line=" + defCamelLine + ")");
+
+                // ClearHitbox() should resolve to syscalls.ffs line 0 (external func ClearHitbox)
+                JsonObject defPascalResult = session.FindResponse(defPascalId)?.GetObject(JsonRpcFields.Result);
+                string defPascalUri = defPascalResult != null ? defPascalResult.GetString(LspFields.Uri) ?? string.Empty : string.Empty;
+                JsonObject defPascalStart = defPascalResult?.GetObject(LspFields.Range)?.GetObject(LspFields.Start);
+                int defPascalLine = defPascalStart != null ? defPascalStart.GetInt(LspFields.Line, -1) : -1;
+
+                Assert(
+                    defPascalUri.IndexOf("/syscalls.ffs", StringComparison.OrdinalIgnoreCase) >= 0 && defPascalLine == 0,
+                    "LSPNEW-T3-CS01-B: ClearHitbox() resolves to syscalls.ffs (PascalCase external), not collision.ffs (got uri="
+                    + defPascalUri + " line=" + defPascalLine + ")");
+            }
+            finally
+            {
+                try { Directory.Delete(tmpDir, true); } catch { }
+            }
         }
 
         // ================================================================

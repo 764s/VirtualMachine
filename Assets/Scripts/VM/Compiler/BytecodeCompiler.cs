@@ -1291,7 +1291,7 @@ namespace FFVM.Compiler
             int offset = 0;
             for (int i = 0; i < literal.Fields.Count; i++)
             {
-                var (fieldName, valueExpr) = literal.Fields[i];
+                var (fieldName, valueExpr, _, _) = literal.Fields[i];
                 var expectedField = structDecl.Fields[i];
 
                 if (fieldName != expectedField.Name)
@@ -2320,7 +2320,7 @@ namespace FFVM.Compiler
 
             for (int i = 0; i < literal.Fields.Count; i++)
             {
-                var (fieldName, valueExpr) = literal.Fields[i];
+                var (fieldName, valueExpr, _, _) = literal.Fields[i];
                 var expectedField = structDecl.Fields[i];
 
                 if (fieldName != expectedField.Name)

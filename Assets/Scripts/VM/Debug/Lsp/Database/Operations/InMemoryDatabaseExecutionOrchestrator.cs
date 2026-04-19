@@ -1410,8 +1410,8 @@ namespace FFVM.Debug.Lsp.Database
 
 			var documentPath = new PathKey(normalizedDocument);
 			DataAggregateId aggregateId = CreateAggregateId(documentPath);
-			var functionSymbols = new Dictionary<string, SymbolIdentity>(StringComparer.OrdinalIgnoreCase);
-			var nameSymbols = new Dictionary<string, SymbolIdentity>(StringComparer.OrdinalIgnoreCase);
+			var functionSymbols = new Dictionary<string, SymbolIdentity>(StringComparer.Ordinal);
+			var nameSymbols = new Dictionary<string, SymbolIdentity>(StringComparer.Ordinal);
 			Dictionary<string, SymbolIdentity> importedFunctionSymbols = BuildImportedFunctionSymbols(module, normalizedDocument);
 			Dictionary<string, SymbolIdentity> importedNameSymbols = BuildImportedNameSymbols(module, normalizedDocument);
 			Dictionary<string, Dictionary<string, SymbolIdentity>> aliasedFunctionSymbols = BuildAliasedFunctionSymbols(module, normalizedDocument);
@@ -1459,8 +1459,8 @@ namespace FFVM.Debug.Lsp.Database
 			EmitStructNameDefinitions(module, source, normalizedDocument, documentPath, aggregateId, snapshotVersion, output, nameSymbols, ref definitionOrdinal);
 			EmitEnumDefinitions(module, source, normalizedDocument, documentPath, aggregateId, snapshotVersion, output, nameSymbols, ref definitionOrdinal);
 
-			var overrideFunctionSymbols = new Dictionary<string, SymbolIdentity>(StringComparer.OrdinalIgnoreCase);
-			var overrideNameSymbols = new Dictionary<string, SymbolIdentity>(StringComparer.OrdinalIgnoreCase);
+			var overrideFunctionSymbols = new Dictionary<string, SymbolIdentity>(StringComparer.Ordinal);
+			var overrideNameSymbols = new Dictionary<string, SymbolIdentity>(StringComparer.Ordinal);
 			EmitOverrideDefinitions(module, source, normalizedDocument, documentPath, aggregateId, snapshotVersion,
 				output, aliasedFunctionSymbols, aliasedNameSymbols,
 				overrideFunctionSymbols, overrideNameSymbols, ref definitionOrdinal);
@@ -1603,7 +1603,7 @@ namespace FFVM.Debug.Lsp.Database
 			List<DataFact> output,
 			ref int definitionOrdinal)
 		{
-			var symbolsByStruct = new Dictionary<string, Dictionary<string, StructFieldDescriptor>>(StringComparer.OrdinalIgnoreCase);
+			var symbolsByStruct = new Dictionary<string, Dictionary<string, StructFieldDescriptor>>(StringComparer.Ordinal);
 			if (module == null || module.Structs == null || module.Structs.Count == 0)
 				return symbolsByStruct;
 
@@ -1616,7 +1616,7 @@ namespace FFVM.Debug.Lsp.Database
 				string structName = structDecl.Name;
 				if (!symbolsByStruct.TryGetValue(structName, out Dictionary<string, StructFieldDescriptor> fieldsByName))
 				{
-					fieldsByName = new Dictionary<string, StructFieldDescriptor>(StringComparer.OrdinalIgnoreCase);
+					fieldsByName = new Dictionary<string, StructFieldDescriptor>(StringComparer.Ordinal);
 					symbolsByStruct[structName] = fieldsByName;
 				}
 
@@ -1675,7 +1675,7 @@ namespace FFVM.Debug.Lsp.Database
 			ModuleNode module,
 			string normalizedDocument)
 		{
-			var symbolsByStruct = new Dictionary<string, Dictionary<string, StructFieldDescriptor>>(StringComparer.OrdinalIgnoreCase);
+			var symbolsByStruct = new Dictionary<string, Dictionary<string, StructFieldDescriptor>>(StringComparer.Ordinal);
 			if (module == null
 				|| module.Imports == null
 				|| module.Imports.Count == 0
@@ -1721,7 +1721,7 @@ namespace FFVM.Debug.Lsp.Database
 			out Dictionary<string, Dictionary<string, StructFieldDescriptor>> symbolsByStruct,
 			HashSet<string> visitedTargets)
 		{
-			symbolsByStruct = new Dictionary<string, Dictionary<string, StructFieldDescriptor>>(StringComparer.OrdinalIgnoreCase);
+			symbolsByStruct = new Dictionary<string, Dictionary<string, StructFieldDescriptor>>(StringComparer.Ordinal);
 			string normalizedUri = NormalizeDocumentKey(importedDocumentUri);
 			if (string.IsNullOrWhiteSpace(normalizedUri))
 				return false;
@@ -1756,7 +1756,7 @@ namespace FFVM.Debug.Lsp.Database
 
 					if (!symbolsByStruct.TryGetValue(structDecl.Name, out Dictionary<string, StructFieldDescriptor> fieldsByName))
 					{
-						fieldsByName = new Dictionary<string, StructFieldDescriptor>(StringComparer.OrdinalIgnoreCase);
+						fieldsByName = new Dictionary<string, StructFieldDescriptor>(StringComparer.Ordinal);
 						symbolsByStruct[structDecl.Name] = fieldsByName;
 					}
 
@@ -1822,7 +1822,7 @@ namespace FFVM.Debug.Lsp.Database
 			Dictionary<string, Dictionary<string, StructFieldDescriptor>> importedSymbols,
 			Dictionary<string, Dictionary<string, StructFieldDescriptor>> localSymbols)
 		{
-			var merged = new Dictionary<string, Dictionary<string, StructFieldDescriptor>>(StringComparer.OrdinalIgnoreCase);
+			var merged = new Dictionary<string, Dictionary<string, StructFieldDescriptor>>(StringComparer.Ordinal);
 			MergeStructFieldSymbolsInto(merged, importedSymbols);
 			MergeStructFieldSymbolsInto(merged, localSymbols);
 			return merged;
@@ -1842,7 +1842,7 @@ namespace FFVM.Debug.Lsp.Database
 
 				if (!destination.TryGetValue(structPair.Key, out Dictionary<string, StructFieldDescriptor> destinationFields))
 				{
-					destinationFields = new Dictionary<string, StructFieldDescriptor>(StringComparer.OrdinalIgnoreCase);
+					destinationFields = new Dictionary<string, StructFieldDescriptor>(StringComparer.Ordinal);
 					destination[structPair.Key] = destinationFields;
 				}
 
@@ -1885,7 +1885,7 @@ namespace FFVM.Debug.Lsp.Database
 					if (function == null || function.Body == null)
 						continue;
 
-					var variableTypes = new Dictionary<string, string>(moduleVariableTypes, StringComparer.OrdinalIgnoreCase);
+					var variableTypes = new Dictionary<string, string>(moduleVariableTypes, StringComparer.Ordinal);
 					if (function.Parameters != null)
 					{
 						for (int paramIndex = 0; paramIndex < function.Parameters.Count; paramIndex++)
@@ -1917,7 +1917,7 @@ namespace FFVM.Debug.Lsp.Database
 			if (module.ModuleVariables == null)
 				return;
 
-			var moduleInitializerTypes = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+			var moduleInitializerTypes = new Dictionary<string, string>(StringComparer.Ordinal);
 			for (int i = 0; i < module.ModuleVariables.Count; i++)
 			{
 				VarDeclStmt variable = module.ModuleVariables[i];
@@ -1962,7 +1962,7 @@ namespace FFVM.Debug.Lsp.Database
 
 			if (statement is BlockStmt block)
 			{
-				var scopedVariables = new Dictionary<string, string>(variableTypes, StringComparer.OrdinalIgnoreCase);
+				var scopedVariables = new Dictionary<string, string>(variableTypes, StringComparer.Ordinal);
 				if (block.Statements == null)
 					return;
 
@@ -2021,7 +2021,7 @@ namespace FFVM.Debug.Lsp.Database
 
 				CollectStructFieldReferencesFromStatement(
 					conditional.ThenBranch,
-					new Dictionary<string, string>(variableTypes, StringComparer.OrdinalIgnoreCase),
+					new Dictionary<string, string>(variableTypes, StringComparer.Ordinal),
 					structFieldSymbolsByStruct,
 					source,
 					normalizedDocument,
@@ -2033,7 +2033,7 @@ namespace FFVM.Debug.Lsp.Database
 
 				CollectStructFieldReferencesFromStatement(
 					conditional.ElseBranch,
-					new Dictionary<string, string>(variableTypes, StringComparer.OrdinalIgnoreCase),
+					new Dictionary<string, string>(variableTypes, StringComparer.Ordinal),
 					structFieldSymbolsByStruct,
 					source,
 					normalizedDocument,
@@ -2061,7 +2061,7 @@ namespace FFVM.Debug.Lsp.Database
 
 				CollectStructFieldReferencesFromStatement(
 					loop.Body,
-					new Dictionary<string, string>(variableTypes, StringComparer.OrdinalIgnoreCase),
+					new Dictionary<string, string>(variableTypes, StringComparer.Ordinal),
 					structFieldSymbolsByStruct,
 					source,
 					normalizedDocument,
@@ -2075,7 +2075,7 @@ namespace FFVM.Debug.Lsp.Database
 
 			if (statement is ForStmt forLoop)
 			{
-				var scopedVariables = new Dictionary<string, string>(variableTypes, StringComparer.OrdinalIgnoreCase);
+				var scopedVariables = new Dictionary<string, string>(variableTypes, StringComparer.Ordinal);
 				CollectStructFieldReferencesFromStatement(
 					forLoop.Initializer,
 					scopedVariables,
@@ -2194,7 +2194,7 @@ namespace FFVM.Debug.Lsp.Database
 			{
 				CollectStructFieldReferencesFromStatement(
 					defer.Body,
-					new Dictionary<string, string>(variableTypes, StringComparer.OrdinalIgnoreCase),
+					new Dictionary<string, string>(variableTypes, StringComparer.Ordinal),
 					structFieldSymbolsByStruct,
 					source,
 					normalizedDocument,
@@ -2228,7 +2228,7 @@ namespace FFVM.Debug.Lsp.Database
 
 				CollectStructFieldReferencesFromStatement(
 					usingStmt.Body,
-					new Dictionary<string, string>(variableTypes, StringComparer.OrdinalIgnoreCase),
+					new Dictionary<string, string>(variableTypes, StringComparer.Ordinal),
 					structFieldSymbolsByStruct,
 					source,
 					normalizedDocument,
@@ -2375,12 +2375,36 @@ namespace FFVM.Debug.Lsp.Database
 
 			if (expression is StructLiteralExpr structLiteral)
 			{
+				string structType = GetBaseTypeName(structLiteral.TypeName);
 				if (structLiteral.Fields != null)
 				{
 					for (int i = 0; i < structLiteral.Fields.Count; i++)
 					{
+						var fieldEntry = structLiteral.Fields[i];
+
+						// Emit struct field name reference
+						if (!string.IsNullOrWhiteSpace(fieldEntry.FieldName)
+							&& !string.IsNullOrWhiteSpace(structType)
+							&& fieldEntry.FieldNameLine > 0
+							&& TryResolveStructFieldDescriptor(structFieldSymbolsByStruct, structType, fieldEntry.FieldName, out StructFieldDescriptor fieldDesc))
+						{
+							AddStructFieldReferenceFact(
+								fieldDesc.Symbol,
+								fieldEntry.FieldName,
+								fieldEntry.FieldNameLine,
+								fieldEntry.FieldNameColumn,
+								source,
+								normalizedDocument,
+								documentPath,
+								aggregateId,
+								snapshotVersion,
+								output,
+								ref referenceOrdinal);
+						}
+
+						// Recurse into field value expression
 						ResolveExpressionTypeAndEmitFieldReferences(
-							structLiteral.Fields[i].Value,
+							fieldEntry.Value,
 							variableTypes,
 							structFieldSymbolsByStruct,
 							source,
@@ -2393,7 +2417,7 @@ namespace FFVM.Debug.Lsp.Database
 					}
 				}
 
-				return GetBaseTypeName(structLiteral.TypeName);
+				return structType ?? string.Empty;
 			}
 
 			if (expression is BinaryExpr binary)
@@ -2505,7 +2529,7 @@ namespace FFVM.Debug.Lsp.Database
 
 		private static Dictionary<string, string> BuildModuleVariableTypeMap(ModuleNode module)
 		{
-			var output = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+			var output = new Dictionary<string, string>(StringComparer.Ordinal);
 			if (module == null || module.ModuleVariables == null)
 				return output;
 
@@ -2618,7 +2642,7 @@ namespace FFVM.Debug.Lsp.Database
 
 		private static Dictionary<string, SymbolIdentity> BuildImportedFunctionSymbols(ModuleNode module, string normalizedDocument)
 		{
-			var symbols = new Dictionary<string, SymbolIdentity>(StringComparer.OrdinalIgnoreCase);
+			var symbols = new Dictionary<string, SymbolIdentity>(StringComparer.Ordinal);
 			if (module == null
 				|| module.Imports == null
 				|| module.Imports.Count == 0
@@ -2669,7 +2693,7 @@ namespace FFVM.Debug.Lsp.Database
 			out Dictionary<string, SymbolIdentity> symbols,
 			HashSet<string> visitedTargets)
 		{
-			symbols = new Dictionary<string, SymbolIdentity>(StringComparer.OrdinalIgnoreCase);
+			symbols = new Dictionary<string, SymbolIdentity>(StringComparer.Ordinal);
 			string normalizedUri = NormalizeDocumentKey(importedDocumentUri);
 			if (string.IsNullOrWhiteSpace(normalizedUri))
 				return false;
@@ -2785,14 +2809,14 @@ namespace FFVM.Debug.Lsp.Database
 			PathKey documentPath, DataAggregateId aggregateId, long snapshotVersion,
 			List<DataFact> output, ref int definitionOrdinal)
 		{
-			var result = new Dictionary<string, Dictionary<string, SymbolIdentity>>(StringComparer.OrdinalIgnoreCase);
+			var result = new Dictionary<string, Dictionary<string, SymbolIdentity>>(StringComparer.Ordinal);
 			if (module == null || module.Functions == null) return result;
 			for (int fi = 0; fi < module.Functions.Count; fi++)
 			{
 				FuncDecl function = module.Functions[fi];
 				if (function == null || string.IsNullOrWhiteSpace(function.Name)) continue;
 				if (function.Parameters == null || function.Parameters.Count == 0) continue;
-				var paramSymbols = new Dictionary<string, SymbolIdentity>(StringComparer.OrdinalIgnoreCase);
+				var paramSymbols = new Dictionary<string, SymbolIdentity>(StringComparer.Ordinal);
 				for (int pi = 0; pi < function.Parameters.Count; pi++)
 				{
 					ParamDecl param = function.Parameters[pi];
@@ -2822,7 +2846,7 @@ namespace FFVM.Debug.Lsp.Database
 			PathKey documentPath, DataAggregateId aggregateId, long snapshotVersion,
 			List<DataFact> output, ref int definitionOrdinal)
 		{
-			var result = new Dictionary<string, List<(string name, SymbolIdentity symbol, int scopeStart, int scopeEnd)>>(StringComparer.OrdinalIgnoreCase);
+			var result = new Dictionary<string, List<(string name, SymbolIdentity symbol, int scopeStart, int scopeEnd)>>(StringComparer.Ordinal);
 			if (module == null || module.Functions == null) return result;
 			var scopedCollector = new List<(VarDeclStmt v, int scopeStart, int scopeEnd)>();
 			for (int fi = 0; fi < module.Functions.Count; fi++)
@@ -2961,7 +2985,7 @@ namespace FFVM.Debug.Lsp.Database
 			for (int i = 0; i < scopedLocals.Count; i++)
 			{
 				var entry = scopedLocals[i];
-				if (!string.Equals(entry.name, name, StringComparison.OrdinalIgnoreCase)) continue;
+				if (!string.Equals(entry.name, name, StringComparison.Ordinal)) continue;
 				if (line < entry.scopeStart || line > entry.scopeEnd) continue;
 				int width = entry.scopeEnd - entry.scopeStart;
 				if (width < bestWidth)
@@ -3032,7 +3056,7 @@ namespace FFVM.Debug.Lsp.Database
 			List<DataFact> output,
 			ref int definitionOrdinal)
 		{
-			var symbolsByEnum = new Dictionary<string, Dictionary<string, SymbolIdentity>>(StringComparer.OrdinalIgnoreCase);
+			var symbolsByEnum = new Dictionary<string, Dictionary<string, SymbolIdentity>>(StringComparer.Ordinal);
 			if (module == null || module.Enums == null || module.Enums.Count == 0)
 				return symbolsByEnum;
 
@@ -3047,7 +3071,7 @@ namespace FFVM.Debug.Lsp.Database
 				string enumName = enumDecl.Name;
 				if (!symbolsByEnum.TryGetValue(enumName, out Dictionary<string, SymbolIdentity> membersByName))
 				{
-					membersByName = new Dictionary<string, SymbolIdentity>(StringComparer.OrdinalIgnoreCase);
+					membersByName = new Dictionary<string, SymbolIdentity>(StringComparer.Ordinal);
 					symbolsByEnum[enumName] = membersByName;
 				}
 
@@ -3089,7 +3113,7 @@ namespace FFVM.Debug.Lsp.Database
 		private static Dictionary<string, Dictionary<string, SymbolIdentity>> BuildImportedEnumMemberSymbols(
 			ModuleNode module, string normalizedDocument)
 		{
-			var symbols = new Dictionary<string, Dictionary<string, SymbolIdentity>>(StringComparer.OrdinalIgnoreCase);
+			var symbols = new Dictionary<string, Dictionary<string, SymbolIdentity>>(StringComparer.Ordinal);
 			if (module == null || module.Imports == null || module.Imports.Count == 0
 				|| string.IsNullOrWhiteSpace(normalizedDocument))
 				return symbols;
@@ -3113,131 +3137,21 @@ namespace FFVM.Debug.Lsp.Database
 					if (string.IsNullOrWhiteSpace(candidateUri) || !visitedTargets.Add(candidateUri))
 						continue;
 
-					string path = WorkspacePathTool.UriToPath(candidateUri);
-					if (string.IsNullOrWhiteSpace(path) || !File.Exists(path))
+					if (!TryReadImportedEnumMemberSymbols(candidateUri, out Dictionary<string, Dictionary<string, SymbolIdentity>> importedSymbols, visitedTargets))
 						continue;
 
-					string importedSource;
-					try { importedSource = File.ReadAllText(path); }
-					catch { continue; }
-
-					var parser = new Parser();
-					ModuleNode importedModule = parser.Parse(importedSource, out _);
-					if (importedModule == null)
-						continue;
-
-					string importedNormalized = candidateUri;
-					if (importedModule.Enums != null)
+					foreach (KeyValuePair<string, Dictionary<string, SymbolIdentity>> pair in importedSymbols)
 					{
-						for (int ei = 0; ei < importedModule.Enums.Count; ei++)
+						if (!symbols.TryGetValue(pair.Key, out Dictionary<string, SymbolIdentity> existing))
 						{
-							EnumDecl enumDecl = importedModule.Enums[ei];
-							if (enumDecl == null || string.IsNullOrWhiteSpace(enumDecl.Name) || enumDecl.Members == null)
-								continue;
-							if (enumDecl.IsPrivate) continue;
-
-							if (!symbols.TryGetValue(enumDecl.Name, out Dictionary<string, SymbolIdentity> membersByName))
-							{
-								membersByName = new Dictionary<string, SymbolIdentity>(StringComparer.OrdinalIgnoreCase);
-								symbols[enumDecl.Name] = membersByName;
-							}
-
-							for (int mi = 0; mi < enumDecl.Members.Count; mi++)
-							{
-								EnumMember member = enumDecl.Members[mi];
-								if (member == null || string.IsNullOrWhiteSpace(member.Name) || membersByName.ContainsKey(member.Name))
-									continue;
-
-								int memberLine = member.Line > 0 ? member.Line : enumDecl.Line;
-								int memberColumn = member.Column > 0 ? member.Column : enumDecl.Column;
-								if (!TryCreateSpanFromLineColumn(importedSource, memberLine, memberColumn, member.Name.Length,
-									out TextSpan span, out _, out _, out _, out _))
-									continue;
-
-								membersByName[member.Name] = new SymbolIdentity(
-									SymbolKindTag.EnumMember,
-									member.Name,
-									enumDecl.Name + "." + member.Name,
-									enumDecl.Name,
-									importedNormalized,
-									span);
-							}
+							existing = new Dictionary<string, SymbolIdentity>(StringComparer.Ordinal);
+							symbols[pair.Key] = existing;
 						}
-					}
 
-					// CFR-03: recursively follow transitive includes
-					if (importedModule.Imports != null)
-					{
-						for (int ii = 0; ii < importedModule.Imports.Count; ii++)
+						foreach (KeyValuePair<string, SymbolIdentity> member in pair.Value)
 						{
-							ImportDecl transitiveImport = importedModule.Imports[ii];
-							if (transitiveImport == null || string.IsNullOrWhiteSpace(transitiveImport.ModulePath))
-								continue;
-							if (!string.IsNullOrEmpty(transitiveImport.Alias))
-								continue;
-
-							List<string> transCandidates = IncludeTargetResolver.ResolveCandidates(candidateUri, transitiveImport.ModulePath);
-							if (transCandidates == null || transCandidates.Count == 0)
-								continue;
-
-							for (int tci = 0; tci < transCandidates.Count; tci++)
-							{
-								string transUri = NormalizeDocumentKey(transCandidates[tci]);
-								if (string.IsNullOrWhiteSpace(transUri) || !visitedTargets.Add(transUri))
-									continue;
-
-								string transPath = WorkspacePathTool.UriToPath(transUri);
-								if (string.IsNullOrWhiteSpace(transPath) || !File.Exists(transPath))
-									continue;
-
-								string transSource;
-								try { transSource = File.ReadAllText(transPath); }
-								catch { continue; }
-
-								var transParser = new Parser();
-								ModuleNode transModule = transParser.Parse(transSource, out _);
-								if (transModule == null)
-									continue;
-
-								if (transModule.Enums != null)
-								{
-									for (int tei = 0; tei < transModule.Enums.Count; tei++)
-									{
-										EnumDecl transEnum = transModule.Enums[tei];
-										if (transEnum == null || string.IsNullOrWhiteSpace(transEnum.Name) || transEnum.Members == null)
-											continue;
-										if (transEnum.IsPrivate) continue;
-
-										if (!symbols.TryGetValue(transEnum.Name, out Dictionary<string, SymbolIdentity> transMembers))
-										{
-											transMembers = new Dictionary<string, SymbolIdentity>(StringComparer.OrdinalIgnoreCase);
-											symbols[transEnum.Name] = transMembers;
-										}
-
-										for (int tmi = 0; tmi < transEnum.Members.Count; tmi++)
-										{
-											EnumMember transMember = transEnum.Members[tmi];
-											if (transMember == null || string.IsNullOrWhiteSpace(transMember.Name) || transMembers.ContainsKey(transMember.Name))
-												continue;
-
-											int tmLine = transMember.Line > 0 ? transMember.Line : transEnum.Line;
-											int tmCol = transMember.Column > 0 ? transMember.Column : transEnum.Column;
-											if (!TryCreateSpanFromLineColumn(transSource, tmLine, tmCol, transMember.Name.Length,
-												out TextSpan transSpan, out _, out _, out _, out _))
-												continue;
-
-											transMembers[transMember.Name] = new SymbolIdentity(
-												SymbolKindTag.EnumMember,
-												transMember.Name,
-												transEnum.Name + "." + transMember.Name,
-												transEnum.Name,
-												transUri,
-												transSpan);
-										}
-									}
-								}
-								break;
-							}
+							if (!existing.ContainsKey(member.Key) && member.Value != null)
+								existing[member.Key] = member.Value;
 						}
 					}
 
@@ -3247,17 +3161,125 @@ namespace FFVM.Debug.Lsp.Database
 			return symbols;
 		}
 
+		private static bool TryReadImportedEnumMemberSymbols(
+			string importedDocumentUri,
+			out Dictionary<string, Dictionary<string, SymbolIdentity>> symbols,
+			HashSet<string> visitedTargets)
+		{
+			symbols = new Dictionary<string, Dictionary<string, SymbolIdentity>>(StringComparer.Ordinal);
+			string normalizedUri = NormalizeDocumentKey(importedDocumentUri);
+			if (string.IsNullOrWhiteSpace(normalizedUri))
+				return false;
+
+			string path = WorkspacePathTool.UriToPath(normalizedUri);
+			if (string.IsNullOrWhiteSpace(path) || !File.Exists(path))
+				return false;
+
+			string source;
+			try { source = File.ReadAllText(path); }
+			catch { return false; }
+
+			var parser = new Parser();
+			ModuleNode module = parser.Parse(source ?? string.Empty, out _);
+			if (module == null)
+				return true;
+
+			if (module.Enums != null)
+			{
+				for (int ei = 0; ei < module.Enums.Count; ei++)
+				{
+					EnumDecl enumDecl = module.Enums[ei];
+					if (enumDecl == null || string.IsNullOrWhiteSpace(enumDecl.Name) || enumDecl.Members == null)
+						continue;
+					if (enumDecl.IsPrivate) continue;
+
+					if (!symbols.TryGetValue(enumDecl.Name, out Dictionary<string, SymbolIdentity> membersByName))
+					{
+						membersByName = new Dictionary<string, SymbolIdentity>(StringComparer.Ordinal);
+						symbols[enumDecl.Name] = membersByName;
+					}
+
+					for (int mi = 0; mi < enumDecl.Members.Count; mi++)
+					{
+						EnumMember member = enumDecl.Members[mi];
+						if (member == null || string.IsNullOrWhiteSpace(member.Name) || membersByName.ContainsKey(member.Name))
+							continue;
+
+						int memberLine = member.Line > 0 ? member.Line : enumDecl.Line;
+						int memberColumn = member.Column > 0 ? member.Column : enumDecl.Column;
+						if (!TryCreateSpanFromLineColumn(source, memberLine, memberColumn, member.Name.Length,
+							out TextSpan span, out _, out _, out _, out _))
+							continue;
+
+						membersByName[member.Name] = new SymbolIdentity(
+							SymbolKindTag.EnumMember,
+							member.Name,
+							enumDecl.Name + "." + member.Name,
+							enumDecl.Name,
+							normalizedUri,
+							span);
+					}
+				}
+			}
+
+			// CFR-03: recursively follow transitive includes
+			if (module.Imports != null)
+			{
+				for (int ii = 0; ii < module.Imports.Count; ii++)
+				{
+					ImportDecl transitiveImport = module.Imports[ii];
+					if (transitiveImport == null || string.IsNullOrWhiteSpace(transitiveImport.ModulePath))
+						continue;
+					if (!string.IsNullOrEmpty(transitiveImport.Alias))
+						continue;
+
+					List<string> transCandidates = IncludeTargetResolver.ResolveCandidates(normalizedUri, transitiveImport.ModulePath);
+					if (transCandidates == null || transCandidates.Count == 0)
+						continue;
+
+					for (int tci = 0; tci < transCandidates.Count; tci++)
+					{
+						string transUri = NormalizeDocumentKey(transCandidates[tci]);
+						if (string.IsNullOrWhiteSpace(transUri) || !visitedTargets.Add(transUri))
+							continue;
+
+						if (!TryReadImportedEnumMemberSymbols(transUri, out Dictionary<string, Dictionary<string, SymbolIdentity>> transitiveSymbols, visitedTargets))
+							continue;
+
+						foreach (KeyValuePair<string, Dictionary<string, SymbolIdentity>> pair in transitiveSymbols)
+						{
+							if (!symbols.TryGetValue(pair.Key, out Dictionary<string, SymbolIdentity> existing))
+							{
+								existing = new Dictionary<string, SymbolIdentity>(StringComparer.Ordinal);
+								symbols[pair.Key] = existing;
+							}
+
+							foreach (KeyValuePair<string, SymbolIdentity> member in pair.Value)
+							{
+								if (!existing.ContainsKey(member.Key) && member.Value != null)
+									existing[member.Key] = member.Value;
+							}
+						}
+
+						break;
+					}
+				}
+			}
+
+			return true;
+		}
+
 		private static Dictionary<string, Dictionary<string, SymbolIdentity>> MergeEnumMemberSymbols(
 			Dictionary<string, Dictionary<string, SymbolIdentity>> localSymbols,
 			Dictionary<string, Dictionary<string, SymbolIdentity>> importedSymbols)
 		{
-			var merged = new Dictionary<string, Dictionary<string, SymbolIdentity>>(StringComparer.OrdinalIgnoreCase);
+			var merged = new Dictionary<string, Dictionary<string, SymbolIdentity>>(StringComparer.Ordinal);
 			if (importedSymbols != null)
 			{
 				foreach (KeyValuePair<string, Dictionary<string, SymbolIdentity>> enumPair in importedSymbols)
 				{
 					if (string.IsNullOrWhiteSpace(enumPair.Key) || enumPair.Value == null) continue;
-					merged[enumPair.Key] = new Dictionary<string, SymbolIdentity>(enumPair.Value, StringComparer.OrdinalIgnoreCase);
+					merged[enumPair.Key] = new Dictionary<string, SymbolIdentity>(enumPair.Value, StringComparer.Ordinal);
 				}
 			}
 			if (localSymbols != null)
@@ -3267,7 +3289,7 @@ namespace FFVM.Debug.Lsp.Database
 					if (string.IsNullOrWhiteSpace(enumPair.Key) || enumPair.Value == null) continue;
 					if (!merged.TryGetValue(enumPair.Key, out Dictionary<string, SymbolIdentity> existing))
 					{
-						merged[enumPair.Key] = new Dictionary<string, SymbolIdentity>(enumPair.Value, StringComparer.OrdinalIgnoreCase);
+						merged[enumPair.Key] = new Dictionary<string, SymbolIdentity>(enumPair.Value, StringComparer.Ordinal);
 					}
 					else
 					{
@@ -3612,7 +3634,7 @@ namespace FFVM.Debug.Lsp.Database
 
 		private static Dictionary<string, SymbolIdentity> BuildImportedNameSymbols(ModuleNode module, string normalizedDocument)
 		{
-			var symbols = new Dictionary<string, SymbolIdentity>(StringComparer.OrdinalIgnoreCase);
+			var symbols = new Dictionary<string, SymbolIdentity>(StringComparer.Ordinal);
 			if (module == null || module.Imports == null || module.Imports.Count == 0
 				|| string.IsNullOrWhiteSpace(normalizedDocument))
 				return symbols;
@@ -3653,7 +3675,7 @@ namespace FFVM.Debug.Lsp.Database
 			out Dictionary<string, SymbolIdentity> symbols,
 			HashSet<string> visitedTargets)
 		{
-			symbols = new Dictionary<string, SymbolIdentity>(StringComparer.OrdinalIgnoreCase);
+			symbols = new Dictionary<string, SymbolIdentity>(StringComparer.Ordinal);
 			string normalizedUri = NormalizeDocumentKey(importedDocumentUri);
 			if (string.IsNullOrWhiteSpace(normalizedUri)) return false;
 
@@ -3754,7 +3776,7 @@ namespace FFVM.Debug.Lsp.Database
 		private static Dictionary<string, Dictionary<string, SymbolIdentity>> BuildAliasedFunctionSymbols(
 			ModuleNode module, string normalizedDocument)
 		{
-			var result = new Dictionary<string, Dictionary<string, SymbolIdentity>>(StringComparer.OrdinalIgnoreCase);
+			var result = new Dictionary<string, Dictionary<string, SymbolIdentity>>(StringComparer.Ordinal);
 			if (module == null || module.Imports == null || module.Imports.Count == 0
 				|| string.IsNullOrWhiteSpace(normalizedDocument))
 				return result;
@@ -3789,7 +3811,7 @@ namespace FFVM.Debug.Lsp.Database
 		private static Dictionary<string, Dictionary<string, SymbolIdentity>> BuildAliasedNameSymbols(
 			ModuleNode module, string normalizedDocument)
 		{
-			var result = new Dictionary<string, Dictionary<string, SymbolIdentity>>(StringComparer.OrdinalIgnoreCase);
+			var result = new Dictionary<string, Dictionary<string, SymbolIdentity>>(StringComparer.Ordinal);
 			if (module == null || module.Imports == null || module.Imports.Count == 0
 				|| string.IsNullOrWhiteSpace(normalizedDocument))
 				return result;

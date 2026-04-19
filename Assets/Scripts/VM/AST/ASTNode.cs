@@ -219,8 +219,8 @@ namespace FFVM.AST
     public class StructLiteralExpr : Expr
     {
         public string TypeName { get; }
-        public List<(string FieldName, Expr Value)> Fields { get; }
-        public StructLiteralExpr(string typeName, List<(string FieldName, Expr Value)> fields)
+        public List<(string FieldName, Expr Value, int FieldNameLine, int FieldNameColumn)> Fields { get; }
+        public StructLiteralExpr(string typeName, List<(string FieldName, Expr Value, int FieldNameLine, int FieldNameColumn)> fields)
             : base(NodeKind.StructLiteral)
         {
             TypeName = typeName;
