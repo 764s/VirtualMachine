@@ -201,7 +201,7 @@
 | 风险 | 描述 | 缓解措施 | 状态 | 未处理部分的处理时机 |
 | --- | --- | --- | --- | --- |
 | R1 | 枚举成员访问语法（`Dir.Up`）与 alias 点号访问（`U.foo`）形态相同，可能产生冲突解析。 | 枚举成员解析使用独立的 `mergedEnumMemberSymbols` 字典（key=`EnumName.MemberName`），alias 解析查 alias 映射表，两者在 `BuildDocumentFacts` 中按独立路径运行，互不干扰。T3-ENM-01/02 已验证不串。 | ✅ 完全处理 | — |
-| R2 | 参数 / 局部变量作用域解析引入函数体遍历，可能影响 fact 发射性能。 | 作用域解析按函数隔离，每函数独立构建 `paramSymbols` + `localSymbols` 字典，O(n) 遍历。`CollectVarDeclStmtsFromBody` 递归一次收集完毕。Fact 发射为预索引阶段（`didOpen`/workspace scan），不在查询响应路径上。 | ✅ 已缓解 | 极大函数体（数千行）性能压力 → **T5 性能优化专项** |
+| R2 | 参数 / 局部变量作用域解析引入函数体遍历，可能影响 fact 发射性能。 | 作用域解析按函数隔离，每函数独立构建 `paramSymbols` + `localSymbols` 字典，O(n) 遍历。`CollectVarDeclStmtsFromBody` 递归一次收集完毕。Fact 发射为预索引阶段（`didOpen`/workspace scan），不在查询响应路径上。 | ✅ 已缓解 | 极大函数体（数千行）性能压力 → **T6 性能与可观测性**（DX25 P4.3 已补基线测试 T6-R03-01） |
 | R3 | 局部变量遮蔽逻辑与 T4（SC-03）有交叠，可能导致重复工作。 | T3 实现了基线作用域链 `局部 > 参数 > 模块/导入`（函数级扁平字典）。T3-LOC-02 + T3-PRM-02 验证单层遮蔽正确。 | ✅ 基线完成 | 块级作用域（`if`/`while`/`for` 内 `var`）、同名局部多次声明精度 → **T4 SC-03** |
 | R4 | external func 定义入库后，可能与运行时宿主注册产生重复符号。 | `external func` 使用 `SymbolKindTag.Function` 正常入库，LSP 层无宿主概念。T3-EXT-01 验证 definition/references 全局命中。 | ✅ 完全处理 | — |
 

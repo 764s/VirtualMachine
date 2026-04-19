@@ -13,7 +13,6 @@
     ],
     "main": "./extension.js",
     "activationEvents": [
-        "onLanguage:ffvm",
         "onDebugResolve:ffvm"
     ],
     "dependencies": {

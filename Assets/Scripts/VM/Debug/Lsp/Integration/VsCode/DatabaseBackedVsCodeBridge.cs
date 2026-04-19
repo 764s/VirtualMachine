@@ -544,12 +544,35 @@ namespace FFVM.Debug.Lsp.Integration.VsCode
 				return null;
 
 			SymbolQueryRequest normalized = BuildQueryRequest(intent, requestParams, includeDeclaration, newName);
+			var stopwatch = System.Diagnostics.Stopwatch.StartNew();
 			SymbolQueryResult result = query(snapshot, normalized);
+			stopwatch.Stop();
+
+			int resultCount = result != null && result.Ranges != null ? result.Ranges.Count : 0;
+			bool succeeded = result != null && result.Succeeded;
+			WriteQueryMetrics(intent, resultCount, stopwatch.ElapsedMilliseconds, succeeded);
 
 			if (result == null)
 				return null;
 
 			return result.Succeeded ? result.Payload : null;
+		}
+
+		private static void WriteQueryMetrics(LspIntentContract intent, int results, long elapsedMs, bool succeeded)
+		{
+			try
+			{
+				string intentCode = intent != null ? intent.IntentCode : string.Empty;
+				System.Console.Error.WriteLine(
+					"[ffvm][lsp] query intent=" + (intentCode ?? string.Empty)
+					+ " results=" + results
+					+ " succeeded=" + (succeeded ? 1 : 0)
+					+ " elapsedMs=" + elapsedMs);
+			}
+			catch
+			{
+				// Never let observability disturb the protocol loop.
+			}
 		}
 
 		private static LspDefinitionPayload NormalizeDefinition(LspDefinitionPayload payload)

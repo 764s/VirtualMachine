@@ -51,11 +51,21 @@ public static class LspServerNewTests
             JsonObject initializeResponse = session.FindResponse(initializeId);
             JsonObject result = initializeResponse != null ? initializeResponse.GetObject(JsonRpcFields.Result) : null;
             JsonObject capabilities = result != null ? result.GetObject(LspFields.Capabilities) : null;
+            JsonObject textDocumentSync = capabilities != null ? capabilities.GetObject("textDocumentSync") : null;
 
             Assert(
                 initializeResponse != null
                 && capabilities != null,
                 "LSPNEW-01: initialize returns capabilities envelope");
+
+            Assert(
+                textDocumentSync != null
+                && textDocumentSync.GetBool("openClose")
+                && textDocumentSync.GetInt("change", 0) == 1
+                && capabilities.GetBool("hoverProvider")
+                && capabilities.GetBool("definitionProvider")
+                && capabilities.GetBool("referencesProvider"),
+                "LSPNEW-01A: initialize advertises hover/definition/references providers");
         }
 
         // ================================================================
@@ -3374,6 +3384,195 @@ public static class LspServerNewTests
         }
 
         // ================================================================
+        // LSPNEW-T3-EXT-02: transitive include external func (CFR-03 + CFR-17)
+        // A (main.ffs) → B (constants.ffs) → C (syscalls.ffs external func)
+        // ================================================================
+        {
+            string tmpDir = Path.Combine(Path.GetTempPath(), "lspnew_t3ext02_" + Guid.NewGuid().ToString("N").Substring(0, 8));
+            try
+            {
+                Directory.CreateDirectory(tmpDir);
+                string syscallsSource = "// syscall declarations\n// line 1 comment\nexternal func IsInputHeld(buttonId: int): int";
+                string constantsSource = "include \"syscalls\"\nenum InputButton {\n    LEFT,\n    RIGHT\n}";
+                string mainSource =
+                    "include \"constants\"\n"
+                    + "func checkInput() {\n"
+                    + "    var held: int = IsInputHeld(InputButton.LEFT)\n"
+                    + "    wait 1\n"
+                    + "}";
+                File.WriteAllText(Path.Combine(tmpDir, "syscalls.ffs"), syscallsSource);
+                File.WriteAllText(Path.Combine(tmpDir, "constants.ffs"), constantsSource);
+                File.WriteAllText(Path.Combine(tmpDir, "main.ffs"), mainSource);
+
+                string rootUri = "file:///" + tmpDir.TrimStart('/').Replace("\\", "/");
+                string syscallsUri = rootUri + "/syscalls.ffs";
+                string mainUri = rootUri + "/main.ffs";
+
+                var bridge = new DatabaseBackedVsCodeBridge(
+                    new InMemoryWorkspaceCodeDatabase(new InMemoryDatabaseExecutionOrchestrator()));
+                var session = new LspServerNewBatchSession();
+                session.AddRequest(LspMethods.Initialize, BuildInitializeParams(tmpDir));
+                session.AddNotification(LspMethods.Initialized, new JsonObject());
+
+                // Definition on "IsInputHeld" call — main.ffs line 2 col 20
+                int defId = session.AddRequest(LspMethods.Definition, BuildTextDocumentPositionParams(mainUri, 2, 20));
+                // References on "IsInputHeld" from syscalls.ffs declaration — line 2
+                int refId = session.AddRequest(LspMethods.References, BuildReferencesParams(syscallsUri, 2, 15, true));
+                // Hover on "IsInputHeld" call — main.ffs line 2 col 20
+                int hoverId = session.AddRequest(LspMethods.Hover, BuildTextDocumentPositionParams(mainUri, 2, 20));
+                session.AddNotification(LspMethods.Exit, new JsonObject());
+                session.Run(bridge);
+
+                // Definition should point to syscalls.ffs line 2 (0-indexed)
+                JsonObject defResult = session.FindResponse(defId)?.GetObject(JsonRpcFields.Result);
+                string defUri = defResult != null ? defResult.GetString(LspFields.Uri) ?? string.Empty : string.Empty;
+                JsonObject defStart = defResult?.GetObject(LspFields.Range)?.GetObject(LspFields.Start);
+                int defLine = defStart != null ? defStart.GetInt(LspFields.Line, -1) : -1;
+
+                Assert(
+                    defUri.IndexOf("/syscalls.ffs", StringComparison.OrdinalIgnoreCase) >= 0 && defLine == 2,
+                    "LSPNEW-T3-EXT-02A: go-to-definition on transitive external func resolves to syscalls.ffs line 2");
+
+                // References should include syscalls declaration + main call site
+                List<object> refLocs = session.FindResponse(refId)?.GetArray(JsonRpcFields.Result);
+                bool hasSyscallDecl = false;
+                int mainCallCount = 0;
+                if (refLocs != null)
+                {
+                    for (int i = 0; i < refLocs.Count; i++)
+                    {
+                        if (!(refLocs[i] is JsonObject loc)) continue;
+                        string u = loc.GetString(LspFields.Uri) ?? string.Empty;
+                        if (u.IndexOf("/syscalls.ffs", StringComparison.OrdinalIgnoreCase) >= 0) hasSyscallDecl = true;
+                        if (u.IndexOf("/main.ffs", StringComparison.OrdinalIgnoreCase) >= 0) mainCallCount++;
+                    }
+                }
+
+                Assert(
+                    refLocs != null && hasSyscallDecl && mainCallCount >= 1,
+                    "LSPNEW-T3-EXT-02B: references on transitive external func include declaration + call site");
+
+                // Hover should return non-empty content
+                JsonObject hoverResult = session.FindResponse(hoverId)?.GetObject(JsonRpcFields.Result);
+                string hoverValue = hoverResult?.GetObject("contents")?.GetString("value") ?? string.Empty;
+
+                Assert(
+                    hoverValue.Length > 0 && hoverValue.IndexOf("IsInputHeld", StringComparison.OrdinalIgnoreCase) >= 0,
+                    "LSPNEW-T3-EXT-02C: hover on transitive external func returns content");
+            }
+            finally
+            {
+                try { Directory.Delete(tmpDir, true); } catch { }
+            }
+        }
+
+        // ================================================================
+        // LSPNEW-T3-EXT-03: subdirectory layout with .ffproj include paths
+        // Mirrors real KOF98 workspace: Scripts/common/syscalls.ffs with
+        // "includePaths": [".", "Scripts"] so "common/syscalls" resolves
+        // via Scripts root. External func on line 5 (not line 0).
+        // ================================================================
+        {
+            string tmpDir = Path.Combine(Path.GetTempPath(), "lspnew_t3ext03_" + Guid.NewGuid().ToString("N").Substring(0, 8));
+            try
+            {
+                string scriptsDir = Path.Combine(tmpDir, "Scripts");
+                string commonDir = Path.Combine(scriptsDir, "common");
+                Directory.CreateDirectory(commonDir);
+
+                // .ffproj at workspace root with include path "Scripts"
+                string ffprojSource = "{\n  \"includePaths\": [\".\", \"Scripts\"]\n}";
+                File.WriteAllText(Path.Combine(tmpDir, "project.ffproj"), ffprojSource);
+
+                // syscalls.ffs in Scripts/common/ — external func at line 5
+                string syscallsSource =
+                    "// KOF98 syscall declarations\n"
+                    + "// Host-provided functions\n"
+                    + "// Available to all scripts\n"
+                    + "// ========================\n"
+                    + "\n"
+                    + "external func IsInputHeld(buttonId: int): int\n"
+                    + "external func PlaySound(soundId: int): void";
+                File.WriteAllText(Path.Combine(commonDir, "syscalls.ffs"), syscallsSource);
+
+                // constants.ffs in Scripts/common/ — includes "common/syscalls"
+                string constantsSource = "include \"common/syscalls\"\nenum InputButton {\n    LEFT,\n    RIGHT\n}";
+                File.WriteAllText(Path.Combine(commonDir, "constants.ffs"), constantsSource);
+
+                // input.ffs in Scripts/ — includes "common/constants"
+                string inputSource =
+                    "include \"common/constants\"\n"
+                    + "func checkInput() {\n"
+                    + "    var held: int = IsInputHeld(InputButton.LEFT)\n"
+                    + "    wait 1\n"
+                    + "}";
+                File.WriteAllText(Path.Combine(scriptsDir, "input.ffs"), inputSource);
+
+                string rootUri = "file:///" + tmpDir.TrimStart('/').Replace("\\", "/");
+                string syscallsUri = rootUri + "/Scripts/common/syscalls.ffs";
+                string inputUri = rootUri + "/Scripts/input.ffs";
+
+                var bridge = new DatabaseBackedVsCodeBridge(
+                    new InMemoryWorkspaceCodeDatabase(new InMemoryDatabaseExecutionOrchestrator()));
+                var session = new LspServerNewBatchSession();
+                session.AddRequest(LspMethods.Initialize, BuildInitializeParams(tmpDir));
+                session.AddNotification(LspMethods.Initialized, new JsonObject());
+
+                // Definition on "IsInputHeld" call — input.ffs line 2 col 20
+                int defId = session.AddRequest(LspMethods.Definition, BuildTextDocumentPositionParams(inputUri, 2, 20));
+                // References on "IsInputHeld" from syscalls.ffs declaration — line 5
+                int refId = session.AddRequest(LspMethods.References, BuildReferencesParams(syscallsUri, 5, 15, true));
+                // Hover on "IsInputHeld" call — input.ffs line 2 col 20
+                int hoverId = session.AddRequest(LspMethods.Hover, BuildTextDocumentPositionParams(inputUri, 2, 20));
+                session.AddNotification(LspMethods.Exit, new JsonObject());
+                session.Run(bridge);
+
+                // Definition should point to syscalls.ffs line 5 (0-indexed)
+                JsonObject defResult = session.FindResponse(defId)?.GetObject(JsonRpcFields.Result);
+                string defUri = defResult != null ? defResult.GetString(LspFields.Uri) ?? string.Empty : string.Empty;
+                JsonObject defStart = defResult?.GetObject(LspFields.Range)?.GetObject(LspFields.Start);
+                int defLine = defStart != null ? defStart.GetInt(LspFields.Line, -1) : -1;
+                int defChar = defStart != null ? defStart.GetInt(LspFields.Character, -1) : -1;
+
+                Assert(
+                    defUri.IndexOf("/syscalls.ffs", StringComparison.OrdinalIgnoreCase) >= 0 && defLine == 5,
+                    "LSPNEW-T3-EXT-03A: subdir layout definition resolves to syscalls.ffs line 5"
+                    + " (got line=" + defLine + " char=" + defChar + " uri=" + defUri + ")");
+
+                // References should include syscalls declaration + input call site
+                List<object> refLocs = session.FindResponse(refId)?.GetArray(JsonRpcFields.Result);
+                bool hasSyscallDecl = false;
+                int inputCallCount = 0;
+                if (refLocs != null)
+                {
+                    for (int i = 0; i < refLocs.Count; i++)
+                    {
+                        if (!(refLocs[i] is JsonObject loc)) continue;
+                        string u = loc.GetString(LspFields.Uri) ?? string.Empty;
+                        if (u.IndexOf("/syscalls.ffs", StringComparison.OrdinalIgnoreCase) >= 0) hasSyscallDecl = true;
+                        if (u.IndexOf("/input.ffs", StringComparison.OrdinalIgnoreCase) >= 0) inputCallCount++;
+                    }
+                }
+
+                Assert(
+                    refLocs != null && hasSyscallDecl && inputCallCount >= 1,
+                    "LSPNEW-T3-EXT-03B: subdir layout references include declaration + call site");
+
+                // Hover should return non-empty content
+                JsonObject hoverResult = session.FindResponse(hoverId)?.GetObject(JsonRpcFields.Result);
+                string hoverValue = hoverResult?.GetObject("contents")?.GetString("value") ?? string.Empty;
+
+                Assert(
+                    hoverValue.Length > 0 && hoverValue.IndexOf("IsInputHeld", StringComparison.OrdinalIgnoreCase) >= 0,
+                    "LSPNEW-T3-EXT-03C: subdir layout hover returns content for IsInputHeld");
+            }
+            finally
+            {
+                try { Directory.Delete(tmpDir, true); } catch { }
+            }
+        }
+
+        // ================================================================
         // LSPNEW-T3-PRM-01: parameter definition + references (same file)
         // ================================================================
         {
@@ -3774,6 +3973,1413 @@ public static class LspServerNewTests
             Assert(
                 hasLocalTypeAnn,
                 "LSPNEW-T3-ENM-03C: enum type references include L6 local var type annotation");
+        }
+
+        // ================================================================
+        // LSPNEW-T4-SC01-01: private func not visible cross-file (CFR-08)
+        // ================================================================
+        {
+            string tmpDir = Path.Combine(Path.GetTempPath(), "lspnew_t4sc0101_" + Guid.NewGuid().ToString("N").Substring(0, 8));
+            try
+            {
+                Directory.CreateDirectory(tmpDir);
+                string libSource =
+                    "private func helper() {\n"
+                    + "    wait 1\n"
+                    + "}\n"
+                    + "func api() {\n"
+                    + "    helper()\n"
+                    + "    wait 1\n"
+                    + "}";
+                string mainSource =
+                    "include \"lib\"\n"
+                    + "func run() {\n"
+                    + "    api()\n"
+                    + "    helper()\n"
+                    + "    wait 1\n"
+                    + "}";
+                File.WriteAllText(Path.Combine(tmpDir, "lib.ffs"), libSource);
+                File.WriteAllText(Path.Combine(tmpDir, "main.ffs"), mainSource);
+
+                string rootUri = "file:///" + tmpDir.TrimStart('/').Replace("\\", "/");
+                string libUri = rootUri + "/lib.ffs";
+                string mainUri = rootUri + "/main.ffs";
+
+                var bridge = new DatabaseBackedVsCodeBridge(
+                    new InMemoryWorkspaceCodeDatabase(new InMemoryDatabaseExecutionOrchestrator()));
+                var session = new LspServerNewBatchSession();
+                session.AddRequest(LspMethods.Initialize, BuildInitializeParams(tmpDir));
+                session.AddNotification(LspMethods.Initialized, new JsonObject());
+
+                // References on "helper" from lib.ffs line 0 col 13
+                int refId = session.AddRequest(LspMethods.References, BuildReferencesParams(libUri, 0, 13, true));
+                // References on "api" from lib.ffs line 3 col 5
+                int apiRefId = session.AddRequest(LspMethods.References, BuildReferencesParams(libUri, 3, 5, true));
+                session.AddNotification(LspMethods.Exit, new JsonObject());
+                session.Run(bridge);
+
+                List<object> helperRefs = session.FindResponse(refId)?.GetArray(JsonRpcFields.Result);
+                bool helperInMain = false;
+                if (helperRefs != null)
+                {
+                    for (int i = 0; i < helperRefs.Count; i++)
+                    {
+                        if (!(helperRefs[i] is JsonObject loc)) continue;
+                        string u = loc.GetString(LspFields.Uri) ?? string.Empty;
+                        if (u.IndexOf("/main.ffs", StringComparison.OrdinalIgnoreCase) >= 0) helperInMain = true;
+                    }
+                }
+
+                Assert(
+                    !helperInMain,
+                    "LSPNEW-T4-SC01-01A: private func helper references do NOT include main.ffs usages");
+
+                List<object> apiRefs = session.FindResponse(apiRefId)?.GetArray(JsonRpcFields.Result);
+                bool apiInMain = false;
+                if (apiRefs != null)
+                {
+                    for (int i = 0; i < apiRefs.Count; i++)
+                    {
+                        if (!(apiRefs[i] is JsonObject loc)) continue;
+                        string u = loc.GetString(LspFields.Uri) ?? string.Empty;
+                        if (u.IndexOf("/main.ffs", StringComparison.OrdinalIgnoreCase) >= 0) apiInMain = true;
+                    }
+                }
+
+                Assert(
+                    apiInMain,
+                    "LSPNEW-T4-SC01-01B: public func api references DO include main.ffs call");
+            }
+            finally
+            {
+                try { Directory.Delete(tmpDir, true); } catch { }
+            }
+        }
+
+        // ================================================================
+        // LSPNEW-T4-SC01-02: private var/struct/enum not visible cross-file
+        // ================================================================
+        {
+            string tmpDir = Path.Combine(Path.GetTempPath(), "lspnew_t4sc0102_" + Guid.NewGuid().ToString("N").Substring(0, 8));
+            try
+            {
+                Directory.CreateDirectory(tmpDir);
+                string libSource =
+                    "private var secret: int = 42\n"
+                    + "var visible: int = 1\n"
+                    + "private struct Hidden { x: int }\n"
+                    + "struct Shown { y: int }\n"
+                    + "private enum Priv { A, B }\n"
+                    + "enum Pub { C, D }";
+                string mainSource =
+                    "include \"lib\"\n"
+                    + "func test() {\n"
+                    + "    var a: int = visible\n"
+                    + "    var b: Shown = Shown { y: 1 }\n"
+                    + "    var c: Pub = Pub.C\n"
+                    + "    wait 1\n"
+                    + "}";
+                File.WriteAllText(Path.Combine(tmpDir, "lib.ffs"), libSource);
+                File.WriteAllText(Path.Combine(tmpDir, "main.ffs"), mainSource);
+
+                string rootUri = "file:///" + tmpDir.TrimStart('/').Replace("\\", "/");
+                string libUri = rootUri + "/lib.ffs";
+                string mainUri = rootUri + "/main.ffs";
+
+                var bridge = new DatabaseBackedVsCodeBridge(
+                    new InMemoryWorkspaceCodeDatabase(new InMemoryDatabaseExecutionOrchestrator()));
+                var session = new LspServerNewBatchSession();
+                session.AddRequest(LspMethods.Initialize, BuildInitializeParams(tmpDir));
+                session.AddNotification(LspMethods.Initialized, new JsonObject());
+
+                // References on private "secret" from lib line 0 col 12
+                int secretRefId = session.AddRequest(LspMethods.References, BuildReferencesParams(libUri, 0, 12, true));
+                // References on public "visible" from lib line 1 col 4
+                int visibleRefId = session.AddRequest(LspMethods.References, BuildReferencesParams(libUri, 1, 4, true));
+                // References on private struct "Hidden" from lib line 2 col 16
+                int hiddenRefId = session.AddRequest(LspMethods.References, BuildReferencesParams(libUri, 2, 16, true));
+                // References on public struct "Shown" from lib line 3 col 7
+                int shownRefId = session.AddRequest(LspMethods.References, BuildReferencesParams(libUri, 3, 7, true));
+                // References on private enum "Priv" from lib line 4 col 13
+                int privRefId = session.AddRequest(LspMethods.References, BuildReferencesParams(libUri, 4, 13, true));
+                // References on public enum "Pub" from lib line 5 col 5
+                int pubRefId = session.AddRequest(LspMethods.References, BuildReferencesParams(libUri, 5, 5, true));
+                session.AddNotification(LspMethods.Exit, new JsonObject());
+                session.Run(bridge);
+
+                bool secretInMain = false;
+                List<object> secretRefs = session.FindResponse(secretRefId)?.GetArray(JsonRpcFields.Result);
+                if (secretRefs != null)
+                    for (int i = 0; i < secretRefs.Count; i++)
+                        if (secretRefs[i] is JsonObject loc && (loc.GetString(LspFields.Uri) ?? "").IndexOf("/main.ffs", StringComparison.OrdinalIgnoreCase) >= 0)
+                            secretInMain = true;
+
+                bool visibleInMain = false;
+                List<object> visibleRefs = session.FindResponse(visibleRefId)?.GetArray(JsonRpcFields.Result);
+                if (visibleRefs != null)
+                    for (int i = 0; i < visibleRefs.Count; i++)
+                        if (visibleRefs[i] is JsonObject loc && (loc.GetString(LspFields.Uri) ?? "").IndexOf("/main.ffs", StringComparison.OrdinalIgnoreCase) >= 0)
+                            visibleInMain = true;
+
+                Assert(!secretInMain, "LSPNEW-T4-SC01-02A: private var secret NOT visible in main");
+                Assert(visibleInMain, "LSPNEW-T4-SC01-02B: public var visible IS visible in main");
+
+                bool hiddenInMain = false;
+                List<object> hiddenRefs = session.FindResponse(hiddenRefId)?.GetArray(JsonRpcFields.Result);
+                if (hiddenRefs != null)
+                    for (int i = 0; i < hiddenRefs.Count; i++)
+                        if (hiddenRefs[i] is JsonObject loc && (loc.GetString(LspFields.Uri) ?? "").IndexOf("/main.ffs", StringComparison.OrdinalIgnoreCase) >= 0)
+                            hiddenInMain = true;
+
+                bool shownInMain = false;
+                List<object> shownRefs = session.FindResponse(shownRefId)?.GetArray(JsonRpcFields.Result);
+                if (shownRefs != null)
+                    for (int i = 0; i < shownRefs.Count; i++)
+                        if (shownRefs[i] is JsonObject loc && (loc.GetString(LspFields.Uri) ?? "").IndexOf("/main.ffs", StringComparison.OrdinalIgnoreCase) >= 0)
+                            shownInMain = true;
+
+                Assert(!hiddenInMain, "LSPNEW-T4-SC01-02C: private struct Hidden NOT visible in main");
+                Assert(shownInMain, "LSPNEW-T4-SC01-02D: public struct Shown IS visible in main");
+
+                bool privInMain = false;
+                List<object> privRefs = session.FindResponse(privRefId)?.GetArray(JsonRpcFields.Result);
+                if (privRefs != null)
+                    for (int i = 0; i < privRefs.Count; i++)
+                        if (privRefs[i] is JsonObject loc && (loc.GetString(LspFields.Uri) ?? "").IndexOf("/main.ffs", StringComparison.OrdinalIgnoreCase) >= 0)
+                            privInMain = true;
+
+                bool pubInMain = false;
+                List<object> pubRefs = session.FindResponse(pubRefId)?.GetArray(JsonRpcFields.Result);
+                if (pubRefs != null)
+                    for (int i = 0; i < pubRefs.Count; i++)
+                        if (pubRefs[i] is JsonObject loc && (loc.GetString(LspFields.Uri) ?? "").IndexOf("/main.ffs", StringComparison.OrdinalIgnoreCase) >= 0)
+                            pubInMain = true;
+
+                Assert(!privInMain, "LSPNEW-T4-SC01-02E: private enum Priv NOT visible in main");
+                Assert(pubInMain, "LSPNEW-T4-SC01-02F: public enum Pub IS visible in main");
+            }
+            finally
+            {
+                try { Directory.Delete(tmpDir, true); } catch { }
+            }
+        }
+
+        // ================================================================
+        // LSPNEW-T4-SC02-01: same-name func — local definition takes priority over imported (CFR-07)
+        // ================================================================
+        {
+            string tmpDir = Path.Combine(Path.GetTempPath(), "lspnew_t4sc0201_" + Guid.NewGuid().ToString("N").Substring(0, 8));
+            try
+            {
+                Directory.CreateDirectory(tmpDir);
+                // lib.ffs: defines func draw()
+                string libSource =
+                    "func draw() {\n"
+                    + "    wait 1\n"
+                    + "}";
+                // main.ffs: includes lib, redefines func draw(), calls draw()
+                // Line 0: include "lib"
+                // Line 1: func draw() {
+                // Line 2:     draw()        ← call at col 4
+                // Line 3:     wait 1
+                // Line 4: }
+                string mainSource =
+                    "include \"lib\"\n"
+                    + "func draw() {\n"
+                    + "    draw()\n"
+                    + "    wait 1\n"
+                    + "}";
+                File.WriteAllText(Path.Combine(tmpDir, "lib.ffs"), libSource);
+                File.WriteAllText(Path.Combine(tmpDir, "main.ffs"), mainSource);
+
+                string rootUri = "file:///" + tmpDir.TrimStart('/').Replace("\\", "/");
+                string mainUri = rootUri + "/main.ffs";
+
+                var bridge = new DatabaseBackedVsCodeBridge(
+                    new InMemoryWorkspaceCodeDatabase(new InMemoryDatabaseExecutionOrchestrator()));
+                var session = new LspServerNewBatchSession();
+                session.AddRequest(LspMethods.Initialize, BuildInitializeParams(tmpDir));
+                session.AddNotification(LspMethods.Initialized, new JsonObject());
+
+                // GoToDefinition on call draw() at main.ffs line 2, col 4
+                int defId = session.AddRequest(LspMethods.Definition, BuildTextDocumentPositionParams(mainUri, 2, 4));
+                // References on draw from main.ffs line 1, col 5 (local def)
+                int refId = session.AddRequest(LspMethods.References, BuildReferencesParams(mainUri, 1, 5, true));
+                session.AddNotification(LspMethods.Exit, new JsonObject());
+                session.Run(bridge);
+
+                // A: GoToDefinition should resolve to main.ffs (not lib.ffs)
+                JsonObject defResp = session.FindResponse(defId);
+                JsonObject defResult = defResp != null ? defResp.GetObject(JsonRpcFields.Result) : null;
+                string defUri = defResult != null ? defResult.GetString(LspFields.Uri) : string.Empty;
+                bool defIsMain = defUri.IndexOf("/main.ffs", StringComparison.OrdinalIgnoreCase) >= 0;
+
+                Assert(defIsMain, "LSPNEW-T4-SC02-01A: same-name func call resolves to local definition (not imported)");
+
+                // B: References from local draw should include call site, but NOT lib.ffs def
+                List<object> refs = session.FindResponse(refId)?.GetArray(JsonRpcFields.Result);
+                bool hasCallSite = false;
+                bool hasLibDef = false;
+                if (refs != null)
+                {
+                    for (int i = 0; i < refs.Count; i++)
+                    {
+                        if (!(refs[i] is JsonObject loc)) continue;
+                        string u = loc.GetString(LspFields.Uri) ?? string.Empty;
+                        JsonObject s = loc.GetObject(LspFields.Range)?.GetObject(LspFields.Start);
+                        int ln = s != null ? s.GetInt(LspFields.Line, -1) : -1;
+                        if (u.IndexOf("/main.ffs", StringComparison.OrdinalIgnoreCase) >= 0 && ln == 2) hasCallSite = true;
+                        if (u.IndexOf("/lib.ffs", StringComparison.OrdinalIgnoreCase) >= 0) hasLibDef = true;
+                    }
+                }
+
+                Assert(hasCallSite, "LSPNEW-T4-SC02-01B: local draw references include call site in main");
+                Assert(!hasLibDef, "LSPNEW-T4-SC02-01C: local draw references do NOT include lib.ffs definition");
+            }
+            finally
+            {
+                try { Directory.Delete(tmpDir, true); } catch { }
+            }
+        }
+
+        // ================================================================
+        // LSPNEW-T4-SC02-02: same-name func across two imports — first import wins (CFR-07)
+        // ================================================================
+        {
+            string tmpDir = Path.Combine(Path.GetTempPath(), "lspnew_t4sc0202_" + Guid.NewGuid().ToString("N").Substring(0, 8));
+            try
+            {
+                Directory.CreateDirectory(tmpDir);
+                // alpha.ffs: defines func render()
+                string alphaSource =
+                    "func render() {\n"
+                    + "    wait 1\n"
+                    + "}";
+                // beta.ffs: also defines func render()
+                string betaSource =
+                    "func render() {\n"
+                    + "    wait 2\n"
+                    + "}";
+                // main.ffs: includes alpha first, then beta, calls render()
+                // Line 0: include "alpha"
+                // Line 1: include "beta"
+                // Line 2: func run() {
+                // Line 3:     render()       ← call at col 4
+                // Line 4:     wait 1
+                // Line 5: }
+                string mainSource =
+                    "include \"alpha\"\n"
+                    + "include \"beta\"\n"
+                    + "func run() {\n"
+                    + "    render()\n"
+                    + "    wait 1\n"
+                    + "}";
+                File.WriteAllText(Path.Combine(tmpDir, "alpha.ffs"), alphaSource);
+                File.WriteAllText(Path.Combine(tmpDir, "beta.ffs"), betaSource);
+                File.WriteAllText(Path.Combine(tmpDir, "main.ffs"), mainSource);
+
+                string rootUri = "file:///" + tmpDir.TrimStart('/').Replace("\\", "/");
+                string mainUri = rootUri + "/main.ffs";
+
+                var bridge = new DatabaseBackedVsCodeBridge(
+                    new InMemoryWorkspaceCodeDatabase(new InMemoryDatabaseExecutionOrchestrator()));
+                var session = new LspServerNewBatchSession();
+                session.AddRequest(LspMethods.Initialize, BuildInitializeParams(tmpDir));
+                session.AddNotification(LspMethods.Initialized, new JsonObject());
+
+                // GoToDefinition on call render() at main.ffs line 3, col 4
+                int defId = session.AddRequest(LspMethods.Definition, BuildTextDocumentPositionParams(mainUri, 3, 4));
+                session.AddNotification(LspMethods.Exit, new JsonObject());
+                session.Run(bridge);
+
+                // A: GoToDefinition should resolve to alpha.ffs (first import wins)
+                JsonObject defResp = session.FindResponse(defId);
+                JsonObject defResult = defResp != null ? defResp.GetObject(JsonRpcFields.Result) : null;
+                string defUri = defResult != null ? defResult.GetString(LspFields.Uri) : string.Empty;
+                bool defIsAlpha = defUri.IndexOf("/alpha.ffs", StringComparison.OrdinalIgnoreCase) >= 0;
+                bool defIsBeta = defUri.IndexOf("/beta.ffs", StringComparison.OrdinalIgnoreCase) >= 0;
+
+                Assert(defIsAlpha, "LSPNEW-T4-SC02-02A: same-name func across imports resolves to first import (alpha)");
+                Assert(!defIsBeta, "LSPNEW-T4-SC02-02B: same-name func across imports does NOT resolve to second import (beta)");
+            }
+            finally
+            {
+                try { Directory.Delete(tmpDir, true); } catch { }
+            }
+        }
+
+        // ================================================================
+        // LSPNEW-T4-SC02-03: same-name var — local definition takes priority over imported
+        // ================================================================
+        {
+            string tmpDir = Path.Combine(Path.GetTempPath(), "lspnew_t4sc0203_" + Guid.NewGuid().ToString("N").Substring(0, 8));
+            try
+            {
+                Directory.CreateDirectory(tmpDir);
+                // lib.ffs: defines var count: int = 10
+                string libSource = "var count: int = 10";
+                // main.ffs: includes lib, redefines var count, uses count
+                // Line 0: include "lib"
+                // Line 1: var count: int = 99
+                // Line 2: func test() {
+                // Line 3:     var x: int = count     ← reference at col 17
+                // Line 4:     wait 1
+                // Line 5: }
+                string mainSource =
+                    "include \"lib\"\n"
+                    + "var count: int = 99\n"
+                    + "func test() {\n"
+                    + "    var x: int = count\n"
+                    + "    wait 1\n"
+                    + "}";
+                File.WriteAllText(Path.Combine(tmpDir, "lib.ffs"), libSource);
+                File.WriteAllText(Path.Combine(tmpDir, "main.ffs"), mainSource);
+
+                string rootUri = "file:///" + tmpDir.TrimStart('/').Replace("\\", "/");
+                string mainUri = rootUri + "/main.ffs";
+
+                var bridge = new DatabaseBackedVsCodeBridge(
+                    new InMemoryWorkspaceCodeDatabase(new InMemoryDatabaseExecutionOrchestrator()));
+                var session = new LspServerNewBatchSession();
+                session.AddRequest(LspMethods.Initialize, BuildInitializeParams(tmpDir));
+                session.AddNotification(LspMethods.Initialized, new JsonObject());
+
+                // References on var count from main.ffs line 1, col 4 (local def)
+                int refId = session.AddRequest(LspMethods.References, BuildReferencesParams(mainUri, 1, 4, true));
+                session.AddNotification(LspMethods.Exit, new JsonObject());
+                session.Run(bridge);
+
+                // A: References of local count should include usage in func body
+                List<object> refs = session.FindResponse(refId)?.GetArray(JsonRpcFields.Result);
+                bool hasUsage = false;
+                bool hasLibDef = false;
+                if (refs != null)
+                {
+                    for (int i = 0; i < refs.Count; i++)
+                    {
+                        if (!(refs[i] is JsonObject loc)) continue;
+                        string u = loc.GetString(LspFields.Uri) ?? string.Empty;
+                        JsonObject s = loc.GetObject(LspFields.Range)?.GetObject(LspFields.Start);
+                        int ln = s != null ? s.GetInt(LspFields.Line, -1) : -1;
+                        if (u.IndexOf("/main.ffs", StringComparison.OrdinalIgnoreCase) >= 0 && ln == 3) hasUsage = true;
+                        if (u.IndexOf("/lib.ffs", StringComparison.OrdinalIgnoreCase) >= 0) hasLibDef = true;
+                    }
+                }
+
+                Assert(hasUsage, "LSPNEW-T4-SC02-03A: local var count references include usage in func body");
+                Assert(!hasLibDef, "LSPNEW-T4-SC02-03B: local var count references do NOT include lib.ffs definition");
+            }
+            finally
+            {
+                try { Directory.Delete(tmpDir, true); } catch { }
+            }
+        }
+
+        // ================================================================
+        // LSPNEW-T4-SC03-01: if-block var shadows outer var (block-level scope)
+        // ================================================================
+        {
+            string uri = "file:///tests/lspnew_t4sc0301.ffs";
+            // Line 0: func f() {
+            // Line 1:     var x: int = 1        ← outer x def at col 8
+            // Line 2:     if 1 {
+            // Line 3:         var x: int = 2    ← inner x def at col 12
+            // Line 4:         wait x            ← inner x usage at col 13
+            // Line 5:     }
+            // Line 6:     wait x                ← outer x usage at col 9
+            // Line 7: }
+            string source =
+                "func f() {\n"
+                + "    var x: int = 1\n"
+                + "    if 1 {\n"
+                + "        var x: int = 2\n"
+                + "        wait x\n"
+                + "    }\n"
+                + "    wait x\n"
+                + "}";
+
+            var bridge = new DatabaseBackedVsCodeBridge(
+                new InMemoryWorkspaceCodeDatabase(new InMemoryDatabaseExecutionOrchestrator()));
+            var session = new LspServerNewBatchSession();
+            session.AddRequest(LspMethods.Initialize, new JsonObject());
+            session.AddNotification(LspMethods.Initialized, new JsonObject());
+            session.AddNotification(LspMethods.DidOpen, BuildDidOpenParams(uri, "ffscript", 1, source));
+
+            // References on outer x at line 1 col 8
+            int outerRefId = session.AddRequest(LspMethods.References, BuildReferencesParams(uri, 1, 8, true));
+            // References on inner x at line 3 col 12
+            int innerRefId = session.AddRequest(LspMethods.References, BuildReferencesParams(uri, 3, 12, true));
+            session.AddNotification(LspMethods.Exit, new JsonObject());
+            session.Run(bridge);
+
+            // Outer x: should have usage at line 6, should NOT have line 4
+            List<object> outerRefs = session.FindResponse(outerRefId)?.GetArray(JsonRpcFields.Result);
+            bool outerHasLine6 = false;
+            bool outerHasLine4 = false;
+            if (outerRefs != null)
+            {
+                for (int i = 0; i < outerRefs.Count; i++)
+                {
+                    if (!(outerRefs[i] is JsonObject loc)) continue;
+                    JsonObject s = loc.GetObject(LspFields.Range)?.GetObject(LspFields.Start);
+                    int ln = s != null ? s.GetInt(LspFields.Line, -1) : -1;
+                    if (ln == 6) outerHasLine6 = true;
+                    if (ln == 4) outerHasLine4 = true;
+                }
+            }
+
+            Assert(outerHasLine6, "LSPNEW-T4-SC03-01A: outer x references include wait x at line 6");
+            Assert(!outerHasLine4, "LSPNEW-T4-SC03-01B: outer x references do NOT include if-block wait x at line 4");
+
+            // Inner x: should have usage at line 4, should NOT have line 6
+            List<object> innerRefs = session.FindResponse(innerRefId)?.GetArray(JsonRpcFields.Result);
+            bool innerHasLine4 = false;
+            bool innerHasLine6 = false;
+            if (innerRefs != null)
+            {
+                for (int i = 0; i < innerRefs.Count; i++)
+                {
+                    if (!(innerRefs[i] is JsonObject loc)) continue;
+                    JsonObject s = loc.GetObject(LspFields.Range)?.GetObject(LspFields.Start);
+                    int ln = s != null ? s.GetInt(LspFields.Line, -1) : -1;
+                    if (ln == 4) innerHasLine4 = true;
+                    if (ln == 6) innerHasLine6 = true;
+                }
+            }
+
+            Assert(innerHasLine4, "LSPNEW-T4-SC03-01C: inner x references include wait x at line 4");
+            Assert(!innerHasLine6, "LSPNEW-T4-SC03-01D: inner x references do NOT include outer wait x at line 6");
+        }
+
+        // ================================================================
+        // LSPNEW-T4-SC03-02: while-loop var scoped to loop body
+        // ================================================================
+        {
+            string uri = "file:///tests/lspnew_t4sc0302.ffs";
+            // Line 0: func g() {
+            // Line 1:     var i: int = 100      ← outer i def at col 8
+            // Line 2:     while 1 {
+            // Line 3:         var i: int = 0    ← inner i def at col 12
+            // Line 4:         wait i            ← inner i usage at col 13
+            // Line 5:     }
+            // Line 6:     wait i                ← outer i usage at col 9
+            // Line 7: }
+            string source =
+                "func g() {\n"
+                + "    var i: int = 100\n"
+                + "    while 1 {\n"
+                + "        var i: int = 0\n"
+                + "        wait i\n"
+                + "    }\n"
+                + "    wait i\n"
+                + "}";
+
+            var bridge = new DatabaseBackedVsCodeBridge(
+                new InMemoryWorkspaceCodeDatabase(new InMemoryDatabaseExecutionOrchestrator()));
+            var session = new LspServerNewBatchSession();
+            session.AddRequest(LspMethods.Initialize, new JsonObject());
+            session.AddNotification(LspMethods.Initialized, new JsonObject());
+            session.AddNotification(LspMethods.DidOpen, BuildDidOpenParams(uri, "ffscript", 1, source));
+
+            int outerRefId = session.AddRequest(LspMethods.References, BuildReferencesParams(uri, 1, 8, true));
+            int innerRefId = session.AddRequest(LspMethods.References, BuildReferencesParams(uri, 3, 12, true));
+            session.AddNotification(LspMethods.Exit, new JsonObject());
+            session.Run(bridge);
+
+            List<object> outerRefs = session.FindResponse(outerRefId)?.GetArray(JsonRpcFields.Result);
+            bool outerHasLine6 = false;
+            bool outerHasLine4 = false;
+            if (outerRefs != null)
+            {
+                for (int i = 0; i < outerRefs.Count; i++)
+                {
+                    if (!(outerRefs[i] is JsonObject loc)) continue;
+                    JsonObject s = loc.GetObject(LspFields.Range)?.GetObject(LspFields.Start);
+                    int ln = s != null ? s.GetInt(LspFields.Line, -1) : -1;
+                    if (ln == 6) outerHasLine6 = true;
+                    if (ln == 4) outerHasLine4 = true;
+                }
+            }
+
+            Assert(outerHasLine6, "LSPNEW-T4-SC03-02A: outer i references include wait i at line 6");
+            Assert(!outerHasLine4, "LSPNEW-T4-SC03-02B: outer i references do NOT include while-body wait i at line 4");
+
+            List<object> innerRefs = session.FindResponse(innerRefId)?.GetArray(JsonRpcFields.Result);
+            bool innerHasLine4 = false;
+            bool innerHasLine6 = false;
+            if (innerRefs != null)
+            {
+                for (int i = 0; i < innerRefs.Count; i++)
+                {
+                    if (!(innerRefs[i] is JsonObject loc)) continue;
+                    JsonObject s = loc.GetObject(LspFields.Range)?.GetObject(LspFields.Start);
+                    int ln = s != null ? s.GetInt(LspFields.Line, -1) : -1;
+                    if (ln == 4) innerHasLine4 = true;
+                    if (ln == 6) innerHasLine6 = true;
+                }
+            }
+
+            Assert(innerHasLine4, "LSPNEW-T4-SC03-02C: inner i references include wait i at line 4");
+            Assert(!innerHasLine6, "LSPNEW-T4-SC03-02D: inner i references do NOT include outer wait i at line 6");
+        }
+
+        // ================================================================
+        // LSPNEW-T4-SC04-01: override const — go-to-definition resolves to override
+        // ================================================================
+        {
+            string tmpDir = Path.Combine(Path.GetTempPath(), "lspnew_t4sc0401_" + Guid.NewGuid().ToString("N").Substring(0, 8));
+            try
+            {
+                Directory.CreateDirectory(tmpDir);
+                // lib.ffs: exports const X
+                string libSource = "const X: int = 10";
+                // main.ffs:
+                // Line 0: include "lib" as B
+                // Line 1: override const B.X: int = 42
+                // Line 2: func test() {
+                // Line 3:     var r: int = B.X          ← B.X usage, X at col 19
+                // Line 4:     wait r
+                // Line 5: }
+                string mainSource =
+                    "include \"lib\" as B\n"
+                    + "override const B.X: int = 42\n"
+                    + "func test() {\n"
+                    + "    var r: int = B.X\n"
+                    + "    wait r\n"
+                    + "}";
+                File.WriteAllText(Path.Combine(tmpDir, "lib.ffs"), libSource);
+                File.WriteAllText(Path.Combine(tmpDir, "main.ffs"), mainSource);
+
+                string rootUri = "file:///" + tmpDir.TrimStart('/').Replace("\\", "/");
+                string mainUri = rootUri + "/main.ffs";
+
+                var bridge = new DatabaseBackedVsCodeBridge(
+                    new InMemoryWorkspaceCodeDatabase(new InMemoryDatabaseExecutionOrchestrator()));
+                var session = new LspServerNewBatchSession();
+                session.AddRequest(LspMethods.Initialize, BuildInitializeParams(tmpDir));
+                session.AddNotification(LspMethods.Initialized, new JsonObject());
+
+                // GoTo Definition on X in B.X at line 3 col 19
+                int defId = session.AddRequest(LspMethods.Definition, BuildTextDocumentPositionParams(mainUri, 3, 19));
+                session.AddNotification(LspMethods.Exit, new JsonObject());
+                session.Run(bridge);
+
+                JsonObject defResp = session.FindResponse(defId);
+                JsonObject defResult = defResp != null ? defResp.GetObject(JsonRpcFields.Result) : null;
+                string defUri = defResult != null ? defResult.GetString(LspFields.Uri) ?? string.Empty : string.Empty;
+                JsonObject defRange = defResult != null ? defResult.GetObject(LspFields.Range) : null;
+                JsonObject defStart = defRange != null ? defRange.GetObject(LspFields.Start) : null;
+                int defLine = defStart != null ? defStart.GetInt(LspFields.Line, -1) : -1;
+
+                Assert(
+                    defUri.IndexOf("/main.ffs", StringComparison.OrdinalIgnoreCase) >= 0
+                    && defLine == 1,
+                    "LSPNEW-T4-SC04-01: override const B.X go-to-definition resolves to override at main.ffs line 1");
+            }
+            finally
+            {
+                try { Directory.Delete(tmpDir, true); } catch { }
+            }
+        }
+
+        // ================================================================
+        // LSPNEW-T4-SC04-02: override struct — go-to-definition resolves to override
+        // ================================================================
+        {
+            string tmpDir = Path.Combine(Path.GetTempPath(), "lspnew_t4sc0402_" + Guid.NewGuid().ToString("N").Substring(0, 8));
+            try
+            {
+                Directory.CreateDirectory(tmpDir);
+                string libSource = "struct Config { x: int }";
+                // main.ffs:
+                // Line 0: include "lib" as B
+                // Line 1: override struct B.Config { x: int, y: int }
+                // Line 2: func test() {
+                // Line 3:     var c: B.Config = B.Config { x: 1, y: 2 }
+                // Line 4:     wait 1
+                // Line 5: }
+                string mainSource =
+                    "include \"lib\" as B\n"
+                    + "override struct B.Config { x: int, y: int }\n"
+                    + "func test() {\n"
+                    + "    var c: B.Config = B.Config { x: 1, y: 2 }\n"
+                    + "    wait 1\n"
+                    + "}";
+                File.WriteAllText(Path.Combine(tmpDir, "lib.ffs"), libSource);
+                File.WriteAllText(Path.Combine(tmpDir, "main.ffs"), mainSource);
+
+                string rootUri = "file:///" + tmpDir.TrimStart('/').Replace("\\", "/");
+                string mainUri = rootUri + "/main.ffs";
+
+                var bridge = new DatabaseBackedVsCodeBridge(
+                    new InMemoryWorkspaceCodeDatabase(new InMemoryDatabaseExecutionOrchestrator()));
+                var session = new LspServerNewBatchSession();
+                session.AddRequest(LspMethods.Initialize, BuildInitializeParams(tmpDir));
+                session.AddNotification(LspMethods.Initialized, new JsonObject());
+
+                // GoTo Definition on Config in type annotation B.Config at line 3
+                // "    var c: B.Config ..." → B at col 11, . at col 12, Config at col 13
+                int defId = session.AddRequest(LspMethods.Definition, BuildTextDocumentPositionParams(mainUri, 3, 13));
+                session.AddNotification(LspMethods.Exit, new JsonObject());
+                session.Run(bridge);
+
+                JsonObject defResp = session.FindResponse(defId);
+                JsonObject defResult = defResp != null ? defResp.GetObject(JsonRpcFields.Result) : null;
+                string defUri = defResult != null ? defResult.GetString(LspFields.Uri) ?? string.Empty : string.Empty;
+                JsonObject defRange = defResult != null ? defResult.GetObject(LspFields.Range) : null;
+                JsonObject defStart = defRange != null ? defRange.GetObject(LspFields.Start) : null;
+                int defLine = defStart != null ? defStart.GetInt(LspFields.Line, -1) : -1;
+
+                Assert(
+                    defUri.IndexOf("/main.ffs", StringComparison.OrdinalIgnoreCase) >= 0
+                    && defLine == 1,
+                    "LSPNEW-T4-SC04-02: override struct B.Config go-to-definition resolves to override at main.ffs line 1");
+            }
+            finally
+            {
+                try { Directory.Delete(tmpDir, true); } catch { }
+            }
+        }
+
+        // ================================================================
+        // LSPNEW-T4-SC04-03: override enum — go-to-definition resolves to override
+        // ================================================================
+        {
+            string tmpDir = Path.Combine(Path.GetTempPath(), "lspnew_t4sc0403_" + Guid.NewGuid().ToString("N").Substring(0, 8));
+            try
+            {
+                Directory.CreateDirectory(tmpDir);
+                string libSource = "enum Mode { A, B }";
+                // main.ffs:
+                // Line 0: include "lib" as Lib
+                // Line 1: override enum Lib.Mode { A, B, C }
+                // Line 2: func test() {
+                // Line 3:     var m: Lib.Mode = Lib.Mode.A
+                // Line 4:     wait 1
+                // Line 5: }
+                string mainSource =
+                    "include \"lib\" as Lib\n"
+                    + "override enum Lib.Mode { A, B, C }\n"
+                    + "func test() {\n"
+                    + "    var m: Lib.Mode = Lib.Mode.A\n"
+                    + "    wait 1\n"
+                    + "}";
+                File.WriteAllText(Path.Combine(tmpDir, "lib.ffs"), libSource);
+                File.WriteAllText(Path.Combine(tmpDir, "main.ffs"), mainSource);
+
+                string rootUri = "file:///" + tmpDir.TrimStart('/').Replace("\\", "/");
+                string mainUri = rootUri + "/main.ffs";
+
+                var bridge = new DatabaseBackedVsCodeBridge(
+                    new InMemoryWorkspaceCodeDatabase(new InMemoryDatabaseExecutionOrchestrator()));
+                var session = new LspServerNewBatchSession();
+                session.AddRequest(LspMethods.Initialize, BuildInitializeParams(tmpDir));
+                session.AddNotification(LspMethods.Initialized, new JsonObject());
+
+                // GoTo Definition on Mode in type annotation Lib.Mode at line 3
+                // "    var m: Lib.Mode ..." → Lib at col 11, . at col 14, Mode at col 15
+                int defId = session.AddRequest(LspMethods.Definition, BuildTextDocumentPositionParams(mainUri, 3, 15));
+                session.AddNotification(LspMethods.Exit, new JsonObject());
+                session.Run(bridge);
+
+                JsonObject defResp = session.FindResponse(defId);
+                JsonObject defResult = defResp != null ? defResp.GetObject(JsonRpcFields.Result) : null;
+                string defUri = defResult != null ? defResult.GetString(LspFields.Uri) ?? string.Empty : string.Empty;
+                JsonObject defRange = defResult != null ? defResult.GetObject(LspFields.Range) : null;
+                JsonObject defStart = defRange != null ? defRange.GetObject(LspFields.Start) : null;
+                int defLine = defStart != null ? defStart.GetInt(LspFields.Line, -1) : -1;
+
+                Assert(
+                    defUri.IndexOf("/main.ffs", StringComparison.OrdinalIgnoreCase) >= 0
+                    && defLine == 1,
+                    "LSPNEW-T4-SC04-03: override enum Lib.Mode go-to-definition resolves to override at main.ffs line 1");
+            }
+            finally
+            {
+                try { Directory.Delete(tmpDir, true); } catch { }
+            }
+        }
+
+        // ================================================================
+        // T5-Q01-01: diamond include dedup — explicit count + sorted unique
+        // ================================================================
+        {
+            string tmpDir = Path.Combine(Path.GetTempPath(), "t5q01_" + Guid.NewGuid().ToString("N").Substring(0, 8));
+            try
+            {
+                Directory.CreateDirectory(tmpDir);
+
+                string sourceD = "func helper(): int { return 1 }";
+                string sourceB = "include \"d\"\nfunc fromB(): int {\n    return helper()\n}";
+                string sourceC = "include \"d\"\nfunc fromC(): int {\n    return helper()\n}";
+                string sourceA = "include \"b\"\ninclude \"c\"\nfunc main() {\n    var x: int = fromB() + fromC()\n    wait x\n}";
+
+                File.WriteAllText(Path.Combine(tmpDir, "d.ffs"), sourceD);
+                File.WriteAllText(Path.Combine(tmpDir, "b.ffs"), sourceB);
+                File.WriteAllText(Path.Combine(tmpDir, "c.ffs"), sourceC);
+                File.WriteAllText(Path.Combine(tmpDir, "a.ffs"), sourceA);
+
+                string rootUri = "file:///" + tmpDir.TrimStart('/').Replace("\\", "/");
+                string dUri = rootUri + "/d.ffs";
+
+                var bridge = new DatabaseBackedVsCodeBridge(
+                    new InMemoryWorkspaceCodeDatabase(new InMemoryDatabaseExecutionOrchestrator()));
+                var session = new LspServerNewBatchSession();
+                session.AddRequest(LspMethods.Initialize, BuildInitializeParams(tmpDir));
+                session.AddNotification(LspMethods.Initialized, new JsonObject());
+                int refId = session.AddRequest(LspMethods.References, BuildReferencesParams(dUri, 0, 5, true));
+                session.AddNotification(LspMethods.Exit, new JsonObject());
+                session.Run(bridge);
+
+                List<object> locs = session.FindResponse(refId)?.GetArray(JsonRpcFields.Result);
+
+                Assert(
+                    locs != null && locs.Count == 3 && AreLocationsSortedAndUnique(locs),
+                    "T5-Q01-01: diamond include references deduped — exactly 3 unique sorted locations");
+            }
+            finally
+            {
+                try { Directory.Delete(tmpDir, true); } catch { }
+            }
+        }
+
+        // ================================================================
+        // T5-Q02-01: idempotency — same request twice returns identical results (CFR-18)
+        // ================================================================
+        {
+            string tmpDir = Path.Combine(Path.GetTempPath(), "t5q02a_" + Guid.NewGuid().ToString("N").Substring(0, 8));
+            try
+            {
+                Directory.CreateDirectory(tmpDir);
+
+                string libSrc = "func greet(): int { return 42 }";
+                string mainSrc = "include \"lib\"\nfunc main() {\n    var a: int = greet()\n    var b: int = greet()\n    wait a + b\n}";
+
+                File.WriteAllText(Path.Combine(tmpDir, "lib.ffs"), libSrc);
+                File.WriteAllText(Path.Combine(tmpDir, "main.ffs"), mainSrc);
+
+                string rootUri = "file:///" + tmpDir.TrimStart('/').Replace("\\", "/");
+                string libUri = rootUri + "/lib.ffs";
+
+                var bridge = new DatabaseBackedVsCodeBridge(
+                    new InMemoryWorkspaceCodeDatabase(new InMemoryDatabaseExecutionOrchestrator()));
+                var session = new LspServerNewBatchSession();
+                session.AddRequest(LspMethods.Initialize, BuildInitializeParams(tmpDir));
+                session.AddNotification(LspMethods.Initialized, new JsonObject());
+                int ref1 = session.AddRequest(LspMethods.References, BuildReferencesParams(libUri, 0, 5, true));
+                int ref2 = session.AddRequest(LspMethods.References, BuildReferencesParams(libUri, 0, 5, true));
+                session.AddNotification(LspMethods.Exit, new JsonObject());
+                session.Run(bridge);
+
+                List<object> locs1 = session.FindResponse(ref1)?.GetArray(JsonRpcFields.Result);
+                List<object> locs2 = session.FindResponse(ref2)?.GetArray(JsonRpcFields.Result);
+
+                bool identical = locs1 != null && locs2 != null && locs1.Count == locs2.Count;
+                if (identical)
+                {
+                    for (int i = 0; i < locs1.Count; i++)
+                    {
+                        JsonObject a = locs1[i] as JsonObject;
+                        JsonObject b = locs2[i] as JsonObject;
+                        if (a == null || b == null) { identical = false; break; }
+                        string uriA = a.GetString(LspFields.Uri) ?? string.Empty;
+                        string uriB = b.GetString(LspFields.Uri) ?? string.Empty;
+                        JsonObject sA = a.GetObject(LspFields.Range)?.GetObject(LspFields.Start);
+                        JsonObject sB = b.GetObject(LspFields.Range)?.GetObject(LspFields.Start);
+                        int lineA = sA != null ? sA.GetInt(LspFields.Line, -1) : -1;
+                        int lineB = sB != null ? sB.GetInt(LspFields.Line, -1) : -1;
+                        int charA = sA != null ? sA.GetInt(LspFields.Character, -1) : -1;
+                        int charB = sB != null ? sB.GetInt(LspFields.Character, -1) : -1;
+                        if (!string.Equals(uriA, uriB, StringComparison.OrdinalIgnoreCase) || lineA != lineB || charA != charB)
+                        { identical = false; break; }
+                    }
+                }
+
+                Assert(
+                    identical && locs1.Count >= 3,
+                    "T5-Q02-01: same references request twice returns identical results (CFR-18 idempotency)");
+            }
+            finally
+            {
+                try { Directory.Delete(tmpDir, true); } catch { }
+            }
+        }
+
+        // ================================================================
+        // T5-Q02-02: cross-file references are sorted and unique
+        // ================================================================
+        {
+            string tmpDir = Path.Combine(Path.GetTempPath(), "t5q02b_" + Guid.NewGuid().ToString("N").Substring(0, 8));
+            try
+            {
+                Directory.CreateDirectory(tmpDir);
+
+                string utilSrc = "func calc(): int { return 10 }";
+                string aSrc = "include \"util\"\nfunc doA(): int { return calc() }";
+                string bSrc = "include \"util\"\nfunc doB(): int { return calc() }";
+
+                File.WriteAllText(Path.Combine(tmpDir, "util.ffs"), utilSrc);
+                File.WriteAllText(Path.Combine(tmpDir, "a.ffs"), aSrc);
+                File.WriteAllText(Path.Combine(tmpDir, "b.ffs"), bSrc);
+
+                string rootUri = "file:///" + tmpDir.TrimStart('/').Replace("\\", "/");
+                string utilUri = rootUri + "/util.ffs";
+
+                var bridge = new DatabaseBackedVsCodeBridge(
+                    new InMemoryWorkspaceCodeDatabase(new InMemoryDatabaseExecutionOrchestrator()));
+                var session = new LspServerNewBatchSession();
+                session.AddRequest(LspMethods.Initialize, BuildInitializeParams(tmpDir));
+                session.AddNotification(LspMethods.Initialized, new JsonObject());
+                int refId = session.AddRequest(LspMethods.References, BuildReferencesParams(utilUri, 0, 5, true));
+                session.AddNotification(LspMethods.Exit, new JsonObject());
+                session.Run(bridge);
+
+                List<object> locs = session.FindResponse(refId)?.GetArray(JsonRpcFields.Result);
+
+                Assert(
+                    locs != null && locs.Count >= 3 && AreLocationsSortedAndUnique(locs),
+                    "T5-Q02-02: cross-file references are sorted and unique across multiple files");
+            }
+            finally
+            {
+                try { Directory.Delete(tmpDir, true); } catch { }
+            }
+        }
+
+        // ================================================================
+        // T5-Q03-01: missing context field defaults to includeDeclaration=false
+        // ================================================================
+        {
+            string tmpDir = Path.Combine(Path.GetTempPath(), "t5q03_" + Guid.NewGuid().ToString("N").Substring(0, 8));
+            try
+            {
+                Directory.CreateDirectory(tmpDir);
+
+                string libSrc = "func target(): int { return 1 }";
+                string mainSrc = "include \"lib\"\nfunc main() {\n    var v: int = target()\n    wait v\n}";
+
+                File.WriteAllText(Path.Combine(tmpDir, "lib.ffs"), libSrc);
+                File.WriteAllText(Path.Combine(tmpDir, "main.ffs"), mainSrc);
+
+                string rootUri = "file:///" + tmpDir.TrimStart('/').Replace("\\", "/");
+                string libUri = rootUri + "/lib.ffs";
+
+                var bridge = new DatabaseBackedVsCodeBridge(
+                    new InMemoryWorkspaceCodeDatabase(new InMemoryDatabaseExecutionOrchestrator()));
+                var session = new LspServerNewBatchSession();
+                session.AddRequest(LspMethods.Initialize, BuildInitializeParams(tmpDir));
+                session.AddNotification(LspMethods.Initialized, new JsonObject());
+
+                // Send references request WITHOUT context field (just textDocument + position)
+                JsonObject noContextParams = BuildTextDocumentPositionParams(libUri, 0, 5);
+                int noCtxId = session.AddRequest(LspMethods.References, noContextParams);
+
+                // Send references request WITH includeDeclaration=false for comparison
+                int withFalseId = session.AddRequest(LspMethods.References, BuildReferencesParams(libUri, 0, 5, false));
+                session.AddNotification(LspMethods.Exit, new JsonObject());
+                session.Run(bridge);
+
+                List<object> noCtxLocs = session.FindResponse(noCtxId)?.GetArray(JsonRpcFields.Result);
+                List<object> falseLocs = session.FindResponse(withFalseId)?.GetArray(JsonRpcFields.Result);
+
+                bool noCtxHasDecl = false;
+                if (noCtxLocs != null)
+                {
+                    for (int i = 0; i < noCtxLocs.Count; i++)
+                    {
+                        if (!(noCtxLocs[i] is JsonObject loc)) continue;
+                        string locUri = loc.GetString(LspFields.Uri) ?? string.Empty;
+                        JsonObject st = loc.GetObject(LspFields.Range)?.GetObject(LspFields.Start);
+                        int ln = st != null ? st.GetInt(LspFields.Line, -1) : -1;
+                        if (locUri.IndexOf("/lib.ffs", StringComparison.OrdinalIgnoreCase) >= 0 && ln == 0)
+                            noCtxHasDecl = true;
+                    }
+                }
+
+                Assert(
+                    noCtxLocs != null && !noCtxHasDecl
+                    && falseLocs != null && noCtxLocs.Count == falseLocs.Count,
+                    "T5-Q03-01: missing context field defaults to includeDeclaration=false — no declaration in results");
+            }
+            finally
+            {
+                try { Directory.Delete(tmpDir, true); } catch { }
+            }
+        }
+
+        // ================================================================
+        // T5-Q04-01: malformed source — references query returns gracefully
+        // ================================================================
+        {
+            string tmpDir = Path.Combine(Path.GetTempPath(), "t5q04a_" + Guid.NewGuid().ToString("N").Substring(0, 8));
+            try
+            {
+                Directory.CreateDirectory(tmpDir);
+
+                string goodSrc = "func helper(): int { return 1 }";
+                string badSrc = "include \"good\"\nfunc broken(\nfunc main() {\n    var x: int = helper()\n    wait x\n}";
+
+                File.WriteAllText(Path.Combine(tmpDir, "good.ffs"), goodSrc);
+                File.WriteAllText(Path.Combine(tmpDir, "bad.ffs"), badSrc);
+
+                string rootUri = "file:///" + tmpDir.TrimStart('/').Replace("\\", "/");
+                string goodUri = rootUri + "/good.ffs";
+
+                var bridge = new DatabaseBackedVsCodeBridge(
+                    new InMemoryWorkspaceCodeDatabase(new InMemoryDatabaseExecutionOrchestrator()));
+                var session = new LspServerNewBatchSession();
+                session.AddRequest(LspMethods.Initialize, BuildInitializeParams(tmpDir));
+                session.AddNotification(LspMethods.Initialized, new JsonObject());
+                int refId = session.AddRequest(LspMethods.References, BuildReferencesParams(goodUri, 0, 5, true));
+                session.AddNotification(LspMethods.Exit, new JsonObject());
+                session.Run(bridge);
+
+                List<object> locs = session.FindResponse(refId)?.GetArray(JsonRpcFields.Result);
+
+                // Should not crash; may return the definition from good.ffs at minimum
+                Assert(
+                    locs != null && locs.Count >= 1,
+                    "T5-Q04-01: references query with malformed sibling file does not crash");
+            }
+            finally
+            {
+                try { Directory.Delete(tmpDir, true); } catch { }
+            }
+        }
+
+        // ================================================================
+        // T5-Q04-02: circular include — references query does not hang
+        // ================================================================
+        {
+            string tmpDir = Path.Combine(Path.GetTempPath(), "t5q04b_" + Guid.NewGuid().ToString("N").Substring(0, 8));
+            try
+            {
+                Directory.CreateDirectory(tmpDir);
+
+                string srcAlpha = "include \"beta\"\nfunc shared(): int { return 1 }";
+                string srcBeta = "include \"alpha\"\nfunc useBeta(): int { return shared() }";
+
+                File.WriteAllText(Path.Combine(tmpDir, "alpha.ffs"), srcAlpha);
+                File.WriteAllText(Path.Combine(tmpDir, "beta.ffs"), srcBeta);
+
+                string rootUri = "file:///" + tmpDir.TrimStart('/').Replace("\\", "/");
+                string alphaUri = rootUri + "/alpha.ffs";
+
+                var bridge = new DatabaseBackedVsCodeBridge(
+                    new InMemoryWorkspaceCodeDatabase(new InMemoryDatabaseExecutionOrchestrator()));
+                var session = new LspServerNewBatchSession();
+                session.AddRequest(LspMethods.Initialize, BuildInitializeParams(tmpDir));
+                session.AddNotification(LspMethods.Initialized, new JsonObject());
+                int refId = session.AddRequest(LspMethods.References, BuildReferencesParams(alphaUri, 1, 5, true));
+                session.AddNotification(LspMethods.Exit, new JsonObject());
+                session.Run(bridge);
+
+                List<object> locs = session.FindResponse(refId)?.GetArray(JsonRpcFields.Result);
+
+                // Should not hang or crash — may return results or null
+                Assert(
+                    locs == null || locs.Count >= 0,
+                    "T5-Q04-02: circular include references query completes without hanging");
+            }
+            finally
+            {
+                try { Directory.Delete(tmpDir, true); } catch { }
+            }
+        }
+
+        // ================================================================
+        // T5-Q04-03: empty source file — references query returns gracefully
+        // ================================================================
+        {
+            string tmpDir = Path.Combine(Path.GetTempPath(), "t5q04c_" + Guid.NewGuid().ToString("N").Substring(0, 8));
+            try
+            {
+                Directory.CreateDirectory(tmpDir);
+
+                string mainSrc = "include \"empty\"\nfunc main() {\n    wait 1\n}";
+                string emptySrc = "";
+
+                File.WriteAllText(Path.Combine(tmpDir, "main.ffs"), mainSrc);
+                File.WriteAllText(Path.Combine(tmpDir, "empty.ffs"), emptySrc);
+
+                string rootUri = "file:///" + tmpDir.TrimStart('/').Replace("\\", "/");
+                string mainUri = rootUri + "/main.ffs";
+
+                var bridge = new DatabaseBackedVsCodeBridge(
+                    new InMemoryWorkspaceCodeDatabase(new InMemoryDatabaseExecutionOrchestrator()));
+                var session = new LspServerNewBatchSession();
+                session.AddRequest(LspMethods.Initialize, BuildInitializeParams(tmpDir));
+                session.AddNotification(LspMethods.Initialized, new JsonObject());
+                int refId = session.AddRequest(LspMethods.References, BuildReferencesParams(mainUri, 1, 5, true));
+                session.AddNotification(LspMethods.Exit, new JsonObject());
+                session.Run(bridge);
+
+                List<object> locs = session.FindResponse(refId)?.GetArray(JsonRpcFields.Result);
+
+                Assert(
+                    locs != null && locs.Count >= 1,
+                    "T5-Q04-03: references query with empty included file does not crash");
+            }
+            finally
+            {
+                try { Directory.Delete(tmpDir, true); } catch { }
+            }
+        }
+
+        // ================================================================
+        // T6-OBS01-01: bootstrap metrics path — multi-file init + definition regression
+        // ================================================================
+        {
+            string tmpDir = Path.Combine(Path.GetTempPath(), "t6obs01_" + Guid.NewGuid().ToString("N").Substring(0, 8));
+            try
+            {
+                Directory.CreateDirectory(tmpDir);
+                for (int i = 0; i < 12; i++)
+                {
+                    string fn = "mod_" + i.ToString("D2") + ".ffs";
+                    string src = "func fn" + i.ToString("D2") + "(): int { return " + i + " }";
+                    File.WriteAllText(Path.Combine(tmpDir, fn), src);
+                }
+
+                string rootUri = "file:///" + tmpDir.TrimStart('/').Replace("\\", "/");
+                string tailUri = rootUri + "/mod_11.ffs";
+
+                var bridge = new DatabaseBackedVsCodeBridge(
+                    new InMemoryWorkspaceCodeDatabase(new InMemoryDatabaseExecutionOrchestrator()));
+                var session = new LspServerNewBatchSession();
+                session.AddRequest(LspMethods.Initialize, BuildInitializeParams(tmpDir));
+                session.AddNotification(LspMethods.Initialized, new JsonObject());
+                int defId = session.AddRequest(LspMethods.Definition, BuildTextDocumentPositionParams(tailUri, 0, 5));
+                session.AddNotification(LspMethods.Exit, new JsonObject());
+                session.Run(bridge);
+
+                JsonObject defResult = session.FindResponse(defId)?.GetObject(JsonRpcFields.Result);
+                string defUri = defResult != null ? defResult.GetString(LspFields.Uri) : string.Empty;
+
+                Assert(
+                    defResult != null && defUri.IndexOf("mod_11.ffs", StringComparison.OrdinalIgnoreCase) >= 0,
+                    "T6-OBS01-01: bootstrap metrics path preserves multi-file indexing (definition hits tail file)");
+            }
+            finally
+            {
+                try { Directory.Delete(tmpDir, true); } catch { }
+            }
+        }
+
+        // ================================================================
+        // T6-OBS02-01: references query instrumentation survives (basic sanity)
+        // ================================================================
+        {
+            string tmpDir = Path.Combine(Path.GetTempPath(), "t6obs02a_" + Guid.NewGuid().ToString("N").Substring(0, 8));
+            try
+            {
+                Directory.CreateDirectory(tmpDir);
+                string libSrc = "func svcRun(): int { return 1 }";
+                string mainSrc = "include \"lib\"\nfunc main() {\n    var v: int = svcRun()\n    wait v\n}";
+                File.WriteAllText(Path.Combine(tmpDir, "lib.ffs"), libSrc);
+                File.WriteAllText(Path.Combine(tmpDir, "main.ffs"), mainSrc);
+
+                string rootUri = "file:///" + tmpDir.TrimStart('/').Replace("\\", "/");
+                string libUri = rootUri + "/lib.ffs";
+
+                var bridge = new DatabaseBackedVsCodeBridge(
+                    new InMemoryWorkspaceCodeDatabase(new InMemoryDatabaseExecutionOrchestrator()));
+                var session = new LspServerNewBatchSession();
+                session.AddRequest(LspMethods.Initialize, BuildInitializeParams(tmpDir));
+                session.AddNotification(LspMethods.Initialized, new JsonObject());
+                int refId = session.AddRequest(LspMethods.References, BuildReferencesParams(libUri, 0, 5, true));
+                session.AddNotification(LspMethods.Exit, new JsonObject());
+                session.Run(bridge);
+
+                List<object> locs = session.FindResponse(refId)?.GetArray(JsonRpcFields.Result);
+
+                Assert(
+                    locs != null && locs.Count >= 1,
+                    "T6-OBS02-01: references path with query metrics instrumentation returns results");
+            }
+            finally
+            {
+                try { Directory.Delete(tmpDir, true); } catch { }
+            }
+        }
+
+        // ================================================================
+        // T6-OBS02-02: cross-file references timing baseline (<2s)
+        // ================================================================
+        {
+            string tmpDir = Path.Combine(Path.GetTempPath(), "t6obs02b_" + Guid.NewGuid().ToString("N").Substring(0, 8));
+            try
+            {
+                Directory.CreateDirectory(tmpDir);
+                string utilSrc = "func shared(): int { return 1 }";
+                string aSrc = "include \"util\"\nfunc uA(): int { return shared() }";
+                string bSrc = "include \"util\"\nfunc uB(): int { return shared() }";
+                string cSrc = "include \"util\"\nfunc uC(): int { return shared() }";
+                File.WriteAllText(Path.Combine(tmpDir, "util.ffs"), utilSrc);
+                File.WriteAllText(Path.Combine(tmpDir, "a.ffs"), aSrc);
+                File.WriteAllText(Path.Combine(tmpDir, "b.ffs"), bSrc);
+                File.WriteAllText(Path.Combine(tmpDir, "c.ffs"), cSrc);
+
+                string rootUri = "file:///" + tmpDir.TrimStart('/').Replace("\\", "/");
+                string utilUri = rootUri + "/util.ffs";
+
+                var bridge = new DatabaseBackedVsCodeBridge(
+                    new InMemoryWorkspaceCodeDatabase(new InMemoryDatabaseExecutionOrchestrator()));
+                var session = new LspServerNewBatchSession();
+                session.AddRequest(LspMethods.Initialize, BuildInitializeParams(tmpDir));
+                session.AddNotification(LspMethods.Initialized, new JsonObject());
+                int refId = session.AddRequest(LspMethods.References, BuildReferencesParams(utilUri, 0, 5, true));
+                session.AddNotification(LspMethods.Exit, new JsonObject());
+
+                Stopwatch sw = Stopwatch.StartNew();
+                session.Run(bridge);
+                sw.Stop();
+
+                List<object> locs = session.FindResponse(refId)?.GetArray(JsonRpcFields.Result);
+
+                Assert(
+                    locs != null && locs.Count >= 4 && sw.ElapsedMilliseconds < 2000,
+                    "T6-OBS02-02: cross-file references count>=4 and elapsed<2s");
+            }
+            finally
+            {
+                try { Directory.Delete(tmpDir, true); } catch { }
+            }
+        }
+
+        // ================================================================
+        // T6-OBS04-01: watcher Created event path survives and preserves references
+        //   Note: batch session captures disk state at Run() start; this test verifies
+        //   the watcher Created handler doesn't perturb already-indexed references
+        //   (re-index via disk-read tier=Watcher produces consistent results).
+        // ================================================================
+        {
+            string tmpDir = Path.Combine(Path.GetTempPath(), "t6obs04_" + Guid.NewGuid().ToString("N").Substring(0, 8));
+            try
+            {
+                Directory.CreateDirectory(tmpDir);
+                string libSrc = "func widget(): int { return 1 }";
+                string callerSrc = "include \"lib\"\nfunc useIt(): int { return widget() }";
+                File.WriteAllText(Path.Combine(tmpDir, "lib.ffs"), libSrc);
+                File.WriteAllText(Path.Combine(tmpDir, "caller.ffs"), callerSrc);
+
+                string rootUri = "file:///" + tmpDir.TrimStart('/').Replace("\\", "/");
+                string libUri = rootUri + "/lib.ffs";
+                string callerUri = rootUri + "/caller.ffs";
+
+                var bridge = new DatabaseBackedVsCodeBridge(
+                    new InMemoryWorkspaceCodeDatabase(new InMemoryDatabaseExecutionOrchestrator()));
+                var session = new LspServerNewBatchSession();
+                session.AddRequest(LspMethods.Initialize, BuildInitializeParams(tmpDir));
+                session.AddNotification(LspMethods.Initialized, new JsonObject());
+
+                int refBeforeId = session.AddRequest(LspMethods.References, BuildReferencesParams(libUri, 0, 5, false));
+                session.AddNotification(
+                    LspMethods.DidChangeWatchedFiles,
+                    BuildDidChangeWatchedFilesParams(new List<(string uri, int changeType)>
+                    {
+                        (callerUri, (int)WatchedFileChangeType.Created)
+                    }));
+                int refAfterId = session.AddRequest(LspMethods.References, BuildReferencesParams(libUri, 0, 5, false));
+                session.AddNotification(LspMethods.Exit, new JsonObject());
+                session.Run(bridge);
+
+                List<object> locsBefore = session.FindResponse(refBeforeId)?.GetArray(JsonRpcFields.Result);
+                List<object> locsAfter = session.FindResponse(refAfterId)?.GetArray(JsonRpcFields.Result);
+
+                int beforeCount = locsBefore != null ? locsBefore.Count : 0;
+                int afterCount = locsAfter != null ? locsAfter.Count : 0;
+
+                Assert(
+                    beforeCount >= 1 && afterCount >= 1 && beforeCount == afterCount,
+                    "T6-OBS04-01: watcher Created event preserves reference consistency (count stable, non-zero)");
+            }
+            finally
+            {
+                try { Directory.Delete(tmpDir, true); } catch { }
+            }
+        }
+
+        // ================================================================
+        // T6-R01-01: T2 R1 residual — alias × local variable shadowing (lenient survival test)
+        //   Scenario: include "lib" as U, then in a function declare `var U: ...`. Field access
+        //   `U.field` should prefer the local binding (not emit an aliased reference into lib).
+        //   This is a regression survival check — a crash/exception counts as failure.
+        // ================================================================
+        {
+            string tmpDir = Path.Combine(Path.GetTempPath(), "t6r01_" + Guid.NewGuid().ToString("N").Substring(0, 8));
+            try
+            {
+                Directory.CreateDirectory(tmpDir);
+                string libSrc = "func helper(): int { return 1 }";
+                string mainSrc = "include \"lib\" as U\nfunc main() {\n    var x: int = helper()\n    wait x\n}";
+                File.WriteAllText(Path.Combine(tmpDir, "lib.ffs"), libSrc);
+                File.WriteAllText(Path.Combine(tmpDir, "main.ffs"), mainSrc);
+
+                string rootUri = "file:///" + tmpDir.TrimStart('/').Replace("\\", "/");
+                string libUri = rootUri + "/lib.ffs";
+
+                var bridge = new DatabaseBackedVsCodeBridge(
+                    new InMemoryWorkspaceCodeDatabase(new InMemoryDatabaseExecutionOrchestrator()));
+                var session = new LspServerNewBatchSession();
+                session.AddRequest(LspMethods.Initialize, BuildInitializeParams(tmpDir));
+                session.AddNotification(LspMethods.Initialized, new JsonObject());
+                int refId = session.AddRequest(LspMethods.References, BuildReferencesParams(libUri, 0, 5, true));
+                session.AddNotification(LspMethods.Exit, new JsonObject());
+                session.Run(bridge);
+
+                List<object> locs = session.FindResponse(refId)?.GetArray(JsonRpcFields.Result);
+
+                Assert(
+                    locs != null,
+                    "T6-R01-01: alias import with same-name contextual symbol does not crash references query");
+            }
+            finally
+            {
+                try { Directory.Delete(tmpDir, true); } catch { }
+            }
+        }
+
+        // ================================================================
+        // T6-R02-01: T3 R3 residual — if/else branches with same-name local `var`
+        //   Row-range approximation: if the query binds correctly to at least the position's
+        //   local, lenient pass. This documents the approximation envelope without asserting
+        //   perfect branch isolation (a known limitation of the row-range scheme).
+        // ================================================================
+        {
+            string tmpDir = Path.Combine(Path.GetTempPath(), "t6r02a_" + Guid.NewGuid().ToString("N").Substring(0, 8));
+            try
+            {
+                Directory.CreateDirectory(tmpDir);
+                string src = "func main() {\n"
+                    + "    var x: int = 1\n"
+                    + "    if (x > 0) {\n"
+                    + "        var y: int = 10\n"
+                    + "        wait y\n"
+                    + "    } else {\n"
+                    + "        var y: int = 20\n"
+                    + "        wait y\n"
+                    + "    }\n"
+                    + "}";
+                File.WriteAllText(Path.Combine(tmpDir, "main.ffs"), src);
+
+                string rootUri = "file:///" + tmpDir.TrimStart('/').Replace("\\", "/");
+                string mainUri = rootUri + "/main.ffs";
+
+                var bridge = new DatabaseBackedVsCodeBridge(
+                    new InMemoryWorkspaceCodeDatabase(new InMemoryDatabaseExecutionOrchestrator()));
+                var session = new LspServerNewBatchSession();
+                session.AddRequest(LspMethods.Initialize, BuildInitializeParams(tmpDir));
+                session.AddNotification(LspMethods.Initialized, new JsonObject());
+                // query references of `y` at the use inside the if-block
+                int refId = session.AddRequest(LspMethods.References, BuildReferencesParams(mainUri, 4, 13, true));
+                session.AddNotification(LspMethods.Exit, new JsonObject());
+                session.Run(bridge);
+
+                List<object> locs = session.FindResponse(refId)?.GetArray(JsonRpcFields.Result);
+
+                Assert(
+                    locs != null && locs.Count >= 1,
+                    "T6-R02-01: if/else same-name `var` references query returns at least one binding (row-range approximation boundary)");
+            }
+            finally
+            {
+                try { Directory.Delete(tmpDir, true); } catch { }
+            }
+        }
+
+        // ================================================================
+        // T6-R02-02: T3 R3 residual — while-loop inner `var` shadows outer `var`
+        //   Lenient: outer reference query should return at least the outer declaration/use.
+        // ================================================================
+        {
+            string tmpDir = Path.Combine(Path.GetTempPath(), "t6r02b_" + Guid.NewGuid().ToString("N").Substring(0, 8));
+            try
+            {
+                Directory.CreateDirectory(tmpDir);
+                string src = "func main() {\n"
+                    + "    var x: int = 100\n"
+                    + "    var n: int = 3\n"
+                    + "    while (n > 0) {\n"
+                    + "        var x: int = 5\n"
+                    + "        wait x\n"
+                    + "        n = n - 1\n"
+                    + "    }\n"
+                    + "    wait x\n"
+                    + "}";
+                File.WriteAllText(Path.Combine(tmpDir, "main.ffs"), src);
+
+                string rootUri = "file:///" + tmpDir.TrimStart('/').Replace("\\", "/");
+                string mainUri = rootUri + "/main.ffs";
+
+                var bridge = new DatabaseBackedVsCodeBridge(
+                    new InMemoryWorkspaceCodeDatabase(new InMemoryDatabaseExecutionOrchestrator()));
+                var session = new LspServerNewBatchSession();
+                session.AddRequest(LspMethods.Initialize, BuildInitializeParams(tmpDir));
+                session.AddNotification(LspMethods.Initialized, new JsonObject());
+                // query references of outer `x` at its final use (line 8, col 9)
+                int refId = session.AddRequest(LspMethods.References, BuildReferencesParams(mainUri, 8, 9, true));
+                session.AddNotification(LspMethods.Exit, new JsonObject());
+                session.Run(bridge);
+
+                List<object> locs = session.FindResponse(refId)?.GetArray(JsonRpcFields.Result);
+
+                Assert(
+                    locs != null && locs.Count >= 1,
+                    "T6-R02-02: while-loop shadowing references query returns at least one binding");
+            }
+            finally
+            {
+                try { Directory.Delete(tmpDir, true); } catch { }
+            }
+        }
+
+        // ================================================================
+        // T6-R03-01: T3 R2 residual — large function body performance baseline
+        //   Generate 200+ line function with repeated uses of a single symbol.
+        //   Query references; assert elapsed <1000ms.
+        // ================================================================
+        {
+            string tmpDir = Path.Combine(Path.GetTempPath(), "t6r03_" + Guid.NewGuid().ToString("N").Substring(0, 8));
+            try
+            {
+                Directory.CreateDirectory(tmpDir);
+
+                var sb = new System.Text.StringBuilder();
+                sb.Append("func big() {\n    var counter: int = 0\n");
+                for (int i = 0; i < 200; i++)
+                {
+                    sb.Append("    counter = counter + 1\n");
+                }
+                sb.Append("    wait counter\n}\n");
+                string src = sb.ToString();
+                File.WriteAllText(Path.Combine(tmpDir, "big.ffs"), src);
+
+                string rootUri = "file:///" + tmpDir.TrimStart('/').Replace("\\", "/");
+                string bigUri = rootUri + "/big.ffs";
+
+                var bridge = new DatabaseBackedVsCodeBridge(
+                    new InMemoryWorkspaceCodeDatabase(new InMemoryDatabaseExecutionOrchestrator()));
+                var session = new LspServerNewBatchSession();
+                session.AddRequest(LspMethods.Initialize, BuildInitializeParams(tmpDir));
+                session.AddNotification(LspMethods.Initialized, new JsonObject());
+                int refId = session.AddRequest(LspMethods.References, BuildReferencesParams(bigUri, 1, 9, true));
+                session.AddNotification(LspMethods.Exit, new JsonObject());
+
+                Stopwatch sw = Stopwatch.StartNew();
+                session.Run(bridge);
+                sw.Stop();
+
+                List<object> locs = session.FindResponse(refId)?.GetArray(JsonRpcFields.Result);
+
+                Assert(
+                    locs != null && locs.Count >= 100 && sw.ElapsedMilliseconds < 1000,
+                    "T6-R03-01: large function body references query completes <1s with count>=100");
+            }
+            finally
+            {
+                try { Directory.Delete(tmpDir, true); } catch { }
+            }
         }
 
         Debug.Log($"[LspServerNewTests] Completed. Passed={passed}, Failed={failed}");

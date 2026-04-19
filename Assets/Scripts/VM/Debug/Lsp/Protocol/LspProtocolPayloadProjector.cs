@@ -11,9 +11,62 @@ namespace FFVM.Debug.Lsp.Protocol
         public static JsonObject CreateInitializeResult()
         {
             var result = new JsonObject();
-
-            // Minimal capability payload to complete VS Code initialize handshake.
             var capabilities = new JsonObject();
+
+            var textDocumentSync = new JsonObject();
+            textDocumentSync.Set("openClose", true);
+            textDocumentSync.Set("change", 1);
+            capabilities.Set("textDocumentSync", textDocumentSync);
+
+            capabilities.Set("documentSymbolProvider", true);
+            capabilities.Set("hoverProvider", true);
+            capabilities.Set("definitionProvider", true);
+            capabilities.Set("referencesProvider", true);
+
+            var completionProvider = new JsonObject();
+            completionProvider.Set("triggerCharacters", new List<object> { "." });
+            capabilities.Set("completionProvider", completionProvider);
+
+            var signatureHelpProvider = new JsonObject();
+            signatureHelpProvider.Set("triggerCharacters", new List<object> { "(", "," });
+            capabilities.Set("signatureHelpProvider", signatureHelpProvider);
+
+            var renameProvider = new JsonObject();
+            renameProvider.Set("prepareProvider", true);
+            capabilities.Set("renameProvider", renameProvider);
+
+            var semanticTokensProvider = new JsonObject();
+            semanticTokensProvider.Set("full", true);
+            var legend = new JsonObject();
+            legend.Set("tokenTypes", new List<object>
+            {
+                "type",
+                "struct",
+                "enum",
+                "enumMember",
+                "property",
+                "variable",
+                "function",
+                "parameter",
+                "string",
+                "keyword"
+            });
+            legend.Set("tokenModifiers", new List<object> { "declaration", "definition" });
+            semanticTokensProvider.Set("legend", legend);
+            capabilities.Set("semanticTokensProvider", semanticTokensProvider);
+
+            var workspace = new JsonObject();
+            var fileOperations = new JsonObject();
+            var willRename = new JsonObject();
+            var pattern = new JsonObject();
+            pattern.Set("glob", "**/*.ffs");
+            var filter = new JsonObject();
+            filter.Set("pattern", pattern);
+            willRename.Set("filters", new List<object> { filter });
+            fileOperations.Set("willRename", willRename);
+            workspace.Set("fileOperations", fileOperations);
+            capabilities.Set("workspace", workspace);
+
             result.Set(LspFields.Capabilities, capabilities);
 
             var serverInfo = new JsonObject();
@@ -240,9 +293,10 @@ namespace FFVM.Debug.Lsp.Protocol
 
         private static JsonObject MakeRangeFromSpan(TextSpan span)
         {
-            int start = span.Start < 0 ? 0 : span.Start;
-            int length = span.Length <= 0 ? 1 : span.Length;
-            return MakeRange(0, start, 0, start + length);
+            // TextSpan carries byte offsets, not line/column.
+            // Without the source text we cannot convert accurately,
+            // so fall back to the start of the file (line 0, char 0).
+            return MakeRange(0, 0, 0, 0);
         }
 
         private static JsonObject MakeRange(int startLine, int startCharacter, int endLine, int endCharacter)

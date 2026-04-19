@@ -423,10 +423,14 @@ namespace FFVM.Cli
                 {
                     useLegacy = false;
                 }
+                else if (string.Equals(option, "--stdio", StringComparison.OrdinalIgnoreCase))
+                {
+                    // stdio is the only supported transport; accept for VS Code LSP client compatibility.
+                }
                 else
                 {
                     Console.Error.WriteLine($"Unknown option for lsp: {option}");
-                    Console.Error.WriteLine("Usage: ffvm lsp [--new|--legacy]");
+                    Console.Error.WriteLine("Usage: ffvm lsp [--new|--legacy] [--stdio]");
                     return 1;
                 }
             }

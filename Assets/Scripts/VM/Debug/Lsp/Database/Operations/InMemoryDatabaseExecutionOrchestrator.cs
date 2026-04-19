@@ -1494,7 +1494,7 @@ namespace FFVM.Debug.Lsp.Database
 			Dictionary<string, Dictionary<string, SymbolIdentity>> parameterSymbolsByFunc = EmitParameterDefinitionFacts(
 				module, source, normalizedDocument, documentPath, aggregateId, snapshotVersion, output, ref definitionOrdinal);
 
-			Dictionary<string, Dictionary<string, SymbolIdentity>> localVarSymbolsByFunc = EmitLocalVarDefinitionFacts(
+			var localVarSymbolsByFunc = EmitLocalVarDefinitionFacts(
 				module, source, normalizedDocument, documentPath, aggregateId, snapshotVersion, output, ref definitionOrdinal);
 
 			int referenceOrdinal = 0;
@@ -1705,7 +1705,7 @@ namespace FFVM.Debug.Lsp.Database
 					if (string.IsNullOrWhiteSpace(candidateUri) || !visitedTargets.Add(candidateUri))
 						continue;
 
-					if (!TryReadImportedStructFieldSymbols(candidateUri, out Dictionary<string, Dictionary<string, StructFieldDescriptor>> importedSymbols))
+					if (!TryReadImportedStructFieldSymbols(candidateUri, out Dictionary<string, Dictionary<string, StructFieldDescriptor>> importedSymbols, visitedTargets))
 						continue;
 
 					MergeStructFieldSymbolsInto(symbolsByStruct, importedSymbols);
@@ -1718,7 +1718,8 @@ namespace FFVM.Debug.Lsp.Database
 
 		private static bool TryReadImportedStructFieldSymbols(
 			string importedDocumentUri,
-			out Dictionary<string, Dictionary<string, StructFieldDescriptor>> symbolsByStruct)
+			out Dictionary<string, Dictionary<string, StructFieldDescriptor>> symbolsByStruct,
+			HashSet<string> visitedTargets)
 		{
 			symbolsByStruct = new Dictionary<string, Dictionary<string, StructFieldDescriptor>>(StringComparer.OrdinalIgnoreCase);
 			string normalizedUri = NormalizeDocumentKey(importedDocumentUri);
@@ -1741,44 +1742,76 @@ namespace FFVM.Debug.Lsp.Database
 
 			var parser = new Parser();
 			ModuleNode module = parser.Parse(source ?? string.Empty, out _);
-			if (module == null || module.Structs == null || module.Structs.Count == 0)
+			if (module == null)
 				return true;
 
-			for (int i = 0; i < module.Structs.Count; i++)
+			if (module.Structs != null)
 			{
-				StructDecl structDecl = module.Structs[i];
-				if (structDecl == null || string.IsNullOrWhiteSpace(structDecl.Name) || structDecl.Fields == null)
-					continue;
-
-				if (!symbolsByStruct.TryGetValue(structDecl.Name, out Dictionary<string, StructFieldDescriptor> fieldsByName))
+				for (int i = 0; i < module.Structs.Count; i++)
 				{
-					fieldsByName = new Dictionary<string, StructFieldDescriptor>(StringComparer.OrdinalIgnoreCase);
-					symbolsByStruct[structDecl.Name] = fieldsByName;
+					StructDecl structDecl = module.Structs[i];
+					if (structDecl == null || string.IsNullOrWhiteSpace(structDecl.Name) || structDecl.Fields == null)
+						continue;
+					if (structDecl.IsPrivate) continue;
+
+					if (!symbolsByStruct.TryGetValue(structDecl.Name, out Dictionary<string, StructFieldDescriptor> fieldsByName))
+					{
+						fieldsByName = new Dictionary<string, StructFieldDescriptor>(StringComparer.OrdinalIgnoreCase);
+						symbolsByStruct[structDecl.Name] = fieldsByName;
+					}
+
+					for (int fieldIndex = 0; fieldIndex < structDecl.Fields.Count; fieldIndex++)
+					{
+						StructField field = structDecl.Fields[fieldIndex];
+						if (field == null || string.IsNullOrWhiteSpace(field.Name))
+							continue;
+
+						int fieldLine = field.Line > 0 ? field.Line : structDecl.Line;
+						int fieldColumn = field.Column > 0 ? field.Column : structDecl.Column;
+						if (!TryCreateSpanFromLineColumn(source, fieldLine, fieldColumn, field.Name.Length, out TextSpan span, out _, out _, out _, out _))
+							continue;
+
+						if (fieldsByName.ContainsKey(field.Name))
+							continue;
+
+						fieldsByName[field.Name] = new StructFieldDescriptor(
+							new SymbolIdentity(
+								SymbolKindTag.StructField,
+								field.Name,
+								BuildStructFieldPath(structDecl.Name, field.Name),
+								structDecl.Name,
+								normalizedUri,
+								span),
+							field.TypeName);
+					}
 				}
+			}
 
-				for (int fieldIndex = 0; fieldIndex < structDecl.Fields.Count; fieldIndex++)
+			// CFR-03: recursively follow transitive includes
+			if (module.Imports != null)
+			{
+				for (int i = 0; i < module.Imports.Count; i++)
 				{
-					StructField field = structDecl.Fields[fieldIndex];
-					if (field == null || string.IsNullOrWhiteSpace(field.Name))
+					ImportDecl import = module.Imports[i];
+					if (import == null || string.IsNullOrWhiteSpace(import.ModulePath))
+						continue;
+					if (!string.IsNullOrEmpty(import.Alias))
 						continue;
 
-					int fieldLine = field.Line > 0 ? field.Line : structDecl.Line;
-					int fieldColumn = field.Column > 0 ? field.Column : structDecl.Column;
-					if (!TryCreateSpanFromLineColumn(source, fieldLine, fieldColumn, field.Name.Length, out TextSpan span, out _, out _, out _, out _))
+					List<string> candidates = IncludeTargetResolver.ResolveCandidates(normalizedUri, import.ModulePath);
+					if (candidates == null || candidates.Count == 0)
 						continue;
 
-					if (fieldsByName.ContainsKey(field.Name))
-						continue;
-
-					fieldsByName[field.Name] = new StructFieldDescriptor(
-						new SymbolIdentity(
-							SymbolKindTag.StructField,
-							field.Name,
-							BuildStructFieldPath(structDecl.Name, field.Name),
-							structDecl.Name,
-							normalizedUri,
-							span),
-						field.TypeName);
+					for (int ci = 0; ci < candidates.Count; ci++)
+					{
+						string candidateUri = NormalizeDocumentKey(candidates[ci]);
+						if (string.IsNullOrWhiteSpace(candidateUri) || !visitedTargets.Add(candidateUri))
+							continue;
+						if (!TryReadImportedStructFieldSymbols(candidateUri, out Dictionary<string, Dictionary<string, StructFieldDescriptor>> transitiveSymbols, visitedTargets))
+							continue;
+						MergeStructFieldSymbolsInto(symbolsByStruct, transitiveSymbols);
+						break;
+					}
 				}
 			}
 
@@ -2615,7 +2648,7 @@ namespace FFVM.Debug.Lsp.Database
 					if (string.IsNullOrWhiteSpace(candidateUri) || !visitedTargets.Add(candidateUri))
 						continue;
 
-					if (!TryReadImportedFunctionSymbols(candidateUri, out Dictionary<string, SymbolIdentity> importedSymbols))
+					if (!TryReadImportedFunctionSymbols(candidateUri, out Dictionary<string, SymbolIdentity> importedSymbols, visitedTargets))
 						continue;
 
 					foreach (KeyValuePair<string, SymbolIdentity> pair in importedSymbols)
@@ -2633,7 +2666,8 @@ namespace FFVM.Debug.Lsp.Database
 
 		private static bool TryReadImportedFunctionSymbols(
 			string importedDocumentUri,
-			out Dictionary<string, SymbolIdentity> symbols)
+			out Dictionary<string, SymbolIdentity> symbols,
+			HashSet<string> visitedTargets)
 		{
 			symbols = new Dictionary<string, SymbolIdentity>(StringComparer.OrdinalIgnoreCase);
 			string normalizedUri = NormalizeDocumentKey(importedDocumentUri);
@@ -2656,29 +2690,65 @@ namespace FFVM.Debug.Lsp.Database
 
 			var parser = new Parser();
 			ModuleNode module = parser.Parse(source ?? string.Empty, out _);
-			if (module == null || module.Functions == null || module.Functions.Count == 0)
+			if (module == null)
 				return true;
 
-			for (int i = 0; i < module.Functions.Count; i++)
+			if (module.Functions != null)
 			{
-				FuncDecl function = module.Functions[i];
-				if (function == null || string.IsNullOrWhiteSpace(function.Name))
-					continue;
-
-				int nameLine = function.Line;
-				int nameColumn = ResolveFunctionNameColumn(function, source);
-				if (!TryCreateSpanFromLineColumn(source, nameLine, nameColumn, function.Name.Length, out TextSpan span, out _, out _, out _, out _))
-					continue;
-
-				if (!symbols.ContainsKey(function.Name))
+				for (int i = 0; i < module.Functions.Count; i++)
 				{
-					symbols[function.Name] = new SymbolIdentity(
-						SymbolKindTag.Function,
-						function.Name,
-						string.Empty,
-						string.Empty,
-						normalizedUri,
-						span);
+					FuncDecl function = module.Functions[i];
+					if (function == null || string.IsNullOrWhiteSpace(function.Name))
+						continue;
+					if (function.IsPrivate) continue;
+
+					int nameLine = function.Line;
+					int nameColumn = ResolveFunctionNameColumn(function, source);
+					if (!TryCreateSpanFromLineColumn(source, nameLine, nameColumn, function.Name.Length, out TextSpan span, out _, out _, out _, out _))
+						continue;
+
+					if (!symbols.ContainsKey(function.Name))
+					{
+						symbols[function.Name] = new SymbolIdentity(
+							SymbolKindTag.Function,
+							function.Name,
+							string.Empty,
+							string.Empty,
+							normalizedUri,
+							span);
+					}
+				}
+			}
+
+			// CFR-03: recursively follow transitive includes
+			if (module.Imports != null)
+			{
+				for (int i = 0; i < module.Imports.Count; i++)
+				{
+					ImportDecl import = module.Imports[i];
+					if (import == null || string.IsNullOrWhiteSpace(import.ModulePath))
+						continue;
+					if (!string.IsNullOrEmpty(import.Alias))
+						continue;
+
+					List<string> candidates = IncludeTargetResolver.ResolveCandidates(normalizedUri, import.ModulePath);
+					if (candidates == null || candidates.Count == 0)
+						continue;
+
+					for (int ci = 0; ci < candidates.Count; ci++)
+					{
+						string candidateUri = NormalizeDocumentKey(candidates[ci]);
+						if (string.IsNullOrWhiteSpace(candidateUri) || !visitedTargets.Add(candidateUri))
+							continue;
+						if (!TryReadImportedFunctionSymbols(candidateUri, out Dictionary<string, SymbolIdentity> transitiveSymbols, visitedTargets))
+							continue;
+						foreach (KeyValuePair<string, SymbolIdentity> pair in transitiveSymbols)
+						{
+							if (!symbols.ContainsKey(pair.Key) && pair.Value != null)
+								symbols[pair.Key] = pair.Value;
+						}
+						break;
+					}
 				}
 			}
 
@@ -2747,25 +2817,28 @@ namespace FFVM.Debug.Lsp.Database
 			return result;
 		}
 
-		private static Dictionary<string, Dictionary<string, SymbolIdentity>> EmitLocalVarDefinitionFacts(
+		private static Dictionary<string, List<(string name, SymbolIdentity symbol, int scopeStart, int scopeEnd)>> EmitLocalVarDefinitionFacts(
 			ModuleNode module, string source, string normalizedDocument,
 			PathKey documentPath, DataAggregateId aggregateId, long snapshotVersion,
 			List<DataFact> output, ref int definitionOrdinal)
 		{
-			var result = new Dictionary<string, Dictionary<string, SymbolIdentity>>(StringComparer.OrdinalIgnoreCase);
+			var result = new Dictionary<string, List<(string name, SymbolIdentity symbol, int scopeStart, int scopeEnd)>>(StringComparer.OrdinalIgnoreCase);
 			if (module == null || module.Functions == null) return result;
-			var varDeclCollector = new List<VarDeclStmt>();
+			var scopedCollector = new List<(VarDeclStmt v, int scopeStart, int scopeEnd)>();
 			for (int fi = 0; fi < module.Functions.Count; fi++)
 			{
 				FuncDecl function = module.Functions[fi];
 				if (function == null || string.IsNullOrWhiteSpace(function.Name) || function.Body == null) continue;
-				varDeclCollector.Clear();
-				CollectVarDeclStmtsFromBody(function.Body, varDeclCollector);
-				if (varDeclCollector.Count == 0) continue;
-				var localSymbols = new Dictionary<string, SymbolIdentity>(StringComparer.OrdinalIgnoreCase);
-				for (int vi = 0; vi < varDeclCollector.Count; vi++)
+				scopedCollector.Clear();
+				int bodyEnd = ComputeMaxLine(function.Body);
+				CollectScopedVarDecls(function.Body, function.Body.Line, bodyEnd, scopedCollector);
+				if (scopedCollector.Count == 0) continue;
+				var scopedList = new List<(string name, SymbolIdentity symbol, int scopeStart, int scopeEnd)>();
+				for (int vi = 0; vi < scopedCollector.Count; vi++)
 				{
-					VarDeclStmt v = varDeclCollector[vi];
+					VarDeclStmt v = scopedCollector[vi].v;
+					int scopeStart = scopedCollector[vi].scopeStart;
+					int scopeEnd = scopedCollector[vi].scopeEnd;
 					if (v == null || string.IsNullOrWhiteSpace(v.Name)) continue;
 					int nameLine = v.NameLine > 0 ? v.NameLine : v.Line;
 					int nameColumn = v.NameColumn > 0 ? v.NameColumn : v.Column;
@@ -2778,11 +2851,10 @@ namespace FFVM.Debug.Lsp.Database
 						new DataFactId(BuildFactId("def", normalizedDocument, definitionOrdinal++, v.Name, sl, sc)),
 						aggregateId, DataFactKind.SymbolDefinition, documentPath, span, snapshotVersion,
 						new SymbolDataFactPayload(symbol, sl, sc, el, ec)));
-					if (!localSymbols.ContainsKey(v.Name))
-						localSymbols[v.Name] = symbol;
+					scopedList.Add((v.Name, symbol, scopeStart, scopeEnd));
 				}
-				if (localSymbols.Count > 0 && !result.ContainsKey(function.Name))
-					result[function.Name] = localSymbols;
+				if (scopedList.Count > 0 && !result.ContainsKey(function.Name))
+					result[function.Name] = scopedList;
 			}
 			return result;
 		}
@@ -2813,6 +2885,92 @@ namespace FFVM.Debug.Lsp.Database
 			}
 			if (stmt is DeferStmt ds) { CollectVarDeclStmtsFromBody(ds.Body, result); return; }
 			if (stmt is UsingStmt us) { CollectVarDeclStmtsFromBody(us.Body, result); return; }
+		}
+
+		private static int ComputeMaxLine(Stmt stmt)
+		{
+			if (stmt == null) return 0;
+			int max = stmt.Line;
+			if (stmt is BlockStmt blk && blk.Statements != null)
+				for (int i = 0; i < blk.Statements.Count; i++)
+					max = Math.Max(max, ComputeMaxLine(blk.Statements[i]));
+			if (stmt is IfStmt ifs) { max = Math.Max(max, ComputeMaxLine(ifs.ThenBranch)); max = Math.Max(max, ComputeMaxLine(ifs.ElseBranch)); }
+			if (stmt is WhileStmt whs) max = Math.Max(max, ComputeMaxLine(whs.Body));
+			if (stmt is ForStmt frs) { max = Math.Max(max, ComputeMaxLine(frs.Initializer)); max = Math.Max(max, ComputeMaxLine(frs.Body)); }
+			if (stmt is DeferStmt dfs) max = Math.Max(max, ComputeMaxLine(dfs.Body));
+			if (stmt is UsingStmt uss) max = Math.Max(max, ComputeMaxLine(uss.Body));
+			return max;
+		}
+
+		private static void CollectScopedVarDecls(Stmt stmt, int scopeStartLine, int scopeEndLine,
+			List<(VarDeclStmt v, int scopeStart, int scopeEnd)> result)
+		{
+			if (stmt == null) return;
+			if (stmt is VarDeclStmt vd) { result.Add((vd, scopeStartLine, scopeEndLine)); return; }
+			if (stmt is BlockStmt blk)
+			{
+				if (blk.Statements != null)
+					for (int i = 0; i < blk.Statements.Count; i++)
+						CollectScopedVarDecls(blk.Statements[i], scopeStartLine, scopeEndLine, result);
+				return;
+			}
+			if (stmt is IfStmt ifs)
+			{
+				int thenEnd = ComputeMaxLine(ifs.ThenBranch);
+				CollectScopedVarDecls(ifs.ThenBranch, ifs.ThenBranch != null ? ifs.ThenBranch.Line : ifs.Line, thenEnd, result);
+				if (ifs.ElseBranch != null)
+				{
+					int elseEnd = ComputeMaxLine(ifs.ElseBranch);
+					CollectScopedVarDecls(ifs.ElseBranch, ifs.ElseBranch.Line, elseEnd, result);
+				}
+				return;
+			}
+			if (stmt is WhileStmt whs)
+			{
+				int whEnd = ComputeMaxLine(whs.Body);
+				CollectScopedVarDecls(whs.Body, whs.Line, whEnd, result);
+				return;
+			}
+			if (stmt is ForStmt frs)
+			{
+				int frEnd = ComputeMaxLine(frs.Body);
+				CollectScopedVarDecls(frs.Initializer, frs.Line, frEnd, result);
+				CollectScopedVarDecls(frs.Body, frs.Line, frEnd, result);
+				return;
+			}
+			if (stmt is DeferStmt dfs)
+			{
+				int dfEnd = ComputeMaxLine(dfs.Body);
+				CollectScopedVarDecls(dfs.Body, dfs.Line, dfEnd, result);
+				return;
+			}
+			if (stmt is UsingStmt uss)
+			{
+				int usEnd = ComputeMaxLine(uss.Body);
+				CollectScopedVarDecls(uss.Body, uss.Line, usEnd, result);
+				return;
+			}
+		}
+
+		private static SymbolIdentity ResolveScopedLocalVar(
+			List<(string name, SymbolIdentity symbol, int scopeStart, int scopeEnd)> scopedLocals,
+			string name, int line)
+		{
+			SymbolIdentity best = null;
+			int bestWidth = int.MaxValue;
+			for (int i = 0; i < scopedLocals.Count; i++)
+			{
+				var entry = scopedLocals[i];
+				if (!string.Equals(entry.name, name, StringComparison.OrdinalIgnoreCase)) continue;
+				if (line < entry.scopeStart || line > entry.scopeEnd) continue;
+				int width = entry.scopeEnd - entry.scopeStart;
+				if (width < bestWidth)
+				{
+					bestWidth = width;
+					best = entry.symbol;
+				}
+			}
+			return best;
 		}
 
 		private static void EmitStructNameDefinitions(
@@ -2965,43 +3123,124 @@ namespace FFVM.Debug.Lsp.Database
 
 					var parser = new Parser();
 					ModuleNode importedModule = parser.Parse(importedSource, out _);
-					if (importedModule == null || importedModule.Enums == null)
+					if (importedModule == null)
 						continue;
 
 					string importedNormalized = candidateUri;
-					for (int ei = 0; ei < importedModule.Enums.Count; ei++)
+					if (importedModule.Enums != null)
 					{
-						EnumDecl enumDecl = importedModule.Enums[ei];
-						if (enumDecl == null || string.IsNullOrWhiteSpace(enumDecl.Name) || enumDecl.Members == null)
-							continue;
-
-						if (!symbols.TryGetValue(enumDecl.Name, out Dictionary<string, SymbolIdentity> membersByName))
+						for (int ei = 0; ei < importedModule.Enums.Count; ei++)
 						{
-							membersByName = new Dictionary<string, SymbolIdentity>(StringComparer.OrdinalIgnoreCase);
-							symbols[enumDecl.Name] = membersByName;
-						}
-
-						for (int mi = 0; mi < enumDecl.Members.Count; mi++)
-						{
-							EnumMember member = enumDecl.Members[mi];
-							if (member == null || string.IsNullOrWhiteSpace(member.Name) || membersByName.ContainsKey(member.Name))
+							EnumDecl enumDecl = importedModule.Enums[ei];
+							if (enumDecl == null || string.IsNullOrWhiteSpace(enumDecl.Name) || enumDecl.Members == null)
 								continue;
+							if (enumDecl.IsPrivate) continue;
 
-							int memberLine = member.Line > 0 ? member.Line : enumDecl.Line;
-							int memberColumn = member.Column > 0 ? member.Column : enumDecl.Column;
-							if (!TryCreateSpanFromLineColumn(importedSource, memberLine, memberColumn, member.Name.Length,
-								out TextSpan span, out _, out _, out _, out _))
-								continue;
+							if (!symbols.TryGetValue(enumDecl.Name, out Dictionary<string, SymbolIdentity> membersByName))
+							{
+								membersByName = new Dictionary<string, SymbolIdentity>(StringComparer.OrdinalIgnoreCase);
+								symbols[enumDecl.Name] = membersByName;
+							}
 
-							membersByName[member.Name] = new SymbolIdentity(
-								SymbolKindTag.EnumMember,
-								member.Name,
-								enumDecl.Name + "." + member.Name,
-								enumDecl.Name,
-								importedNormalized,
-								span);
+							for (int mi = 0; mi < enumDecl.Members.Count; mi++)
+							{
+								EnumMember member = enumDecl.Members[mi];
+								if (member == null || string.IsNullOrWhiteSpace(member.Name) || membersByName.ContainsKey(member.Name))
+									continue;
+
+								int memberLine = member.Line > 0 ? member.Line : enumDecl.Line;
+								int memberColumn = member.Column > 0 ? member.Column : enumDecl.Column;
+								if (!TryCreateSpanFromLineColumn(importedSource, memberLine, memberColumn, member.Name.Length,
+									out TextSpan span, out _, out _, out _, out _))
+									continue;
+
+								membersByName[member.Name] = new SymbolIdentity(
+									SymbolKindTag.EnumMember,
+									member.Name,
+									enumDecl.Name + "." + member.Name,
+									enumDecl.Name,
+									importedNormalized,
+									span);
+							}
 						}
 					}
+
+					// CFR-03: recursively follow transitive includes
+					if (importedModule.Imports != null)
+					{
+						for (int ii = 0; ii < importedModule.Imports.Count; ii++)
+						{
+							ImportDecl transitiveImport = importedModule.Imports[ii];
+							if (transitiveImport == null || string.IsNullOrWhiteSpace(transitiveImport.ModulePath))
+								continue;
+							if (!string.IsNullOrEmpty(transitiveImport.Alias))
+								continue;
+
+							List<string> transCandidates = IncludeTargetResolver.ResolveCandidates(candidateUri, transitiveImport.ModulePath);
+							if (transCandidates == null || transCandidates.Count == 0)
+								continue;
+
+							for (int tci = 0; tci < transCandidates.Count; tci++)
+							{
+								string transUri = NormalizeDocumentKey(transCandidates[tci]);
+								if (string.IsNullOrWhiteSpace(transUri) || !visitedTargets.Add(transUri))
+									continue;
+
+								string transPath = WorkspacePathTool.UriToPath(transUri);
+								if (string.IsNullOrWhiteSpace(transPath) || !File.Exists(transPath))
+									continue;
+
+								string transSource;
+								try { transSource = File.ReadAllText(transPath); }
+								catch { continue; }
+
+								var transParser = new Parser();
+								ModuleNode transModule = transParser.Parse(transSource, out _);
+								if (transModule == null)
+									continue;
+
+								if (transModule.Enums != null)
+								{
+									for (int tei = 0; tei < transModule.Enums.Count; tei++)
+									{
+										EnumDecl transEnum = transModule.Enums[tei];
+										if (transEnum == null || string.IsNullOrWhiteSpace(transEnum.Name) || transEnum.Members == null)
+											continue;
+										if (transEnum.IsPrivate) continue;
+
+										if (!symbols.TryGetValue(transEnum.Name, out Dictionary<string, SymbolIdentity> transMembers))
+										{
+											transMembers = new Dictionary<string, SymbolIdentity>(StringComparer.OrdinalIgnoreCase);
+											symbols[transEnum.Name] = transMembers;
+										}
+
+										for (int tmi = 0; tmi < transEnum.Members.Count; tmi++)
+										{
+											EnumMember transMember = transEnum.Members[tmi];
+											if (transMember == null || string.IsNullOrWhiteSpace(transMember.Name) || transMembers.ContainsKey(transMember.Name))
+												continue;
+
+											int tmLine = transMember.Line > 0 ? transMember.Line : transEnum.Line;
+											int tmCol = transMember.Column > 0 ? transMember.Column : transEnum.Column;
+											if (!TryCreateSpanFromLineColumn(transSource, tmLine, tmCol, transMember.Name.Length,
+												out TextSpan transSpan, out _, out _, out _, out _))
+												continue;
+
+											transMembers[transMember.Name] = new SymbolIdentity(
+												SymbolKindTag.EnumMember,
+												transMember.Name,
+												transEnum.Name + "." + transMember.Name,
+												transEnum.Name,
+												transUri,
+												transSpan);
+										}
+									}
+								}
+								break;
+							}
+						}
+					}
+
 					break;
 				}
 			}
@@ -3154,7 +3393,7 @@ namespace FFVM.Debug.Lsp.Database
 			Dictionary<string, SymbolIdentity> localNameSymbols,
 			Dictionary<string, SymbolIdentity> importedNameSymbols,
 			Dictionary<string, Dictionary<string, SymbolIdentity>> parameterSymbolsByFunc,
-			Dictionary<string, Dictionary<string, SymbolIdentity>> localVarSymbolsByFunc,
+			Dictionary<string, List<(string name, SymbolIdentity symbol, int scopeStart, int scopeEnd)>> localVarSymbolsByFunc,
 			ref int referenceOrdinal)
 		{
 			if (module == null || module.Functions == null) return;
@@ -3229,17 +3468,17 @@ namespace FFVM.Debug.Lsp.Database
 
 				if (function.Body == null) continue;
 				Dictionary<string, SymbolIdentity> paramSymbols = null;
-				Dictionary<string, SymbolIdentity> localSymbols = null;
+				List<(string name, SymbolIdentity symbol, int scopeStart, int scopeEnd)> scopedLocals = null;
 				if (function.Name != null)
 				{
 					parameterSymbolsByFunc?.TryGetValue(function.Name, out paramSymbols);
-					localVarSymbolsByFunc?.TryGetValue(function.Name, out localSymbols);
+					localVarSymbolsByFunc?.TryGetValue(function.Name, out scopedLocals);
 				}
 				CollectIdentifierReferencesFromStatement(function.Body, ident =>
 				{
 					if (ident == null || string.IsNullOrWhiteSpace(ident.Name)) return;
 					SymbolIdentity symbol = null;
-					if (localSymbols != null) localSymbols.TryGetValue(ident.Name, out symbol);
+					if (scopedLocals != null) symbol = ResolveScopedLocalVar(scopedLocals, ident.Name, ident.Line);
 					if (symbol == null && paramSymbols != null) paramSymbols.TryGetValue(ident.Name, out symbol);
 					if (symbol == null && !localNameSymbols.TryGetValue(ident.Name, out symbol))
 						importedNameSymbols.TryGetValue(ident.Name, out symbol);
@@ -3396,7 +3635,7 @@ namespace FFVM.Debug.Lsp.Database
 					string candidateUri = NormalizeDocumentKey(candidates[ci]);
 					if (string.IsNullOrWhiteSpace(candidateUri) || !visitedTargets.Add(candidateUri))
 						continue;
-					if (!TryReadImportedNameSymbols(candidateUri, out Dictionary<string, SymbolIdentity> imported))
+					if (!TryReadImportedNameSymbols(candidateUri, out Dictionary<string, SymbolIdentity> imported, visitedTargets))
 						continue;
 					foreach (KeyValuePair<string, SymbolIdentity> pair in imported)
 					{
@@ -3411,7 +3650,8 @@ namespace FFVM.Debug.Lsp.Database
 
 		private static bool TryReadImportedNameSymbols(
 			string importedDocumentUri,
-			out Dictionary<string, SymbolIdentity> symbols)
+			out Dictionary<string, SymbolIdentity> symbols,
+			HashSet<string> visitedTargets)
 		{
 			symbols = new Dictionary<string, SymbolIdentity>(StringComparer.OrdinalIgnoreCase);
 			string normalizedUri = NormalizeDocumentKey(importedDocumentUri);
@@ -3434,6 +3674,7 @@ namespace FFVM.Debug.Lsp.Database
 				{
 					VarDeclStmt v = module.ModuleVariables[i];
 					if (v == null || string.IsNullOrWhiteSpace(v.Name)) continue;
+					if (v.IsPrivate) continue;
 					int nl = v.NameLine > 0 ? v.NameLine : v.Line;
 					int nc = v.NameColumn > 0 ? v.NameColumn : v.Column;
 					if (!TryCreateSpanFromLineColumn(source, nl, nc, v.Name.Length, out TextSpan span, out _, out _, out _, out _))
@@ -3449,6 +3690,7 @@ namespace FFVM.Debug.Lsp.Database
 				{
 					StructDecl s = module.Structs[i];
 					if (s == null || string.IsNullOrWhiteSpace(s.Name)) continue;
+					if (s.IsPrivate) continue;
 					int snl = s.NameLine > 0 ? s.NameLine : s.Line;
 					int snc = s.NameColumn > 0 ? s.NameColumn : s.Column;
 					if (!TryCreateSpanFromLineColumn(source, snl, snc, s.Name.Length, out TextSpan span, out _, out _, out _, out _))
@@ -3464,12 +3706,45 @@ namespace FFVM.Debug.Lsp.Database
 				{
 					EnumDecl en = module.Enums[i];
 					if (en == null || string.IsNullOrWhiteSpace(en.Name)) continue;
+					if (en.IsPrivate) continue;
 					int enl = en.NameLine > 0 ? en.NameLine : en.Line;
 					int enc = en.NameColumn > 0 ? en.NameColumn : en.Column;
 					if (!TryCreateSpanFromLineColumn(source, enl, enc, en.Name.Length, out TextSpan span, out _, out _, out _, out _))
 						continue;
 					if (!symbols.ContainsKey(en.Name))
 						symbols[en.Name] = new SymbolIdentity(SymbolKindTag.Enum, en.Name, string.Empty, string.Empty, normalizedUri, span);
+				}
+			}
+
+			// CFR-03: recursively follow transitive includes
+			if (module.Imports != null)
+			{
+				for (int i = 0; i < module.Imports.Count; i++)
+				{
+					ImportDecl import = module.Imports[i];
+					if (import == null || string.IsNullOrWhiteSpace(import.ModulePath))
+						continue;
+					if (!string.IsNullOrEmpty(import.Alias))
+						continue;
+
+					List<string> candidates = IncludeTargetResolver.ResolveCandidates(normalizedUri, import.ModulePath);
+					if (candidates == null || candidates.Count == 0)
+						continue;
+
+					for (int ci = 0; ci < candidates.Count; ci++)
+					{
+						string candidateUri = NormalizeDocumentKey(candidates[ci]);
+						if (string.IsNullOrWhiteSpace(candidateUri) || !visitedTargets.Add(candidateUri))
+							continue;
+						if (!TryReadImportedNameSymbols(candidateUri, out Dictionary<string, SymbolIdentity> transitiveSymbols, visitedTargets))
+							continue;
+						foreach (KeyValuePair<string, SymbolIdentity> pair in transitiveSymbols)
+						{
+							if (!symbols.ContainsKey(pair.Key) && pair.Value != null)
+								symbols[pair.Key] = pair.Value;
+						}
+						break;
+					}
 				}
 			}
 
@@ -3501,7 +3776,7 @@ namespace FFVM.Debug.Lsp.Database
 					string candidateUri = NormalizeDocumentKey(candidates[ci]);
 					if (string.IsNullOrWhiteSpace(candidateUri) || !visitedTargets.Add(candidateUri))
 						continue;
-					if (!TryReadImportedFunctionSymbols(candidateUri, out Dictionary<string, SymbolIdentity> imported))
+					if (!TryReadImportedFunctionSymbols(candidateUri, out Dictionary<string, SymbolIdentity> imported, visitedTargets))
 						continue;
 					if (!result.ContainsKey(import.Alias))
 						result[import.Alias] = imported;
@@ -3536,7 +3811,7 @@ namespace FFVM.Debug.Lsp.Database
 					string candidateUri = NormalizeDocumentKey(candidates[ci]);
 					if (string.IsNullOrWhiteSpace(candidateUri) || !visitedTargets.Add(candidateUri))
 						continue;
-					if (!TryReadImportedNameSymbols(candidateUri, out Dictionary<string, SymbolIdentity> imported))
+					if (!TryReadImportedNameSymbols(candidateUri, out Dictionary<string, SymbolIdentity> imported, visitedTargets))
 						continue;
 					if (!result.ContainsKey(import.Alias))
 						result[import.Alias] = imported;

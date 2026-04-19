@@ -148,7 +148,9 @@ private/public、同名冲突、override 仲裁。
 | DX20 | 全局工作区 Find All References | ✅ 完成 | [Step_DX20_GlobalWorkspace_FindAllReferences_Checklist.md](Step_DX20_GlobalWorkspace_FindAllReferences_Checklist.md) |
 | DX21 | T2 内联/include as/别名 LSP 语义 | ✅ 完成 | [Step_DX21_T2_IncludeAlias_Checklist.md](Step_DX21_T2_IncludeAlias_Checklist.md) |
 | DX22 | T3 语法结构覆盖矩阵 | ✅ 完成 | [Step_DX22_T3_SyntaxStructure_Checklist.md](Step_DX22_T3_SyntaxStructure_Checklist.md) |
-| DX23 | T4 作用域与可见性 | ⚪ 未开始 | [Step_DX23_T4_ScopeVisibility_Checklist.md](Step_DX23_T4_ScopeVisibility_Checklist.md) |
+| DX23 | T4 作用域与可见性 | ✅ 完成 | [Step_DX23_T4_ScopeVisibility_Checklist.md](Step_DX23_T4_ScopeVisibility_Checklist.md) |
+| DX24 | T5 结果质量 | ✅ 完成 | [Step_DX24_T5_ResultQuality_Checklist.md](Step_DX24_T5_ResultQuality_Checklist.md) |
+| DX25 | T6 性能与可观测性（含 T2-T4 残留闭环） | ✅ 完成 | [Step_DX25_T6_PerfObservability_Checklist.md](Step_DX25_T6_PerfObservability_Checklist.md) |
 
 ## 七、文件结构索引
 
@@ -185,6 +187,8 @@ private/public、同名冲突、override 仲裁。
 - [Step_DX21_T2_IncludeAlias_Checklist.md](Step_DX21_T2_IncludeAlias_Checklist.md) — T2 别名 LSP 语义
 - [Step_DX22_T3_SyntaxStructure_Checklist.md](Step_DX22_T3_SyntaxStructure_Checklist.md) — T3 语法结构覆盖矩阵
 - [Step_DX23_T4_ScopeVisibility_Checklist.md](Step_DX23_T4_ScopeVisibility_Checklist.md) — T4 作用域与可见性
+- [Step_DX24_T5_ResultQuality_Checklist.md](Step_DX24_T5_ResultQuality_Checklist.md) — T5 结果质量
+- [Step_DX25_T6_PerfObservability_Checklist.md](Step_DX25_T6_PerfObservability_Checklist.md) — T6 性能与可观测性
 
 ### 辅助地图
 
