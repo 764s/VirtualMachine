@@ -1439,7 +1439,8 @@ namespace FFVM.Debug.Lsp.Database
 					string.Empty,
 					string.Empty,
 					normalizedDocument,
-					span);
+					span,
+					BuildFuncDocumentation(function));
 
 				var payload = new SymbolDataFactPayload(symbol, startLine, startCharacter, endLine, endCharacter);
 				output.Add(new DataFact(
@@ -2739,7 +2740,8 @@ namespace FFVM.Debug.Lsp.Database
 							string.Empty,
 							string.Empty,
 							normalizedUri,
-							span);
+							span,
+							BuildFuncDocumentation(function));
 					}
 				}
 			}
@@ -3013,7 +3015,7 @@ namespace FFVM.Debug.Lsp.Database
 				if (!TryCreateSpanFromLineColumn(source, nameLine, nameColumn, s.Name.Length,
 					out TextSpan span, out int sl, out int sc, out int el, out int ec))
 					continue;
-				var symbol = new SymbolIdentity(SymbolKindTag.Struct, s.Name, string.Empty, string.Empty, normalizedDocument, span);
+				var symbol = new SymbolIdentity(SymbolKindTag.Struct, s.Name, string.Empty, string.Empty, normalizedDocument, span, BuildStructDocumentation(s));
 				output.Add(new DataFact(
 					new DataFactId(BuildFactId("def", normalizedDocument, definitionOrdinal++, s.Name, sl, sc)),
 					aggregateId, DataFactKind.SymbolDefinition, documentPath, span, snapshotVersion,
@@ -3038,7 +3040,7 @@ namespace FFVM.Debug.Lsp.Database
 				if (!TryCreateSpanFromLineColumn(source, nameLine, nameColumn, e.Name.Length,
 					out TextSpan span, out int sl, out int sc, out int el, out int ec))
 					continue;
-				var symbol = new SymbolIdentity(SymbolKindTag.Enum, e.Name, string.Empty, string.Empty, normalizedDocument, span);
+				var symbol = new SymbolIdentity(SymbolKindTag.Enum, e.Name, string.Empty, string.Empty, normalizedDocument, span, BuildEnumDocumentation(e));
 				output.Add(new DataFact(
 					new DataFactId(BuildFactId("def", normalizedDocument, definitionOrdinal++, e.Name, sl, sc)),
 					aggregateId, DataFactKind.SymbolDefinition, documentPath, span, snapshotVersion,
@@ -3718,7 +3720,7 @@ namespace FFVM.Debug.Lsp.Database
 					if (!TryCreateSpanFromLineColumn(source, snl, snc, s.Name.Length, out TextSpan span, out _, out _, out _, out _))
 						continue;
 					if (!symbols.ContainsKey(s.Name))
-						symbols[s.Name] = new SymbolIdentity(SymbolKindTag.Struct, s.Name, string.Empty, string.Empty, normalizedUri, span);
+						symbols[s.Name] = new SymbolIdentity(SymbolKindTag.Struct, s.Name, string.Empty, string.Empty, normalizedUri, span, BuildStructDocumentation(s));
 				}
 			}
 
@@ -3734,7 +3736,7 @@ namespace FFVM.Debug.Lsp.Database
 					if (!TryCreateSpanFromLineColumn(source, enl, enc, en.Name.Length, out TextSpan span, out _, out _, out _, out _))
 						continue;
 					if (!symbols.ContainsKey(en.Name))
-						symbols[en.Name] = new SymbolIdentity(SymbolKindTag.Enum, en.Name, string.Empty, string.Empty, normalizedUri, span);
+						symbols[en.Name] = new SymbolIdentity(SymbolKindTag.Enum, en.Name, string.Empty, string.Empty, normalizedUri, span, BuildEnumDocumentation(en));
 				}
 			}
 
@@ -4686,6 +4688,98 @@ namespace FFVM.Debug.Lsp.Database
 				offset = lineEnd;
 
 			return offset;
+		}
+
+		private static string BuildFuncDocumentation(FuncDecl function)
+		{
+			if (function == null) return null;
+
+			var sb = new System.Text.StringBuilder();
+
+			// Signature line
+			sb.Append("```ffvm\n");
+			if (function.IsExternal) sb.Append("external ");
+			sb.Append("func ").Append(function.Name).Append('(');
+			if (function.Parameters != null)
+			{
+				for (int i = 0; i < function.Parameters.Count; i++)
+				{
+					if (i > 0) sb.Append(", ");
+					ParamDecl p = function.Parameters[i];
+					sb.Append(p.Name);
+					if (!string.IsNullOrEmpty(p.TypeName)) sb.Append(": ").Append(p.TypeName);
+				}
+			}
+			sb.Append(')');
+			if (!string.IsNullOrEmpty(function.ReturnType)) sb.Append(": ").Append(function.ReturnType);
+			sb.Append("\n```");
+
+			// Doc comment
+			if (!string.IsNullOrEmpty(function.DocComment))
+				sb.Append("\n\n---\n\n").Append(function.DocComment);
+
+			// Parameters
+			bool hasParamDoc = false;
+			if (function.Parameters != null)
+			{
+				for (int pi = 0; pi < function.Parameters.Count; pi++)
+				{
+					ParamDecl p = function.Parameters[pi];
+					if (!string.IsNullOrEmpty(p.DocComment))
+					{
+						if (!hasParamDoc) { sb.Append("\n\n**Parameters:**\n"); hasParamDoc = true; }
+						sb.Append("\n- `").Append(p.Name).Append("` — ").Append(p.DocComment);
+					}
+				}
+			}
+
+			// Return doc
+			if (!string.IsNullOrEmpty(function.ReturnDoc))
+				sb.Append("\n\n**Returns:** ").Append(function.ReturnDoc);
+
+			return sb.ToString();
+		}
+
+		private static string BuildStructDocumentation(StructDecl s)
+		{
+			if (s == null) return null;
+
+			var sb = new System.Text.StringBuilder();
+			sb.Append("```ffvm\nstruct ").Append(s.Name).Append(" {\n");
+			if (s.Fields != null)
+			{
+				for (int i = 0; i < s.Fields.Count; i++)
+				{
+					StructField f = s.Fields[i];
+					sb.Append("  ").Append(f.Name).Append(": ").Append(f.TypeName).Append('\n');
+				}
+			}
+			sb.Append("}\n```");
+			if (!string.IsNullOrEmpty(s.DocComment))
+				sb.Append("\n\n---\n\n").Append(s.DocComment);
+			return sb.ToString();
+		}
+
+		private static string BuildEnumDocumentation(EnumDecl e)
+		{
+			if (e == null) return null;
+
+			var sb = new System.Text.StringBuilder();
+			sb.Append("```ffvm\nenum ").Append(e.Name).Append(" {\n");
+			if (e.Members != null)
+			{
+				for (int i = 0; i < e.Members.Count; i++)
+				{
+					EnumMember m = e.Members[i];
+					sb.Append("  ").Append(m.Name);
+					if (i < e.Members.Count - 1) sb.Append(',');
+					sb.Append('\n');
+				}
+			}
+			sb.Append("}\n```");
+			if (!string.IsNullOrEmpty(e.DocComment))
+				sb.Append("\n\n---\n\n").Append(e.DocComment);
+			return sb.ToString();
 		}
 
 		private static string BuildFactId(

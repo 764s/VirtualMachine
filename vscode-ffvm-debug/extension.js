@@ -116,7 +116,7 @@ function activate(context) {
                     if (!nextLine) return undefined;
 
                     // Parse func signature
-                    const funcMatch = nextLine.match(/^func\s+(\w+)\(([^)]*)\)(?:\s*:\s*(\w+))?/);
+                    const funcMatch = nextLine.match(/^(?:external\s+)?func\s+(\w+)\(([^)]*)\)(?:\s*:\s*(\w+))?/);
                     if (funcMatch) {
                         const [, name, paramsStr, returnType] = funcMatch;
                         const params = paramsStr.trim() ? paramsStr.split(",").map(p => p.trim().split(":")[0].trim()) : [];
@@ -179,6 +179,25 @@ function activate(context) {
                         item.filterText = "///";
                         item.preselect = true;
                         item.detail = `Generate doc for struct ${structMatch[1]}`;
+                        item.range = new vscode.Range(
+                            position.line, lineText.indexOf("///"),
+                            position.line, position.character
+                        );
+                        item.sortText = "!";
+                        return [item];
+                    }
+
+                    // Parse enum
+                    const enumMatch = nextLine.match(/^enum\s+(\w+)/);
+                    if (enumMatch) {
+                        if (existingDoc.some(l => !l.startsWith("@"))) return undefined; // already has desc
+                        const snippet = new vscode.SnippetString("/// ");
+                        snippet.appendPlaceholder("Description");
+                        const item = new vscode.CompletionItem("/// (doc comment)", vscode.CompletionItemKind.Snippet);
+                        item.insertText = snippet;
+                        item.filterText = "///";
+                        item.preselect = true;
+                        item.detail = `Generate doc for enum ${enumMatch[1]}`;
                         item.range = new vscode.Range(
                             position.line, lineText.indexOf("///"),
                             position.line, position.character

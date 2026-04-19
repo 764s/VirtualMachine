@@ -99,8 +99,26 @@ namespace FFVM.Debug.Lsp.Database
 			if (!TryResolveSymbol(index, request, out SymbolIdentity symbol, out SymbolQueryResult resolveError))
 				return resolveError;
 
-			string summary = symbol.Kind + ": " + symbol.Name;
-			var payload = new LspHoverPayload(summary, symbol.Scope, symbol.ParentName, symbol.Origin);
+			// Use pre-built documentation from the definition symbol when available
+			string hoverContent;
+			if (!string.IsNullOrWhiteSpace(symbol.Documentation))
+			{
+				hoverContent = symbol.Documentation;
+			}
+			else if (index.SymbolIndex != null
+				&& index.SymbolIndex.TryGetDefinition(symbol, out DataFact defFact)
+				&& defFact != null
+				&& defFact.Payload is SymbolDataFactPayload defPayload
+				&& defPayload.Symbol != null
+				&& !string.IsNullOrWhiteSpace(defPayload.Symbol.Documentation))
+			{
+				hoverContent = defPayload.Symbol.Documentation;
+			}
+			else
+			{
+				hoverContent = symbol.Kind + ": " + symbol.Name;
+			}
+			var payload = new LspHoverPayload(hoverContent, symbol.Scope, symbol.ParentName, symbol.Origin);
 
 			var ranges = symbol.DeclarationSpan.Length > 0
 				? new List<TextSpan> { symbol.DeclarationSpan }
@@ -147,7 +165,8 @@ namespace FFVM.Debug.Lsp.Database
 						aliasItems.Add(new LspCompletionItem(
 							aliasPrefix + "." + candidate.Name,
 							candidate.Kind.ToString(),
-							BuildSymbolDetail(candidate)));
+							BuildSymbolDetail(candidate),
+							candidate.Documentation));
 					}
 					SymbolIdentity aliasAnchor = aliasItems.Count > 0
 						? SymbolIdentity.CreateUnknown(aliasPrefix)
@@ -167,7 +186,8 @@ namespace FFVM.Debug.Lsp.Database
 				items.Add(new LspCompletionItem(
 					candidate.Name,
 					candidate.Kind.ToString(),
-					BuildSymbolDetail(candidate)));
+					BuildSymbolDetail(candidate),
+					candidate.Documentation));
 			}
 
 			SymbolIdentity anchor = candidates.Count > 0
@@ -796,12 +816,14 @@ namespace FFVM.Debug.Lsp.Database
 		public string Label { get; }
 		public string Kind { get; }
 		public string Detail { get; }
+		public string Documentation { get; }
 
-		public LspCompletionItem(string label, string kind, string detail)
+		public LspCompletionItem(string label, string kind, string detail, string documentation = null)
 		{
 			Label = label ?? string.Empty;
 			Kind = kind ?? string.Empty;
 			Detail = detail ?? string.Empty;
+			Documentation = documentation ?? string.Empty;
 		}
 	}
 

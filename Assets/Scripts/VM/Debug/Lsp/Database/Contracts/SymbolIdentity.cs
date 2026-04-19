@@ -28,6 +28,7 @@ namespace FFVM.Debug.Lsp.Database.Contracts
 		public string ParentName { get; }
 		public string Origin { get; }
 		public TextSpan DeclarationSpan { get; }
+		public string Documentation { get; }
 
 		public SymbolIdentity(
 			SymbolKindTag kind,
@@ -35,7 +36,8 @@ namespace FFVM.Debug.Lsp.Database.Contracts
 			string scope,
 			string parentName,
 			string origin,
-			TextSpan declarationSpan)
+			TextSpan declarationSpan,
+			string documentation = null)
 		{
 			Kind = kind;
 			Name = name ?? string.Empty;
@@ -43,6 +45,7 @@ namespace FFVM.Debug.Lsp.Database.Contracts
 			ParentName = parentName ?? string.Empty;
 			Origin = origin ?? string.Empty;
 			DeclarationSpan = declarationSpan;
+			Documentation = documentation ?? string.Empty;
 		}
 
 		public static SymbolIdentity CreateUnknown(string name)

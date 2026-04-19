@@ -106,10 +106,15 @@ namespace FFVM.Debug.Lsp.Protocol
                 return null;
 
             string summary = payload.Summary ?? string.Empty;
-            if (!string.IsNullOrWhiteSpace(payload.Scope))
-                summary += "\n\nScope: " + payload.Scope;
-            if (!string.IsNullOrWhiteSpace(payload.ParentName))
-                summary += "\nParent: " + payload.ParentName;
+
+            // Only append scope/parent for fallback (non-documented) hovers
+            if (!summary.Contains("```"))
+            {
+                if (!string.IsNullOrWhiteSpace(payload.Scope))
+                    summary += "\n\nScope: " + payload.Scope;
+                if (!string.IsNullOrWhiteSpace(payload.ParentName))
+                    summary += "\nParent: " + payload.ParentName;
+            }
 
             var contents = new JsonObject();
             contents.Set(LspFields.Kind, LspValues.Markdown);
@@ -169,6 +174,13 @@ namespace FFVM.Debug.Lsp.Protocol
                 projected.Set(LspFields.Kind, MapCompletionKind(item.Kind));
                 if (!string.IsNullOrWhiteSpace(item.Detail))
                     projected.Set(LspFields.Detail, item.Detail);
+                if (!string.IsNullOrWhiteSpace(item.Documentation))
+                {
+                    var doc = new JsonObject();
+                    doc.Set(LspFields.Kind, LspValues.Markdown);
+                    doc.Set(LspFields.Value, item.Documentation);
+                    projected.Set(LspFields.Documentation, doc);
+                }
                 output.Add(projected);
             }
 
