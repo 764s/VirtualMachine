@@ -3159,10 +3159,75 @@ namespace FFVM.Debug.Lsp.Database
 		{
 			if (module == null || module.Functions == null) return;
 			int ordinal = referenceOrdinal;
+
+			// DX22 P5: emit module-level variable type annotation + initializer references (L4/L7)
+			if (module.ModuleVariables != null)
+			{
+				for (int vi = 0; vi < module.ModuleVariables.Count; vi++)
+				{
+					VarDeclStmt mv = module.ModuleVariables[vi];
+					if (mv == null) continue;
+					// type annotation reference
+					if (!string.IsNullOrWhiteSpace(mv.TypeName) && mv.TypeNameLine > 0 && mv.TypeNameColumn > 0)
+					{
+						if (localNameSymbols.TryGetValue(mv.TypeName, out SymbolIdentity mvTypeSym) && mvTypeSym != null
+							|| importedNameSymbols.TryGetValue(mv.TypeName, out mvTypeSym) && mvTypeSym != null)
+						{
+							if (TryCreateSpanFromLineColumn(source, mv.TypeNameLine, mv.TypeNameColumn, mv.TypeName.Length,
+								out TextSpan mvSpan, out int mvSl, out int mvSc, out int mvEl, out int mvEc))
+							{
+								output.Add(new DataFact(
+									new DataFactId(BuildFactId("ref", normalizedDocument, ordinal++, mv.TypeName, mvSl, mvSc)),
+									aggregateId, DataFactKind.SymbolReference, documentPath, mvSpan, snapshotVersion,
+									new SymbolDataFactPayload(mvTypeSym, mvSl, mvSc, mvEl, mvEc)));
+							}
+						}
+					}
+					// initializer expression references
+					CollectIdentifierReferencesFromExpression(mv.Initializer, ident =>
+					{
+						if (ident == null || string.IsNullOrWhiteSpace(ident.Name)) return;
+						if (!localNameSymbols.TryGetValue(ident.Name, out SymbolIdentity sym) || sym == null)
+							if (!importedNameSymbols.TryGetValue(ident.Name, out sym) || sym == null)
+								return;
+						if (!TryCreateSpanFromLineColumn(source, ident.Line, ident.Column, ident.Name.Length,
+							out TextSpan span, out int sl, out int sc, out int el, out int ec))
+							return;
+						output.Add(new DataFact(
+							new DataFactId(BuildFactId("ref", normalizedDocument, ordinal++, ident.Name, sl, sc)),
+							aggregateId, DataFactKind.SymbolReference, documentPath, span, snapshotVersion,
+							new SymbolDataFactPayload(sym, sl, sc, el, ec)));
+					});
+				}
+			}
+
 			for (int fi = 0; fi < module.Functions.Count; fi++)
 			{
 				FuncDecl function = module.Functions[fi];
-				if (function == null || function.Body == null) continue;
+				if (function == null) continue;
+
+				// DX22 P5: emit parameter type annotation references (L5)
+				if (function.Parameters != null)
+				{
+					for (int pi = 0; pi < function.Parameters.Count; pi++)
+					{
+						ParamDecl param = function.Parameters[pi];
+						if (param == null || string.IsNullOrWhiteSpace(param.TypeName)) continue;
+						if (param.TypeNameLine <= 0 || param.TypeNameColumn <= 0) continue;
+						if (!localNameSymbols.TryGetValue(param.TypeName, out SymbolIdentity ptSym) || ptSym == null)
+							if (!importedNameSymbols.TryGetValue(param.TypeName, out ptSym) || ptSym == null)
+								continue;
+						if (!TryCreateSpanFromLineColumn(source, param.TypeNameLine, param.TypeNameColumn, param.TypeName.Length,
+							out TextSpan ptSpan, out int ptSl, out int ptSc, out int ptEl, out int ptEc))
+							continue;
+						output.Add(new DataFact(
+							new DataFactId(BuildFactId("ref", normalizedDocument, ordinal++, param.TypeName, ptSl, ptSc)),
+							aggregateId, DataFactKind.SymbolReference, documentPath, ptSpan, snapshotVersion,
+							new SymbolDataFactPayload(ptSym, ptSl, ptSc, ptEl, ptEc)));
+					}
+				}
+
+				if (function.Body == null) continue;
 				Dictionary<string, SymbolIdentity> paramSymbols = null;
 				Dictionary<string, SymbolIdentity> localSymbols = null;
 				if (function.Name != null)
@@ -3291,6 +3356,14 @@ namespace FFVM.Debug.Lsp.Database
 			}
 			if (expression is StructLiteralExpr structLit)
 			{
+				if (!string.IsNullOrWhiteSpace(structLit.TypeName) && !structLit.TypeName.Contains('.')
+					&& structLit.Line > 0 && structLit.Column > 0)
+				{
+					var typeIdent = new IdentifierExpr(structLit.TypeName);
+					typeIdent.Line = structLit.Line;
+					typeIdent.Column = structLit.Column;
+					onIdent(typeIdent);
+				}
 				if (structLit.Fields != null)
 					for (int i = 0; i < structLit.Fields.Count; i++)
 						CollectIdentifierReferencesFromExpression(structLit.Fields[i].Value, onIdent);

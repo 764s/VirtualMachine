@@ -3646,6 +3646,136 @@ public static class LspServerNewTests
                 "LSPNEW-T3-LOC-02B: module var n refs include module def + g body, NOT local def or f body");
         }
 
+        // ================================================================
+        // LSPNEW-T3-STR-02: struct type at L4 (module var), L5 (param), L7 (struct literal)
+        // ================================================================
+        {
+            string uri = "file:///tests/lspnew_t3str02.ffs";
+            string source =
+                "struct Vec { x: int, y: int }\n"
+                + "var origin: Vec = Vec { x: 0, y: 0 }\n"
+                + "func move(v: Vec) {\n"
+                + "    var dest: Vec = Vec { x: 1, y: 1 }\n"
+                + "    wait 1\n"
+                + "}";
+            // Line 0: struct Vec { x: int, y: int }       → struct def at col 7
+            // Line 1: var origin: Vec = Vec { x:0, y:0 }  → type-ann Vec at col 12, literal Vec at col 18
+            // Line 2: func move(v: Vec) {                  → param type Vec at col 13
+            // Line 3:     var dest: Vec = Vec { x:1, y:1 } → type-ann Vec at col 14, literal Vec at col 20
+
+            var bridge = new DatabaseBackedVsCodeBridge(
+                new InMemoryWorkspaceCodeDatabase(new InMemoryDatabaseExecutionOrchestrator()));
+            var session = new LspServerNewBatchSession();
+            session.AddRequest(LspMethods.Initialize, new JsonObject());
+            session.AddNotification(LspMethods.Initialized, new JsonObject());
+            session.AddNotification(LspMethods.DidOpen, BuildDidOpenParams(uri, "ffscript", 1, source));
+
+            int refId = session.AddRequest(LspMethods.References, BuildReferencesParams(uri, 0, 7, true));
+            session.AddNotification(LspMethods.Exit, new JsonObject());
+            session.Run(bridge);
+
+            List<object> refLocs = session.FindResponse(refId)?.GetArray(JsonRpcFields.Result);
+            bool hasDefL0 = false;
+            bool hasModuleTypeAnn = false;    // L4: line 1 type annotation
+            bool hasModuleLiteral = false;    // L7: line 1 struct literal
+            bool hasParamType = false;        // L5: line 2 param type
+            bool hasLocalTypeAnn = false;     // L6: line 3 type annotation
+            bool hasLocalLiteral = false;     // L7: line 3 struct literal
+            if (refLocs != null)
+            {
+                for (int i = 0; i < refLocs.Count; i++)
+                {
+                    if (!(refLocs[i] is JsonObject loc)) continue;
+                    JsonObject s = loc.GetObject(LspFields.Range)?.GetObject(LspFields.Start);
+                    int ln = s != null ? s.GetInt(LspFields.Line, -1) : -1;
+                    int col = s != null ? s.GetInt(LspFields.Character, -1) : -1;
+                    if (ln == 0) hasDefL0 = true;
+                    if (ln == 1 && col == 12) hasModuleTypeAnn = true;
+                    if (ln == 1 && col == 18) hasModuleLiteral = true;
+                    if (ln == 2 && col == 13) hasParamType = true;
+                    if (ln == 3 && col == 14) hasLocalTypeAnn = true;
+                    if (ln == 3 && col == 20) hasLocalLiteral = true;
+                }
+            }
+
+            Assert(
+                refLocs != null && hasDefL0 && hasModuleTypeAnn,
+                "LSPNEW-T3-STR-02A: struct type references include L4 module-level type annotation");
+
+            Assert(
+                hasParamType,
+                "LSPNEW-T3-STR-02B: struct type references include L5 param type annotation");
+
+            Assert(
+                hasModuleLiteral && hasLocalLiteral,
+                "LSPNEW-T3-STR-02C: struct type references include L7 struct literal type name");
+
+            Assert(
+                hasLocalTypeAnn,
+                "LSPNEW-T3-STR-02D: struct type references include L6 local var type annotation");
+        }
+
+        // ================================================================
+        // LSPNEW-T3-ENM-03: enum type at L4 (module var), L5 (param), L6 (local var)
+        // ================================================================
+        {
+            string uri = "file:///tests/lspnew_t3enm03.ffs";
+            string source =
+                "enum Dir { Up, Down }\n"
+                + "var facing: Dir = Dir.Up\n"
+                + "func walk(d: Dir) {\n"
+                + "    var next: Dir = Dir.Down\n"
+                + "    wait 1\n"
+                + "}";
+            // Line 0: enum Dir { Up, Down }            → enum def at col 5
+            // Line 1: var facing: Dir = Dir.Up         → module type-ann Dir at col 12, Dir.Up target Dir at col 18
+            // Line 2: func walk(d: Dir) {              → param type Dir at col 13
+            // Line 3:     var next: Dir = Dir.Down     → local type-ann Dir at col 14, Dir.Down target Dir at col 20
+
+            var bridge = new DatabaseBackedVsCodeBridge(
+                new InMemoryWorkspaceCodeDatabase(new InMemoryDatabaseExecutionOrchestrator()));
+            var session = new LspServerNewBatchSession();
+            session.AddRequest(LspMethods.Initialize, new JsonObject());
+            session.AddNotification(LspMethods.Initialized, new JsonObject());
+            session.AddNotification(LspMethods.DidOpen, BuildDidOpenParams(uri, "ffscript", 1, source));
+
+            int refId = session.AddRequest(LspMethods.References, BuildReferencesParams(uri, 0, 5, true));
+            session.AddNotification(LspMethods.Exit, new JsonObject());
+            session.Run(bridge);
+
+            List<object> refLocs = session.FindResponse(refId)?.GetArray(JsonRpcFields.Result);
+            bool hasDefL0 = false;
+            bool hasModuleTypeAnn = false;
+            bool hasParamType = false;
+            bool hasLocalTypeAnn = false;
+            if (refLocs != null)
+            {
+                for (int i = 0; i < refLocs.Count; i++)
+                {
+                    if (!(refLocs[i] is JsonObject loc)) continue;
+                    JsonObject s = loc.GetObject(LspFields.Range)?.GetObject(LspFields.Start);
+                    int ln = s != null ? s.GetInt(LspFields.Line, -1) : -1;
+                    int col = s != null ? s.GetInt(LspFields.Character, -1) : -1;
+                    if (ln == 0 && col == 5) hasDefL0 = true;
+                    if (ln == 1 && col == 12) hasModuleTypeAnn = true;
+                    if (ln == 2 && col == 13) hasParamType = true;
+                    if (ln == 3 && col == 14) hasLocalTypeAnn = true;
+                }
+            }
+
+            Assert(
+                refLocs != null && hasDefL0 && hasModuleTypeAnn,
+                "LSPNEW-T3-ENM-03A: enum type references include L4 module-level type annotation");
+
+            Assert(
+                hasParamType,
+                "LSPNEW-T3-ENM-03B: enum type references include L5 param type annotation");
+
+            Assert(
+                hasLocalTypeAnn,
+                "LSPNEW-T3-ENM-03C: enum type references include L6 local var type annotation");
+        }
+
         Debug.Log($"[LspServerNewTests] Completed. Passed={passed}, Failed={failed}");
     }
 

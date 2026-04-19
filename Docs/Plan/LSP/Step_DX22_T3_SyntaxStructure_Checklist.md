@@ -13,14 +13,14 @@
 
 ## 一、完成定义（Definition of Done）
 
-- [ ] DOD-1：模块变量（var/const）跨文件 definition/references 全局命中（CFR-11）。
-- [ ] DOD-2：结构体类型跨文件 definition/references 全局命中（CFR-12，含声明 / 类型注解 / 字面量）。
-- [ ] DOD-3：同名字段在不同结构体中按 parent 区分，不误并（CFR-15）。
+- [x] DOD-1：模块变量（var/const）跨文件 definition/references 全局命中（CFR-11）。✅ Phase 0 完成
+- [x] DOD-2：结构体类型跨文件 definition/references 全局命中（CFR-12，含声明 / 类型注解 / 字面量）。✅ Phase 0+5 完成（L4/L5/L7 gap 修复）
+- [x] DOD-3：同名字段在不同结构体中按 parent 区分，不误并（CFR-15）。✅ Phase 0 完成
 - [x] DOD-4：枚举类型 + 枚举成员跨文件 definition/references 全局命中（CFR-16）。✅ Phase 1 完成
 - [x] DOD-5：外部函数（external func）声明与调用引用全局命中（CFR-17）。✅ Phase 2 完成
 - [x] DOD-6：参数 definition/references 在函数体内正确绑定。✅ Phase 3 完成
 - [x] DOD-7：局部变量 definition/references 在函数体内正确绑定，不与模块变量串符号。✅ Phase 4 完成
-- [ ] DOD-8：V2 矩阵所有 M（必须覆盖）单元格均有对应测试。
+- [x] DOD-8：V2 矩阵所有 M（必须覆盖）单元格均有对应测试。✅ Phase 5 完成（T3-STR-02 + T3-ENM-03 补齐 L4/L5/L7 gap）
 
 ## 二、当前基线
 
@@ -154,21 +154,21 @@
 - [x] A4-1：T3-LOC-01、T3-LOC-02 全绿（4 assertions 全通过）。
 - [x] A4-2：Phase 0-3 测试仍绿 + 全量 LSPNEW 全绿（88/88, 0 failed）。
 
-### Phase 5：V2 矩阵收敛 + 回归
+### Phase 5：V2 矩阵收敛 + 回归 ✅ 完成
 
 > 依赖 Phase 0-4。完成后所有 M（必须覆盖）单元格均有测试验证。
 
-- [ ] P5-1：V2 矩阵 gap 扫描 — 逐行逐列校验每个 M 单元格是否已被某个 LSPNEW 测试覆盖。
-- [ ] P5-2：补缺测试（若 gap 扫描发现 Phase 0-4 未覆盖的 M 单元格）。
-- [ ] P5-3：全量 LSPNEW 回归通过。
-- [ ] P5-4：FFVM.Cli 与 StandaloneRunner 编译全绿。
-- [ ] P5-5：更新 Overview_LSP.md 仪表板，标记 DX22 完成。
+- [x] P5-1：V2 矩阵 gap 扫描 — 逐行逐列校验每个 M 单元格是否已被某个 LSPNEW 测试覆盖。✅ 扫描发现 5 个 M gap（StructType@L4/L5/L7, EnumType@L4/L5）
+- [x] P5-2：补缺测试（若 gap 扫描发现 Phase 0-4 未覆盖的 M 单元格）。✅ 3 个代码修复 + T3-STR-02(A/B/C/D) + T3-ENM-03(A/B/C) 共 7 assertions
+- [x] P5-3：全量 LSPNEW 回归通过。✅ 95/95 全绿
+- [x] P5-4：FFVM.Cli 与 StandaloneRunner 编译全绿。✅ 0 errors
+- [x] P5-5：更新 Overview_LSP.md 仪表板，标记 DX22 完成。✅
 
 验收标准：
 
-- [ ] A5-1：V2 矩阵所有 M 单元格已覆盖（测试可追溯到具体 LSPNEW ID）。
-- [ ] A5-2：全量 LSPNEW / DBMID / LspDatabaseQuery 全绿。
-- [ ] A5-3：FFVM.Cli + StandaloneRunner 编译全绿。
+- [x] A5-1：V2 矩阵所有 M 单元格已覆盖（测试可追溯到具体 LSPNEW ID）。✅
+- [x] A5-2：全量 LSPNEW / DBMID / LspDatabaseQuery 全绿。✅ 95/95
+- [x] A5-3：FFVM.Cli + StandaloneRunner 编译全绿。✅
 
 ## 五、依赖关系
 
@@ -198,14 +198,12 @@
 
 ## 八、风险与缓解
 
-- R1：枚举成员访问语法（`Dir.Up`）与 alias 点号访问（`U.foo`）形态相同，可能产生冲突解析。
-  - 缓解：枚举成员解析应先查当前文档已声明枚举，alias 解析查 alias 映射；两者按优先级仲裁。
-- R2：参数 / 局部变量作用域解析引入函数体遍历，可能影响 fact 发射性能。
-  - 缓解：作用域解析限定在函数体内，不跨函数；fact 发射为预索引阶段，不影响查询响应时间。
-- R3：局部变量遮蔽逻辑与 T4（SC-03）有交叠，可能导致重复工作。
-  - 缓解：T3 仅做"可工作的基线实现"（参数 > 模块、局部 > 参数 > 模块）；T4 细化多层嵌套作用域、块级作用域等复杂场景。
-- R4：external func 定义入库后，可能与运行时宿主注册产生重复符号。
-  - 缓解：external func 仍使用 `SymbolKindTag.Function`，通过 `IsExternal` 属性标记区分；LSP 层无宿主概念，不冲突。
+| 风险 | 描述 | 缓解措施 | 状态 | 未处理部分的处理时机 |
+| --- | --- | --- | --- | --- |
+| R1 | 枚举成员访问语法（`Dir.Up`）与 alias 点号访问（`U.foo`）形态相同，可能产生冲突解析。 | 枚举成员解析使用独立的 `mergedEnumMemberSymbols` 字典（key=`EnumName.MemberName`），alias 解析查 alias 映射表，两者在 `BuildDocumentFacts` 中按独立路径运行，互不干扰。T3-ENM-01/02 已验证不串。 | ✅ 完全处理 | — |
+| R2 | 参数 / 局部变量作用域解析引入函数体遍历，可能影响 fact 发射性能。 | 作用域解析按函数隔离，每函数独立构建 `paramSymbols` + `localSymbols` 字典，O(n) 遍历。`CollectVarDeclStmtsFromBody` 递归一次收集完毕。Fact 发射为预索引阶段（`didOpen`/workspace scan），不在查询响应路径上。 | ✅ 已缓解 | 极大函数体（数千行）性能压力 → **T5 性能优化专项** |
+| R3 | 局部变量遮蔽逻辑与 T4（SC-03）有交叠，可能导致重复工作。 | T3 实现了基线作用域链 `局部 > 参数 > 模块/导入`（函数级扁平字典）。T3-LOC-02 + T3-PRM-02 验证单层遮蔽正确。 | ✅ 基线完成 | 块级作用域（`if`/`while`/`for` 内 `var`）、同名局部多次声明精度 → **T4 SC-03** |
+| R4 | external func 定义入库后，可能与运行时宿主注册产生重复符号。 | `external func` 使用 `SymbolKindTag.Function` 正常入库，LSP 层无宿主概念。T3-EXT-01 验证 definition/references 全局命中。 | ✅ 完全处理 | — |
 
 ## 九、参考资料
 
