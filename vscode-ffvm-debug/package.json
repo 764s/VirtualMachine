@@ -93,6 +93,22 @@
                 "scopeName": "source.ffvm",
                 "path": "./syntaxes/ffvm.tmLanguage.json"
             }
+        ],
+        "semanticTokenScopes": [
+            {
+                "language": "ffvm",
+                "scopes": {
+                    "namespace": ["entity.name.namespace.ffvm"],
+                    "type": ["entity.name.type.struct.ffvm"],
+                    "enum": ["entity.name.type.enum.ffvm"],
+                    "function": ["entity.name.function.ffvm"],
+                    "variable": ["variable.other.ffvm"],
+                    "parameter": ["variable.parameter.ffvm"],
+                    "property": ["variable.other.property.ffvm"],
+                    "enumMember": ["variable.other.enummember.ffvm"],
+                    "keyword": ["keyword.other.ffvm"]
+                }
+            }
         ]
     }
 }

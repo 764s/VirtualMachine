@@ -27,14 +27,15 @@ namespace FFVM.Debug.Lsp.Database
 	{
 		private const int CompletionLimit = 128;
 		private const int DocumentSymbolLimit = 512;
-		private const int SemanticTokenTypeStruct = 5;
-		private const int SemanticTokenTypeParameter = 7;
-		private const int SemanticTokenTypeVariable = 8;
-		private const int SemanticTokenTypeProperty = 9;
-		private const int SemanticTokenTypeEnum = 10;
-		private const int SemanticTokenTypeFunction = 12;
-		private const int SemanticTokenTypeKeyword = 15;
-		private const int SemanticTokenTypeEnumDeclaration = 3;
+		private const int SemanticTokenTypeNamespace = 0;
+		private const int SemanticTokenTypeStruct = 1;
+		private const int SemanticTokenTypeEnum = 2;
+		private const int SemanticTokenTypeFunction = 3;
+		private const int SemanticTokenTypeVariable = 4;
+		private const int SemanticTokenTypeParameter = 5;
+		private const int SemanticTokenTypeProperty = 6;
+		private const int SemanticTokenTypeEnumMember = 7;
+		private const int SemanticTokenTypeKeyword = 8;
 		private const int SemanticTokenTypeUnknown = -1;
 
 		public SymbolQueryResult QueryDefinition(CodeDatabaseSnapshot snapshot, SymbolQueryRequest request)
@@ -679,13 +680,13 @@ namespace FFVM.Debug.Lsp.Database
 				case SymbolKindTag.Parameter:
 					return SemanticTokenTypeParameter;
 				case SymbolKindTag.Enum:
-					return SemanticTokenTypeEnumDeclaration;
+					return SemanticTokenTypeEnum;
 				case SymbolKindTag.StructField:
 					return SemanticTokenTypeProperty;
 				case SymbolKindTag.EnumMember:
-					return SemanticTokenTypeEnum;
+					return SemanticTokenTypeEnumMember;
 				case SymbolKindTag.IncludeFile:
-					return SemanticTokenTypeKeyword;
+					return SemanticTokenTypeNamespace;
 				default:
 					return SemanticTokenTypeUnknown;
 			}

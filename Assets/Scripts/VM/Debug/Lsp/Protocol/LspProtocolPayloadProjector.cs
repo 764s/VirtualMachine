@@ -40,15 +40,14 @@ namespace FFVM.Debug.Lsp.Protocol
             var legend = new JsonObject();
             legend.Set("tokenTypes", new List<object>
             {
+                "namespace",
                 "type",
-                "struct",
                 "enum",
-                "enumMember",
-                "property",
-                "variable",
                 "function",
+                "variable",
                 "parameter",
-                "string",
+                "property",
+                "enumMember",
                 "keyword"
             });
             legend.Set("tokenModifiers", new List<object> { "declaration", "definition" });

@@ -16,13 +16,22 @@
             "include": "#annotations"
         },
         {
-            "include": "#keywords"
+            "include": "#func-declaration"
         },
         {
             "include": "#struct-declaration"
         },
         {
             "include": "#enum-declaration"
+        },
+        {
+            "include": "#keywords"
+        },
+        {
+            "include": "#enum-qualified-access"
+        },
+        {
+            "include": "#type-annotations"
         },
         {
             "include": "#types"
@@ -35,9 +44,6 @@
         },
         {
             "include": "#operators"
-        },
-        {
-            "include": "#type-annotations"
         }
     ],
     "repository": {
@@ -71,7 +77,7 @@
         "annotations": {
             "patterns": [
                 {
-                    "name": "storage.modifier.ffvm",
+                    "name": "entity.name.function.preprocessor.ffvm",
                     "match": "@(export|inline)\\b"
                 }
             ]
@@ -83,8 +89,8 @@
                     "match": "\\b(if|else|while|for|return|yield|wait_for|wait|defer|using)\\b"
                 },
                 {
-                    "name": "keyword.declaration.ffvm",
-                    "match": "\\b(func|var|const|struct|enum|include)\\b"
+                    "name": "keyword.other.ffvm",
+                    "match": "\\b(func|var|const|struct|enum|include|external)\\b"
                 },
                 {
                     "name": "storage.modifier.ffvm",
@@ -92,7 +98,19 @@
                 },
                 {
                     "name": "constant.language.ffvm",
-                    "match": "\\b(true|false)\\b"
+                    "match": "\\b(true|false|null)\\b"
+                }
+            ]
+        },
+        "func-declaration": {
+            "patterns": [
+                {
+                    "comment": "Function declaration: func name(",
+                    "match": "\\b(func)\\s+([a-zA-Z_][a-zA-Z0-9_]*)\\s*(?=\\()",
+                    "captures": {
+                        "1": { "name": "keyword.other.ffvm" },
+                        "2": { "name": "entity.name.function.ffvm" }
+                    }
                 }
             ]
         },
@@ -102,7 +120,7 @@
                     "comment": "Struct name in declaration: struct Name {",
                     "match": "\\b(struct)\\s+([A-Z][a-zA-Z0-9_]*)",
                     "captures": {
-                        "1": { "name": "keyword.declaration.ffvm" },
+                        "1": { "name": "keyword.other.ffvm" },
                         "2": { "name": "entity.name.type.struct.ffvm" }
                     }
                 }
@@ -114,8 +132,20 @@
                     "comment": "Enum name in declaration: enum Name {",
                     "match": "\\b(enum)\\s+([A-Z][a-zA-Z0-9_]*)",
                     "captures": {
-                        "1": { "name": "keyword.declaration.ffvm" },
+                        "1": { "name": "keyword.other.ffvm" },
                         "2": { "name": "entity.name.type.enum.ffvm" }
+                    }
+                }
+            ]
+        },
+        "enum-qualified-access": {
+            "patterns": [
+                {
+                    "comment": "Qualified enum member: DamageType.NORMAL_LOWER",
+                    "match": "\\b([A-Z][a-zA-Z0-9_]*)\\s*\\.\\s*([A-Z][A-Z0-9_]*)\\b",
+                    "captures": {
+                        "1": { "name": "entity.name.type.enum.ffvm" },
+                        "2": { "name": "variable.other.enummember.ffvm" }
                     }
                 }
             ]
@@ -130,8 +160,8 @@
                     }
                 },
                 {
-                    "comment": "Type name before dot-access: TypeName.member",
-                    "match": "\\b([A-Z][a-zA-Z0-9_]*)\\s*\\.",
+                    "comment": "Type name before dot-access (not enum qualified): TypeName.member",
+                    "match": "\\b([A-Z][a-zA-Z0-9_]*)\\s*\\.\\s*(?![A-Z][A-Z0-9_]*\\b)",
                     "captures": {
                         "1": { "name": "entity.name.type.ffvm" }
                     }
@@ -148,7 +178,7 @@
         "types": {
             "patterns": [
                 {
-                    "name": "support.type.ffvm",
+                    "name": "keyword.type.ffvm",
                     "match": "\\b(int|float|bool|void)\\b"
                 }
             ]
@@ -168,8 +198,11 @@
         "functions": {
             "patterns": [
                 {
-                    "name": "entity.name.function.ffvm",
-                    "match": "\\b([a-zA-Z_][a-zA-Z0-9_]*)\\s*(?=\\()"
+                    "comment": "Function call: name(",
+                    "match": "\\b([a-zA-Z_][a-zA-Z0-9_]*)\\s*(?=\\()",
+                    "captures": {
+                        "1": { "name": "entity.name.function.ffvm" }
+                    }
                 }
             ]
         },

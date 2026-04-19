@@ -239,12 +239,12 @@ public static class LspDatabaseQueryTests
 
 			var facts = new List<DataFact>
 			{
-				new DataFact(new DataFactId("tok-func"), new DataAggregateId("agg-sem"), DataFactKind.Token, doc, new TextSpan(0, 0), 1, new TokenDataFactPayload(2, 4, 3, 12, 1)),
-				new DataFact(new DataFactId("tok-var"), new DataAggregateId("agg-sem"), DataFactKind.Token, doc, new TextSpan(0, 0), 1, new TokenDataFactPayload(1, 1, 2, 8, 0)),
-				new DataFact(new DataFactId("tok-keyword"), new DataAggregateId("agg-sem"), DataFactKind.Token, doc, new TextSpan(0, 0), 1, new TokenDataFactPayload(2, 10, 5, 15, 0)),
-				new DataFact(new DataFactId("tok-dup"), new DataAggregateId("agg-sem"), DataFactKind.Token, doc, new TextSpan(0, 0), 1, new TokenDataFactPayload(2, 10, 5, 15, 0)),
-				new DataFact(new DataFactId("tok-invalid"), new DataAggregateId("agg-sem"), DataFactKind.Token, doc, new TextSpan(0, 0), 1, new TokenDataFactPayload(-1, 10, 5, 15, 0)),
-				new DataFact(new DataFactId("tok-other-doc"), new DataAggregateId("agg-sem"), DataFactKind.Token, otherDoc, new TextSpan(0, 0), 1, new TokenDataFactPayload(0, 0, 3, 8, 0)),
+				new DataFact(new DataFactId("tok-func"), new DataAggregateId("agg-sem"), DataFactKind.Token, doc, new TextSpan(0, 0), 1, new TokenDataFactPayload(2, 4, 3, 3, 1)),
+				new DataFact(new DataFactId("tok-var"), new DataAggregateId("agg-sem"), DataFactKind.Token, doc, new TextSpan(0, 0), 1, new TokenDataFactPayload(1, 1, 2, 4, 0)),
+				new DataFact(new DataFactId("tok-keyword"), new DataAggregateId("agg-sem"), DataFactKind.Token, doc, new TextSpan(0, 0), 1, new TokenDataFactPayload(2, 10, 5, 8, 0)),
+				new DataFact(new DataFactId("tok-dup"), new DataAggregateId("agg-sem"), DataFactKind.Token, doc, new TextSpan(0, 0), 1, new TokenDataFactPayload(2, 10, 5, 8, 0)),
+				new DataFact(new DataFactId("tok-invalid"), new DataAggregateId("agg-sem"), DataFactKind.Token, doc, new TextSpan(0, 0), 1, new TokenDataFactPayload(-1, 10, 5, 8, 0)),
+				new DataFact(new DataFactId("tok-other-doc"), new DataAggregateId("agg-sem"), DataFactKind.Token, otherDoc, new TextSpan(0, 0), 1, new TokenDataFactPayload(0, 0, 3, 4, 0)),
 			};
 
 			CodeDatabaseSnapshot snapshot = BuildSnapshot(indexSnapshot: null, facts: facts);
@@ -258,7 +258,7 @@ public static class LspDatabaseQueryTests
 				Assert(payload.Data.Count == 15, "DBQ-06B: semantic token payload has 3 encoded tokens");
 				Assert(payload.Message == string.Empty, "DBQ-06C: semantic token success message empty");
 
-				int[] expected = { 1, 1, 2, 8, 0, 1, 4, 3, 12, 1, 0, 6, 5, 15, 0 };
+				int[] expected = { 1, 1, 2, 4, 0, 1, 4, 3, 3, 1, 0, 6, 5, 8, 0 };
 				bool matched = payload.Data.Count == expected.Length;
 				for (int i = 0; matched && i < expected.Length; i++)
 				{
