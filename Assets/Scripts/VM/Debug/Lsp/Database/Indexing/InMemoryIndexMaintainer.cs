@@ -575,6 +575,23 @@ namespace FFVM.Debug.Lsp.Database
 					return false;
 				}
 
+				PositionEntry best = FindNarrowestEntry(entries, position);
+
+				// Fallback: when the cursor sits exactly at the end of a symbol
+				// (e.g. double-click selection places the cursor one past the last character),
+				// retry with the preceding character position.
+				if (best == null && position.Character > 0)
+					best = FindNarrowestEntry(entries, new TextPosition(position.Line, position.Character - 1));
+
+				if (best == null)
+					return false;
+
+				symbol = best.Symbol;
+				return true;
+			}
+
+			private static PositionEntry FindNarrowestEntry(IReadOnlyList<PositionEntry> entries, TextPosition position)
+			{
 				PositionEntry best = null;
 				long bestWidth = long.MaxValue;
 				for (int i = 0; i < entries.Count; i++)
@@ -594,11 +611,7 @@ namespace FFVM.Debug.Lsp.Database
 					}
 				}
 
-				if (best == null)
-					return false;
-
-				symbol = best.Symbol;
-				return true;
+				return best;
 			}
 		}
 
