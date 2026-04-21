@@ -23,6 +23,8 @@ func main() {
         EndAction()
     }
 
+    
+
     // Visual feedback: spawn hit effect on self
     SpawnEffectSelf(FxId.HURT_EFFECT, FxDuration.HURT)
 

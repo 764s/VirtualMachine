@@ -5601,6 +5601,263 @@ public static class LspServerNewTests
             }
         }
 
+        // ================================================================
+        // LSPNEW-STRICT: T3 completion visibility matrix — end-to-end via
+        // real orchestrator + bridge. Mirrors DBQ-10 but exercises the
+        // actual include-graph maintained during workspace bootstrap.
+        //
+        // Topology:
+        //   curr.ffs    <- requester; includes base, aliases alias as X
+        //   base.ffs    <- flat; includes leaf; declares base_var + shared_const
+        //   leaf.ffs    <- transitive flat via base; declares leaf_var
+        //   alias.ffs   <- alias-included; declares alias_var (bare-name hidden)
+        //   unrel.ffs   <- not referenced; declares unrel_var (hidden)
+        // ================================================================
+        {
+            string tmpDir = Path.Combine(Path.GetTempPath(), "lspnew_strict_" + Guid.NewGuid().ToString("N").Substring(0, 8));
+            try
+            {
+                Directory.CreateDirectory(tmpDir);
+
+                File.WriteAllText(Path.Combine(tmpDir, "leaf.ffs"),
+                    "@export var leaf_var: int = 3\n");
+                File.WriteAllText(Path.Combine(tmpDir, "base.ffs"),
+                    "include \"leaf\"\n@export var base_var: int = 1\n@export const shared_const: int = 2\n");
+                File.WriteAllText(Path.Combine(tmpDir, "alias.ffs"),
+                    "@export var alias_var: int = 4\n");
+                File.WriteAllText(Path.Combine(tmpDir, "unrel.ffs"),
+                    "@export var unrel_var: int = 5\n");
+                File.WriteAllText(Path.Combine(tmpDir, "curr.ffs"),
+                    "include \"base\"\ninclude \"alias\" as X\n@export const shared_const: int = 99\nfunc main() {\n    \n}\n");
+
+                string rootUri = "file:///" + tmpDir.TrimStart('/').Replace("\\", "/");
+                string currUri = rootUri + "/curr.ffs";
+
+                var bridge = new DatabaseBackedVsCodeBridge(
+                    new InMemoryWorkspaceCodeDatabase(new InMemoryDatabaseExecutionOrchestrator()));
+                var session = new LspServerNewBatchSession();
+                session.AddRequest(LspMethods.Initialize, BuildInitializeParams(tmpDir));
+                session.AddNotification(LspMethods.Initialized, new JsonObject());
+
+                int compId = session.AddRequest(LspMethods.Completion, BuildTextDocumentPositionParams(currUri, 4, 4));
+                session.AddNotification(LspMethods.Exit, new JsonObject());
+                session.Run(bridge);
+
+                List<object> items = session.FindResponse(compId)?.GetArray(JsonRpcFields.Result);
+
+                Assert(ContainsCompletionLabel(items, "base_var"),
+                    "LSPNEW-STRICT-01: flat-included @export var appears in completion");
+                Assert(ContainsCompletionLabel(items, "leaf_var"),
+                    "LSPNEW-STRICT-02: transitively flat-included @export var appears in completion");
+                Assert(!ContainsCompletionLabel(items, "alias_var"),
+                    "LSPNEW-STRICT-03: alias-included @export var hidden at bare-identifier completion");
+                Assert(!ContainsCompletionLabel(items, "unrel_var"),
+                    "LSPNEW-STRICT-04: unincluded @export var hidden from completion (facing-class bug)");
+
+                int sharedCount = 0;
+                if (items != null)
+                {
+                    for (int i = 0; i < items.Count; i++)
+                    {
+                        JsonObject it = items[i] as JsonObject;
+                        string lbl = it != null ? it.GetString(LspFields.Label) : string.Empty;
+                        if (string.Equals(lbl, "shared_const", StringComparison.Ordinal))
+                            sharedCount++;
+                    }
+                }
+                Assert(sharedCount == 1,
+                    "LSPNEW-STRICT-05: symbol duplicated across current+include appears exactly once (interruptPriority-class bug)");
+            }
+            finally
+            {
+                try { Directory.Delete(tmpDir, true); } catch { }
+            }
+        }
+
+        // ================================================================
+        // LSPNEW-MATRIX: T3 coverage-matrix end-to-end, one assertion per
+        // searchable unit kind × position cell that completion serves.
+        // Mirrors the KOF98 shape (external func + enum + struct + @export
+        // const + transitive includes). Catches regressions that unit-only
+        // DBQ-10 mocks miss because mocks synthesize SymbolIdentity directly
+        // and bypass the Parser → orchestrator → NameIndex pipeline.
+        // ================================================================
+        {
+            string tmpDir = Path.Combine(Path.GetTempPath(), "lspnew_matrix_" + Guid.NewGuid().ToString("N").Substring(0, 8));
+            try
+            {
+                Directory.CreateDirectory(tmpDir);
+
+                File.WriteAllText(Path.Combine(tmpDir, "syscalls.ffs"),
+                    "external func BeginAction(actionId: int, totalFrames: int)\n" +
+                    "external func EndAction()\n" +
+                    "external func SpawnEffectSelf(fxId: int, dur: int)\n");
+                File.WriteAllText(Path.Combine(tmpDir, "types.ffs"),
+                    "enum FxId {\n    HURT = 1,\n    BLOCK = 2\n}\n" +
+                    "struct Vec2 {\n    x: float,\n    y: float\n}\n");
+                File.WriteAllText(Path.Combine(tmpDir, "base.ffs"),
+                    "include \"syscalls\"\n" +
+                    "include \"types\"\n" +
+                    "@export const totalFrames: int = -1\n" +
+                    "func helper(): int { return 1 }\n");
+                File.WriteAllText(Path.Combine(tmpDir, "skill.ffs"),
+                    "include \"base\"\n" +
+                    "func main() {\n" +
+                    "    var v: Vec2 = Vec2 { x: 1.0, y: 2.0 }\n" +
+                    "    \n" +                                          // line 3 col 4 — identifier probe
+                    "    var fx: int = FxId.\n" +                       // line 4 — enum-member probe col after dot
+                    "    v.\n" +                                        // line 5 — struct-field probe col after dot
+                    "}\n");
+
+                string rootUri = "file:///" + tmpDir.TrimStart('/').Replace("\\", "/");
+                string skillUri = rootUri + "/skill.ffs";
+                string skillText =
+                    "include \"base\"\n" +
+                    "func main() {\n" +
+                    "    var v: Vec2 = Vec2 { x: 1.0, y: 2.0 }\n" +
+                    "    \n" +
+                    "    var fx: int = FxId.\n" +
+                    "    v.\n" +
+                    "}\n";
+
+                var bridge = new DatabaseBackedVsCodeBridge(
+                    new InMemoryWorkspaceCodeDatabase(new InMemoryDatabaseExecutionOrchestrator()));
+                var session = new LspServerNewBatchSession();
+                session.AddRequest(LspMethods.Initialize, BuildInitializeParams(tmpDir));
+                session.AddNotification(LspMethods.Initialized, new JsonObject());
+                // didOpen is required for MemberAccess/TypeAnnotation context detection
+                // — the resolver needs the document text to find the `.` trigger and
+                // the receiver chain before the cursor.
+                session.AddNotification(LspMethods.DidOpen, BuildDidOpenParams(skillUri, "ffscript", 1, skillText));
+                int idIdent = session.AddRequest(LspMethods.Completion, BuildTextDocumentPositionParams(skillUri, 3, 4));
+                int idEnum  = session.AddRequest(LspMethods.Completion, BuildTextDocumentPositionParams(skillUri, 4, 23));
+                int idField = session.AddRequest(LspMethods.Completion, BuildTextDocumentPositionParams(skillUri, 5, 6));
+                session.AddNotification(LspMethods.Exit, new JsonObject());
+                session.Run(bridge);
+
+                List<object> identItems = session.FindResponse(idIdent)?.GetArray(JsonRpcFields.Result);
+                List<object> enumItems  = session.FindResponse(idEnum)?.GetArray(JsonRpcFields.Result);
+                List<object> fieldItems = session.FindResponse(idField)?.GetArray(JsonRpcFields.Result);
+
+                // Matrix row: 函数（func） @ 函数位置 (inside main body)
+                Assert(ContainsCompletionLabel(identItems, "helper"),
+                    "LSPNEW-MATRIX-01: transitively-included user func appears at identifier completion");
+                // Matrix row: 宿主函数（external func）
+                Assert(ContainsCompletionLabel(identItems, "BeginAction"),
+                    "LSPNEW-MATRIX-02: transitively-included external func appears at identifier completion");
+                Assert(ContainsCompletionLabel(identItems, "EndAction"),
+                    "LSPNEW-MATRIX-03: external func with no params appears at identifier completion");
+                // Matrix row: 值（模块 const）
+                Assert(ContainsCompletionLabel(identItems, "totalFrames"),
+                    "LSPNEW-MATRIX-04: @export const from include appears at identifier completion");
+                // Matrix row: 枚举类型 at identifier position (enum name usable as value)
+                Assert(ContainsCompletionLabel(identItems, "FxId"),
+                    "LSPNEW-MATRIX-05: Enum type name appears at identifier completion");
+                // Matrix row: 类型 at identifier position (struct name)
+                Assert(ContainsCompletionLabel(identItems, "Vec2"),
+                    "LSPNEW-MATRIX-06: Struct type name appears at identifier completion");
+
+                // Matrix row: 枚举值（EnumMember） @ Enum. access
+                Assert(ContainsCompletionLabel(enumItems, "HURT"),
+                    "LSPNEW-MATRIX-07: Enum member offered via `FxId.`");
+                Assert(ContainsCompletionLabel(enumItems, "BLOCK"),
+                    "LSPNEW-MATRIX-08: Enum member offered via `FxId.`");
+
+                // Matrix row: 结构体字段 @ struct field access on typed var
+                Assert(ContainsCompletionLabel(fieldItems, "x"),
+                    "LSPNEW-MATRIX-09: Struct field offered via receiver.field");
+                Assert(ContainsCompletionLabel(fieldItems, "y"),
+                    "LSPNEW-MATRIX-10: Struct field offered via receiver.field");
+            }
+            finally
+            {
+                try { Directory.Delete(tmpDir, true); } catch { }
+            }
+        }
+
+        // ================================================================
+        // LSPNEW-MATRIX-NESTED: same coverage, but with subdirectory include
+        // paths (`include "common/xxx"`) — mirrors the KOF98 Scripts/common/
+        // shape where skill_*.ffs at root transitively includes common/...
+        // This verifies IncludeTargetResolver correctly chains resolution
+        // through multi-level relative paths via workspace-root fallback.
+        // ================================================================
+        {
+            string tmpDir = Path.Combine(Path.GetTempPath(), "lspnew_nested_" + Guid.NewGuid().ToString("N").Substring(0, 8));
+            try
+            {
+                Directory.CreateDirectory(tmpDir);
+                string commonDir = Path.Combine(tmpDir, "common");
+                Directory.CreateDirectory(commonDir);
+
+                File.WriteAllText(Path.Combine(commonDir, "syscalls.ffs"),
+                    "external func BeginAction(a: int, b: int)\n" +
+                    "external func EndAction()\n");
+                File.WriteAllText(Path.Combine(commonDir, "types.ffs"),
+                    "enum FxId { HURT = 1, BLOCK = 2 }\n" +
+                    "struct Vec2 { x: float, y: float }\n");
+                File.WriteAllText(Path.Combine(commonDir, "base.ffs"),
+                    "include \"common/syscalls\"\n" +
+                    "include \"common/types\"\n" +
+                    "@export const totalFrames: int = -1\n" +
+                    "func helper(): int { return 1 }\n");
+                File.WriteAllText(Path.Combine(tmpDir, "skill.ffs"),
+                    "include \"common/base\"\n" +
+                    "func main() {\n" +
+                    "    var v: Vec2 = Vec2 { x: 1.0, y: 2.0 }\n" +
+                    "    \n" +
+                    "    var fx: int = FxId.\n" +
+                    "    v.\n" +
+                    "}\n");
+
+                string rootUri = "file:///" + tmpDir.TrimStart('/').Replace("\\", "/");
+                string skillUri = rootUri + "/skill.ffs";
+                string skillText =
+                    "include \"common/base\"\n" +
+                    "func main() {\n" +
+                    "    var v: Vec2 = Vec2 { x: 1.0, y: 2.0 }\n" +
+                    "    \n" +
+                    "    var fx: int = FxId.\n" +
+                    "    v.\n" +
+                    "}\n";
+
+                var bridge = new DatabaseBackedVsCodeBridge(
+                    new InMemoryWorkspaceCodeDatabase(new InMemoryDatabaseExecutionOrchestrator()));
+                var session = new LspServerNewBatchSession();
+                session.AddRequest(LspMethods.Initialize, BuildInitializeParams(tmpDir));
+                session.AddNotification(LspMethods.Initialized, new JsonObject());
+                session.AddNotification(LspMethods.DidOpen, BuildDidOpenParams(skillUri, "ffscript", 1, skillText));
+                int nIdent = session.AddRequest(LspMethods.Completion, BuildTextDocumentPositionParams(skillUri, 3, 4));
+                int nEnum  = session.AddRequest(LspMethods.Completion, BuildTextDocumentPositionParams(skillUri, 4, 23));
+                int nField = session.AddRequest(LspMethods.Completion, BuildTextDocumentPositionParams(skillUri, 5, 6));
+                session.AddNotification(LspMethods.Exit, new JsonObject());
+                session.Run(bridge);
+
+                List<object> identItems = session.FindResponse(nIdent)?.GetArray(JsonRpcFields.Result);
+                List<object> enumItems  = session.FindResponse(nEnum)?.GetArray(JsonRpcFields.Result);
+                List<object> fieldItems = session.FindResponse(nField)?.GetArray(JsonRpcFields.Result);
+
+                Assert(ContainsCompletionLabel(identItems, "helper"),
+                    "LSPNEW-NESTED-01: 1-level subdir include resolves user func");
+                Assert(ContainsCompletionLabel(identItems, "BeginAction"),
+                    "LSPNEW-NESTED-02: 2-level subdir include resolves transitive external func (KOF98 shape)");
+                Assert(ContainsCompletionLabel(identItems, "totalFrames"),
+                    "LSPNEW-NESTED-03: @export const in 1-level subdir visible");
+                Assert(ContainsCompletionLabel(identItems, "FxId"),
+                    "LSPNEW-NESTED-04: enum type in 2-level subdir visible at identifier position");
+                Assert(ContainsCompletionLabel(identItems, "Vec2"),
+                    "LSPNEW-NESTED-05: struct type in 2-level subdir visible at identifier position");
+                Assert(ContainsCompletionLabel(enumItems, "HURT"),
+                    "LSPNEW-NESTED-06: enum member accessible via `FxId.` across 2-level subdir chain");
+                Assert(ContainsCompletionLabel(fieldItems, "x"),
+                    "LSPNEW-NESTED-07: struct field accessible via `v.` across 2-level subdir chain");
+            }
+            finally
+            {
+                try { Directory.Delete(tmpDir, true); } catch { }
+            }
+        }
+
         Debug.Log($"[LspServerNewTests] Completed. Passed={passed}, Failed={failed}");
     }
 

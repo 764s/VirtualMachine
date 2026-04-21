@@ -4343,7 +4343,7 @@ namespace FFVM.Debug.Lsp.Database
 				}
 
 				List<string> candidates = IncludeTargetResolver.ResolveCandidates(normalizedDocument, import.ModulePath);
-				string targetUri = candidates != null && candidates.Count > 0 ? candidates[0] : string.Empty;
+				string targetUri = SelectBestIncludeCandidate(candidates);
 
 				var payload = new IncludeEdgeDataFactPayload(targetUri);
 				output.Add(new DataFact(
@@ -4973,6 +4973,29 @@ namespace FFVM.Debug.Lsp.Database
 		private static string NormalizeDocumentKey(string value)
 		{
 			return DocumentKeyNormalizer.Normalize(value);
+		}
+
+		// Picks the best include-target candidate from IncludeTargetResolver output.
+		// Resolver returns candidates in priority order (source-dir-relative first,
+		// then each workspace-root-relative), but the first one may point to a
+		// non-existent file when the include path happens to share a prefix with
+		// the including file's directory (e.g. `common/syscalls` included from
+		// `common/base.ffs` would naively resolve to `common/common/syscalls.ffs`).
+		// Prefer the first candidate whose file actually exists; fall back to the
+		// first candidate to preserve existing diagnostics for unresolved paths.
+		private static string SelectBestIncludeCandidate(List<string> candidates)
+		{
+			if (candidates == null || candidates.Count == 0)
+				return string.Empty;
+			for (int i = 0; i < candidates.Count; i++)
+			{
+				string uri = candidates[i];
+				if (string.IsNullOrWhiteSpace(uri)) continue;
+				string path = WorkspacePathTool.UriToPath(uri);
+				if (!string.IsNullOrWhiteSpace(path) && System.IO.File.Exists(path))
+					return uri;
+			}
+			return candidates[0] ?? string.Empty;
 		}
 
 		private static string ComputeStableTextHash(string text)

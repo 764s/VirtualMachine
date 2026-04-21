@@ -30,17 +30,18 @@ const hitPhase: HitPhaseDef = HitPhaseDef {
 const hurtBox: Box4 = Box4 { ox: 0.0, oy: 0.35, hw: 0.2, hh: 0.35 }
 
 func main() {
+
     // ── Execution ───────────────────────────────────────────
     BeginAction(20, 18)
     defer {
         ClearHitbox()
         EndAction()
     }
-    
-    // f
 
     var f: int = 0
+
     var hitDone: int = 0
+    
     while f < 18 {
         // Push collision for this frame
         applyHurtbox(hurtBox)

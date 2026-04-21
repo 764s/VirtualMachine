@@ -157,19 +157,26 @@ namespace FFVM.Debug.Lsp.Database
 			IReadOnlyList<SymbolIdentity> allSymbols = index.NameIndex.Search(string.Empty, CompletionLimit * 4);
 			if (allSymbols == null) allSymbols = new List<SymbolIdentity>(0);
 
+			// Transitive flat-include closure for the request document. Only
+			// module-scope symbols whose Origin is in this set are visible at
+			// bare-identifier / type-annotation completion. Alias-included
+			// documents are deliberately excluded (their symbols must be
+			// qualified via the alias namespace).
+			HashSet<string> includeClosure = BuildIncludeClosure(index, normalizedDocKey);
+
 			// Dispatch by context kind.
 			switch (context.Kind)
 			{
 				case CompletionContextKind.MemberAccess:
-					return CompletionMemberAccess(index, request, context, allSymbols, normalizedDocKey);
+					return CompletionMemberAccess(index, request, context, allSymbols, normalizedDocKey, includeClosure);
 				case CompletionContextKind.IncludePath:
 					return CompletionIncludePath(allSymbols, context, normalizedDocKey);
 				case CompletionContextKind.TypeAnnotation:
 				case CompletionContextKind.NewExpression:
-					return CompletionTypeContext(allSymbols, context, normalizedDocKey);
+					return CompletionTypeContext(allSymbols, context, normalizedDocKey, includeClosure);
 				case CompletionContextKind.Identifier:
 				default:
-					return CompletionIdentifier(allSymbols, context, normalizedDocKey, request);
+					return CompletionIdentifier(allSymbols, context, normalizedDocKey, request, includeClosure);
 			}
 		}
 
@@ -178,12 +185,21 @@ namespace FFVM.Debug.Lsp.Database
 			IReadOnlyList<SymbolIdentity> allSymbols,
 			CompletionContext context,
 			string normalizedDocKey,
-			SymbolQueryRequest request)
+			SymbolQueryRequest request,
+			HashSet<string> includeClosure)
 		{
 			string containingFunc = ResolveContainingFunction(allSymbols, normalizedDocKey,
 				request != null ? request.Position.Line : 0,
 				request != null ? request.DocumentText : string.Empty);
+			// Cursor absolute offset — used to filter out locals declared after the cursor.
+			int cursorOffset = request != null
+				? LineToOffset(request.DocumentText, request.Position.Line)
+					+ System.Math.Max(0, request.Position.Character)
+				: 0;
 			var items = new List<LspCompletionItem>();
+			// Dedup map: (Kind,Name) -> index into items. Current-doc origin wins.
+			var dedup = new Dictionary<string, int>(System.StringComparer.Ordinal);
+			var itemOriginIsCurrent = new List<bool>();
 
 			for (int i = 0; i < allSymbols.Count && items.Count < CompletionLimit; i++)
 			{
@@ -192,20 +208,57 @@ namespace FFVM.Debug.Lsp.Database
 				// Skip nested/sub-symbols offered via dot triggers.
 				if (c.Kind == SymbolKindTag.StructField) continue;
 				if (c.Kind == SymbolKindTag.EnumMember) continue;
-				// Scope isolation: locals/params only in their containing function
+				// IncludeFile pseudo-symbols surface via include-path completion only.
+				if (c.Kind == SymbolKindTag.IncludeFile) continue;
+				bool sameDoc = IsSameDocument(c.Origin, normalizedDocKey);
+				// Scope isolation: locals/params only in their containing function AND only
+				// from the current document. Multiple files may declare functions with the
+				// same name (e.g. `main` in every skill_*.ffs), so ParentName alone is not
+				// unique across documents.
 				if ((c.Kind == SymbolKindTag.Variable || c.Kind == SymbolKindTag.Parameter)
 					&& !string.IsNullOrEmpty(c.ParentName))
 				{
+					if (!sameDoc)
+						continue;
 					if (!string.Equals(c.ParentName, containingFunc, System.StringComparison.Ordinal))
+						continue;
+					// Forward-reference guard: a local variable declared after the cursor
+					// is not yet in scope. Parameters are always in scope for the whole
+					// function body, so they are not filtered here.
+					if (c.Kind == SymbolKindTag.Variable
+						&& c.DeclarationSpan.Start > cursorOffset)
+						continue;
+				}
+				else if (IsModuleScopeCandidate(c))
+				{
+					// Include-graph reachability: module-scope symbols from unreachable
+					// documents are invisible. Same-doc always reachable.
+					if (!sameDoc && !IsOriginReachable(c.Origin, includeClosure))
 						continue;
 				}
 				// Private visibility: hide private symbols from other files
-				if (c.IsPrivate && !IsSameDocument(c.Origin, normalizedDocKey))
+				if (c.IsPrivate && !sameDoc)
 					continue;
-				items.Add(new LspCompletionItem(c.Name, c.Kind.ToString(), BuildCompletionDetail(c), c.Documentation));
+
+				var item = new LspCompletionItem(c.Name, c.Kind.ToString(), BuildCompletionDetail(c), c.Documentation);
+				string key = c.Kind.ToString() + "\0" + c.Name;
+				if (dedup.TryGetValue(key, out int existingIdx))
+				{
+					// Current-doc wins over already-added non-current item.
+					if (sameDoc && !itemOriginIsCurrent[existingIdx])
+					{
+						items[existingIdx] = item;
+						itemOriginIsCurrent[existingIdx] = true;
+					}
+					// else: keep existing (stable order / current-doc already kept).
+					continue;
+				}
+				dedup[key] = items.Count;
+				itemOriginIsCurrent.Add(sameDoc);
+				items.Add(item);
 			}
 
-			// Append keywords (always useful)
+			// Append keywords (always useful; not deduped against symbols).
 			foreach (string kw in CompletionKeywords)
 				items.Add(new LspCompletionItem(kw, "Keyword", "keyword", null));
 
@@ -219,9 +272,12 @@ namespace FFVM.Debug.Lsp.Database
 		private SymbolQueryResult CompletionTypeContext(
 			IReadOnlyList<SymbolIdentity> allSymbols,
 			CompletionContext context,
-			string normalizedDocKey)
+			string normalizedDocKey,
+			HashSet<string> includeClosure)
 		{
 			var items = new List<LspCompletionItem>();
+			var dedup = new Dictionary<string, int>(System.StringComparer.Ordinal);
+			var itemOriginIsCurrent = new List<bool>();
 			for (int i = 0; i < allSymbols.Count && items.Count < CompletionLimit; i++)
 			{
 				SymbolIdentity c = allSymbols[i];
@@ -230,8 +286,25 @@ namespace FFVM.Debug.Lsp.Database
 				bool isType = c.Kind == SymbolKindTag.Struct
 					|| (context.Kind == CompletionContextKind.TypeAnnotation && c.Kind == SymbolKindTag.Enum);
 				if (!isType) continue;
-				if (c.IsPrivate && !IsSameDocument(c.Origin, normalizedDocKey)) continue;
-				items.Add(new LspCompletionItem(c.Name, c.Kind.ToString(), BuildCompletionDetail(c), c.Documentation));
+				bool sameDoc = IsSameDocument(c.Origin, normalizedDocKey);
+				// Include-graph reachability for types (Struct / Enum always module-scope).
+				if (!sameDoc && !IsOriginReachable(c.Origin, includeClosure)) continue;
+				if (c.IsPrivate && !sameDoc) continue;
+
+				var item = new LspCompletionItem(c.Name, c.Kind.ToString(), BuildCompletionDetail(c), c.Documentation);
+				string key = c.Kind.ToString() + "\0" + c.Name;
+				if (dedup.TryGetValue(key, out int existingIdx))
+				{
+					if (sameDoc && !itemOriginIsCurrent[existingIdx])
+					{
+						items[existingIdx] = item;
+						itemOriginIsCurrent[existingIdx] = true;
+					}
+					continue;
+				}
+				dedup[key] = items.Count;
+				itemOriginIsCurrent.Add(sameDoc);
+				items.Add(item);
 			}
 			// Builtin primitives as keywords in TypeAnnotation context
 			if (context.Kind == CompletionContextKind.TypeAnnotation)
@@ -251,7 +324,8 @@ namespace FFVM.Debug.Lsp.Database
 			SymbolQueryRequest request,
 			CompletionContext context,
 			IReadOnlyList<SymbolIdentity> allSymbols,
-			string normalizedDocKey)
+			string normalizedDocKey,
+			HashSet<string> includeClosure)
 		{
 			var items = new List<LspCompletionItem>();
 			if (context.ReceiverChain == null || context.ReceiverChain.Count == 0)
@@ -268,6 +342,7 @@ namespace FFVM.Debug.Lsp.Database
 				&& context.ReceiverChain.Count == 1)
 			{
 				string targetPath = NormalizeDocumentKey(targetDoc.Value ?? string.Empty);
+				var aliasDedup = new HashSet<string>(System.StringComparer.Ordinal);
 				for (int i = 0; i < allSymbols.Count && items.Count < CompletionLimit; i++)
 				{
 					SymbolIdentity c = allSymbols[i];
@@ -276,9 +351,12 @@ namespace FFVM.Debug.Lsp.Database
 					if (c.Kind == SymbolKindTag.Variable && !string.IsNullOrEmpty(c.ParentName)) continue; // skip locals
 					if (c.Kind == SymbolKindTag.StructField) continue;
 					if (c.Kind == SymbolKindTag.EnumMember) continue;
+					if (c.Kind == SymbolKindTag.IncludeFile) continue;
 					if (!string.Equals(NormalizeDocumentKey(c.Origin), targetPath, System.StringComparison.OrdinalIgnoreCase))
 						continue;
 					if (c.IsPrivate) continue;
+					string aliasKey = c.Kind.ToString() + "\0" + c.Name;
+					if (!aliasDedup.Add(aliasKey)) continue;
 					items.Add(new LspCompletionItem(first + "." + c.Name, c.Kind.ToString(),
 						BuildCompletionDetail(c), c.Documentation));
 				}
@@ -287,15 +365,19 @@ namespace FFVM.Debug.Lsp.Database
 					SymbolQueryPayload.ForCompletion(items));
 			}
 
-			// Enum-qualified access: first segment is an Enum name → return its members
-			if (IsEnumName(allSymbols, first))
+			// Enum-qualified access: first segment is an Enum name → return its members.
+			// Reachability: the Enum declaration must be in the current doc or the include closure.
+			if (IsReachableEnumName(allSymbols, first, normalizedDocKey, includeClosure))
 			{
+				var enumDedup = new HashSet<string>(System.StringComparer.Ordinal);
 				for (int i = 0; i < allSymbols.Count && items.Count < CompletionLimit; i++)
 				{
 					SymbolIdentity c = allSymbols[i];
 					if (c == null) continue;
 					if (c.Kind != SymbolKindTag.EnumMember) continue;
 					if (!string.Equals(c.ParentName, first, System.StringComparison.Ordinal)) continue;
+					if (!IsSameDocument(c.Origin, normalizedDocKey) && !IsOriginReachable(c.Origin, includeClosure)) continue;
+					if (!enumDedup.Add(c.Name)) continue;
 					items.Add(new LspCompletionItem(c.Name, c.Kind.ToString(), BuildCompletionDetail(c), c.Documentation));
 				}
 				return SymbolQueryResult.Success(
@@ -303,43 +385,49 @@ namespace FFVM.Debug.Lsp.Database
 					SymbolQueryPayload.ForCompletion(items));
 			}
 
-			// Struct member access: resolve receiver chain to a struct type
+			// Struct member access: resolve receiver chain to a struct type (closure-gated).
 			string containingFunc = ResolveContainingFunction(allSymbols, normalizedDocKey,
 				request != null ? request.Position.Line : 0,
 				request != null ? request.DocumentText : string.Empty);
-			string currentType = ResolveChainBaseType(allSymbols, first, containingFunc);
+			string currentType = ResolveChainBaseType(allSymbols, first, containingFunc, normalizedDocKey, includeClosure);
 			for (int k = 1; k < context.ReceiverChain.Count; k++)
 			{
 				if (string.IsNullOrEmpty(currentType)) break;
 				string seg = context.ReceiverChain[k];
-				currentType = ResolveFieldType(allSymbols, currentType, seg);
+				currentType = ResolveFieldType(allSymbols, currentType, seg, normalizedDocKey, includeClosure);
 			}
 			if (string.IsNullOrEmpty(currentType))
 				return SymbolQueryResult.Success(
 					SymbolIdentity.CreateUnknown("completion"), null,
 					SymbolQueryPayload.ForCompletion(items));
 
-			// If final type is an Enum, return its members
-			if (IsEnumName(allSymbols, currentType))
+			// If final type is an Enum (and reachable), return its members
+			if (IsReachableEnumName(allSymbols, currentType, normalizedDocKey, includeClosure))
 			{
+				var memberDedup = new HashSet<string>(System.StringComparer.Ordinal);
 				for (int i = 0; i < allSymbols.Count && items.Count < CompletionLimit; i++)
 				{
 					SymbolIdentity c = allSymbols[i];
 					if (c == null) continue;
 					if (c.Kind != SymbolKindTag.EnumMember) continue;
 					if (!string.Equals(c.ParentName, currentType, System.StringComparison.Ordinal)) continue;
+					if (!IsSameDocument(c.Origin, normalizedDocKey) && !IsOriginReachable(c.Origin, includeClosure)) continue;
+					if (!memberDedup.Add(c.Name)) continue;
 					items.Add(new LspCompletionItem(c.Name, c.Kind.ToString(), BuildCompletionDetail(c), c.Documentation));
 				}
 			}
 			else
 			{
-				// Struct fields
+				// Struct fields, reachable only.
+				var fieldDedup = new HashSet<string>(System.StringComparer.Ordinal);
 				for (int i = 0; i < allSymbols.Count && items.Count < CompletionLimit; i++)
 				{
 					SymbolIdentity c = allSymbols[i];
 					if (c == null) continue;
 					if (c.Kind != SymbolKindTag.StructField) continue;
 					if (!string.Equals(c.ParentName, currentType, System.StringComparison.Ordinal)) continue;
+					if (!IsSameDocument(c.Origin, normalizedDocKey) && !IsOriginReachable(c.Origin, includeClosure)) continue;
+					if (!fieldDedup.Add(c.Name)) continue;
 					items.Add(new LspCompletionItem(c.Name, c.Kind.ToString(), BuildSymbolDetail(c), c.Documentation));
 				}
 			}
@@ -701,6 +789,89 @@ namespace FFVM.Debug.Lsp.Database
 			return string.Equals(NormalizeDocumentKey(a), NormalizeDocumentKey(b), System.StringComparison.OrdinalIgnoreCase);
 		}
 
+		// Whether an origin document is reachable through the flat-include
+		// closure computed for the request document. Closure is case-insensitive;
+		// empty or unknown origins are treated as unreachable (fail-closed).
+		private static bool IsOriginReachable(string origin, HashSet<string> closure)
+		{
+			if (closure == null) return true; // no closure computed → do not filter
+			if (string.IsNullOrEmpty(origin)) return false;
+			string norm = NormalizeDocumentKey(origin);
+			return !string.IsNullOrEmpty(norm) && closure.Contains(norm);
+		}
+
+		// Module-scope candidates are those we gate by include-graph reachability:
+		// Variables/Functions/Structs/Enums with empty ParentName, and ExternalFunc
+		// (always module-scope).
+		private static bool IsModuleScopeCandidate(SymbolIdentity c)
+		{
+			if (c == null) return false;
+			switch (c.Kind)
+			{
+				case SymbolKindTag.Function:
+				case SymbolKindTag.Struct:
+				case SymbolKindTag.Enum:
+					// Note: ExternalFunction is represented via SymbolKindTag.Function
+					// in this codebase (semantic subclass, not a distinct kind).
+					return true;
+				case SymbolKindTag.Variable:
+					return string.IsNullOrEmpty(c.ParentName);
+				default:
+					return false;
+			}
+		}
+
+		// Transitive flat-include closure (includes the document itself).
+		// Alias-include edges are excluded: if doc X aliases "a" → Y, then Y
+		// is NOT walked as a flat dependency of X. This enforces IN-02:
+		// symbols from aliased imports must be reached via the alias namespace.
+		private static HashSet<string> BuildIncludeClosure(IIndexSnapshot index, string normalizedDocKey)
+		{
+			var closure = new HashSet<string>(System.StringComparer.OrdinalIgnoreCase);
+			if (string.IsNullOrEmpty(normalizedDocKey))
+				return closure;
+			closure.Add(normalizedDocKey);
+			if (index == null || index.IncludeGraphIndex == null)
+				return closure;
+
+			var queue = new Queue<string>();
+			queue.Enqueue(normalizedDocKey);
+			while (queue.Count > 0)
+			{
+				string cur = queue.Dequeue();
+				IReadOnlyList<PathKey> includes = index.IncludeGraphIndex.GetIncludes(new PathKey(cur));
+				if (includes == null || includes.Count == 0)
+					continue;
+
+				// Aliased targets at this node — skip them.
+				HashSet<string> aliasedTargets = null;
+				if (index.AliasIndex != null)
+				{
+					IReadOnlyDictionary<string, PathKey> aliases = index.AliasIndex.GetAliases(new PathKey(cur));
+					if (aliases != null && aliases.Count > 0)
+					{
+						aliasedTargets = new HashSet<string>(System.StringComparer.OrdinalIgnoreCase);
+						foreach (var kv in aliases)
+						{
+							string t = NormalizeDocumentKey(kv.Value.Value ?? string.Empty);
+							if (!string.IsNullOrEmpty(t))
+								aliasedTargets.Add(t);
+						}
+					}
+				}
+
+				for (int i = 0; i < includes.Count; i++)
+				{
+					string next = NormalizeDocumentKey(includes[i].Value ?? string.Empty);
+					if (string.IsNullOrEmpty(next)) continue;
+					if (aliasedTargets != null && aliasedTargets.Contains(next)) continue;
+					if (closure.Add(next))
+						queue.Enqueue(next);
+				}
+			}
+			return closure;
+		}
+
 		private static bool IsEnumName(IReadOnlyList<SymbolIdentity> symbols, string name)
 		{
 			if (string.IsNullOrEmpty(name) || symbols == null) return false;
@@ -710,6 +881,29 @@ namespace FFVM.Debug.Lsp.Database
 				if (s == null) continue;
 				if (s.Kind == SymbolKindTag.Enum && string.Equals(s.Name, name, System.StringComparison.Ordinal))
 					return true;
+			}
+			return false;
+		}
+
+		// Closure-aware variant: only treats `name` as an Enum if at least one
+		// Enum with that name is declared in the current document or in the
+		// flat-include closure. Prevents member-access leaks from unreachable
+		// same-named enums.
+		private static bool IsReachableEnumName(
+			IReadOnlyList<SymbolIdentity> symbols,
+			string name,
+			string normalizedDocKey,
+			HashSet<string> includeClosure)
+		{
+			if (string.IsNullOrEmpty(name) || symbols == null) return false;
+			for (int i = 0; i < symbols.Count; i++)
+			{
+				SymbolIdentity s = symbols[i];
+				if (s == null) continue;
+				if (s.Kind != SymbolKindTag.Enum) continue;
+				if (!string.Equals(s.Name, name, System.StringComparison.Ordinal)) continue;
+				if (IsSameDocument(s.Origin, normalizedDocKey)) return true;
+				if (IsOriginReachable(s.Origin, includeClosure)) return true;
 			}
 			return false;
 		}
@@ -755,9 +949,14 @@ namespace FFVM.Debug.Lsp.Database
 
 		// Look up the base type for the first segment of a receiver chain:
 		// - Parameter or Variable in the containing function (scope match)
-		// - Module Variable (no parent)
-		// - Struct/Enum type name directly (for Enum. or new Struct{} contexts)
-		private static string ResolveChainBaseType(IReadOnlyList<SymbolIdentity> symbols, string firstName, string containingFunc)
+		// - Module Variable (no parent, reachable only)
+		// - Struct/Enum type name directly (for Enum. or new Struct{} contexts, reachable only)
+		private static string ResolveChainBaseType(
+			IReadOnlyList<SymbolIdentity> symbols,
+			string firstName,
+			string containingFunc,
+			string normalizedDocKey,
+			HashSet<string> includeClosure)
 		{
 			if (symbols == null || string.IsNullOrEmpty(firstName)) return string.Empty;
 			SymbolIdentity moduleVar = null;
@@ -768,10 +967,14 @@ namespace FFVM.Debug.Lsp.Database
 				if (s == null || !string.Equals(s.Name, firstName, System.StringComparison.Ordinal)) continue;
 				if ((s.Kind == SymbolKindTag.Parameter || s.Kind == SymbolKindTag.Variable)
 					&& !string.IsNullOrEmpty(s.ParentName)
-					&& string.Equals(s.ParentName, containingFunc, System.StringComparison.Ordinal))
+					&& string.Equals(s.ParentName, containingFunc, System.StringComparison.Ordinal)
+					&& IsSameDocument(s.Origin, normalizedDocKey))
 				{
 					if (!string.IsNullOrEmpty(s.TypeName)) return s.TypeName;
 				}
+				bool reachable = IsSameDocument(s.Origin, normalizedDocKey)
+					|| IsOriginReachable(s.Origin, includeClosure);
+				if (!reachable) continue;
 				if (s.Kind == SymbolKindTag.Variable && string.IsNullOrEmpty(s.ParentName))
 					moduleVar = s;
 				if (s.Kind == SymbolKindTag.Struct || s.Kind == SymbolKindTag.Enum)
@@ -783,7 +986,13 @@ namespace FFVM.Debug.Lsp.Database
 		}
 
 		// For a given struct name and field name, return the field's declared type.
-		private static string ResolveFieldType(IReadOnlyList<SymbolIdentity> symbols, string structName, string fieldName)
+		// Only considers fields whose parent struct is reachable (current doc or include closure).
+		private static string ResolveFieldType(
+			IReadOnlyList<SymbolIdentity> symbols,
+			string structName,
+			string fieldName,
+			string normalizedDocKey,
+			HashSet<string> includeClosure)
 		{
 			if (symbols == null || string.IsNullOrEmpty(structName) || string.IsNullOrEmpty(fieldName))
 				return string.Empty;
@@ -793,6 +1002,7 @@ namespace FFVM.Debug.Lsp.Database
 				if (s == null || s.Kind != SymbolKindTag.StructField) continue;
 				if (!string.Equals(s.ParentName, structName, System.StringComparison.Ordinal)) continue;
 				if (!string.Equals(s.Name, fieldName, System.StringComparison.Ordinal)) continue;
+				if (!IsSameDocument(s.Origin, normalizedDocKey) && !IsOriginReachable(s.Origin, includeClosure)) continue;
 				return s.TypeName ?? string.Empty;
 			}
 			return string.Empty;

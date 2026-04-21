@@ -350,6 +350,246 @@ public static class LspDatabaseQueryTests
 		}
 
 		// ================================================================
+		// DBQ-05G: Local-variable scope isolation + forward-reference guard
+		// ================================================================
+		// Regression: every KOF98 skill_*.ffs declares `func main()` with a local
+		// `var f`. The previous scope filter matched only ParentName == "main",
+		// so typing `f` in one file's main surfaced every `f` from every file's
+		// main. Also, locals were offered before their declaration. The fix
+		// filters locals/params by same-document AND (for Variables) requires
+		// DeclarationSpan.Start <= cursor offset.
+		{
+			var currentDoc = new PathKey("file:///query/current.ffs");
+			var otherDoc = new PathKey("file:///query/other.ffs");
+
+			// DocumentText: 20 lines of 10 chars each ("xxxxxxxxxx\n") → 11 chars
+			// per line, so LineToOffset(text, N) = N * 11.
+			string docText = string.Concat(System.Linq.Enumerable.Repeat("xxxxxxxxxx\n", 20));
+
+			// Function `main` in each document, declared on line 0 (offset 0).
+			var currentMain = new SymbolIdentity(SymbolKindTag.Function, "main",
+				string.Empty, string.Empty, currentDoc.Value, new TextSpan(0, 4));
+			var otherMain = new SymbolIdentity(SymbolKindTag.Function, "main",
+				string.Empty, string.Empty, otherDoc.Value, new TextSpan(0, 4));
+
+			// Local `f` in each main. Declaration offset 100 (≈ line 9).
+			var currentF = new SymbolIdentity(SymbolKindTag.Variable, "f",
+				"main.f", "main", currentDoc.Value, new TextSpan(100, 1));
+			var otherF = new SymbolIdentity(SymbolKindTag.Variable, "f",
+				"main.f", "main", otherDoc.Value, new TextSpan(100, 1));
+
+			var anchor = new SymbolIdentity(SymbolKindTag.Variable, "a",
+				"main.a", "main", currentDoc.Value, new TextSpan(5, 1));
+
+			var scopeIndex = BuildIndex(
+				tuple: (currentDoc, new TextPosition(5, 0), anchor),
+				definition: (anchor, null),
+				referencesIncludeDecl: new List<DataFact>(),
+				referencesExcludeDecl: new List<DataFact>(),
+				nameSymbols: new List<SymbolIdentity> { currentMain, otherMain, currentF, otherF });
+			CodeDatabaseSnapshot scopeSnapshot = BuildSnapshot(scopeIndex);
+
+			// Case A: cursor at line 5 (offset 55). containingFunc resolves to
+			// currentMain (start=0 ≤ 55). currentF.Start=100 > 55 → filtered by
+			// forward-reference guard. otherF filtered by same-document guard.
+			// Expect: no `f` in completion items.
+			var reqBefore = new SymbolQueryRequest("completion", currentDoc.Value,
+				new TextPosition(5, 0), new TextSpan(0, 0), false, "f", docText);
+			SymbolQueryResult beforeResult = facade.QueryCompletion(scopeSnapshot, reqBefore);
+			int fCountBefore = 0;
+			if (beforeResult != null && beforeResult.Payload != null
+				&& beforeResult.Payload.CompletionItems != null)
+			{
+				for (int i = 0; i < beforeResult.Payload.CompletionItems.Count; i++)
+				{
+					if (beforeResult.Payload.CompletionItems[i] != null
+						&& beforeResult.Payload.CompletionItems[i].Label == "f")
+						fCountBefore++;
+				}
+			}
+			Assert(fCountBefore == 0,
+				"DBQ-05G-A: local `f` hidden before its declaration (forward-ref guard)");
+
+			// Case B: cursor at line 15 (offset 165). currentF.Start=100 ≤ 165
+			// → visible. otherF filtered by same-document guard.
+			// Expect: exactly one `f` and it is from currentDoc.
+			var reqAfter = new SymbolQueryRequest("completion", currentDoc.Value,
+				new TextPosition(15, 0), new TextSpan(0, 0), false, "f", docText);
+			SymbolQueryResult afterResult = facade.QueryCompletion(scopeSnapshot, reqAfter);
+			int fCountAfter = 0;
+			if (afterResult != null && afterResult.Payload != null
+				&& afterResult.Payload.CompletionItems != null)
+			{
+				for (int i = 0; i < afterResult.Payload.CompletionItems.Count; i++)
+				{
+					LspCompletionItem it = afterResult.Payload.CompletionItems[i];
+					if (it != null && it.Label == "f")
+						fCountAfter++;
+				}
+			}
+			Assert(fCountAfter == 1,
+				"DBQ-05G-B: exactly one local `f` visible after its declaration (no cross-file duplicates)");
+		}
+
+		// ================================================================
+		// DBQ-10: Strict T3 visibility matrix — include-graph reachability
+		// and (Kind, Name) de-duplication at completion.
+		// ================================================================
+		// Topology:
+		//   curr --include--> flat
+		//   curr --include as X--> alias  (alias-include; symbols hidden at bare name)
+		//   unrel is not included anywhere.
+		// Plus: `shared_const` exists in both curr and flat → must appear once,
+		// resolving to curr's origin.
+		{
+			var curr = new PathKey("file:///query/mtx/curr.ffs");
+			var flat = new PathKey("file:///query/mtx/flat.ffs");
+			var aliasDoc = new PathKey("file:///query/mtx/alias.ffs");
+			var unrel = new PathKey("file:///query/mtx/unrel.ffs");
+
+			// Anchor symbol in curr so TryResolveSymbol succeeds.
+			var anchor = new SymbolIdentity(SymbolKindTag.Variable, "anchor",
+				"main.anchor", "main", curr.Value, new TextSpan(10, 6));
+			var mainCurr = new SymbolIdentity(SymbolKindTag.Function, "main",
+				string.Empty, string.Empty, curr.Value, new TextSpan(0, 4));
+
+			// Module-scope symbols per doc (all @export → IsPrivate = false).
+			SymbolIdentity MV(string name, PathKey doc, bool isPriv = false) => new SymbolIdentity(
+				SymbolKindTag.Variable, name, string.Empty, string.Empty, doc.Value, new TextSpan(20, 1),
+				documentation: null, typeName: "int", isPrivate: isPriv);
+			SymbolIdentity MF(string name, PathKey doc) => new SymbolIdentity(
+				SymbolKindTag.Function, name, string.Empty, string.Empty, doc.Value, new TextSpan(30, 1));
+			SymbolIdentity MS(string name, PathKey doc) => new SymbolIdentity(
+				SymbolKindTag.Struct, name, string.Empty, string.Empty, doc.Value, new TextSpan(40, 1));
+			SymbolIdentity ME(string name, PathKey doc) => new SymbolIdentity(
+				SymbolKindTag.Enum, name, string.Empty, string.Empty, doc.Value, new TextSpan(50, 1));
+
+			// curr: mv_curr, mf_curr, shared_const (also exists in flat)
+			var mvCurr = MV("mv_curr", curr);
+			var mfCurr = MF("mf_curr", curr);
+			var sharedCurr = MV("shared_const", curr);
+			// flat (reachable): mv_flat, mf_flat, ms_flat, me_flat, mv_flat_priv, shared_const
+			var mvFlat = MV("mv_flat", flat);
+			var mfFlat = MF("mf_flat", flat);
+			var msFlat = MS("ms_flat", flat);
+			var meFlat = ME("me_flat", flat);
+			var mvFlatPriv = MV("mv_flat_priv", flat, isPriv: true);
+			var sharedFlat = MV("shared_const", flat);
+			// alias (not reachable at bare name): mv_alias, mf_alias, ms_alias, me_alias
+			var mvAlias = MV("mv_alias", aliasDoc);
+			var mfAlias = MF("mf_alias", aliasDoc);
+			var msAlias = MS("ms_alias", aliasDoc);
+			var meAlias = ME("me_alias", aliasDoc);
+			// unrel (not reachable): mv_unrel, mf_unrel, ms_unrel, me_unrel
+			var mvUnrel = MV("mv_unrel", unrel);
+			var mfUnrel = MF("mf_unrel", unrel);
+			var msUnrel = MS("ms_unrel", unrel);
+			var meUnrel = ME("me_unrel", unrel);
+
+			var nameSymbols = new List<SymbolIdentity>
+			{
+				mainCurr, mvCurr, mfCurr, sharedCurr,
+				mvFlat, mfFlat, msFlat, meFlat, mvFlatPriv, sharedFlat,
+				mvAlias, mfAlias, msAlias, meAlias,
+				mvUnrel, mfUnrel, msUnrel, meUnrel,
+				anchor,
+			};
+
+			// Build index with include edges + alias mapping.
+			var positionIndex = new FakePositionIndex();
+			positionIndex.Add(curr, new TextPosition(0, 3), anchor);
+			var symbolIndex = new FakeSymbolIndex();
+			var includeMap = new Dictionary<string, IReadOnlyList<PathKey>>(StringComparer.Ordinal)
+			{
+				[curr.Value] = new List<PathKey> { flat, aliasDoc },
+			};
+			var aliasMap = new Dictionary<string, IReadOnlyDictionary<string, PathKey>>(StringComparer.Ordinal)
+			{
+				[curr.Value] = new Dictionary<string, PathKey> { ["X"] = aliasDoc },
+			};
+			var mtxIndex = new FakeIndexSnapshot(
+				snapshotVersion: 1,
+				positionIndex: positionIndex,
+				symbolIndex: symbolIndex,
+				includeGraphIndex: new FakeIncludeGraphIndex(includeMap),
+				nameIndex: new FakeNameIndex(nameSymbols),
+				aliasIndex: new FakeAliasIndex(aliasMap));
+			CodeDatabaseSnapshot mtxSnapshot = BuildSnapshot(mtxIndex);
+
+			// Helper to gather completion labels.
+			Func<string, TextPosition, List<string>> labelsAt = (docText, pos) =>
+			{
+				var req = new SymbolQueryRequest("completion", curr.Value, pos,
+					new TextSpan(0, 0), false, string.Empty, docText);
+				SymbolQueryResult res = facade.QueryCompletion(mtxSnapshot, req);
+				var labels = new List<string>();
+				if (res != null && res.Payload != null && res.Payload.CompletionItems != null)
+				{
+					for (int i = 0; i < res.Payload.CompletionItems.Count; i++)
+					{
+						LspCompletionItem it = res.Payload.CompletionItems[i];
+						if (it != null) labels.Add(it.Label);
+					}
+				}
+				return labels;
+			};
+
+			// Identifier context: blank line, cursor near column 0.
+			string idText = string.Concat(System.Linq.Enumerable.Repeat("xxxxxxxxxx\n", 20));
+			List<string> idLabels = labelsAt(idText, new TextPosition(15, 0));
+
+			// DBQ-10-A: module var reachability
+			Assert(idLabels.Contains("mv_flat"),
+				"DBQ-10-A1: module var from flat-included doc is visible");
+			Assert(!idLabels.Contains("mv_alias"),
+				"DBQ-10-A2: module var from alias-included doc is hidden at bare name");
+			Assert(!idLabels.Contains("mv_unrel"),
+				"DBQ-10-A3: module var from unrelated doc is hidden");
+
+			// DBQ-10-B: module func reachability
+			Assert(idLabels.Contains("mf_flat"),
+				"DBQ-10-B1: module func from flat-included doc is visible");
+			Assert(!idLabels.Contains("mf_alias"),
+				"DBQ-10-B2: module func from alias-included doc is hidden at bare name");
+			Assert(!idLabels.Contains("mf_unrel"),
+				"DBQ-10-B3: module func from unrelated doc is hidden");
+
+			// DBQ-10-D: private @export-missing hidden cross-doc
+			Assert(!idLabels.Contains("mv_flat_priv"),
+				"DBQ-10-D: private module var from flat-included doc is hidden cross-file");
+
+			// DBQ-10-E: de-dup — `shared_const` declared in both curr and flat,
+			// must appear exactly once.
+			int sharedCount = 0;
+			for (int i = 0; i < idLabels.Count; i++)
+				if (idLabels[i] == "shared_const") sharedCount++;
+			Assert(sharedCount == 1,
+				"DBQ-10-E: `shared_const` duplicated across current+flat appears exactly once");
+
+			// DBQ-10-C: TypeContext — "var t: " triggers TypeAnnotation.
+			string typeText = "var t: \n" + string.Concat(System.Linq.Enumerable.Repeat("xxxxxxxxxx\n", 19));
+			List<string> typeLabels = labelsAt(typeText, new TextPosition(0, 7));
+			Assert(typeLabels.Contains("ms_flat") && typeLabels.Contains("me_flat"),
+				"DBQ-10-C1: type completion sees struct/enum from flat-included doc");
+			Assert(!typeLabels.Contains("ms_alias") && !typeLabels.Contains("me_alias"),
+				"DBQ-10-C2: type completion hides struct/enum from alias-included doc");
+			Assert(!typeLabels.Contains("ms_unrel") && !typeLabels.Contains("me_unrel"),
+				"DBQ-10-C3: type completion hides struct/enum from unrelated doc");
+
+			// DBQ-10-F: alias member access — "X." surfaces alias's symbols only.
+			string memText = "X.\n" + string.Concat(System.Linq.Enumerable.Repeat("xxxxxxxxxx\n", 19));
+			List<string> memLabels = labelsAt(memText, new TextPosition(0, 2));
+			bool sawAliasMember = false;
+			for (int i = 0; i < memLabels.Count; i++)
+			{
+				if (memLabels[i] != null && memLabels[i].StartsWith("X.mv_alias"))
+				{ sawAliasMember = true; break; }
+			}
+			Assert(sawAliasMember,
+				"DBQ-10-F: alias member access `X.` surfaces aliased doc's module symbols");
+		}
+
+		// ================================================================
 		// DBQ-06: SemanticTokens encodes sorted/filtered token facts
 		// ================================================================
 		{
@@ -729,13 +969,24 @@ public static class LspDatabaseQueryTests
 			ISymbolIndex symbolIndex,
 			IIncludeGraphIndex includeGraphIndex,
 			INameIndex nameIndex)
+			: this(snapshotVersion, positionIndex, symbolIndex, includeGraphIndex, nameIndex, null)
+		{
+		}
+
+		public FakeIndexSnapshot(
+			long snapshotVersion,
+			IPositionIndex positionIndex,
+			ISymbolIndex symbolIndex,
+			IIncludeGraphIndex includeGraphIndex,
+			INameIndex nameIndex,
+			IAliasIndex aliasIndex)
 		{
 			SnapshotVersion = snapshotVersion;
 			PositionIndex = positionIndex;
 			SymbolIndex = symbolIndex;
 			IncludeGraphIndex = includeGraphIndex;
 			NameIndex = nameIndex;
-			AliasIndex = new EmptyAliasIndex();
+			AliasIndex = aliasIndex ?? new EmptyAliasIndex();
 		}
 
 		public long SnapshotVersion { get; }
@@ -854,14 +1105,57 @@ public static class LspDatabaseQueryTests
 	{
 		private static readonly IReadOnlyList<PathKey> Empty = new List<PathKey>(0);
 
+		private readonly Dictionary<string, IReadOnlyList<PathKey>> _includes;
+
+		public FakeIncludeGraphIndex()
+		{
+			_includes = null;
+		}
+
+		public FakeIncludeGraphIndex(Dictionary<string, IReadOnlyList<PathKey>> includes)
+		{
+			_includes = includes;
+		}
+
 		public IReadOnlyList<PathKey> GetIncludes(PathKey documentKey)
 		{
-			return Empty;
+			if (_includes == null) return Empty;
+			return _includes.TryGetValue(documentKey.Value ?? string.Empty, out var list) ? list : Empty;
 		}
 
 		public IReadOnlyList<PathKey> GetDependents(PathKey documentKey)
 		{
 			return Empty;
+		}
+	}
+
+	private sealed class FakeAliasIndex : IAliasIndex
+	{
+		private static readonly IReadOnlyDictionary<string, PathKey> EmptyMap =
+			new Dictionary<string, PathKey>(0);
+
+		private readonly Dictionary<string, IReadOnlyDictionary<string, PathKey>> _byDoc;
+
+		public FakeAliasIndex(Dictionary<string, IReadOnlyDictionary<string, PathKey>> byDoc)
+		{
+			_byDoc = byDoc ?? new Dictionary<string, IReadOnlyDictionary<string, PathKey>>();
+		}
+
+		public bool TryResolveAlias(PathKey documentKey, string aliasName, out PathKey targetDocument)
+		{
+			if (_byDoc.TryGetValue(documentKey.Value ?? string.Empty, out var m)
+				&& m.TryGetValue(aliasName ?? string.Empty, out var t))
+			{
+				targetDocument = t;
+				return true;
+			}
+			targetDocument = new PathKey(string.Empty);
+			return false;
+		}
+
+		public IReadOnlyDictionary<string, PathKey> GetAliases(PathKey documentKey)
+		{
+			return _byDoc.TryGetValue(documentKey.Value ?? string.Empty, out var m) ? m : EmptyMap;
 		}
 	}
 
