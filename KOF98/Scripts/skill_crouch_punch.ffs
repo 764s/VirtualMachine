@@ -36,6 +36,8 @@ func main() {
         ClearHitbox()
         EndAction()
     }
+    
+    // f
 
     var f: int = 0
     var hitDone: int = 0

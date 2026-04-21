@@ -29,6 +29,10 @@ namespace FFVM.Debug.Lsp.Database.Contracts
 		public string Origin { get; }
 		public TextSpan DeclarationSpan { get; }
 		public string Documentation { get; }
+		/// <summary>Type name for Parameter/Variable/StructField (used by completion to resolve member access). Empty for other kinds.</summary>
+		public string TypeName { get; }
+		/// <summary>Whether the symbol is marked private (skip cross-file suggestions).</summary>
+		public bool IsPrivate { get; }
 
 		public SymbolIdentity(
 			SymbolKindTag kind,
@@ -37,7 +41,9 @@ namespace FFVM.Debug.Lsp.Database.Contracts
 			string parentName,
 			string origin,
 			TextSpan declarationSpan,
-			string documentation = null)
+			string documentation = null,
+			string typeName = null,
+			bool isPrivate = false)
 		{
 			Kind = kind;
 			Name = name ?? string.Empty;
@@ -46,6 +52,8 @@ namespace FFVM.Debug.Lsp.Database.Contracts
 			Origin = origin ?? string.Empty;
 			DeclarationSpan = declarationSpan;
 			Documentation = documentation ?? string.Empty;
+			TypeName = typeName ?? string.Empty;
+			IsPrivate = isPrivate;
 		}
 
 		public static SymbolIdentity CreateUnknown(string name)

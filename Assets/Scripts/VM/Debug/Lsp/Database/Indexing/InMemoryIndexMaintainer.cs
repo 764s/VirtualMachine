@@ -428,7 +428,10 @@ namespace FFVM.Debug.Lsp.Database
 				symbol.Scope,
 				symbol.ParentName,
 				origin,
-				declaration);
+				declaration,
+				documentation: symbol.Documentation,
+				typeName: symbol.TypeName,
+				isPrivate: symbol.IsPrivate);
 		}
 
 		private static bool TryResolvePositionRange(DataFact fact, out PositionRange range)

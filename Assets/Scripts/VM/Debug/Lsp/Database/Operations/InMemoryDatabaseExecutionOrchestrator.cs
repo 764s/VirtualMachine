@@ -1440,7 +1440,9 @@ namespace FFVM.Debug.Lsp.Database
 					string.Empty,
 					normalizedDocument,
 					span,
-					BuildFuncDocumentation(function));
+					BuildFuncDocumentation(function),
+					typeName: null,
+					isPrivate: function.IsPrivate);
 
 				var payload = new SymbolDataFactPayload(symbol, startLine, startCharacter, endLine, endCharacter);
 				output.Add(new DataFact(
@@ -1651,7 +1653,9 @@ namespace FFVM.Debug.Lsp.Database
 							BuildStructFieldPath(structName, field.Name),
 							structName,
 							normalizedDocument,
-							span);
+							span,
+							documentation: null,
+							typeName: GetBaseTypeName(field.TypeName));
 
 						fieldsByName[field.Name] = new StructFieldDescriptor(symbol, field.TypeName);
 					}
@@ -1782,7 +1786,9 @@ namespace FFVM.Debug.Lsp.Database
 								BuildStructFieldPath(structDecl.Name, field.Name),
 								structDecl.Name,
 								normalizedUri,
-								span),
+								span,
+								documentation: null,
+								typeName: GetBaseTypeName(field.TypeName)),
 							field.TypeName);
 					}
 				}
@@ -2797,7 +2803,8 @@ namespace FFVM.Debug.Lsp.Database
 				if (!TryCreateSpanFromLineColumn(source, nameLine, nameColumn, v.Name.Length,
 					out TextSpan span, out int sl, out int sc, out int el, out int ec))
 					continue;
-				var symbol = new SymbolIdentity(SymbolKindTag.Variable, v.Name, string.Empty, string.Empty, normalizedDocument, span);
+				var symbol = new SymbolIdentity(SymbolKindTag.Variable, v.Name, string.Empty, string.Empty, normalizedDocument, span,
+					documentation: BuildVariableDocumentation(v), typeName: GetBaseTypeName(v.TypeName), isPrivate: v.IsPrivate);
 				output.Add(new DataFact(
 					new DataFactId(BuildFactId("def", normalizedDocument, definitionOrdinal++, v.Name, sl, sc)),
 					aggregateId, DataFactKind.SymbolDefinition, documentPath, span, snapshotVersion,
@@ -2829,7 +2836,8 @@ namespace FFVM.Debug.Lsp.Database
 						out TextSpan span, out int sl, out int sc, out int el, out int ec))
 						continue;
 					var symbol = new SymbolIdentity(SymbolKindTag.Parameter, param.Name,
-						function.Name + "." + param.Name, function.Name, normalizedDocument, span);
+						function.Name + "." + param.Name, function.Name, normalizedDocument, span,
+						documentation: BuildParameterDocumentation(param), typeName: GetBaseTypeName(param.TypeName));
 					output.Add(new DataFact(
 						new DataFactId(BuildFactId("def", normalizedDocument, definitionOrdinal++, param.Name, sl, sc)),
 						aggregateId, DataFactKind.SymbolDefinition, documentPath, span, snapshotVersion,
@@ -2872,7 +2880,8 @@ namespace FFVM.Debug.Lsp.Database
 						out TextSpan span, out int sl, out int sc, out int el, out int ec))
 						continue;
 					var symbol = new SymbolIdentity(SymbolKindTag.Variable, v.Name,
-						function.Name + "." + v.Name, function.Name, normalizedDocument, span);
+						function.Name + "." + v.Name, function.Name, normalizedDocument, span,
+						documentation: BuildVariableDocumentation(v), typeName: GetBaseTypeName(v.TypeName));
 					output.Add(new DataFact(
 						new DataFactId(BuildFactId("def", normalizedDocument, definitionOrdinal++, v.Name, sl, sc)),
 						aggregateId, DataFactKind.SymbolDefinition, documentPath, span, snapshotVersion,
@@ -3015,7 +3024,7 @@ namespace FFVM.Debug.Lsp.Database
 				if (!TryCreateSpanFromLineColumn(source, nameLine, nameColumn, s.Name.Length,
 					out TextSpan span, out int sl, out int sc, out int el, out int ec))
 					continue;
-				var symbol = new SymbolIdentity(SymbolKindTag.Struct, s.Name, string.Empty, string.Empty, normalizedDocument, span, BuildStructDocumentation(s));
+				var symbol = new SymbolIdentity(SymbolKindTag.Struct, s.Name, string.Empty, string.Empty, normalizedDocument, span, BuildStructDocumentation(s), typeName: null, isPrivate: s.IsPrivate);
 				output.Add(new DataFact(
 					new DataFactId(BuildFactId("def", normalizedDocument, definitionOrdinal++, s.Name, sl, sc)),
 					aggregateId, DataFactKind.SymbolDefinition, documentPath, span, snapshotVersion,
@@ -3040,7 +3049,7 @@ namespace FFVM.Debug.Lsp.Database
 				if (!TryCreateSpanFromLineColumn(source, nameLine, nameColumn, e.Name.Length,
 					out TextSpan span, out int sl, out int sc, out int el, out int ec))
 					continue;
-				var symbol = new SymbolIdentity(SymbolKindTag.Enum, e.Name, string.Empty, string.Empty, normalizedDocument, span, BuildEnumDocumentation(e));
+				var symbol = new SymbolIdentity(SymbolKindTag.Enum, e.Name, string.Empty, string.Empty, normalizedDocument, span, BuildEnumDocumentation(e), typeName: null, isPrivate: e.IsPrivate);
 				output.Add(new DataFact(
 					new DataFactId(BuildFactId("def", normalizedDocument, definitionOrdinal++, e.Name, sl, sc)),
 					aggregateId, DataFactKind.SymbolDefinition, documentPath, span, snapshotVersion,
@@ -3704,7 +3713,8 @@ namespace FFVM.Debug.Lsp.Database
 					if (!TryCreateSpanFromLineColumn(source, nl, nc, v.Name.Length, out TextSpan span, out _, out _, out _, out _))
 						continue;
 					if (!symbols.ContainsKey(v.Name))
-						symbols[v.Name] = new SymbolIdentity(SymbolKindTag.Variable, v.Name, string.Empty, string.Empty, normalizedUri, span);
+						symbols[v.Name] = new SymbolIdentity(SymbolKindTag.Variable, v.Name, string.Empty, string.Empty, normalizedUri, span,
+							documentation: null, typeName: GetBaseTypeName(v.TypeName), isPrivate: v.IsPrivate);
 				}
 			}
 
@@ -4779,6 +4789,42 @@ namespace FFVM.Debug.Lsp.Database
 			sb.Append("}\n```");
 			if (!string.IsNullOrEmpty(e.DocComment))
 				sb.Append("\n\n---\n\n").Append(e.DocComment);
+			return sb.ToString();
+		}
+
+		private static string BuildVariableDocumentation(VarDeclStmt variable)
+		{
+			if (variable == null)
+				return null;
+
+			if (string.IsNullOrWhiteSpace(variable.DocComment))
+				return null;
+
+			var sb = new System.Text.StringBuilder();
+			sb.Append("```ffvm\n");
+			if (variable.IsExported)
+				sb.Append("@export ");
+			sb.Append(variable.IsConst ? "const " : "var ");
+			sb.Append(variable.Name);
+			if (!string.IsNullOrWhiteSpace(variable.TypeName))
+				sb.Append(": ").Append(variable.TypeName);
+			sb.Append("\n```");
+			sb.Append("\n\n---\n\n").Append(variable.DocComment);
+			return sb.ToString();
+		}
+
+		private static string BuildParameterDocumentation(ParamDecl param)
+		{
+			if (param == null || string.IsNullOrWhiteSpace(param.DocComment))
+				return null;
+
+			var sb = new System.Text.StringBuilder();
+			sb.Append("```ffvm\n");
+			sb.Append(param.Name);
+			if (!string.IsNullOrWhiteSpace(param.TypeName))
+				sb.Append(": ").Append(param.TypeName);
+			sb.Append("\n```");
+			sb.Append("\n\n---\n\n").Append(param.DocComment);
 			return sb.ToString();
 		}
 

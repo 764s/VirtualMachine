@@ -202,6 +202,7 @@ public static class LspDatabaseQueryTests
 			var position = new TextPosition(5, 1);
 			var symbolA = new SymbolIdentity(SymbolKindTag.Function, "Attack", string.Empty, string.Empty, doc.Value, new TextSpan(100, 6));
 			var symbolB = new SymbolIdentity(SymbolKindTag.Function, "Assist", string.Empty, string.Empty, doc.Value, new TextSpan(120, 6));
+			var symbolC = new SymbolIdentity(SymbolKindTag.Variable, "totalFrames", string.Empty, string.Empty, doc.Value, new TextSpan(140, 11), documentation: "Total animation frames");
 			var anchor = new SymbolIdentity(SymbolKindTag.Variable, "a", "entry", string.Empty, doc.Value, new TextSpan(50, 1));
 
 			var index = BuildIndex(
@@ -209,7 +210,7 @@ public static class LspDatabaseQueryTests
 				definition: (anchor, null),
 				referencesIncludeDecl: new List<DataFact>(),
 				referencesExcludeDecl: new List<DataFact>(),
-				nameSymbols: new List<SymbolIdentity> { symbolA, symbolB });
+				nameSymbols: new List<SymbolIdentity> { symbolA, symbolB, symbolC });
 
 			CodeDatabaseSnapshot snapshot = BuildSnapshot(index);
 			var request = new SymbolQueryRequest("completion", doc.Value, position, new TextSpan(0, 0), false, "Ass");
@@ -226,8 +227,126 @@ public static class LspDatabaseQueryTests
 				: null;
 			if (items != null)
 			{
-				Assert(items.Count == 1 && items[0].Label == "Assist", "DBQ-05C: completion filtered by query token");
+				bool hasAssist = false;
+				bool hasAttack = false;
+				bool hasKeyword = false;
+				bool hasDocDetail = false;
+				for (int i = 0; i < items.Count; i++)
+				{
+					if (items[i].Label == "Assist") hasAssist = true;
+					if (items[i].Label == "Attack") hasAttack = true;
+					if (items[i].Label == "func") hasKeyword = true;
+					if (items[i].Label == "totalFrames" && items[i].Detail == "Total animation frames") hasDocDetail = true;
+				}
+				Assert(hasAssist && hasAttack, "DBQ-05C: completion returns all indexed functions");
+				Assert(hasKeyword, "DBQ-05D: completion includes language keywords");
+				Assert(hasDocDetail, "DBQ-05E: completion detail prefers documentation summary");
 			}
+		}
+
+		// ================================================================
+		// DBQ-05F: InMemoryIndexMaintainer preserves Documentation / TypeName / IsPrivate
+		// ================================================================
+		// Regression: EnsureSymbolDefaults previously used the 6-arg SymbolIdentity
+		// constructor, silently dropping Documentation/TypeName/IsPrivate. That made
+		// every indexed symbol emerge with empty docs, so completion items never
+		// showed the triple-slash comment summary even though extraction populated it.
+		{
+			var doc = new PathKey("file:///query/pipeline.ffs");
+			var originalSymbol = new SymbolIdentity(
+				SymbolKindTag.Function,
+				"DocumentedFunc",
+				string.Empty,
+				string.Empty,
+				doc.Value,
+				new TextSpan(10, 14),
+				documentation: "```ffvm\nfunc DocumentedFunc(): void\n```\n\n---\n\nDoes the thing.",
+				typeName: "void",
+				isPrivate: true);
+
+			var definitionFact = new DataFact(
+				new DataFactId("pipeline-def"),
+				new DataAggregateId("pipeline-agg"),
+				DataFactKind.SymbolDefinition,
+				doc,
+				new TextSpan(10, 14),
+				1,
+				new SymbolDataFactPayload(originalSymbol, 0, 5, 0, 19));
+
+			var rawSnapshot = new CodeDatabaseSnapshot(
+				1,
+				DateTime.UtcNow,
+				new List<DataAggregate>(0),
+				new List<DataFact> { definitionFact },
+				indexSnapshot: null);
+
+			var maintainer = new InMemoryIndexMaintainer();
+			IIndexSnapshot builtIndex = maintainer.Rebuild(rawSnapshot);
+
+			Assert(builtIndex != null && builtIndex.NameIndex != null,
+				"DBQ-05F-A: InMemoryIndexMaintainer produced a NameIndex");
+
+			SymbolIdentity resolved = null;
+			if (builtIndex != null && builtIndex.NameIndex != null)
+			{
+				IReadOnlyList<SymbolIdentity> all = builtIndex.NameIndex.Search(string.Empty, 32);
+				if (all != null)
+				{
+					for (int i = 0; i < all.Count; i++)
+					{
+						if (all[i] != null && all[i].Name == "DocumentedFunc")
+						{
+							resolved = all[i];
+							break;
+						}
+					}
+				}
+			}
+
+			Assert(resolved != null, "DBQ-05F-B: indexed symbol resolvable by name");
+			Assert(resolved != null && !string.IsNullOrEmpty(resolved.Documentation)
+				&& resolved.Documentation.Contains("Does the thing."),
+				"DBQ-05F-C: maintainer preserves SymbolIdentity.Documentation through the index");
+			Assert(resolved != null && resolved.TypeName == "void",
+				"DBQ-05F-D: maintainer preserves SymbolIdentity.TypeName through the index");
+			Assert(resolved != null && resolved.IsPrivate,
+				"DBQ-05F-E: maintainer preserves SymbolIdentity.IsPrivate through the index");
+
+			// End-to-end: feed the built index through the facade and verify
+			// completion items expose the doc-derived detail + documentation fields.
+			var facadeSnapshot = new CodeDatabaseSnapshot(
+				1,
+				DateTime.UtcNow,
+				new List<DataAggregate>(0),
+				new List<DataFact> { definitionFact },
+				builtIndex);
+			var completionRequest = new SymbolQueryRequest(
+				"completion", doc.Value, new TextPosition(0, 5),
+				new TextSpan(0, 0), false, "Doc");
+			SymbolQueryResult completionResult = facade.QueryCompletion(facadeSnapshot, completionRequest);
+
+			LspCompletionItem pipelineItem = null;
+			if (completionResult != null
+				&& completionResult.Payload != null
+				&& completionResult.Payload.CompletionItems != null)
+			{
+				for (int i = 0; i < completionResult.Payload.CompletionItems.Count; i++)
+				{
+					LspCompletionItem candidate = completionResult.Payload.CompletionItems[i];
+					if (candidate != null && candidate.Label == "DocumentedFunc")
+					{
+						pipelineItem = candidate;
+						break;
+					}
+				}
+			}
+
+			Assert(pipelineItem != null, "DBQ-05F-F: completion surfaces the indexed symbol");
+			Assert(pipelineItem != null && pipelineItem.Detail == "Does the thing.",
+				"DBQ-05F-G: completion Detail is the first line of the doc comment");
+			Assert(pipelineItem != null && !string.IsNullOrEmpty(pipelineItem.Documentation)
+				&& pipelineItem.Documentation.Contains("Does the thing."),
+				"DBQ-05F-H: completion Documentation carries the full markdown doc");
 		}
 
 		// ================================================================
@@ -389,6 +508,177 @@ public static class LspDatabaseQueryTests
 				&& ((withoutDeclItems[1].SourcePayload as SymbolDataFactPayload)?.StartLine ?? -1) == 1;
 
 			Assert(withoutDeclSorted, "DBQ-08D: excludeDeclaration references are stable-ordered by doc/line");
+		}
+
+		// ================================================================
+		// DBQ-09: Completion dispatches on context (member access / type / include / identifier)
+		// ================================================================
+		{
+			var doc = new PathKey("file:///query/completion-ctx.ffs");
+
+			// Document text shaped so offsets align with line structure:
+			string docText = string.Join("\n", new[]
+			{
+				"struct Player {",          // L0
+				"  hp: int;",                // L1
+				"  name: string;",           // L2
+				"}",                         // L3
+				"enum Color { Red, Blue }", // L4
+				"var gPlayer: Player;",     // L5
+				"",                          // L6
+				"func entry() {",           // L7
+				"  var localP: Player;",    // L8
+				"  localP.",                 // L9  -> test member access here
+				"}",                         // L10
+				"",                          // L11
+				"func other() {",           // L12
+				"  var temp: int;",         // L13
+				"  ",                        // L14  -> identifier-context here
+				"}",                         // L15
+			});
+
+			// Helper to find a token's start offset in docText
+			int OffsetOf(string token) => docText.IndexOf(token, StringComparison.Ordinal);
+
+			// Build symbols whose DeclarationSpan.Start matches the real offset in docText,
+			// so that ResolveContainingFunction(offset-based) works correctly.
+			var structPlayer = new SymbolIdentity(SymbolKindTag.Struct, "Player", string.Empty, string.Empty, doc.Value, new TextSpan(OffsetOf("struct Player"), 6));
+			var fieldHp = new SymbolIdentity(SymbolKindTag.StructField, "hp", string.Empty, "Player", doc.Value, new TextSpan(OffsetOf("hp:"), 2), null, "int");
+			var fieldName = new SymbolIdentity(SymbolKindTag.StructField, "name", string.Empty, "Player", doc.Value, new TextSpan(OffsetOf("name:"), 4), null, "string");
+			var enumColor = new SymbolIdentity(SymbolKindTag.Enum, "Color", string.Empty, string.Empty, doc.Value, new TextSpan(OffsetOf("enum Color"), 5));
+			var enumRed = new SymbolIdentity(SymbolKindTag.EnumMember, "Red", string.Empty, "Color", doc.Value, new TextSpan(OffsetOf("Red,"), 3));
+			var enumBlue = new SymbolIdentity(SymbolKindTag.EnumMember, "Blue", string.Empty, "Color", doc.Value, new TextSpan(OffsetOf("Blue }"), 4));
+			var moduleVar = new SymbolIdentity(SymbolKindTag.Variable, "gPlayer", string.Empty, string.Empty, doc.Value, new TextSpan(OffsetOf("gPlayer:"), 7), null, "Player");
+			var funcEntry = new SymbolIdentity(SymbolKindTag.Function, "entry", string.Empty, string.Empty, doc.Value, new TextSpan(OffsetOf("func entry"), 5));
+			var localP = new SymbolIdentity(SymbolKindTag.Variable, "localP", "entry", "entry", doc.Value, new TextSpan(OffsetOf("localP:"), 6), null, "Player");
+			var funcOther = new SymbolIdentity(SymbolKindTag.Function, "other", string.Empty, string.Empty, doc.Value, new TextSpan(OffsetOf("func other"), 5));
+			var otherTemp = new SymbolIdentity(SymbolKindTag.Variable, "temp", "other", "other", doc.Value, new TextSpan(OffsetOf("temp:"), 4), null, "int");
+
+			var allSymbols = new List<SymbolIdentity>
+			{
+				structPlayer, fieldHp, fieldName, enumColor, enumRed, enumBlue,
+				moduleVar, funcEntry, localP, funcOther, otherTemp,
+			};
+
+			var index = BuildIndex(
+				tuple: (doc, new TextPosition(0, 0), structPlayer),
+				definition: (structPlayer, null),
+				referencesIncludeDecl: new List<DataFact>(),
+				referencesExcludeDecl: new List<DataFact>(),
+				nameSymbols: allSymbols);
+
+			CodeDatabaseSnapshot snapshot = BuildSnapshot(index);
+
+			// --- DBQ-09A: Member access on local variable typed Player -> StructFields ---
+			{
+				var req = new SymbolQueryRequest(
+					"completion", doc.Value, new TextPosition(9, 9),
+					new TextSpan(0, 0), false, string.Empty, docText);
+				SymbolQueryResult r = facade.QueryCompletion(snapshot, req);
+				var items = r != null && r.Payload != null ? r.Payload.CompletionItems : null;
+				bool hasHp = false, hasName = false, hasLocalP = false, hasKeyword = false;
+				if (items != null)
+				{
+					for (int i = 0; i < items.Count; i++)
+					{
+						if (items[i].Label == "hp") hasHp = true;
+						if (items[i].Label == "name") hasName = true;
+						if (items[i].Label == "localP") hasLocalP = true;
+						if (items[i].Label == "func") hasKeyword = true;
+					}
+				}
+				Assert(hasHp && hasName, "DBQ-09A: member access on Player returns its fields");
+				Assert(!hasLocalP && !hasKeyword, "DBQ-09A2: member access excludes non-members");
+			}
+
+			// --- DBQ-09B: Identifier context in `other()` excludes locals of `entry()` ---
+			{
+				var req = new SymbolQueryRequest(
+					"completion", doc.Value, new TextPosition(14, 2),
+					new TextSpan(0, 0), false, string.Empty, docText);
+				SymbolQueryResult r = facade.QueryCompletion(snapshot, req);
+				var items = r != null && r.Payload != null ? r.Payload.CompletionItems : null;
+				bool hasLocalP = false, hasTemp = false, hasEntry = false, hasKeyword = false;
+				if (items != null)
+				{
+					for (int i = 0; i < items.Count; i++)
+					{
+						if (items[i].Label == "localP") hasLocalP = true;
+						if (items[i].Label == "temp") hasTemp = true;
+						if (items[i].Label == "entry") hasEntry = true;
+						if (items[i].Label == "return") hasKeyword = true;
+					}
+				}
+				Assert(!hasLocalP, "DBQ-09B: locals of another function are not suggested");
+				Assert(hasTemp, "DBQ-09B2: locals of current function are suggested");
+				Assert(hasEntry, "DBQ-09B3: peer functions are suggested");
+				Assert(hasKeyword, "DBQ-09B4: keywords appear in identifier context");
+			}
+
+			// --- DBQ-09C: Member access on enum name returns enum members ---
+			{
+				// Place cursor after "Color." on an ad-hoc line — inject into docText
+				string docText2 = docText + "\nvar c = Color.";
+				int line = docText2.Split('\n').Length - 1;
+				int col = "var c = Color.".Length;
+				var req = new SymbolQueryRequest(
+					"completion", doc.Value, new TextPosition(line, col),
+					new TextSpan(0, 0), false, string.Empty, docText2);
+				SymbolQueryResult r = facade.QueryCompletion(snapshot, req);
+				var items = r != null && r.Payload != null ? r.Payload.CompletionItems : null;
+				bool hasRed = false, hasBlue = false;
+				if (items != null)
+				{
+					for (int i = 0; i < items.Count; i++)
+					{
+						if (items[i].Label == "Red") hasRed = true;
+						if (items[i].Label == "Blue") hasBlue = true;
+					}
+				}
+				Assert(hasRed && hasBlue, "DBQ-09C: member access on enum returns enum members");
+			}
+
+			// --- DBQ-09D: Type annotation context prefers Structs + builtin types ---
+			{
+				string docText3 = "var x: ";
+				var req = new SymbolQueryRequest(
+					"completion", doc.Value, new TextPosition(0, docText3.Length),
+					new TextSpan(0, 0), false, string.Empty, docText3);
+				SymbolQueryResult r = facade.QueryCompletion(snapshot, req);
+				var items = r != null && r.Payload != null ? r.Payload.CompletionItems : null;
+				bool hasPlayer = false, hasInt = false, hasFunc = false;
+				if (items != null)
+				{
+					for (int i = 0; i < items.Count; i++)
+					{
+						if (items[i].Label == "Player") hasPlayer = true;
+						if (items[i].Label == "int") hasInt = true;
+						if (items[i].Label == "func") hasFunc = true;
+					}
+				}
+				Assert(hasPlayer, "DBQ-09D: type annotation offers struct types");
+				Assert(hasInt, "DBQ-09D2: type annotation offers builtin types");
+				Assert(!hasFunc, "DBQ-09D3: type annotation excludes keywords/functions");
+			}
+
+			// --- DBQ-09E: Inside comments/strings returns empty ---
+			{
+				string docText4 = "// this is a ";
+				var reqComment = new SymbolQueryRequest(
+					"completion", doc.Value, new TextPosition(0, docText4.Length),
+					new TextSpan(0, 0), false, string.Empty, docText4);
+				SymbolQueryResult rc = facade.QueryCompletion(snapshot, reqComment);
+				var ci = rc != null && rc.Payload != null ? rc.Payload.CompletionItems : null;
+				Assert(ci != null && ci.Count == 0, "DBQ-09E: completion inside a comment is suppressed");
+
+				string docText5 = "var s = \"hello ";
+				var reqString = new SymbolQueryRequest(
+					"completion", doc.Value, new TextPosition(0, docText5.Length),
+					new TextSpan(0, 0), false, string.Empty, docText5);
+				SymbolQueryResult rs = facade.QueryCompletion(snapshot, reqString);
+				var si = rs != null && rs.Payload != null ? rs.Payload.CompletionItems : null;
+				Assert(si != null && si.Count == 0, "DBQ-09E2: completion inside a string is suppressed");
+			}
 		}
 
 		Debug.Log($"[LspDatabaseQueryTests] Completed. Passed={passed}, Failed={failed}");

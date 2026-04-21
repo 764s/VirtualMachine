@@ -255,6 +255,7 @@ namespace FFVM.AST
         public bool IsExported { get; }
         public bool IsPrivate { get; }
         public bool IsOverride { get; }
+        public string DocComment { get; set; }
         /// <summary>Lang-18: Target alias for override alias declarations (e.g. "Alias" in "override const Alias.X"). Null for normal declarations.</summary>
         public string AliasTarget { get; set; }
         /// <summary>Lang-15: Source file this declaration originated from. Set by Preprocessor during merge.</summary>

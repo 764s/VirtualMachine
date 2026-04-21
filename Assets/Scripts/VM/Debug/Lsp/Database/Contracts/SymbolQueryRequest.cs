@@ -29,6 +29,8 @@ namespace FFVM.Debug.Lsp.Database.Contracts
 		public TextSpan Selection { get; }
 		public bool IncludeDeclaration { get; }
 		public string NewName { get; }
+		/// <summary>Current document text at request time. Populated by the bridge for context-sensitive queries (completion, signature help). Empty when unavailable.</summary>
+		public string DocumentText { get; }
 
 		public SymbolQueryRequest(
 			string operation,
@@ -36,7 +38,8 @@ namespace FFVM.Debug.Lsp.Database.Contracts
 			TextPosition position,
 			TextSpan selection,
 			bool includeDeclaration,
-			string newName)
+			string newName,
+			string documentText = null)
 		{
 			Operation = operation ?? string.Empty;
 			DocumentKey = documentKey ?? string.Empty;
@@ -44,6 +47,7 @@ namespace FFVM.Debug.Lsp.Database.Contracts
 			Selection = selection;
 			IncludeDeclaration = includeDeclaration;
 			NewName = newName ?? string.Empty;
+			DocumentText = documentText ?? string.Empty;
 		}
 
 		public static SymbolQueryRequest ForPosition(string operation, string documentKey, TextPosition position)

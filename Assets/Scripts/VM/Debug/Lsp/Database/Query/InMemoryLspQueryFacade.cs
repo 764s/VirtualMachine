@@ -20,6 +20,7 @@ using System;
 using System.Collections.Generic;
 using FFVM.Debug.Lsp.Database.Contracts;
 using FFVM.Debug.Lsp.Database.Paths;
+using FFVM.Debug.Lsp.Database.Query;
 
 namespace FFVM.Debug.Lsp.Database
 {
@@ -135,66 +136,243 @@ namespace FFVM.Debug.Lsp.Database
 			if (index.NameIndex == null)
 				return SymbolQueryResult.Failure("NameIndex is not available for completion query.");
 
-			string query = request != null ? request.NewName : string.Empty;
-			if (string.IsNullOrWhiteSpace(query))
-				query = string.Empty;
+			// Detect completion context from document text + cursor
+			CompletionContext context = request != null
+				? CompletionContextDetector.Detect(request.DocumentText, request.Position.Line, request.Position.Character)
+				: new CompletionContext(CompletionContextKind.Identifier, null, string.Empty, 0);
 
-			// DX21 P2-3: alias-scoped completion — "U." prefix triggers alias resolution
-			if (query.Contains(".") && index.AliasIndex != null && request != null && !string.IsNullOrWhiteSpace(request.DocumentKey))
+			string normalizedDocKey = request != null ? NormalizeDocumentKey(request.DocumentKey) : string.Empty;
+
+			// Suppress completion inside comments/strings (except include paths handled separately).
+			if (context.Kind == CompletionContextKind.InsideComment
+				|| context.Kind == CompletionContextKind.InsideString)
 			{
-				int dotIndex = query.IndexOf('.');
-				string aliasPrefix = query.Substring(0, dotIndex);
-				string memberQuery = query.Substring(dotIndex + 1);
-				string normalizedDocKey = NormalizeDocumentKey(request.DocumentKey);
-				if (!string.IsNullOrWhiteSpace(normalizedDocKey)
-					&& index.AliasIndex.TryResolveAlias(new PathKey(normalizedDocKey), aliasPrefix, out PathKey targetDoc))
+				return SymbolQueryResult.Success(
+					SymbolIdentity.CreateUnknown("completion"),
+					null,
+					SymbolQueryPayload.ForCompletion(new List<LspCompletionItem>(0)));
+			}
+
+			// Snapshot of all indexed symbols (used by several branches).
+			IReadOnlyList<SymbolIdentity> allSymbols = index.NameIndex.Search(string.Empty, CompletionLimit * 4);
+			if (allSymbols == null) allSymbols = new List<SymbolIdentity>(0);
+
+			// Dispatch by context kind.
+			switch (context.Kind)
+			{
+				case CompletionContextKind.MemberAccess:
+					return CompletionMemberAccess(index, request, context, allSymbols, normalizedDocKey);
+				case CompletionContextKind.IncludePath:
+					return CompletionIncludePath(allSymbols, context, normalizedDocKey);
+				case CompletionContextKind.TypeAnnotation:
+				case CompletionContextKind.NewExpression:
+					return CompletionTypeContext(allSymbols, context, normalizedDocKey);
+				case CompletionContextKind.Identifier:
+				default:
+					return CompletionIdentifier(allSymbols, context, normalizedDocKey, request);
+			}
+		}
+
+		// ---- Completion branch: plain identifier (default) ----
+		private SymbolQueryResult CompletionIdentifier(
+			IReadOnlyList<SymbolIdentity> allSymbols,
+			CompletionContext context,
+			string normalizedDocKey,
+			SymbolQueryRequest request)
+		{
+			string containingFunc = ResolveContainingFunction(allSymbols, normalizedDocKey,
+				request != null ? request.Position.Line : 0,
+				request != null ? request.DocumentText : string.Empty);
+			var items = new List<LspCompletionItem>();
+
+			for (int i = 0; i < allSymbols.Count && items.Count < CompletionLimit; i++)
+			{
+				SymbolIdentity c = allSymbols[i];
+				if (c == null) continue;
+				// Skip nested/sub-symbols offered via dot triggers.
+				if (c.Kind == SymbolKindTag.StructField) continue;
+				if (c.Kind == SymbolKindTag.EnumMember) continue;
+				// Scope isolation: locals/params only in their containing function
+				if ((c.Kind == SymbolKindTag.Variable || c.Kind == SymbolKindTag.Parameter)
+					&& !string.IsNullOrEmpty(c.ParentName))
 				{
-					IReadOnlyList<SymbolIdentity> allSymbols = index.NameIndex.Search(string.Empty, CompletionLimit * 2);
-					var aliasItems = new List<LspCompletionItem>();
-					string targetDocPath = targetDoc.Value ?? string.Empty;
-					for (int i = 0; i < allSymbols.Count && aliasItems.Count < CompletionLimit; i++)
-					{
-						SymbolIdentity candidate = allSymbols[i];
-						if (candidate == null) continue;
-						string origin = candidate.Origin ?? string.Empty;
-						if (!string.Equals(NormalizeDocumentKey(origin), NormalizeDocumentKey(targetDocPath), System.StringComparison.OrdinalIgnoreCase))
-							continue;
-						if (!string.IsNullOrEmpty(memberQuery)
-							&& (candidate.Name == null || candidate.Name.IndexOf(memberQuery, System.StringComparison.OrdinalIgnoreCase) < 0))
-							continue;
-						aliasItems.Add(new LspCompletionItem(
-							aliasPrefix + "." + candidate.Name,
-							candidate.Kind.ToString(),
-							BuildSymbolDetail(candidate),
-							candidate.Documentation));
-					}
-					SymbolIdentity aliasAnchor = aliasItems.Count > 0
-						? SymbolIdentity.CreateUnknown(aliasPrefix)
-						: SymbolIdentity.CreateUnknown("completion");
-					return SymbolQueryResult.Success(aliasAnchor, null, SymbolQueryPayload.ForCompletion(aliasItems));
+					if (!string.Equals(c.ParentName, containingFunc, System.StringComparison.Ordinal))
+						continue;
+				}
+				// Private visibility: hide private symbols from other files
+				if (c.IsPrivate && !IsSameDocument(c.Origin, normalizedDocKey))
+					continue;
+				items.Add(new LspCompletionItem(c.Name, c.Kind.ToString(), BuildCompletionDetail(c), c.Documentation));
+			}
+
+			// Append keywords (always useful)
+			foreach (string kw in CompletionKeywords)
+				items.Add(new LspCompletionItem(kw, "Keyword", "keyword", null));
+
+			SymbolIdentity anchor = items.Count > 0
+				? SymbolIdentity.CreateUnknown(context.Prefix ?? "completion")
+				: SymbolIdentity.CreateUnknown("completion");
+			return SymbolQueryResult.Success(anchor, null, SymbolQueryPayload.ForCompletion(items));
+		}
+
+		// ---- Completion branch: type annotation / new expression ----
+		private SymbolQueryResult CompletionTypeContext(
+			IReadOnlyList<SymbolIdentity> allSymbols,
+			CompletionContext context,
+			string normalizedDocKey)
+		{
+			var items = new List<LspCompletionItem>();
+			for (int i = 0; i < allSymbols.Count && items.Count < CompletionLimit; i++)
+			{
+				SymbolIdentity c = allSymbols[i];
+				if (c == null) continue;
+				// Only types
+				bool isType = c.Kind == SymbolKindTag.Struct
+					|| (context.Kind == CompletionContextKind.TypeAnnotation && c.Kind == SymbolKindTag.Enum);
+				if (!isType) continue;
+				if (c.IsPrivate && !IsSameDocument(c.Origin, normalizedDocKey)) continue;
+				items.Add(new LspCompletionItem(c.Name, c.Kind.ToString(), BuildCompletionDetail(c), c.Documentation));
+			}
+			// Builtin primitives as keywords in TypeAnnotation context
+			if (context.Kind == CompletionContextKind.TypeAnnotation)
+			{
+				foreach (string bt in BuiltinTypeKeywords)
+					items.Add(new LspCompletionItem(bt, "Keyword", "builtin type", null));
+			}
+			return SymbolQueryResult.Success(
+				SymbolIdentity.CreateUnknown(context.Prefix ?? "completion"),
+				null,
+				SymbolQueryPayload.ForCompletion(items));
+		}
+
+		// ---- Completion branch: member access (dot trigger) ----
+		private SymbolQueryResult CompletionMemberAccess(
+			IIndexSnapshot index,
+			SymbolQueryRequest request,
+			CompletionContext context,
+			IReadOnlyList<SymbolIdentity> allSymbols,
+			string normalizedDocKey)
+		{
+			var items = new List<LspCompletionItem>();
+			if (context.ReceiverChain == null || context.ReceiverChain.Count == 0)
+				return SymbolQueryResult.Success(
+					SymbolIdentity.CreateUnknown("completion"), null,
+					SymbolQueryPayload.ForCompletion(items));
+
+			string first = context.ReceiverChain[0];
+
+			// Alias path: if first segment resolves as an alias, return symbols scoped to target doc.
+			if (index.AliasIndex != null
+				&& !string.IsNullOrEmpty(normalizedDocKey)
+				&& index.AliasIndex.TryResolveAlias(new PathKey(normalizedDocKey), first, out PathKey targetDoc)
+				&& context.ReceiverChain.Count == 1)
+			{
+				string targetPath = NormalizeDocumentKey(targetDoc.Value ?? string.Empty);
+				for (int i = 0; i < allSymbols.Count && items.Count < CompletionLimit; i++)
+				{
+					SymbolIdentity c = allSymbols[i];
+					if (c == null) continue;
+					if (c.Kind == SymbolKindTag.Parameter) continue;
+					if (c.Kind == SymbolKindTag.Variable && !string.IsNullOrEmpty(c.ParentName)) continue; // skip locals
+					if (c.Kind == SymbolKindTag.StructField) continue;
+					if (c.Kind == SymbolKindTag.EnumMember) continue;
+					if (!string.Equals(NormalizeDocumentKey(c.Origin), targetPath, System.StringComparison.OrdinalIgnoreCase))
+						continue;
+					if (c.IsPrivate) continue;
+					items.Add(new LspCompletionItem(first + "." + c.Name, c.Kind.ToString(),
+						BuildCompletionDetail(c), c.Documentation));
+				}
+				return SymbolQueryResult.Success(
+					SymbolIdentity.CreateUnknown(first), null,
+					SymbolQueryPayload.ForCompletion(items));
+			}
+
+			// Enum-qualified access: first segment is an Enum name → return its members
+			if (IsEnumName(allSymbols, first))
+			{
+				for (int i = 0; i < allSymbols.Count && items.Count < CompletionLimit; i++)
+				{
+					SymbolIdentity c = allSymbols[i];
+					if (c == null) continue;
+					if (c.Kind != SymbolKindTag.EnumMember) continue;
+					if (!string.Equals(c.ParentName, first, System.StringComparison.Ordinal)) continue;
+					items.Add(new LspCompletionItem(c.Name, c.Kind.ToString(), BuildCompletionDetail(c), c.Documentation));
+				}
+				return SymbolQueryResult.Success(
+					SymbolIdentity.CreateUnknown(first), null,
+					SymbolQueryPayload.ForCompletion(items));
+			}
+
+			// Struct member access: resolve receiver chain to a struct type
+			string containingFunc = ResolveContainingFunction(allSymbols, normalizedDocKey,
+				request != null ? request.Position.Line : 0,
+				request != null ? request.DocumentText : string.Empty);
+			string currentType = ResolveChainBaseType(allSymbols, first, containingFunc);
+			for (int k = 1; k < context.ReceiverChain.Count; k++)
+			{
+				if (string.IsNullOrEmpty(currentType)) break;
+				string seg = context.ReceiverChain[k];
+				currentType = ResolveFieldType(allSymbols, currentType, seg);
+			}
+			if (string.IsNullOrEmpty(currentType))
+				return SymbolQueryResult.Success(
+					SymbolIdentity.CreateUnknown("completion"), null,
+					SymbolQueryPayload.ForCompletion(items));
+
+			// If final type is an Enum, return its members
+			if (IsEnumName(allSymbols, currentType))
+			{
+				for (int i = 0; i < allSymbols.Count && items.Count < CompletionLimit; i++)
+				{
+					SymbolIdentity c = allSymbols[i];
+					if (c == null) continue;
+					if (c.Kind != SymbolKindTag.EnumMember) continue;
+					if (!string.Equals(c.ParentName, currentType, System.StringComparison.Ordinal)) continue;
+					items.Add(new LspCompletionItem(c.Name, c.Kind.ToString(), BuildCompletionDetail(c), c.Documentation));
+				}
+			}
+			else
+			{
+				// Struct fields
+				for (int i = 0; i < allSymbols.Count && items.Count < CompletionLimit; i++)
+				{
+					SymbolIdentity c = allSymbols[i];
+					if (c == null) continue;
+					if (c.Kind != SymbolKindTag.StructField) continue;
+					if (!string.Equals(c.ParentName, currentType, System.StringComparison.Ordinal)) continue;
+					items.Add(new LspCompletionItem(c.Name, c.Kind.ToString(), BuildSymbolDetail(c), c.Documentation));
 				}
 			}
 
-			IReadOnlyList<SymbolIdentity> candidates = index.NameIndex.Search(query, CompletionLimit);
-			if (candidates == null)
-				candidates = new List<SymbolIdentity>(0);
+			return SymbolQueryResult.Success(
+				SymbolIdentity.CreateUnknown(currentType), null,
+				SymbolQueryPayload.ForCompletion(items));
+		}
 
-			var items = new List<LspCompletionItem>(candidates.Count);
-			for (int i = 0; i < candidates.Count; i++)
+		// ---- Completion branch: include path (workspace file enumeration) ----
+		private SymbolQueryResult CompletionIncludePath(
+			IReadOnlyList<SymbolIdentity> allSymbols,
+			CompletionContext context,
+			string normalizedDocKey)
+		{
+			// Collect unique Origins from all indexed symbols — these are the known .ffs files.
+			var seen = new HashSet<string>(System.StringComparer.OrdinalIgnoreCase);
+			var items = new List<LspCompletionItem>();
+			for (int i = 0; i < allSymbols.Count && items.Count < CompletionLimit; i++)
 			{
-				SymbolIdentity candidate = candidates[i];
-				items.Add(new LspCompletionItem(
-					candidate.Name,
-					candidate.Kind.ToString(),
-					BuildSymbolDetail(candidate),
-					candidate.Documentation));
+				SymbolIdentity c = allSymbols[i];
+				if (c == null || string.IsNullOrWhiteSpace(c.Origin)) continue;
+				string origin = c.Origin;
+				if (!seen.Add(origin)) continue;
+				// Skip the current document itself
+				if (IsSameDocument(origin, normalizedDocKey)) continue;
+				string label = ExtractFileRelativeLabel(origin);
+				if (string.IsNullOrEmpty(label)) continue;
+				items.Add(new LspCompletionItem(label, "File", origin, null));
 			}
-
-			SymbolIdentity anchor = candidates.Count > 0
-				? candidates[0]
-				: SymbolIdentity.CreateUnknown("completion");
-
-			return SymbolQueryResult.Success(anchor, null, SymbolQueryPayload.ForCompletion(items));
+			return SymbolQueryResult.Success(
+				SymbolIdentity.CreateUnknown("include"), null,
+				SymbolQueryPayload.ForCompletion(items));
 		}
 
 		public SymbolQueryResult QuerySignatureHelp(CodeDatabaseSnapshot snapshot, SymbolQueryRequest request)
@@ -466,6 +644,168 @@ namespace FFVM.Debug.Lsp.Database
 				return symbol.Kind + " member of " + symbol.ParentName;
 
 			return symbol.Kind.ToString();
+		}
+
+		private static string BuildCompletionDetail(SymbolIdentity symbol)
+		{
+			if (symbol == null)
+				return string.Empty;
+
+			string docLine = ExtractDocSummaryLine(symbol.Documentation);
+			if (!string.IsNullOrWhiteSpace(docLine))
+				return docLine;
+
+			return BuildSymbolDetail(symbol);
+		}
+
+		private static string ExtractDocSummaryLine(string documentation)
+		{
+			if (string.IsNullOrWhiteSpace(documentation))
+				return string.Empty;
+
+			if (documentation.StartsWith("```", StringComparison.Ordinal))
+			{
+				int sep = documentation.IndexOf("\n\n---\n\n", StringComparison.Ordinal);
+				if (sep >= 0)
+				{
+					string tail = documentation.Substring(sep + "\n\n---\n\n".Length).Trim();
+					int end = tail.IndexOf('\n');
+					return end >= 0 ? tail.Substring(0, end).Trim() : tail;
+				}
+				return string.Empty;
+			}
+
+			string trimmed = documentation.Trim();
+			int lineEnd = trimmed.IndexOf('\n');
+			return lineEnd >= 0 ? trimmed.Substring(0, lineEnd).Trim() : trimmed;
+		}
+
+		// ---------- Completion helpers ----------
+
+		private static readonly string[] CompletionKeywords = new[]
+		{
+			"func", "var", "const", "if", "else", "while", "for", "return",
+			"wait", "wait_for", "yield", "defer", "using",
+			"true", "false", "null",
+			"struct", "include", "enum",
+			"public", "private", "override", "external", "new"
+		};
+
+		private static readonly string[] BuiltinTypeKeywords = new[]
+		{
+			"int", "bool", "float", "string"
+		};
+
+		private static bool IsSameDocument(string a, string b)
+		{
+			return string.Equals(NormalizeDocumentKey(a), NormalizeDocumentKey(b), System.StringComparison.OrdinalIgnoreCase);
+		}
+
+		private static bool IsEnumName(IReadOnlyList<SymbolIdentity> symbols, string name)
+		{
+			if (string.IsNullOrEmpty(name) || symbols == null) return false;
+			for (int i = 0; i < symbols.Count; i++)
+			{
+				SymbolIdentity s = symbols[i];
+				if (s == null) continue;
+				if (s.Kind == SymbolKindTag.Enum && string.Equals(s.Name, name, System.StringComparison.Ordinal))
+					return true;
+			}
+			return false;
+		}
+
+		// Finds the function whose body contains the cursor in the current document.
+		// Heuristic: among Function symbols in this document sorted by DeclarationSpan.Start,
+		// pick the last one whose start offset <= cursor offset. Works when functions are sequential.
+		private static string ResolveContainingFunction(IReadOnlyList<SymbolIdentity> symbols, string normalizedDocKey, int cursorLine0, string documentText)
+		{
+			if (symbols == null || string.IsNullOrEmpty(normalizedDocKey)) return string.Empty;
+			int cursorOffset = LineToOffset(documentText, cursorLine0);
+			string best = string.Empty;
+			int bestStart = -1;
+			for (int i = 0; i < symbols.Count; i++)
+			{
+				SymbolIdentity s = symbols[i];
+				if (s == null || s.Kind != SymbolKindTag.Function) continue;
+				if (!IsSameDocument(s.Origin, normalizedDocKey)) continue;
+				int startOffset = s.DeclarationSpan.Start;
+				if (startOffset <= cursorOffset && startOffset > bestStart)
+				{
+					bestStart = startOffset;
+					best = s.Name;
+				}
+			}
+			return best;
+		}
+
+		private static int LineToOffset(string text, int line0)
+		{
+			if (string.IsNullOrEmpty(text) || line0 <= 0) return 0;
+			int offset = 0;
+			int currentLine = 0;
+			while (offset < text.Length && currentLine < line0)
+			{
+				int nl = text.IndexOf('\n', offset);
+				if (nl < 0) return text.Length;
+				offset = nl + 1;
+				currentLine++;
+			}
+			return offset;
+		}
+
+		// Look up the base type for the first segment of a receiver chain:
+		// - Parameter or Variable in the containing function (scope match)
+		// - Module Variable (no parent)
+		// - Struct/Enum type name directly (for Enum. or new Struct{} contexts)
+		private static string ResolveChainBaseType(IReadOnlyList<SymbolIdentity> symbols, string firstName, string containingFunc)
+		{
+			if (symbols == null || string.IsNullOrEmpty(firstName)) return string.Empty;
+			SymbolIdentity moduleVar = null;
+			SymbolIdentity typeDecl = null;
+			for (int i = 0; i < symbols.Count; i++)
+			{
+				SymbolIdentity s = symbols[i];
+				if (s == null || !string.Equals(s.Name, firstName, System.StringComparison.Ordinal)) continue;
+				if ((s.Kind == SymbolKindTag.Parameter || s.Kind == SymbolKindTag.Variable)
+					&& !string.IsNullOrEmpty(s.ParentName)
+					&& string.Equals(s.ParentName, containingFunc, System.StringComparison.Ordinal))
+				{
+					if (!string.IsNullOrEmpty(s.TypeName)) return s.TypeName;
+				}
+				if (s.Kind == SymbolKindTag.Variable && string.IsNullOrEmpty(s.ParentName))
+					moduleVar = s;
+				if (s.Kind == SymbolKindTag.Struct || s.Kind == SymbolKindTag.Enum)
+					typeDecl = s;
+			}
+			if (moduleVar != null && !string.IsNullOrEmpty(moduleVar.TypeName)) return moduleVar.TypeName;
+			if (typeDecl != null) return typeDecl.Name;
+			return string.Empty;
+		}
+
+		// For a given struct name and field name, return the field's declared type.
+		private static string ResolveFieldType(IReadOnlyList<SymbolIdentity> symbols, string structName, string fieldName)
+		{
+			if (symbols == null || string.IsNullOrEmpty(structName) || string.IsNullOrEmpty(fieldName))
+				return string.Empty;
+			for (int i = 0; i < symbols.Count; i++)
+			{
+				SymbolIdentity s = symbols[i];
+				if (s == null || s.Kind != SymbolKindTag.StructField) continue;
+				if (!string.Equals(s.ParentName, structName, System.StringComparison.Ordinal)) continue;
+				if (!string.Equals(s.Name, fieldName, System.StringComparison.Ordinal)) continue;
+				return s.TypeName ?? string.Empty;
+			}
+			return string.Empty;
+		}
+
+		// Given a full URI like "file:///.../KOF98/Scripts/foo.ffs", return a repo-relative label "foo.ffs".
+		private static string ExtractFileRelativeLabel(string origin)
+		{
+			if (string.IsNullOrEmpty(origin)) return string.Empty;
+			int slash = origin.LastIndexOf('/');
+			if (slash < 0) slash = origin.LastIndexOf('\\');
+			string tail = slash >= 0 && slash < origin.Length - 1 ? origin.Substring(slash + 1) : origin;
+			return tail;
 		}
 
 		private static List<SemanticTokenAbsolute> CollectSemanticTokens(CodeDatabaseSnapshot snapshot, string documentKey)

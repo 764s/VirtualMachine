@@ -746,6 +746,9 @@ namespace FFVM.Compiler
             stmt.AliasTarget = aliasTarget;
             stmt.Line = line;
             stmt.Column = col;
+            var varDocLines = CollectDocLines(line);
+            if (varDocLines != null)
+                stmt.DocComment = string.Join("\n", varDocLines);
             // DX7: track precise position of type name token
             stmt.TypeNameLine = typeNameLine;
             stmt.TypeNameColumn = typeNameCol;

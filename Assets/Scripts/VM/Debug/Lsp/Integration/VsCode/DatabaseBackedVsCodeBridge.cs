@@ -708,7 +708,7 @@ namespace FFVM.Debug.Lsp.Integration.VsCode
 			return true;
 		}
 
-		private static SymbolQueryRequest BuildQueryRequest(
+		private SymbolQueryRequest BuildQueryRequest(
 			LspIntentContract intent,
 			JsonObject requestParams,
 			bool includeDeclaration,
@@ -723,13 +723,19 @@ namespace FFVM.Debug.Lsp.Integration.VsCode
 			int character = position != null ? position.GetInt(JsonFields.Character) : 0;
 
 			var normalizedPosition = new TextPosition(line, character);
+
+			string documentText = string.Empty;
+			if (!string.IsNullOrWhiteSpace(uri) && TryGetOpenDocumentText(uri, out string openText))
+				documentText = openText ?? string.Empty;
+
 			return new SymbolQueryRequest(
 				intent.QueryOperationName,
 				uri,
 				normalizedPosition,
 				new TextSpan(0, 0),
 				includeDeclaration,
-				newName);
+				newName,
+				documentText);
 		}
 
 		private string ResolveRootPath(JsonObject initializeParams)
