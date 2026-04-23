@@ -34,3 +34,4 @@
 | D18 | [D_ScriptUsabilityChecklist.md](D_ScriptUsabilityChecklist.md) | FFScript 易用性审查：脚本语言使用者视角的系统性检验 | ✅ 已完成 | 2026-04-14 | 35 项检验标准 × 7 大类，33/35 通过。7 项改进建议（UC-1~UC-7）→ 展望项 [Outlook §2.10](../Plan/Outlook_And_Risks.md) |
 | D19 | [D_LspStructuralAudit.md](D_LspStructuralAudit.md) | LSP 结构性审查：概念源唯一性与执行路径收敛 | ✅ 已完成 | 2026-04-14 | KL-01~05 根因分析。三大函数 N 路分派 → 笛卡尔积遗漏。统一符号解析 + 统一引用收集的目标架构 + P1~P3 实施路径。行动项 → DX17（统一符号解析）+ DX18（统一引用收集） |
 | D20 | [D_ResolveSymbolCollisionTopDown.md](D_ResolveSymbolCollisionTopDown.md) | ResolveSymbol 同位置信息冲突：长期测试保留与顶层修复路径 | ✅ 已完成 | 2026-04-15 | 锁定 VERIFY-01 为长期回归；提交 DX19（候选仲裁修复）需求与子计划 |
+| D21 | [D_CoverageMatrix.md](D_CoverageMatrix.md) | LSP 覆盖矩阵：从语法文法生成的两层结构化穷举 | ✅ 已完成 | 2026-04-23 | 两层矩阵框架（语法结构层 + 语义覆盖层）。主轴 = AST 节点族/子位置，语义轴 = 符号角色×采集通道×LSP 功能。将"靠注意力穷举"转为"结构化穷举 + 自动缺口报警"。可选行动项 CM1~CM4 暂不入主串行，待 `#requirement` 激活 |
