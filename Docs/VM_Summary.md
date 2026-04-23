@@ -249,9 +249,10 @@ Docs/
 | DX17 | 统一符号解析 | ✅ | 合并 SymbolAtPosition + FindDefinitionLocation → ResolvedSymbol。HandleDefinition/HandleReferences/HandleRename/HandleHover 共享 ResolveSymbol。消除 ResolveSymbolDualAst 二次查找。修复 WaitForStmt 子表达式遗漏。DX17-01~02（4 asserts）。计划 → [Step_DX17_UnifiedSymbolResolution](Plan/LSP/Step_DX17_UnifiedSymbolResolution.md)　讨论 → [D_LspStructuralAudit](Discussion/D_LspStructuralAudit.md) | ⭐⭐ |
 | DX18 | 统一引用收集 | ✅ | 8 个引用 Walker → 1 个 UnifiedRefsWalker。CollectReferencesWithOrigin 8 分支 → CollectDeclarationLocations + 统一遍历 4 分支。死代码 CollectReferences 删除。LspServer.cs −242 行（4799→4557）。656 LSP 测试全通过。计划 → [Step_DX18_UnifiedRefCollection](Plan/LSP/Step_DX18_UnifiedRefCollection.md)　讨论 → [D_LspStructuralAudit](Discussion/D_LspStructuralAudit.md) | ⭐⭐⭐ |
 | DX19 | ResolveSymbol 候选仲裁修复 | ✅ | VERIFY-01 长期回归测试保留。ResolveSymbol 从"变量强制 merged fallback"升级为"条件化候选仲裁"：per-file 有完整作用域身份（scopeFunc+declLine>0）时保留，否则 merged 接管。修复 include/main 同 line+col 冲突误跳。DX19-01~05（16 asserts）。675 LSP 测试全通过。计划 → [Step_DX19_ResolveSymbolCandidateResolution](Plan/LSP/Step_DX19_ResolveSymbolCandidateResolution.md)　讨论 → [D_ResolveSymbolCollisionTopDown](Discussion/D_ResolveSymbolCollisionTopDown.md) | ⭐⭐⭐ |
+| CM | LSP 覆盖矩阵基座 | 🟡 Phase 0 ✅ | 两层矩阵（AST 节点族/子位置 × 符号角色/采集通道/LSP 功能）。Phase 0 人工首版 Map 落地 + GAP-01~04（DB 后端 call-ref 遍历缺口：SyscallExpr / ModuleVariables.Initializer / ParamDecl.DefaultValue）机械暴露。纯文档基座，不改 LspServer。Phase 1~3（生成器/投影器/测试标签化/CI 守卫）⚪ 业务驱动激活。Map → [Map_CM_CoverageMatrix](Plan/LSP/Map_CM_CoverageMatrix.md)　计划 → [Step_CM_CoverageMatrix](Plan/LSP/Step_CM_CoverageMatrix.md)　讨论 → [D_CoverageMatrix](Discussion/D_CoverageMatrix.md) | ⭐⭐ |
 
-**Lang 系列全部完成。DX13 ✅ 完成。DX14 ✅ 完成。DX15 ✅ 完成。DX16 ✅ 完成。DX17 ✅ 完成。DX18 ✅ 完成。DX19 ✅ 完成。**
-**DX13~DX19 ALL ✅。D_LspStructuralAudit P1（DX17 统一符号解析）✅ + P2+P3（DX18 统一引用收集）✅ + 候选仲裁（DX19）✅。**
+**Lang 系列全部完成。DX13 ✅ 完成。DX14 ✅ 完成。DX15 ✅ 完成。DX16 ✅ 完成。DX17 ✅ 完成。DX18 ✅ 完成。DX19 ✅ 完成。CM Phase 0 ✅ 完成。**
+**DX13~DX19 ALL ✅。D_LspStructuralAudit P1（DX17 统一符号解析）✅ + P2+P3（DX18 统一引用收集）✅ + 候选仲裁（DX19）✅。CM 矩阵基座 Phase 0 ✅ 覆盖缺口暴露。**
 **DX12（后台编译调度）⚪ 远期待激活。C 区间阻塞于宿主 ECS 就绪。**
 **语言易用性审查（D18）→ 7 项改进建议（UC-1~UC-7）已纳入 [Outlook §2.10](Plan/Outlook_And_Risks.md)。**
 
