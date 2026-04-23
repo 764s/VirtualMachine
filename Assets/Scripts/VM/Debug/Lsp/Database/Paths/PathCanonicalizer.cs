@@ -15,7 +15,7 @@
 //   - Same physical file always yields the same canonical key pair.
 //   - No component compares raw path strings directly.
 // Boundary Closure:
-//   Upstream: LspServer input adapters, watched files events.
+//   Upstream: LspServerNew input adapters, watched files events.
 //   Downstream: index, query request normalization, diagnostics routing.
 
 namespace FFVM.Debug.Lsp.Database.Paths

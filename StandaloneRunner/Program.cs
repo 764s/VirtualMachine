@@ -31,16 +31,6 @@ public static class Program
             return;
         }
 
-        if (args.Length > 0 && args[0] == "--lsp-legacy")
-        {
-            // Legacy LSP server mode retained for fallback diagnostics
-            var input = System.Console.OpenStandardInput();
-            var output = System.Console.OpenStandardOutput();
-            var server = new FFVM.Debug.LspServer(input, output);
-            server.Run();
-            return;
-        }
-
         if (args.Length > 0 && args[0] == "--lsp-new-tests")
         {
             LspServerNewTests.RunAll();
@@ -53,9 +43,9 @@ public static class Program
         FFScriptTests.RunAll();
         DebugTests.RunAll();
         DapTests.RunAll();
-        LspTests.RunAll();
         LspDatabaseTests.RunAll();
         LspDatabaseQueryTests.RunAll();
         LspServerNewTests.RunAll();
+        LspCoverageMatrixTests.RunAll();
     }
 }

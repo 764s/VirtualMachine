@@ -26,15 +26,6 @@
                     "type": "string",
                     "default": "ffvm-cli",
                     "description": "Path to the ffvm-cli executable. Defaults to searching in PATH."
-                },
-                "ffvm.lspMode": {
-                    "type": "string",
-                    "enum": [
-                        "new",
-                        "legacy"
-                    ],
-                    "default": "new",
-                    "description": "Choose LSP server implementation. 'new' uses database-backed LspServerNew, 'legacy' uses original LspServer."
                 }
             }
         },

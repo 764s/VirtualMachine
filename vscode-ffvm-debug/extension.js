@@ -218,13 +218,10 @@ function activate(context) {
         const { LanguageClient, TransportKind } = require("vscode-languageclient/node");
 
         const serverCommand = resolveExecutablePath();
-        const config = vscode.workspace.getConfiguration("ffvm");
-        const configuredMode = config.get("lspMode", "new");
-        const lspMode = configuredMode === "legacy" ? "legacy" : "new";
-        const lspArgs = lspMode === "legacy" ? ["lsp", "--legacy"] : ["lsp", "--new"];
+        const lspArgs = ["lsp"];
 
         outputChannel.appendLine(`[FFVM] LSP server command: ${serverCommand} ${lspArgs.join(" ")}`);
-        outputChannel.appendLine(`[FFVM] LSP mode: ${lspMode}`);
+        outputChannel.appendLine("[FFVM] LSP mode: new");
 
         const serverOptions = {
             command: serverCommand,

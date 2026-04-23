@@ -37,8 +37,6 @@ namespace FFVM.Cli
                     return CmdLsp(subArgs);
                 case "lsp-new":
                     return CmdLspNew();
-                case "lsp-legacy":
-                    return CmdLspLegacy();
                 case "dap":
                     return CmdDap(subArgs);
                 case "version":
@@ -66,9 +64,8 @@ namespace FFVM.Cli
             Console.WriteLine("  ffvm init [--host <preset>]                Create a .ffproj project file");
             Console.WriteLine("  ffvm run <script.ffs> [options]            Compile and run a script");
             Console.WriteLine("  ffvm compile <script.ffs> [options]        Compile a script (check only)");
-            Console.WriteLine("  ffvm lsp [--new|--legacy]                  Start LSP server (stdio, default: new)");
+            Console.WriteLine("  ffvm lsp [--new]                           Start database-backed LSP server (stdio)");
             Console.WriteLine("  ffvm lsp-new                               Start database-backed LSP server");
-            Console.WriteLine("  ffvm lsp-legacy                            Start legacy LSP server");
             Console.WriteLine("  ffvm dap [--port <N>]                      Start DAP server (stdio or TCP)");
             Console.WriteLine("  ffvm version                               Show version");
             Console.WriteLine("  ffvm help                                  Show this help");
@@ -410,32 +407,23 @@ namespace FFVM.Cli
 
         private static int CmdLsp(string[] args)
         {
-            bool useLegacy = false;
-
             for (int i = 0; i < args.Length; i++)
             {
                 string option = args[i] ?? string.Empty;
-                if (string.Equals(option, "--legacy", StringComparison.OrdinalIgnoreCase))
+                if (string.Equals(option, "--new", StringComparison.OrdinalIgnoreCase)
+                    || string.Equals(option, "--stdio", StringComparison.OrdinalIgnoreCase))
                 {
-                    useLegacy = true;
-                }
-                else if (string.Equals(option, "--new", StringComparison.OrdinalIgnoreCase))
-                {
-                    useLegacy = false;
-                }
-                else if (string.Equals(option, "--stdio", StringComparison.OrdinalIgnoreCase))
-                {
-                    // stdio is the only supported transport; accept for VS Code LSP client compatibility.
+                    // stdio is the only supported transport; --new is accepted for backward compatibility.
                 }
                 else
                 {
                     Console.Error.WriteLine($"Unknown option for lsp: {option}");
-                    Console.Error.WriteLine("Usage: ffvm lsp [--new|--legacy] [--stdio]");
+                    Console.Error.WriteLine("Usage: ffvm lsp [--new] [--stdio]");
                     return 1;
                 }
             }
 
-            return useLegacy ? CmdLspLegacy() : CmdLspNew();
+            return CmdLspNew();
         }
 
         private static int CmdLspNew()
@@ -456,15 +444,6 @@ namespace FFVM.Cli
                 Console.Error.WriteLine(ex.Message);
                 return 1;
             }
-        }
-
-        private static int CmdLspLegacy()
-        {
-            var input = Console.OpenStandardInput();
-            var output = Console.OpenStandardOutput();
-            var server = new LspServer(input, output);
-            server.Run();
-            return 0;
         }
 
         // ─── dap ──────────────────────────────────────────────────────────
