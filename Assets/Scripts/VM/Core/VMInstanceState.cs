@@ -137,6 +137,7 @@ namespace FFVM
         // underlying storage via the legacy name.
 
         // Identity / persistent (VMData)
+#if NET7_0_OR_GREATER
         [UnscopedRef] public ref int InstanceId { [MethodImpl(MethodImplOptions.AggressiveInlining)] get => ref Data.InstanceId; }
         [UnscopedRef] public ref int ModuleSlot { [MethodImpl(MethodImplOptions.AggressiveInlining)] get => ref Data.ModuleSlot; }
         [UnscopedRef] public ref int Generation { [MethodImpl(MethodImplOptions.AggressiveInlining)] get => ref Data.Generation; }
@@ -157,6 +158,30 @@ namespace FFVM
         [UnscopedRef] public ref NumberRegisters Registers { [MethodImpl(MethodImplOptions.AggressiveInlining)] get => ref Cpu.Registers; }
         [UnscopedRef] public ref CallStackFrames CallStack { [MethodImpl(MethodImplOptions.AggressiveInlining)] get => ref Cpu.CallStack; }
         [UnscopedRef] public ref CleanupFrames CleanupStack { [MethodImpl(MethodImplOptions.AggressiveInlining)] get => ref Cpu.CleanupStack; }
+#else
+        // Unity / C# < 11: [UnscopedRef] on ref-returning struct properties requires C# 11.
+        // Provide value get/set for primitive fields so inst.X = v and v = inst.X keep working
+        // when inst is accessed via a ref local. Complex struct fields (Registers, CallStack,
+        // CleanupStack) are get-only — mutation must go through Cpu/Data sub-fields directly.
+        public int InstanceId { [MethodImpl(MethodImplOptions.AggressiveInlining)] get => Data.InstanceId; [MethodImpl(MethodImplOptions.AggressiveInlining)] set => Data.InstanceId = value; }
+        public int ModuleSlot { [MethodImpl(MethodImplOptions.AggressiveInlining)] get => Data.ModuleSlot; [MethodImpl(MethodImplOptions.AggressiveInlining)] set => Data.ModuleSlot = value; }
+        public int Generation { [MethodImpl(MethodImplOptions.AggressiveInlining)] get => Data.Generation; [MethodImpl(MethodImplOptions.AggressiveInlining)] set => Data.Generation = value; }
+        public int ActiveListIndex { [MethodImpl(MethodImplOptions.AggressiveInlining)] get => Data.ActiveListIndex; [MethodImpl(MethodImplOptions.AggressiveInlining)] set => Data.ActiveListIndex = value; }
+        public bool IsAlive { [MethodImpl(MethodImplOptions.AggressiveInlining)] get => Data.IsAlive; [MethodImpl(MethodImplOptions.AggressiveInlining)] set => Data.IsAlive = value; }
+        public int WaitCounter { [MethodImpl(MethodImplOptions.AggressiveInlining)] get => Data.WaitCounter; [MethodImpl(MethodImplOptions.AggressiveInlining)] set => Data.WaitCounter = value; }
+        public int WaitTargetInstanceId { [MethodImpl(MethodImplOptions.AggressiveInlining)] get => Data.WaitTargetInstanceId; [MethodImpl(MethodImplOptions.AggressiveInlining)] set => Data.WaitTargetInstanceId = value; }
+        public int IP { [MethodImpl(MethodImplOptions.AggressiveInlining)] get => Cpu.IP; [MethodImpl(MethodImplOptions.AggressiveInlining)] set => Cpu.IP = value; }
+        public int RegisterBase { [MethodImpl(MethodImplOptions.AggressiveInlining)] get => Cpu.RegisterBase; [MethodImpl(MethodImplOptions.AggressiveInlining)] set => Cpu.RegisterBase = value; }
+        public int CallStackDepth { [MethodImpl(MethodImplOptions.AggressiveInlining)] get => Cpu.CallStackDepth; [MethodImpl(MethodImplOptions.AggressiveInlining)] set => Cpu.CallStackDepth = value; }
+        public int LeafReturnIP { [MethodImpl(MethodImplOptions.AggressiveInlining)] get => Cpu.LeafReturnIP; [MethodImpl(MethodImplOptions.AggressiveInlining)] set => Cpu.LeafReturnIP = value; }
+        public int LeafRegisterBase { [MethodImpl(MethodImplOptions.AggressiveInlining)] get => Cpu.LeafRegisterBase; [MethodImpl(MethodImplOptions.AggressiveInlining)] set => Cpu.LeafRegisterBase = value; }
+        public VMError ErrorFlag { [MethodImpl(MethodImplOptions.AggressiveInlining)] get => Cpu.ErrorFlag; [MethodImpl(MethodImplOptions.AggressiveInlining)] set => Cpu.ErrorFlag = value; }
+        public VMStateFlags StateFlags { [MethodImpl(MethodImplOptions.AggressiveInlining)] get => Cpu.StateFlags; [MethodImpl(MethodImplOptions.AggressiveInlining)] set => Cpu.StateFlags = value; }
+        public byte CleanupDepth { [MethodImpl(MethodImplOptions.AggressiveInlining)] get => Cpu.CleanupDepth; [MethodImpl(MethodImplOptions.AggressiveInlining)] set => Cpu.CleanupDepth = value; }
+        public NumberRegisters Registers { [MethodImpl(MethodImplOptions.AggressiveInlining)] get => Cpu.Registers; }
+        public CallStackFrames CallStack { [MethodImpl(MethodImplOptions.AggressiveInlining)] get => Cpu.CallStack; }
+        public CleanupFrames CleanupStack { [MethodImpl(MethodImplOptions.AggressiveInlining)] get => Cpu.CleanupStack; }
+#endif
     }
 
     /// <summary>

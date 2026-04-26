@@ -881,7 +881,7 @@ public static class PerformanceTests
                 sparseWorld.Tick();
             }
             sparseSw.Stop();
-            double sparseUs = sparseSw.Elapsed.TotalMicroseconds / sparseRounds;
+            double sparseUs = sparseSw.Elapsed.TotalMilliseconds * 1000.0 / sparseRounds;
 
             Debug.Log($"[BENCH] O9 sparse (3/128): {sparseUs:F2} µs/tick");
 
@@ -1050,13 +1050,13 @@ public static class PerformanceTests
             for (int r = 0; r < benchRounds; r++)
                 o10Bench.SaveState();
             saveSw.Stop();
-            double saveUs = saveSw.Elapsed.TotalMicroseconds / benchRounds;
+            double saveUs = saveSw.Elapsed.TotalMilliseconds * 1000.0 / benchRounds;
 
             var loadSw = Stopwatch.StartNew();
             for (int r = 0; r < benchRounds; r++)
                 o10Bench.LoadState(o10Bench.FrameNumber);
             loadSw.Stop();
-            double loadUs = loadSw.Elapsed.TotalMicroseconds / benchRounds;
+            double loadUs = loadSw.Elapsed.TotalMilliseconds * 1000.0 / benchRounds;
 
             Debug.Log($"[BENCH] O10 snapshot (5/128 active): save={saveUs:F2} µs, load={loadUs:F2} µs");
 

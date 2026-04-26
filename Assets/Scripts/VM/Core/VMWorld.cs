@@ -339,7 +339,7 @@ namespace FFVM
             cpu.StateFlags |= VMStateFlags.Completed;
         }
 
-#if !FFVM_LEGACY_CSHARP
+#if NET5_0_OR_GREATER && !FFVM_LEGACY_CSHARP
         [MethodImpl(MethodImplOptions.AggressiveOptimization)]
 #endif
         internal unsafe void ExecuteInstance(ref CPUData cpu, ref VMData vmd)
