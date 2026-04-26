@@ -105,7 +105,7 @@ echo [OK] KOF98_CS build succeeded.
 ) > KOF98_CS\run-kof98_cs.cmd
 echo [OK] Generated KOF98_CS\run-kof98_cs.cmd
 
-:: --- Step 5: Generate VS Code debug configuration -------------
+:: --- Step 5: Upsert VS Code debug configuration ---------------
 
 :: Detect TargetFramework from KOF98_CS.csproj
 set "NET_TFM=net8.0"
@@ -115,33 +115,15 @@ for /f "tokens=*" %%L in ('findstr /i "TargetFramework" KOF98_CS\KOF98_CS.csproj
     )
 )
 
-:: Generate launch.json from template (replace __NET_TFM__).
-:: NOTE: writes to KOF98_CS\.vscode\launch.json so it does not collide with the
-:: existing top-level .vscode/launch.json from the KOF98 / FFVM workflows.
-if not exist "KOF98_CS\.vscode" mkdir "KOF98_CS\.vscode"
-
-if exist "KOF98_CS\launch.json.template" (
-    (for /f "usebackq delims=" %%L in ("KOF98_CS\launch.json.template") do (
-        set "LINE=%%L"
-        setlocal enabledelayedexpansion
-        echo(!LINE:__NET_TFM__=%NET_TFM%!
-        endlocal
-    )) > "KOF98_CS\.vscode\launch.json"
-)
-
-if exist "KOF98_CS\tasks.json.template" (
-    copy /y "KOF98_CS\tasks.json.template" "KOF98_CS\.vscode\tasks.json" >nul
-)
-
-if exist "KOF98_CS\.vscode\launch.json" (
-    echo [OK] Generated KOF98_CS\.vscode\launch.json  ^(C# debug, TFM=%NET_TFM%^)
+if exist "KOF98\merge-vscode-config.ps1" (
+    powershell -NoProfile -ExecutionPolicy Bypass -File "KOF98\merge-vscode-config.ps1" -RepoRoot "%CD%" -Profile "KOF98_CS" -NetTfm "%NET_TFM%"
+    if errorlevel 1 (
+        echo [WARN] Could not upsert .vscode\launch.json / tasks.json
+    ) else (
+        echo [OK] Upserted .vscode\launch.json / .vscode\tasks.json  ^(KOF98_CS, TFM=%NET_TFM%^)
+    )
 ) else (
-    echo [WARN] Could not generate launch.json
-)
-if exist "KOF98_CS\.vscode\tasks.json" (
-    echo [OK] Generated KOF98_CS\.vscode\tasks.json
-) else (
-    echo [WARN] Could not generate tasks.json
+    echo [WARN] Missing helper script: KOF98\merge-vscode-config.ps1
 )
 
 :: --- Done -----------------------------------------------------
@@ -152,8 +134,8 @@ echo   KOF98_CS initialization complete!
 echo  ========================================================
 echo.
 echo   [Generated]  KOF98_CS\run-kof98_cs.cmd
-echo   [Generated]  KOF98_CS\.vscode\launch.json   (C# debug)
-echo   [Generated]  KOF98_CS\.vscode\tasks.json
+echo   [Generated]  .vscode\launch.json   (merged, includes KOF98_CS debug)
+echo   [Generated]  .vscode\tasks.json    (merged, includes build-kof98_cs)
 echo.
 echo   Next steps:
 echo     1. Double-click  KOF98_CS\run-kof98_cs.cmd  to launch the game
