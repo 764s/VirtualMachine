@@ -36,6 +36,8 @@ ExportedObj/
 .consulo/
 *.csproj
 !src/**/*.csproj
+!KOF98.Game/KOF98.Game.csproj
+!KOF98.CsSim/KOF98.CsSim.csproj
 *.unityproj
 *.sln
 *.suo
@@ -92,6 +94,15 @@ crashlytics-build.properties
 /KOF98/KOF98.csproj
 /KOF98/run-kof98.cmd
 /StandaloneRunner/StandaloneRunner.csproj
+/KOF98.Game/bin/
+/KOF98.Game/obj/
+/KOF98.CsSim/bin/
+/KOF98.CsSim/obj/
+/KOF98_CS/bin/
+/KOF98_CS/obj/
+/KOF98_CS/KOF98_CS.csproj
+/KOF98_CS/run-kof98_cs.cmd
+/KOF98_CS/.vscode/
 /src/**/bin/
 /src/**/obj/
 vscode-ffvm-debug/node_modules/
