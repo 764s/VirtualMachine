@@ -1,0 +1,17 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0</TargetFramework>
+    <RollForward>LatestMajor</RollForward>
+    <LangVersion>9.0</LangVersion>
+    <Nullable>disable</Nullable>
+    <RootNamespace>KOF98_CS</RootNamespace>
+    <AssemblyName>KOF98_CS</AssemblyName>
+    <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
+  </PropertyGroup>
+  <ItemGroup>
+    <Compile Include="**/*.cs" Exclude="obj/**;bin/**" />
+    <ProjectReference Include="../KOF98.Game/KOF98.Game.csproj" />
+    <ProjectReference Include="../KOF98.CsSim/KOF98.CsSim.csproj" />
+  </ItemGroup>
+</Project>
