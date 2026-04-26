@@ -1,6 +1,6 @@
 # FFVM Cross-Language Performance Comparison
 
-> Auto-generated: 2026-04-19 23:49:06
+> Auto-generated: 2026-04-26 19:14:23
 > .NET 10.0.5 | Microsoft Windows NT 10.0.26200.0 | 20 cores
 > Node.js 24.14.1 | Lua 5.1.5 | Python 3.13.2
 > 200 runs after warmup. All times in μs.
@@ -40,11 +40,11 @@ B02 is pure integer (classic Fibonacci). Each language uses its own supported ty
 
 | Benchmark | C# raw | C# | FFVM | Lua | Node.js | Python |
 |-----------|-------:|---:|-----:|----:|--------:|-------:|
-| B01_ArithLoop | 12.3 | 22.0 | 101.1 | 150.0 | 8.2 | 503.9 |
-| B02_Fibonacci | 0.4 | 0.4 | 0.4 | 0.0 | 0.4 | 0.7 |
-| B03_NestedLoop | 8.3 | 20.2 | 88.3 | 95.0 | 6.6 | 362.9 |
-| B04_Branching | 10.3 | 18.4 | 245.4 | 175.0 | 7.8 | 673.0 |
-| B05_Accumulator | 22.1 | 28.4 | 231.7 | 235.0 | 19.7 | 1372.5 |
+| B01_ArithLoop | 10.8 | 20.7 | 91.9 | 110.0 | 8.6 | 470.7 |
+| B02_Fibonacci | 0.4 | 0.4 | 0.5 | 0.0 | 0.4 | 0.7 |
+| B03_NestedLoop | 8.3 | 18.3 | 83.0 | 95.0 | 6.7 | 365.9 |
+| B04_Branching | 11.3 | 16.8 | 258.0 | 220.0 | 7.6 | 679.8 |
+| B05_Accumulator | 22.0 | 27.3 | 236.9 | 255.0 | 19.7 | 1429.9 |
 
 ### Relative to C# (1.00x)
 
@@ -54,11 +54,11 @@ B02 is pure integer (classic Fibonacci). Each language uses its own supported ty
 
 | Benchmark | C# raw | C# | FFVM | Lua | Node.js | Python |
 |-----------|-------:|---:|-----:|----:|--------:|-------:|
-| B01_ArithLoop | 0.56x | 1.00x | 4.60x | 6.82x | 0.37x | 22.90x |
-| B02_Fibonacci | 1.00x | 1.00x | 1.00x | 0.00x | 1.00x | 1.75x |
-| B03_NestedLoop | 0.41x | 1.00x | 4.37x | 4.70x | 0.33x | 17.97x |
-| B04_Branching | 0.56x | 1.00x | 13.34x | 9.51x | 0.42x | 36.58x |
-| B05_Accumulator | 0.78x | 1.00x | 8.16x | 8.27x | 0.69x | 48.33x |
+| B01_ArithLoop | 0.52x | 1.00x | 4.44x | 5.31x | 0.42x | 22.74x |
+| B02_Fibonacci | 1.00x | 1.00x | 1.25x | 0.00x | 1.00x | 1.75x |
+| B03_NestedLoop | 0.45x | 1.00x | 4.54x | 5.19x | 0.37x | 19.99x |
+| B04_Branching | 0.67x | 1.00x | 15.36x | 13.10x | 0.45x | 40.46x |
+| B05_Accumulator | 0.81x | 1.00x | 8.68x | 9.34x | 0.72x | 52.38x |
 
 ---
 

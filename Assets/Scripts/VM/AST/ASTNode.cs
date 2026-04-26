@@ -420,6 +420,8 @@ namespace FFVM.AST
         public bool IsOverride { get; }
         /// <summary>DX8: External function declaration — declares a host-provided syscall with parameter metadata. Body is null.</summary>
         public bool IsExternal { get; }
+        /// <summary>VOM2 Phase2: Function is annotated <c>@readonly</c> / <c>@static_readonly</c>. Compiler rejects module-variable writes; required by <c>VMEngine.StaticReadOnlyCall</c>.</summary>
+        public bool IsReadOnly { get; set; }
         /// <summary>DX9: 1-based line of the 'external' keyword token. 0 if not external.</summary>
         public int ExternalLine { get; set; }
         /// <summary>DX9: 1-based column of the 'external' keyword token. 0 if not external.</summary>

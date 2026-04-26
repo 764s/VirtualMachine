@@ -112,6 +112,7 @@ namespace FFVM
         private readonly int[] _pairedSlots; // Paired (release) slot for each syscall, -1 = no pair
         private readonly bool[] _requiresCleanup; // True if syscall must be wrapped in using/defer
         private readonly SyscallSignature[] _signatures; // LSP6: parameter/return/description metadata
+        private readonly bool[] _isReadOnly; // VOM3 Phase2: syscall declared safe inside ReadOnlyCall
 
         public SyscallTable()
         {
@@ -120,6 +121,7 @@ namespace FFVM
             _pairedSlots = new int[VMConstants.MaxSyscalls];
             _requiresCleanup = new bool[VMConstants.MaxSyscalls];
             _signatures = new SyscallSignature[VMConstants.MaxSyscalls];
+            _isReadOnly = new bool[VMConstants.MaxSyscalls];
             for (int i = 0; i < VMConstants.MaxSyscalls; i++)
                 _pairedSlots[i] = -1;
         }
@@ -128,8 +130,10 @@ namespace FFVM
         /// Register a syscall handler at a specific slot.
         /// E002: Throws if slot is already occupied by a different syscall (collision detection).
         /// Re-registering the same name is allowed (acts as Replace for hot-swap).
+        /// VOM3 Phase2: <paramref name="isReadOnly"/>=true marks the syscall as safe to invoke
+        /// from inside <see cref="VMEngine.ReadOnlyCall"/>; default false preserves legacy behavior.
         /// </summary>
-        public void Register(int slot, string name, SyscallHandler handler)
+        public void Register(int slot, string name, SyscallHandler handler, bool isReadOnly = false)
         {
             if (slot < 0 || slot >= VMConstants.MaxSyscalls)
                 throw new ArgumentOutOfRangeException(nameof(slot));
@@ -139,6 +143,7 @@ namespace FFVM
                     $"Choose a different slot.");
             _handlers[slot] = handler;
             _names[slot] = name;
+            _isReadOnly[slot] = isReadOnly;
         }
 
         /// <summary>
@@ -169,6 +174,17 @@ namespace FFVM
             if (slot < 0 || slot >= VMConstants.MaxSyscalls)
                 return null;
             return _names[slot];
+        }
+
+        /// <summary>
+        /// VOM3 Phase2: returns true if the syscall registered at <paramref name="slot"/>
+        /// was declared @readonly via <see cref="Register"/> and may execute inside
+        /// <see cref="VMEngine.ReadOnlyCall"/>. Out-of-range slot returns false.
+        /// </summary>
+        public bool IsReadOnly(int slot)
+        {
+            if (slot < 0 || slot >= VMConstants.MaxSyscalls) return false;
+            return _isReadOnly[slot];
         }
 
         /// <summary>

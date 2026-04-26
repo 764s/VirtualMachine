@@ -17,6 +17,7 @@ namespace FFVM.Compiler
         Func, Var, Const, If, Else, While, For, Return,
         Wait, WaitFor, Yield, Defer, Using,
         True, False, Struct, Include, Export, Inline,
+        ReadOnly,  // VOM2 Phase2: @readonly / @static_readonly modifier
         Enum,
         Public, Private, Override, External,
 
@@ -262,6 +263,11 @@ namespace FFVM.Compiler
                 return new Token(TokenType.Export, "@export", line, col);
             if (word == "inline")
                 return new Token(TokenType.Inline, "@inline", line, col);
+            // VOM2 Phase2: @readonly and @static_readonly are aliases for the read-only contract.
+            // Phase2 only enforces "no module-state writes"; the static_readonly distinction (no
+            // cross-instance reads either) collapses into the same flag for now.
+            if (word == "readonly" || word == "static_readonly")
+                return new Token(TokenType.ReadOnly, "@" + word, line, col);
 
             return new Token(TokenType.Error, $"Unknown annotation '@{word}' at {line}:{col}", line, col);
         }

@@ -1,9 +1,28 @@
-﻿# FFEditor 胶水执行器与技能虚拟机：阶段性总结
+# FFEditor 胶水执行器与技能虚拟机：阶段性总结
 
 > 本文是项目的单一入口文档。
 > 详细背景与理想目标见 [Reference/VM_Background.md](Reference/VM_Background.md)。
 > 核心架构决策详见 [Reference/VM_Core_Decisions.md](Reference/VM_Core_Decisions.md)。
 > 实现状态、性能记录与缺口见 [Reference/VM_Implementation_Record.md](Reference/VM_Implementation_Record.md)。
+
+---
+
+## ✅ 架构转向（已完成，进入维持期）
+
+“VM 即 C# 对象”心智转向已按 VOM1-VOM11 主链完成并收口。详见：
+
+- 转向定稿：[Discussion/D_VM_ObjectModel_Transition.md](Discussion/D_VM_ObjectModel_Transition.md)
+- 理想形态与差距：[Discussion/D_VM_ObjectModel_IdealAndGap.md](Discussion/D_VM_ObjectModel_IdealAndGap.md)
+
+**核心结构（五对象）**：`VMDef` / `CPUData`（执行机，含临时池）/ `VMData`（业务持久态）/ `HostBindings` / `VMInstance`(handle façade) + `InstancePool`(SoA)。
+
+**调用契约（四档静态调用）**：`VMEngine.YieldCall` / `Call` / `ReadOnlyCall` / `StaticReadOnlyCall`，宿主 ABI 统一为 `Span<Number>` 中介的 `Arguments` / `ReturnSlot` ref struct。
+
+**性能天花板**（详见转向定稿）：单次 15-230 ns，batch 摊销后基本回到原始需求成本。
+
+**与本文关系**：与新心智冲突的历史叙述将随推进逐步整理。
+
+---
 
 ### 实现流程
 
@@ -99,202 +118,113 @@ Docs/
 
 ## 语言特性
 
-### 当前语言能力
+完整能力清单与 Lang-1~18 实现条目见 [Reference/FFS_Language_Capabilities.md](Reference/FFS_Language_Capabilities.md)。  
+语法规范见 [Reference/FFS_Syntax.md](Reference/FFS_Syntax.md)，速查见 [Reference/FFS_QuickRef.md](Reference/FFS_QuickRef.md)。
 
-| 分类 | 能力 |
-|------|------|
-| 流程控制 | `if`/`else`、`while`、`for`、`wait N`、`wait_for(id)` |
-| 函数 | `func`、`entry`、多参数、可选参数默认值、返回值、递归、CALL/RET + CALL_LEAF/RET_LEAF |
-| 结构体 | `struct` 编译期拍平、嵌套 struct、字面量构造 `TypeName { field: expr }` |
-| 枚举 | `enum Name { A, B = expr, C }` 语法糖 → 编译期命名整数常量 |
-| 变量 | `var`/`const`、模块级变量、扩展寄存器溢出 |
-| 模块 | `include "path"`、`include "path" as Alias`、`private`/`public`/`override` 可见性 |
-| 跨实例 | `@export` 导出、XCALL/XLOAD_MVAR/XSTORE_MVAR、`svc.member` 统一语法 |
-| Cleanup | `using SomeCall(args) { body }`、`defer { body }`、超时保护 |
-| 运算 | 算术、比较、逻辑、位运算（`& \| ^ ~ << >>`） |
-| 字符串 | 常量字符串字面量（ROM，不支持拼接） |
-| 优化 | 常量折叠、Peephole、LICM、CMP-immediate、SWITCH 跳转表、内联（模块内+跨模块+深度链式）、FORLOOP 超级指令、指令压缩 4B |
-| 调试 | 源码映射、符号表、断点/单步/变量查看、DAP 协议、VS Code 扩展 |
-| 语言服务 | LSP 诊断、补全、hover、definition、references、rename、signatureHelp、语义染色、依赖图、全项目诊断 |
-| 分发 | 独立 .NET 类库（netstandard2.1 + net8.0）、CLI 工具、单文件发布 |
-
-### 实现状态概要
-
-> 详细实现状态表见 [Reference/VM_Implementation_Record.md](Reference/VM_Implementation_Record.md)
-
-- **全链路完成**：源码 → Lexer → Parser → AST → BytecodeCompiler → VMProgram → VMWorld.Tick → 执行
-- **测试**：2140 项 Assert 全部通过（114 TW + 1302+ Compiler + 44 Perf + 18 FFS + 51 Debug + 97 DAP + 514 LSP）
-- **性能**：编译脚本 5-7x vs C#，与 Lua 5.4 同量级，已实施 19 项优化
+实现状态：全链路完成（源码 → Lexer → Parser → AST → BytecodeCompiler → VMProgram → VMWorld.Tick → 执行），约 2140 项 Assert 全通过（详见 [Reference/VM_Implementation_Record.md](Reference/VM_Implementation_Record.md)），编译脚本 5-7x vs C#，与 Lua 5.4 同量级。
 
 ---
 
 ## 串行需求列表
 
-> **阅读指南**：
-> - 本节为项目唯一的串行执行计划，所有任务严格串行推进。
-> - ✅ = 已完成，⏳ = 待执行，⚪ = 被外部前置条件阻塞。
-> - 展望项（暂无排期）的完整索引见 [Outlook_And_Risks.md](Plan/Outlook_And_Risks.md)。
+> ✅ = 已完成，⏳ = 待执行，⚪ = 被外部前置条件阻塞。
+> 完整历史详情见 [Reference/VM_Implementation_Record.md](Reference/VM_Implementation_Record.md)；展望索引见 [Plan/Outlook_And_Risks.md](Plan/Outlook_And_Risks.md)。
+> 本节按 **特性区 / 优化区 / 语言服务器区** 三分。
 
 ---
 
-### A. 已完成阶段（Steps 1–9 + 调试 + CI）
+### 特性区
 
-下表按实际执行顺序列出所有已完成步骤。
+#### 已完成
 
-| # | 步骤 | 关键产出 | 测试数 | 详情 |
-|---|------|---------|--------|------|
-| 1 | VMInstanceState Cleanup 字段 | blittable struct + CleanupStack | — | — |
-| 2 | TreeWalker defer + Kill 验证 | Phase A 通过 | — | — |
-| 3 | 最小 7 指令字节码解释循环 | VMWorld.Tick | — | — |
-| 4 | 字节码 Phase A+B 全部验证 | **曳光弹成立** | — | [TracerBullet_Checklist](Plan/TracerBullet_Checklist.md) |
-| — | V1 GC 精确验证 | 100 Tick 0 bytes alloc | — | [D_TracerBullet §6](Discussion/D_TracerBullet.md#6-验证门禁与通过条件) |
-| — | V2 回滚正确性验证 | Syscall 序列 bit-exact | — | [D_TracerBullet §6](Discussion/D_TracerBullet.md#6-验证门禁与通过条件) |
-| 5 | MOVE/JUMP/比较/布尔 | 19 条 Phase 2 指令 | — | — |
-| — | V3 单实例性能基准 | 3.8x vs C# | — | [D_TracerBullet §6](Discussion/D_TracerBullet.md#6-验证门禁与通过条件) |
-| — | V4 N 实例吞吐上限 | 128 实例 = 0.391ms | — | [D_TracerBullet §6](Discussion/D_TracerBullet.md#6-验证门禁与通过条件) |
-| 6 | Lexer + Parser + BytecodeCompiler | 端到端文本→字节码→执行 | C01-C22 | — |
-| — | 自动化性能基准 B01-B05 | 编译脚本 5-7x ratio | — | [D_TracerBullet §6](Discussion/D_TracerBullet.md#6-验证门禁与通过条件) |
-| 7 | using + Paired Syscall (C1-C3, G1-G2) | 理想 Cleanup 模式 | — | [Step7](Plan/Step7_Using_PairedSyscall_Checklist.md) |
-| 8 | 函数调用 + 调用栈 (F1-F3) | CALL/RET_FUNC + GC/回滚验证 | 279 | [Step8](Plan/Step8_FunctionCall.md) |
-| 9 | 结构体编译期拍平 (S1-S3) | struct → 连续寄存器 | 303 | [Step9](Plan/Step9_StructFlatten.md) |
-| — | Step 10 前置 (C4+G6) | requires_cleanup + Cleanup 块禁 wait | 315 | [Step10_Pre](Plan/Step10_Pre_CompilerSemanticChecks.md) |
-| — | F4 + 自然优化 + 调试 Phase 1 | 寄存器生命周期 + O4/O5/O7/O3 + DBG1/DBG2 | 361 | [Step_F4](Plan/Step_F4_RegisterLifecycle.md) |
-| — | 调试 Phase 2 (Gate 0) | ScriptDebugger 命令行调试 | 412 | [Phase2](Plan/Step_Debug_Phase2.md) |
-| — | GR1 CI 构建矩阵 | float + Fix64 双模式自动验证 | 412×2 | [GR1](Plan/Step_GR1_CI_BuildMatrix.md) |
-| — | 调试 Phase 3A (Gate 1) | DAP Server 核心 + VS Code 扩展 | 470 | [Phase3A](Plan/Step_Debug_Phase3A_DAP.md) |
-| — | 调试 Phase 3B (Gate 2) | DAP 单步 next/stepIn/stepOut | 505 | [Phase3B](Plan/Step_Debug_Phase3B_DAP_SingleStep.md) |
-| — | LSP Phase 4 | LSP Server 核心 + 实时诊断 | 546 | [Phase4](Plan/LSP/Step_LSP_Phase4.md) |
-| — | LSP4 符号分析 | documentSymbol + hover + definition + references | 586 | [LSP4](Plan/LSP/Step_LSP4_Symbols.md) |
-| — | LSP5 代码补全 | textDocument/completion | 624 | [LSP5](Plan/LSP/Step_LSP5_Completion.md) |
-| — | B3 Tier 1 (O1+O2) | OpCode 连续编号 + unsafe fixed | 624 | [B3-T1](Plan/Step_B3_Optimization_Tier1.md) |
-| — | B-R1 FFScript 命名 | `.vm` → `.ffs` 统一 | 624 | [B-R1](Plan/Step_R1_FFScript_Rename.md) |
-| — | B-α1 LSP6 Syscall 声明 | .ffvm.d.json + 补全增强 | 644 | [B-α1](Plan/LSP/Step_B_Alpha1_LSP6_SyscallDecl.md) |
-| — | B-α2 LSP7 参数提示 | signatureHelp | 676 | [B-α2](Plan/LSP/Step_B_Alpha2_LSP7_SignatureHelp.md) |
-| — | B-β1 O6 Peephole | 自赋值消除 + NOP 压缩 | 676 | [B-β1](Plan/Step_B_Beta1_O6_Peephole.md) |
-| — | B-β2 FO1 叶函数 | CALL_LEAF/RET_LEAF | 700 | [B-β2](Plan/Step_B_Beta2_FO1_LeafFunction.md) |
-| — | B-β3 O9 活跃链表 | ActiveList + swap-remove O(1) | 711 | [B-β3](Plan/Step_B_Beta3_O9_ActiveList.md) |
-| — | B-γ1 FO6 自适应窗口 | 嵌套 ~3→~6 | 721 | [B-γ1](Plan/Step_B_Gamma1_FO6_AdaptiveWindow.md) |
-| — | B-γ2 FF5 非 entry defer | Kill 逐层展开 | 763 | [B-γ2](Plan/Step_B_Gamma2_FF5_NonEntryDefer.md) |
-| — | B-γ3 BM1 Benchmark | B06 FuncCall + CI 基线 | 795 | [B-γ3](Plan/Step_B_Gamma3_BM1_Benchmark.md) |
-| — | B-γ4 O15 热循环 | SENTINEL，VM 时间 -32%~-80% | 795 | [B-γ4](Plan/Step_B_Gamma4_O15_HotLoop.md) |
-| — | B-γ7 SN1 嵌套结构体 | 递归拍平 + 循环引用检测 | 884 | [B-γ7](Plan/Step_B_Gamma7_SN1_NestedStruct.md) |
-| — | B-γ9 STR1 常量字符串 | StringConstants ROM | 913 | — |
-| — | B-δ1~δ5 | O10+SO1+FF3+SN2+C5 | 1007 | 各步骤子文档 |
+- **A 阶段**（Steps 1-9 + 调试 + CI）：曳光弹建立、字节码核心、Lexer/Parser、Cleanup（using/defer）、函数调用、结构体、寄存器生命周期、调试 Phase 1-3B、LSP Phase 4-5、CI 双模式矩阵 — 全部 ✅
+- **B 阶段**（B-α/β/γ/δ 26 步）：Tier1 / Peephole / 叶函数 / 活跃链表 / 嵌套结构体 / 字符串 / 自适应窗口 / 非 entry defer / 热循环 / Benchmark — 全部 ✅
+- **Lang 系列**（Lang-1~18，仅 Lang-4 暂缓）：模块变量 / include / 黑板 / @export / XCALL / 内联 / 枚举 / 位运算 / 可见性 / override / 别名 — 全部 ✅
+- **D 分发**：DIST-1/2/3/8/9/10 — 全部 ✅
 
-**B 阶段全部完成。1007 项 Assert × 2 模式全通过。**
+> 详细条目与计划链接见 [Reference/FFS_Language_Capabilities.md](Reference/FFS_Language_Capabilities.md)、[Reference/VM_Implementation_Record.md](Reference/VM_Implementation_Record.md)。
+
+#### 待执行（C. 宿主集成侧 — 生产必经路径）
+
+部署架构决策详见 [Step_C0_DeploymentArchitecture.md](Discussion/Step_C0_DeploymentArchitecture.md)。
+
+| 序号 | 状态 | 内容 | 前置条件 |
+|------|------|------|----------|
+| C0 | ✅ | 部署架构决策（VM 分配策略、多实例交互、数据读取） | — |
+| C1 | ⚪ | 真实 Syscall 接入 ECS（stub → 真实宿主实现） | 宿主 ECS 就绪 |
+| C2 | ⚪ | V5 帧内 Profiler 验证（含真实 ECS 交互开销） | C1 |
+| C3 | ⚪ | 技能资源管线（.ffs 加载/编译/缓存/热更新） | C1 |
+| C4 | ⏳ | Handle64 批处理（句柄化多目标数据流转） | C1 |
+| C5 | ⚪ | 帧同步集成验证（真实网络环境快照/回滚） | C1+C2 |
+| C6 | ⏳ | 编辑器流程图投影（AST → 结构化流程图主视图） | C2 |
+
+#### 转向落地（VOM 系列 — 当前架构转向高优先级）
+
+按 [D_VM_ObjectModel_IdealAndGap §四](Discussion/D_VM_ObjectModel_IdealAndGap.md) 提出的 S1-S9 序列推进；总入口 [Step_VOM_Overview.md](Plan/Step_VOM_Overview.md)。
+
+| 序号 | 状态 | 内容 | 涵盖 S | 前置 |
+|------|------|------|--------|------|
+| VOM1 | ✅ | [VMInstanceState 切分 + MethodHandle 缓存](Plan/Step_VOM1_StateSplit.md) | S1 + S2 | — |
+| VOM2 | � | [Arguments/ReturnSlot ABI + StaticReadOnlyCall + @readonly](Plan/Step_VOM2_CallABI.md) | S3 + S4 | VOM1 |
+| VOM3 | � | [TransientInstancePool + Call/ReadOnlyCall + 运行期 ReadOnly 防护](Plan/Step_VOM3_CPUDataPool.md)（关键里程碑） | S5 | VOM2 |
+| VOM4 | 🟢 | [YieldCall + YieldHandle](Plan/Step_VOM4_YieldCall.md) | S6 | VOM3 |
+| VOM5 | 🟢 | [HostBindings 实例化 + VMInstance façade](Plan/Step_VOM5_HostBindings_Facade.md) | S7 + S8 | VOM3 / VOM4 |
+| VOM6 | 🟢 | [Batch 调用入口 + 摊销基准](Plan/Step_VOM6_Batch.md) | S9 | VOM3 |
+| VOM7 | 🟢 | [CPUData / VMData / MVarRegisters 类型加法](Plan/Step_VOM7_CPUData_VMData_Types.md) | 妥协 A.1 | VOM6 |
+| VOM8 | 🟢 | [VMInstanceState 包装 + VOM8a 内部 ref 局部化](Plan/Step_VOM8_FieldMigration_Engine.md) | 妥协 A.2 | VOM7 |
+| VOM9 | 🟢 | [VMInstanceView pass-through API + ExecuteInstance dual-ref](Plan/Step_VOM9_SoA_SyscallBreak.md)（Phase 1+2+4-minimal；Phase 3 取消；Phase 4-full 移交 VOM-Tail） | 妥协 A.3 | VOM8 |
+| VOM10 | 🟢 | [façade 精简 + ModuleVar 清理](Plan/Step_VOM10_Facade_ModuleVar_Cleanup.md)（B.4 / C.2 推迟见 Overview §八 D5/D6） | — | VOM9 |
+| VOM11 | 🟢 | [Lazy Rent Reset](Plan/Step_VOM11_LazyRentReset.md) — 妥协 B 消除（B08-equiv 1.29 ns / −85%；F1/F2 −10 ns；P03 alloc=0） | 妥协 B | VOM10 |
 
 ---
 
-### B-ε/ζ/η 优化串行计划 ✅（全部完成）
+### 优化区
 
-- **B-ε**（追平 Lua，4/4 ✅）：fixed pin + Compare&Branch fusion + const/DCE + FORLOOP 超级指令
-- **B-ζ**（分支优化，3/3 ✅）：LICM + CMP-immediate + SWITCH 跳转表
-- **B-η**（指令压缩 ✅）：16B → 4B（O8-1~O8-3/O8-5 ✅，O8-4 临时妥协 ⏸）
+#### 已完成
 
----
+- **B-ε**（追平 Lua，4/4）：fixed pin + Compare&Branch fusion + const/DCE + FORLOOP 超级指令
+- **B-ζ**（分支优化，3/3）：LICM + CMP-immediate + SWITCH 跳转表
+- **B-η**（指令压缩）：16B → 4B（O8-1~3, O8-5 ✅；O8-4 临时妥协 ⏸）
+- 共 **19 项优化**已实施，详见 [Reference/VM_Implementation_Record.md](Reference/VM_Implementation_Record.md) 与 [Reference/VM_Optimization_Outlook.md](Reference/VM_Optimization_Outlook.md)
 
-### Lang. 语言需求实现（SK14 + Q4）
+#### 未实施
 
-> **来源**：SK14 — FFS 语言需求整合 + Q4 服务脚本设计
-> **原则**：优先理想方案。任何语言层改动必须运行 B01-B06 benchmark 确认无回归。
-
-| 序号 | 步骤 | 状态 | 内容 | 复杂度 |
-|------|------|------|------|--------|
-| Lang-1 | 模块变量 (L1) | ✅ | Parser 顶层 `var`/`const` + 保留寄存器段 | ⭐⭐ |
-| Lang-1.1a | MaxRegisters 配置化 | ✅ | VMConstants 派生常量 | ⭐ |
-| Lang-1.1b | 扩展寄存器 | ✅ | LOAD_XREG/STORE_XREG 零开销溢出 | ⭐⭐ |
-| Lang-2 | include (L2) | ✅ | 预处理器递归展开 + 重定义规则 | ⭐⭐ |
-| Lang-3 | 黑板 Syscall | ✅ | Get/SetBlackboard 标准 Syscall | ⭐ |
-| *Lang-4* | *跨模块共享变量* | *⏳* | *按需触发（黑板瓶颈时）* | *⭐⭐⭐* |
-| Lang-6 | XCALL 基线 | ✅ | XCALL + XLOAD_MVAR + XSTORE_MVAR + @export | ⭐⭐⭐ |
-| Lang-7 | 自动退化 + VMConfig | ✅ | getter/setter 退化 + XCallDepthPolicy | ⭐⭐ |
-| Lang-8 | 统一语法 + @inline | ✅ | `svc.member` 点号语法 | ⭐⭐⭐ |
-| Lang-9 | 深度内联 P1-P4 | ✅ | 模块内/跨模块/深度链式 | ⭐⭐⭐ |
-| Lang-10 | 导出变量默认值 | ✅ | ExportVarEntry.DefaultValue | ⭐⭐ |
-| Lang-11 | 模块级 struct 初始化 | ✅ | 模块级 struct var/const 直接初始化 | ⭐⭐ |
-| Lang-12 | @export const | ✅ | 基础类型导出常量 | ⭐ |
-| Lang-13 | 枚举 (enum) | ✅ | 语法糖 → 编译期命名整数常量 | ⭐⭐ |
-| Lang-14 | 位运算 | ✅ | `& \| ^ ~ << >>` 全链路 | ⭐⭐ |
-| Lang-15 | Include 可见性 | ✅ | public/private + origin-aware 编译 | ⭐⭐⭐ |
-| Lang-16 | Override 关键字 | ✅ | 显式跨文件替换 | ⭐⭐ |
-| Lang-17 | Include As 别名 | ✅ | `include "path" as Alias` | ⭐⭐⭐ |
-| Lang-18 | Override Alias | ✅ | `override func Alias.Name()` | ⭐⭐ |
+O11-O14 运行时优化、FO2 尾调用、FO3 小函数内联。无强排期。
 
 ---
 
-### DX. 开发体验改进
+### 语言服务器区
 
-| 序号 | 步骤 | 状态 | 内容 | 复杂度 |
-|------|------|------|------|--------|
-| DX4-P0 | LSP workspace | ✅ | rootUri + .ffvm.d.json 自动发现 | ⭐⭐ |
-| DX4-P1 | .ffproj 项目文件 | ✅ | ProjectFile + CompositeFileResolver | ⭐⭐⭐ |
-| DX4-P2 | CLI 项目编译 | ✅ | `ffvm-cli init/compile/run --project` | ⭐⭐ |
-| DX4-P3 | 跨文件符号 | ✅ | 合并 AST + 跨文件 definition/references | ⭐⭐⭐ |
-| DX4-P4 | LSP 辅助创建 .ffproj | ✅ | workspace/applyEdit 自动创建 | ⭐⭐ |
-| DX5 | 重命名 + 语义染色 | ✅ | rename + semanticTokens/full + Include 导航 | ⭐⭐⭐ |
-| DX6 | Include 重命名 | ✅ | willRenameFiles 自动更新引用 | ⭐⭐ |
-| DX7 | AST 精确位置 | ✅ | 字段/类型注解精确位置追踪 | ⭐⭐ |
-| DX8 | external func | ✅ | 无体声明 + 跨文件错误 + 表达式染色 | ⭐⭐⭐ |
-| DX9 | 语义染色改进 | ✅ | 10 类 token 染色 | ⭐⭐ |
-| R1 | LSP 架构重构 | ✅ | AstWalker + DocumentStore，4100→3780 行 | ⭐⭐ |
-| E003 | 紧急修复 | ✅ | 枚举引用 + didClose | ⭐⭐ |
-| E004 | 模块级符号导航 | ✅ | 模块变量完整 LSP 支持 | ⭐⭐ |
-| DX10 | 依赖图 + 全项目诊断 | ✅ | Include 依赖图 + RecompileDependents | ⭐⭐⭐ |
-| DX11 | VFS + Rename 状态 | ✅ | DocumentStore.RenameUri + 连续重命名修复 | ⭐⭐ |
-| DX12 | 后台编译调度 | ⚪ | debounce + 取消 + 缓存（远期待激活） | ⭐⭐ |
-| DX13 | 参数 LSP 完整支持 | ✅ | KL-01 参数引用含声明位置 + KL-02 参数重命名 + 声明位置定义精确化 + 签名悬停。DX13-01~09（16 asserts）。计划 → [Step_DX13_ParameterLsp](Plan/LSP/Step_DX13_ParameterLsp.md)　讨论 → [D_LspUsabilityAudit](Discussion/D_LspUsabilityAudit.md) | ⭐⭐ |
-| DX14 | Rename 完整性补全 | ✅ | KL-03 struct 字面量名计入 struct 重命名编辑（CollectReferencesWithOrigin Struct 分支追加 StructLiteralTypeRefsWalker 函数体走查）。DX14-01~05（14 asserts）。计划 → [Step_DX14_RenameCompleteness](Plan/LSP/Step_DX14_RenameCompleteness.md)　讨论 → [D_LspUsabilityAudit](Discussion/D_LspUsabilityAudit.md) | ⭐ |
-| DX15 | Private 跨文件补全过滤 | ✅ | KL-04 private func/struct/enum/var 不出现在 include 文件的 completion 中（HandleCompletion IsPrivate + IsFromOtherFile 守卫）。DX15-01~07（16 asserts）。计划 → [Step_DX15_PrivateCompletionFilter](Plan/LSP/Step_DX15_PrivateCompletionFilter.md)　讨论 → [D_LspUsabilityAudit](Discussion/D_LspUsabilityAudit.md) | ⭐⭐ |
-| DX16 | 变量引用作用域隔离 | ✅ | KL-05 同名变量引用按作用域精确匹配（FindSymbolWalker 块级作用域追踪 + ScopedIdentRefsWalker 精确声明匹配）。DX16-01~08（16 asserts），DX12-22 升级严格断言。计划 → [Step_DX16_ScopeIsolatedRefs](Plan/LSP/Step_DX16_ScopeIsolatedRefs.md)　讨论 → [D_LspUsabilityAudit](Discussion/D_LspUsabilityAudit.md) | ⭐⭐⭐ |
-| DX17 | 统一符号解析 | ✅ | 合并 SymbolAtPosition + FindDefinitionLocation → ResolvedSymbol。HandleDefinition/HandleReferences/HandleRename/HandleHover 共享 ResolveSymbol。消除 ResolveSymbolDualAst 二次查找。修复 WaitForStmt 子表达式遗漏。DX17-01~02（4 asserts）。计划 → [Step_DX17_UnifiedSymbolResolution](Plan/LSP/Step_DX17_UnifiedSymbolResolution.md)　讨论 → [D_LspStructuralAudit](Discussion/D_LspStructuralAudit.md) | ⭐⭐ |
-| DX18 | 统一引用收集 | ✅ | 8 个引用 Walker → 1 个 UnifiedRefsWalker。CollectReferencesWithOrigin 8 分支 → CollectDeclarationLocations + 统一遍历 4 分支。死代码 CollectReferences 删除。LspServer.cs −242 行（4799→4557）。656 LSP 测试全通过。计划 → [Step_DX18_UnifiedRefCollection](Plan/LSP/Step_DX18_UnifiedRefCollection.md)　讨论 → [D_LspStructuralAudit](Discussion/D_LspStructuralAudit.md) | ⭐⭐⭐ |
-| DX19 | ResolveSymbol 候选仲裁修复 | ✅ | VERIFY-01 长期回归测试保留。ResolveSymbol 从"变量强制 merged fallback"升级为"条件化候选仲裁"：per-file 有完整作用域身份（scopeFunc+declLine>0）时保留，否则 merged 接管。修复 include/main 同 line+col 冲突误跳。DX19-01~05（16 asserts）。675 LSP 测试全通过。计划 → [Step_DX19_ResolveSymbolCandidateResolution](Plan/LSP/Step_DX19_ResolveSymbolCandidateResolution.md)　讨论 → [D_ResolveSymbolCollisionTopDown](Discussion/D_ResolveSymbolCollisionTopDown.md) | ⭐⭐⭐ |
+#### 已完成（DX 系列 + 紧急修复）
 
-**Lang 系列全部完成。DX13 ✅ 完成。DX14 ✅ 完成。DX15 ✅ 完成。DX16 ✅ 完成。DX17 ✅ 完成。DX18 ✅ 完成。DX19 ✅ 完成。**
-**DX13~DX19 ALL ✅。D_LspStructuralAudit P1（DX17 统一符号解析）✅ + P2+P3（DX18 统一引用收集）✅ + 候选仲裁（DX19）✅。**
-**DX12（后台编译调度）⚪ 远期待激活。C 区间阻塞于宿主 ECS 就绪。**
-**语言易用性审查（D18）→ 7 项改进建议（UC-1~UC-7）已纳入 [Outlook §2.10](Plan/Outlook_And_Risks.md)。**
+| 序号 | 状态 | 主要产出 |
+|------|------|---------|
+| DX4-P0~P4 | ✅ | LSP workspace + .ffproj 项目文件 + CLI 项目编译 + 跨文件符号 + LSP 辅助创建 |
+| DX5~DX9 | ✅ | rename + semanticTokens + Include 重命名 + AST 精确位置 + external func + 染色改进 |
+| R1 / E003 / E004 | ✅ | LSP 架构重构（4100→3780 行）+ 紧急修复 + 模块级符号导航 |
+| DX10 / DX11 | ✅ | 依赖图 + 全项目诊断 + VFS Rename 状态修复 |
+| DX13~DX16 | ✅ | KL-01~05：参数 LSP / Rename 完整性 / Private 跨文件过滤 / 变量作用域隔离 |
+| DX17 / DX18 | ✅ | 统一符号解析（ResolvedSymbol）+ 统一引用收集（LspServer −242 行） |
+| DX19 | ✅ | ResolveSymbol 候选仲裁修复（include/main 同行列冲突） |
 
----
+详细计划与讨论文档链接见 [Reference/VM_Implementation_Record.md](Reference/VM_Implementation_Record.md)。
 
-### C. 待执行阶段（宿主集成侧 — 生产必经路径）
+#### 待执行 / 阻塞
 
-以下步骤依赖真实游戏宿主环境。部署架构决策详见 [Step_C0_DeploymentArchitecture.md](Discussion/Step_C0_DeploymentArchitecture.md)。
-
-| 序号 | 步骤 | 状态 | 内容 | 前置条件 |
-|------|------|------|------|----------|
-| C0 | 部署架构决策 | ✅ | VM 分配策略、多实例交互、数据读取 | — |
-| C1 | 真实 Syscall 接入 ECS | ⚪ | stub → 真实宿主实现 | 宿主 ECS 就绪 |
-| C2 | V5 帧内 Profiler 验证 | ⚪ | 含真实 ECS 交互开销的 Tick 耗时测量 | C1 完成 |
-| C3 | 技能资源管线 | ⚪ | .ffs 加载/编译/缓存/热更新 | C1 完成 |
-| C4 | Handle64 批处理 | ⏳ | 句柄化多目标数据流转 | C1 完成 |
-| C5 | 帧同步集成验证 | ⚪ | 真实网络环境快照/回滚 | C1+C2 完成 |
-| C6 | 编辑器流程图投影 | ⏳ | AST → 结构化流程图主视图 | C2 通过 |
-
----
-
-### D. 分发基础设施 ✅（全部完成）
-
-| 序号 | 步骤 | 状态 | 内容 |
-|------|------|------|------|
-| DIST-1 | 独立 FFVM 类库 | ✅ | `src/FFVM/FFVM.csproj` 双目标 |
-| DIST-2 | 统一 CLI | ✅ | `ffvm-cli run/compile/lsp/dap/version` |
-| DIST-3 | 单文件发布 | ✅ | PublishSingleFile 跨平台 |
-| DIST-8 | EmbeddableDapServer | ✅ | DapServerBase + attach 模式 |
-| DIST-9 | Sandbox 改造 | ✅ | 消费分发库 API |
-| DIST-10 | .NET 多版本兼容 | ✅ | 双目标 TFM + RollForward |
+- **DX12** 后台编译调度 ⚪ debounce + 取消 + 缓存（远期待激活）
+- 语言易用性审查 D18 → UC-1~UC-7 已纳入 [Outlook §2.10](Plan/Outlook_And_Risks.md)
 
 ---
 
 ## 临时妥协区
 
-| 当前妥协 | 理由 | 未来补全路径 |
+| 当前妙协 | 理由 | 未来补全路径 |
 |----------|------|-------------|
 | 开发期 float（`Number`） | 快速迭代，Fix64 调试较痛苦 | 正式测试和上线构建必须 `USE_FIXPOINT` |
 | 无编辑器 UI | 编辑器依赖稳定 AST + 真实 Syscall | C6 流程图投影（C2 通过后） |
 | 无 Handle64 批处理 | 曳光弹不涉及多目标 | C4（真实多目标业务接入前） |
 | Paired Syscall 仅无参反向调用 | 覆盖 80%+ 场景 | 如需带参反向调用扩展配对协议 |
-| 函数参数上限 = 16 | 与 Syscall 参数传递一致 | 如需更多参数扩展寄存器布局 |
+| 函数参数上限 = 16 | 与 Syscall 参数传递一致；转向后 `Arguments` ref struct 仍按此寄存器布局走 | 如需更多参数扩展寄存器布局 |
 | O8-4 Peephole 适配 ⏸ | EXTEND_AX 在 Peephole 后运行 | 未来按需消除冗余 |
 
 ---
@@ -312,7 +242,8 @@ Docs/
 | 部署架构 (MI) | MI-1~MI-5 | — |
 | 结构体 | MSV-F1 const 折叠、MSV-F2 @export struct（暂缓） | S4 ✅、SN1 ✅、SN2 ✅ |
 | Include | IA-F1 LSP、VIS-1 默认 private（暂缓） | Lang-15~18 ✅ |
-| LSP 架构 | DX12 后台编译（远期）、DX19 ResolveSymbol 候选仲裁修复 ⏳、DX13~DX16 审查改进 ✅、DX17 统一符号解析 ✅、DX18 统一引用收集 ✅ | DX10 ✅、DX11 ✅ |
+| LSP 架构 | DX12 后台编译（远期） | DX10/DX11/DX13~DX19 全 ✅ |
+| 转向落地 | S1-S9（按 [IdealAndGap](Discussion/D_VM_ObjectModel_IdealAndGap.md) 调整点序列） | — |
 
 ### 优化展望
 
@@ -331,3 +262,4 @@ Docs/
 | 外部工具对接 | DR1-DR5 | 5 | 低~极低 |
 
 > 风险降级详细措施见 [Outlook_And_Risks.md §六](Plan/Outlook_And_Risks.md#六风险降级计划目标全部--低--极低)。
+> 转向引入的新风险点（CPUData 切分回退面、临时池清理成本、HostBindings 迁移路径、只读校验与内联交互、MethodHandle hot-reload）集中记录于 [D_VM_ObjectModel_IdealAndGap §五](Discussion/D_VM_ObjectModel_IdealAndGap.md)。

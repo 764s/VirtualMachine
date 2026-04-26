@@ -87,6 +87,7 @@ namespace FFVM.Compiler
         private Dictionary<string, FuncDecl> _externalFuncs; // DX8: external func name → declaration (host-provided)
         private bool _isEntryFunction;                   // true when compiling the entry func
         private bool _isLeafFunction;                    // FO1: true when compiling a leaf func
+        private bool _isReadOnlyFunction;                 // VOM2 Phase2: true when compiling a @readonly / @static_readonly func
         private int _callerWindowSize;                   // localVarCount for current function
 
         // STR1: String constant pool (ROM)
@@ -545,7 +546,7 @@ namespace FFVM.Compiler
                 CompileFunction(entryDecl, isEntry: true);
                 int funcEndIP = CurrentIP();
                 int entryWindow = ComputeAndRemapFunctionWindow(funcStartIP, funcEndIP);
-                functionEntries.Add(new FunctionEntry(entryDecl.Name, 0, entryDecl.Parameters.Count, entryWindow, false));
+                functionEntries.Add(new FunctionEntry(entryDecl.Name, 0, entryDecl.Parameters.Count, entryWindow, false, entryDecl.IsReadOnly));
             }
 
             for (int i = 0; i < module.Functions.Count; i++)
@@ -564,7 +565,7 @@ namespace FFVM.Compiler
                 CompileFunction(f, isEntry: entryDecl == null && i == 0);
                 int funcEndIP = CurrentIP();
                 int window = ComputeAndRemapFunctionWindow(funcStartIP, funcEndIP);
-                functionEntries.Add(new FunctionEntry(f.Name, funcStartIP, f.Parameters.Count, window, isLeaf));
+                functionEntries.Add(new FunctionEntry(f.Name, funcStartIP, f.Parameters.Count, window, isLeaf, f.IsReadOnly));
             }
 
             // Lang-17: Compile aliased module functions
@@ -584,7 +585,7 @@ namespace FFVM.Compiler
                         CompileFunction(f, isEntry: false);
                         int funcEndIP2 = CurrentIP();
                         int window2 = ComputeAndRemapFunctionWindow(funcStartIP2, funcEndIP2);
-                        functionEntries.Add(new FunctionEntry(qualKey, funcStartIP2, f.Parameters.Count, window2, false));
+                        functionEntries.Add(new FunctionEntry(qualKey, funcStartIP2, f.Parameters.Count, window2, false, f.IsReadOnly));
                     }
                 }
             }
@@ -706,6 +707,7 @@ namespace FFVM.Compiler
             _deferredCleanups = new List<DeferredCleanup>();
             _isEntryFunction = isEntry;
             _isLeafFunction = !isEntry && _leafFunctions.TryGetValue(FuncKey(func), out bool lf) && lf;
+            _isReadOnlyFunction = func.IsReadOnly;
             _inCleanupBlock = false;
             _freeVarRegs = new List<int>();
             _maxVarRegUsed = VarRegBase - 1;
@@ -1364,6 +1366,12 @@ namespace FFVM.Compiler
         /// </summary>
         private void EmitStoreModuleVar(int moduleVarReg, int srcReg)
         {
+            // VOM2 Phase2: a @readonly function may not write to module state.
+            if (_isReadOnlyFunction)
+            {
+                _errors.Add($"[VOM2] @readonly function '{_currentFunctionName}' cannot write to module variable (line {_currentLine}).");
+                return;
+            }
             if (moduleVarReg >= VMConstants.MaxRegisters)
             {
                 int xidx = moduleVarReg - VMConstants.MaxRegisters;
@@ -3576,6 +3584,11 @@ namespace FFVM.Compiler
                     if (_xInlineVars != null && _xInlineVars.TryGetValue(scalarTarget.Name, out int xVarIdx))
                     {
                         int scalarValueReg = CompileExpr(assign.Value);
+                        if (_isReadOnlyFunction)
+                        {
+                            _errors.Add($"[VOM2] @readonly function '{_currentFunctionName}' cannot write to cross-module variable '{scalarTarget.Name}' (line {assign.Line}).");
+                            return scalarValueReg;
+                        }
                         Emit(OpCode.XSTORE_MVAR, xVarIdx, _xInlineSvcReg, scalarValueReg);
                         return scalarValueReg;
                     }
@@ -4282,6 +4295,11 @@ namespace FFVM.Compiler
                     return destReg >= 0 ? destReg : AllocTemp();
                 }
                 int argReg = CompileExpr(mc.Arguments[0]);
+                if (_isReadOnlyFunction)
+                {
+                    _errors.Add($"[VOM2] @readonly function '{_currentFunctionName}' cannot invoke setter '{mc.MemberName}' (line {mc.Line}).");
+                    return argReg;
+                }
                 Emit(OpCode.XSTORE_MVAR, funcEntry.DegradeMvarSlot, svcReg, argReg);
                 return argReg;
             }
@@ -4478,6 +4496,11 @@ namespace FFVM.Compiler
             }
 
             int valueReg = CompileExpr(value);
+            if (_isReadOnlyFunction)
+            {
+                _errors.Add($"[VOM2] @readonly function '{_currentFunctionName}' cannot write to cross-module variable '{svcVarName}.{memberName}' (line {line}).");
+                return valueReg;
+            }
             Emit(OpCode.XSTORE_MVAR, varIdx, svcReg, valueReg);
             return valueReg;
         }
@@ -6224,7 +6247,7 @@ namespace FFVM.Compiler
             {
                 var fe = functionEntries[i];
                 int newEntryIP = remap[fe.EntryIP];
-                functionEntries[i] = new FunctionEntry(fe.Name, newEntryIP, fe.ParamCount, fe.LocalRegCount, fe.IsLeaf);
+                functionEntries[i] = new FunctionEntry(fe.Name, newEntryIP, fe.ParamCount, fe.LocalRegCount, fe.IsLeaf, fe.IsReadOnly);
             }
 
             // B-ζ3: Rebase SWITCH jump table entries
@@ -6329,7 +6352,7 @@ namespace FFVM.Compiler
                 for (int i = 0; i < functionEntries.Count; i++)
                 {
                     var fe = functionEntries[i];
-                    functionEntries[i] = new FunctionEntry(fe.Name, remap[fe.EntryIP], fe.ParamCount, fe.LocalRegCount, fe.IsLeaf);
+                    functionEntries[i] = new FunctionEntry(fe.Name, remap[fe.EntryIP], fe.ParamCount, fe.LocalRegCount, fe.IsLeaf, fe.IsReadOnly);
                 }
 
                 // Rebase SWITCH jump table entries

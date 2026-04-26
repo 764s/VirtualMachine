@@ -155,6 +155,37 @@ namespace FFVM.Compiler
                         Advance();
                     }
                 }
+                else if (Check(TokenType.ReadOnly))
+                {
+                    // VOM2 Phase2: @readonly / @static_readonly is the leftmost modifier.
+                    // Composes with optional `@export [private|public]` (and optional `@inline`)
+                    // or just `@inline`. The function must finally be `func`.
+                    Advance(); // consume @readonly
+                    bool exported = false, inlineHint = false, priv = false;
+                    if (Check(TokenType.Export))
+                    {
+                        Advance();
+                        exported = true;
+                        if (Check(TokenType.Inline)) { Advance(); inlineHint = true; }
+                        if (Check(TokenType.Private) || Check(TokenType.Public))
+                        {
+                            priv = Check(TokenType.Private);
+                            Advance();
+                        }
+                    }
+                    else if (Check(TokenType.Inline))
+                    {
+                        Advance();
+                        inlineHint = true;
+                    }
+                    if (Check(TokenType.Func))
+                        module.Functions.Add(ParseFuncDecl(isExported: exported, isInline: inlineHint, isPrivate: priv, isReadOnly: true));
+                    else
+                    {
+                        Error($"Expected 'func' (optionally preceded by '@export'/'@inline') after '@readonly', got '{Current().Text}'");
+                        Advance();
+                    }
+                }
                 else if (Check(TokenType.Func))
                 {
                     module.Functions.Add(ParseFuncDecl());
@@ -361,7 +392,7 @@ namespace FFVM.Compiler
             return decl;
         }
 
-        private FuncDecl ParseFuncDecl(bool isExported = false, bool isInline = false, bool isPrivate = false, bool isOverride = false)
+        private FuncDecl ParseFuncDecl(bool isExported = false, bool isInline = false, bool isPrivate = false, bool isOverride = false, bool isReadOnly = false)
         {
             int line = Current().Line, col = Current().Column;
             Expect(TokenType.Func, "");
@@ -424,6 +455,7 @@ namespace FFVM.Compiler
             var body = ParseBlock();
             var decl = new FuncDecl(name, parameters, returnType, body, isPrivate, isExported, isInline, isOverride);
             decl.AliasTarget = aliasTarget;
+            decl.IsReadOnly = isReadOnly;
             decl.Line = line;
             decl.Column = col;
             AttachDocComment(decl, line);

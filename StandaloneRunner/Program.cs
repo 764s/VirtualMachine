@@ -47,5 +47,13 @@ public static class Program
         LspDatabaseQueryTests.RunAll();
         LspServerNewTests.RunAll();
         LspCoverageMatrixTests.RunAll();
+        VOM1Tests.RunAll();
+        VOM2Tests.RunAll();
+        VOM3Tests.RunAll();
+        VOM4Tests.RunAll();
+        VOM5Tests.RunAll();
+        VOM6Tests.RunAll();
+        VOM7Tests.RunAll();
+        VOM11Tests.RunAll();
     }
 }

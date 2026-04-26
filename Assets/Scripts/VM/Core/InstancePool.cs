@@ -22,6 +22,11 @@ namespace FFVM
         // Null entry = instance does not use extended registers.
         public Number[][] ExtendedRegs;
 
+        // VOM5: Per-instance host service binding (heap-allocated, ref type).
+        // SYSCALL dispatch reads Bindings[id] at runtime to resolve callbacks.
+        // Free() clears entries so dead slots don't pin GC roots.
+        public HostBindings[] Bindings;
+
         // Legacy alias: always equals ActiveListCount (kept for snapshot compat)
         public int ActiveCount { get => ActiveListCount; set => ActiveListCount = value; }
 
@@ -31,6 +36,7 @@ namespace FFVM
             FreeStack = new int[VMConstants.MaxFreeStack];
             ActiveList = new int[VMConstants.MaxInstances];
             ExtendedRegs = new Number[VMConstants.MaxInstances][];
+            Bindings = new HostBindings[VMConstants.MaxInstances];
             FreeTop = VMConstants.MaxInstances;
             ActiveListCount = 0;
 
@@ -53,7 +59,11 @@ namespace FFVM
             int slot = FreeStack[FreeTop];
 
             ref VMInstanceState inst = ref Instances[slot];
+            // VOM4: bump generation BEFORE clearing struct so we capture old value;
+            // then we re-apply incremented value after `inst = default`.
+            int newGen = inst.Generation + 1;
             inst = default;
+            inst.Generation = newGen;
             inst.InstanceId = slot;
             inst.ModuleSlot = moduleSlot;
             inst.IP = entryIP;
@@ -98,6 +108,8 @@ namespace FFVM
 
             inst.IsAlive = false;
             inst.ErrorFlag = VMError.None;
+            // VOM5: clear binding ref so dead slot doesn't pin GC roots
+            Bindings[instanceId] = null;
             FreeStack[FreeTop] = instanceId;
             FreeTop++;
         }

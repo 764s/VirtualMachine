@@ -32,14 +32,17 @@ namespace FFVM
         public readonly int ParamCount;
         public readonly int LocalRegCount; // window size: registers above r16 used by this function
         public readonly bool IsLeaf; // FO1: true if function contains no CallExpr/wait/wait_for
+        /// <summary>VOM2 Phase2: function declared <c>@readonly</c> / <c>@static_readonly</c>; required by <c>VMEngine.StaticReadOnlyCall</c>.</summary>
+        public readonly bool IsReadOnly;
 
-        public FunctionEntry(string name, int entryIP, int paramCount, int localRegCount, bool isLeaf = false)
+        public FunctionEntry(string name, int entryIP, int paramCount, int localRegCount, bool isLeaf = false, bool isReadOnly = false)
         {
             Name = name;
             EntryIP = entryIP;
             ParamCount = paramCount;
             LocalRegCount = localRegCount;
             IsLeaf = isLeaf;
+            IsReadOnly = isReadOnly;
         }
     }
 
@@ -72,6 +75,15 @@ namespace FFVM
 
         /// <summary>O15: Logical instruction count, excluding the trailing SENTINEL.</summary>
         public int InstructionCount => Instructions.Length - 1;
+
+        /// <summary>
+        /// VOM1: Monotonic version stamp. Incremented by <see cref="Invalidate"/> on hot-reload
+        /// to invalidate previously resolved <see cref="MethodHandle"/> instances. Starts at 1.
+        /// </summary>
+        public int Version { get; private set; } = 1;
+
+        /// <summary>VOM1: name → Functions[] index cache. Populated lazily by ResolveMethod.</summary>
+        private System.Collections.Generic.Dictionary<string, int> _methodIndexCache;
 
         public VMProgram(Instruction[] instructions, Number[] constants, int requiredRegisters,
             FunctionEntry[] functions = null, int[] sourceMap = null, SymbolEntry[] symbolTable = null,
@@ -123,6 +135,51 @@ namespace FFVM
             }
             entry = default;
             return false;
+        }
+
+        /// <summary>
+        /// VOM1: Resolve a function by name to a cached <see cref="MethodHandle"/>.
+        /// First call builds the dictionary cache (O(N)); subsequent calls are O(1).
+        /// Returns <see cref="MethodHandle.Invalid"/> if no function matches.
+        /// </summary>
+        public MethodHandle ResolveMethod(string name)
+        {
+            if (string.IsNullOrEmpty(name)) return MethodHandle.Invalid;
+
+            if (_methodIndexCache == null)
+            {
+                var cache = new System.Collections.Generic.Dictionary<string, int>(Functions.Length);
+                for (int i = 0; i < Functions.Length; i++)
+                {
+                    // Last-wins on duplicate names (matches TryGetFunction semantics: first-wins by index).
+                    // We use first-wins to be consistent with Functions[] linear scan order.
+                    if (!cache.ContainsKey(Functions[i].Name))
+                    {
+                        cache[Functions[i].Name] = i;
+                    }
+                }
+                _methodIndexCache = cache;
+            }
+
+            if (!_methodIndexCache.TryGetValue(name, out var index))
+            {
+                return MethodHandle.Invalid;
+            }
+
+            ref readonly var fn = ref Functions[index];
+            // ReturnCount is 1 for current FFS (single r0 return); reserved for FF4 multi-return.
+            return new MethodHandle(index, Version, fn.EntryIP, fn.ParamCount, 1);
+        }
+
+        /// <summary>
+        /// VOM1: Invalidate all previously issued <see cref="MethodHandle"/> instances.
+        /// Call after hot-reload / module-replacement. Increments <see cref="Version"/>
+        /// and clears the name cache; existing handles fail <see cref="MethodHandle.IsValid"/>.
+        /// </summary>
+        public void Invalidate()
+        {
+            unchecked { Version = Version + 1; }
+            _methodIndexCache = null;
         }
     }
 

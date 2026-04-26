@@ -1,3 +1,5 @@
+﻿using System.Diagnostics.CodeAnalysis;
+using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 
 namespace FFVM
@@ -10,7 +12,7 @@ namespace FFVM
     {
         None = 0,
 
-        // Panic errors — terminate instance immediately
+        // Panic errors 鈥?terminate instance immediately
         PanicStackOverflow = 1,
         PanicIllegalInstruction = 2,
         PanicDivideByZero = 3,
@@ -23,7 +25,10 @@ namespace FFVM
         PanicInvalidInstanceId = 8,
         PanicExportNotFound = 9,
 
-        // Soft errors — returned in register, script handles
+        // VOM3 Phase2: ReadOnly call write/yield violation
+        PanicReadOnlyViolation = 10,
+
+        // Soft errors 鈥?returned in register, script handles
         SoftSyscallFailed = 128,
         SoftContainerOverflow = 129,
     }
@@ -34,11 +39,19 @@ namespace FFVM
     [System.Flags]
     public enum VMStateFlags : byte
     {
-        None      = 0,
-        Active    = 1,
-        Killed    = 2,
-        InCleanup = 4,
-        Completed = 8,
+        None         = 0,
+        Active       = 1,
+        Killed       = 2,
+        InCleanup    = 4,
+        Completed    = 8,
+        // VOM3 Phase2: instance is executing inside a VMEngine.ReadOnlyCall.
+        // Gates STORE_MVAR / XSTORE_MVAR / STORE_XREG / non-readonly XCALL /
+        // WAIT / WAIT_FOR / non-readonly SYSCALL at runtime.
+        ReadOnlyMode = 16,
+        // VOM4: instance is currently inside a host callback from VMWorld.ExecuteInstance.
+        // Used by YieldHandle to reject reentrant Release / TickOnce / ReadReturn
+        // against the same instance while syscall host code is on the stack.
+        HostExecuting = 32,
     }
 
     /// <summary>
@@ -87,56 +100,67 @@ namespace FFVM
     }
 
     /// <summary>
-    /// Complete state of a single VM instance. Pure blittable struct for memcpy snapshot.
-    /// Size per instance ≈ MaxRegisters*8 + CallStack + CleanupStack + fields.
+    /// [VOM8] Complete state of a single VM instance, structurally split into
+    /// <see cref="CPUData"/> (execution-private: IP / Registers / CallStack /
+    /// CleanupStack / leaf return frame / per-execution flags) and
+    /// <see cref="VMData"/> (instance-persistent: identity / generation / wait
+    /// state / active-list index / module variables).
+    ///
+    /// All legacy field names are preserved as ref-returning properties so that
+    /// existing call sites 鈥?including <c>fixed (long* p = inst.Registers.Raw)</c>
+    /// pinning patterns and <c>inst.WaitCounter = N</c> assignments 鈥?keep
+    /// compiling unchanged. The wrapper is still blittable: <see cref="Cpu"/>
+    /// and <see cref="Data"/> are <c>Sequential</c> structs containing only
+    /// blittable fields and inline fixed buffers.
+    ///
+    /// VOM8 status: storage layout is now CPUData+VMData; the
+    /// <see cref="InstancePool"/> still keeps a single <c>VMInstanceState[]</c>.
+    /// VOM9 splits the pool into dual <c>Datas[]</c> + <c>Cpus[]</c> arrays,
+    /// migrates module variables off <c>NumberRegisters[ModuleVarRegBase..]</c>
+    /// onto <see cref="VMData.MVars"/>, and breaks SYSCALL signatures from
+    /// <c>(ref VMInstanceState)</c> to <c>(ref VMInstanceView)</c>.
     /// </summary>
     [StructLayout(LayoutKind.Sequential)]
     public struct VMInstanceState
     {
-        // Identity
-        public int InstanceId;
-        public int ModuleSlot;
+        // [VOM8] CPU-private execution storage (see CPUData in VMObjectModel.cs).
+        public CPUData Cpu;
 
-        // Execution state
-        public int IP;
-        public int RegisterBase;
+        // [VOM8] Persistent instance/identity storage (see VMData in VMObjectModel.cs).
+        public VMData Data;
 
-        // Wait/suspend state
-        public int WaitCounter;
-        public int WaitTargetInstanceId;
+        // ----- Legacy field-name ref-property forwards -----
+        // Each property returns a ref into the corresponding subfield of Cpu or
+        // Data, so legacy code that did `inst.IP = N`, `inst.Registers.Set(...)`,
+        // or `fixed (long* p = inst.Registers.Raw)` keeps working unchanged.
+        // No field is duplicated: the ref-property is the only way to reach the
+        // underlying storage via the legacy name.
 
-        // Call stack
-        public int CallStackDepth;
+        // Identity / persistent (VMData)
+        [UnscopedRef] public ref int InstanceId { [MethodImpl(MethodImplOptions.AggressiveInlining)] get => ref Data.InstanceId; }
+        [UnscopedRef] public ref int ModuleSlot { [MethodImpl(MethodImplOptions.AggressiveInlining)] get => ref Data.ModuleSlot; }
+        [UnscopedRef] public ref int Generation { [MethodImpl(MethodImplOptions.AggressiveInlining)] get => ref Data.Generation; }
+        [UnscopedRef] public ref int ActiveListIndex { [MethodImpl(MethodImplOptions.AggressiveInlining)] get => ref Data.ActiveListIndex; }
+        [UnscopedRef] public ref bool IsAlive { [MethodImpl(MethodImplOptions.AggressiveInlining)] get => ref Data.IsAlive; }
+        [UnscopedRef] public ref int WaitCounter { [MethodImpl(MethodImplOptions.AggressiveInlining)] get => ref Data.WaitCounter; }
+        [UnscopedRef] public ref int WaitTargetInstanceId { [MethodImpl(MethodImplOptions.AggressiveInlining)] get => ref Data.WaitTargetInstanceId; }
 
-        // FO1: Leaf function call return state (avoids CallFrame push/pop)
-        public int LeafReturnIP;
-        public int LeafRegisterBase;
-
-        // O9: Index in InstancePool.ActiveList for O(1) swap-remove
-        public int ActiveListIndex;
-
-        // Status flags
-        public VMError ErrorFlag;
-        public bool IsAlive;
-        public VMStateFlags StateFlags;
-
-        // Cleanup stack
-        public byte CleanupDepth;
-
-        // ----- Fixed-size arrays (inline for blittable memcpy) -----
-
-        // Registers: 64 Number slots
-        public NumberRegisters Registers;
-
-        // Call stack frames: 16 max depth
-        public CallStackFrames CallStack;
-
-        // Cleanup stack frames: 8 max depth
-        public CleanupFrames CleanupStack;
+        // Execution (CPUData)
+        [UnscopedRef] public ref int IP { [MethodImpl(MethodImplOptions.AggressiveInlining)] get => ref Cpu.IP; }
+        [UnscopedRef] public ref int RegisterBase { [MethodImpl(MethodImplOptions.AggressiveInlining)] get => ref Cpu.RegisterBase; }
+        [UnscopedRef] public ref int CallStackDepth { [MethodImpl(MethodImplOptions.AggressiveInlining)] get => ref Cpu.CallStackDepth; }
+        [UnscopedRef] public ref int LeafReturnIP { [MethodImpl(MethodImplOptions.AggressiveInlining)] get => ref Cpu.LeafReturnIP; }
+        [UnscopedRef] public ref int LeafRegisterBase { [MethodImpl(MethodImplOptions.AggressiveInlining)] get => ref Cpu.LeafRegisterBase; }
+        [UnscopedRef] public ref VMError ErrorFlag { [MethodImpl(MethodImplOptions.AggressiveInlining)] get => ref Cpu.ErrorFlag; }
+        [UnscopedRef] public ref VMStateFlags StateFlags { [MethodImpl(MethodImplOptions.AggressiveInlining)] get => ref Cpu.StateFlags; }
+        [UnscopedRef] public ref byte CleanupDepth { [MethodImpl(MethodImplOptions.AggressiveInlining)] get => ref Cpu.CleanupDepth; }
+        [UnscopedRef] public ref NumberRegisters Registers { [MethodImpl(MethodImplOptions.AggressiveInlining)] get => ref Cpu.Registers; }
+        [UnscopedRef] public ref CallStackFrames CallStack { [MethodImpl(MethodImplOptions.AggressiveInlining)] get => ref Cpu.CallStack; }
+        [UnscopedRef] public ref CleanupFrames CleanupStack { [MethodImpl(MethodImplOptions.AggressiveInlining)] get => ref Cpu.CleanupStack; }
     }
 
     /// <summary>
-    /// Inline fixed-size register file. MaxRegisters × Number (8 bytes each).
+    /// Inline fixed-size register file. MaxRegisters 脳 Number (8 bytes each).
     /// Uses fixed-size buffer so size auto-follows VMConstants.MaxRegisters.
     /// Number is LayoutKind.Explicit, Size=8 with long Raw at offset 0,
     /// so long* and Number* are safely interchangeable via reinterpret cast.
@@ -164,7 +188,7 @@ namespace FFVM
     }
 
     /// <summary>
-    /// Inline fixed-size call stack. 16 × CallFrame.
+    /// Inline fixed-size call stack. 16 脳 CallFrame.
     /// </summary>
     [StructLayout(LayoutKind.Sequential)]
     public struct CallStackFrames
@@ -190,7 +214,7 @@ namespace FFVM
     }
 
     /// <summary>
-    /// Inline fixed-size cleanup stack. 8 × CleanupFrame.
+    /// Inline fixed-size cleanup stack. 8 脳 CleanupFrame.
     /// </summary>
     [StructLayout(LayoutKind.Sequential)]
     public struct CleanupFrames

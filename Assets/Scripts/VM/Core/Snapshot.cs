@@ -39,12 +39,18 @@ namespace FFVM
         // Lang-1.1b: Extended register snapshots (per-instance, null = not used)
         public Number[][] ExtendedRegSnapshots;
 
+        // VOM5: per-instance host bindings snapshot (shallow ref-copy; HostBindings
+        // is itself an immutable reference once constructed). Inactive entries left
+        // null; on LoadState we clear all slots first then restore active ones.
+        public HostBindings[] BindingSnapshots;
+
         public void Init()
         {
             InstanceSnapshots = new VMInstanceState[VMConstants.MaxInstances];
             FreeStackData = new int[VMConstants.MaxFreeStack];
             ActiveListData = new int[VMConstants.MaxInstances];
             ExtendedRegSnapshots = new Number[VMConstants.MaxInstances][];
+            BindingSnapshots = new HostBindings[VMConstants.MaxInstances];
         }
     }
 
@@ -84,6 +90,9 @@ namespace FFVM
             {
                 int id = pool.ActiveList[i];
                 snap.InstanceSnapshots[id] = pool.Instances[id];
+
+                // VOM5: shallow ref-copy of per-instance bindings.
+                snap.BindingSnapshots[id] = pool.Bindings[id];
 
                 // Lang-1.1b: Deep-copy extended registers if allocated
                 var xregs = pool.ExtendedRegs[id];
@@ -125,6 +134,9 @@ namespace FFVM
                     for (int j = 0; j < VMConstants.MaxInstances; j++)
                     {
                         pool.Instances[j].IsAlive = false;
+                        // VOM5: clear bindings on all slots so dead slots don't keep
+                        // post-snapshot bindings alive (also avoids GC root pinning).
+                        pool.Bindings[j] = null;
                     }
 
                     pool.ActiveListCount = snap.FreeStackState.ActiveListCount;
@@ -135,6 +147,9 @@ namespace FFVM
                     {
                         int id = snap.ActiveListData[j];
                         pool.Instances[id] = snap.InstanceSnapshots[id];
+
+                        // VOM5: restore per-instance binding ref.
+                        pool.Bindings[id] = snap.BindingSnapshots[id];
 
                         // Lang-1.1b: Restore extended registers
                         var xsnap = snap.ExtendedRegSnapshots[id];
