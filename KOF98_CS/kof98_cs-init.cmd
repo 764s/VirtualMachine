@@ -107,8 +107,6 @@ echo [OK] Generated KOF98_CS\run-kof98_cs.cmd
 
 :: --- Step 5: Generate VS Code debug configuration -------------
 
-if not exist ".vscode" mkdir ".vscode"
-
 :: Detect TargetFramework from KOF98_CS.csproj
 set "NET_TFM=net8.0"
 for /f "tokens=*" %%L in ('findstr /i "TargetFramework" KOF98_CS\KOF98_CS.csproj') do (
