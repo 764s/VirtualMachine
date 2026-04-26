@@ -1,7 +1,7 @@
 # Step VOM9: SYSCALL ABI Cleanup（VOM8 wrapper 退役）
 
 > **位置**: 妥协 A 消除 — ABI 基础设施完成部分。
-> **状态**: ✅ 已完成（Phase 1 + Phase 2 + Phase 4-minimal）。Phase 4-full SYSCALL ABI 硬切已移交 VOM-Tail（见 [Step_VOM_Overview §八 D1](Step_VOM_Overview.md)）。
+> **状态**: ✅ 已完成（Phase 1 + Phase 2 + Phase 4-minimal）。Phase 4-full SYSCALL ABI 硬切已**接受为长期债务**（VOM-Tail D1=C，2026-04-26 决策），不再立项；详见 [Step_VOM_Overview §八 D1](Step_VOM_Overview.md)。VMInstanceView pass-through API 保留为未来重启资产。
 > **前置**: VOM8 完成（VMInstanceState 包装 + VOM8a 内部 ref 局部化）。
 > **来源**: VOMX 重规划（2026-04-26）。VOM9 perf 假说证伪后二次修订（见 §零）。
 
@@ -29,11 +29,11 @@
 | Phase | 内容 | 验收 |
 |---|---|---|
 | **Phase 1 ✅** | `VMInstanceView readonly ref struct` 加入 18 个 pass-through ref-property（VMData 侧 7 + CPUData 侧 11，每个 `[MethodImpl(AggressiveInlining)]`）。意义：SYSCALL ABI 切换时 lambda body 内 `s.Registers / s.IP / s.WaitCounter` 等无需修改（为 VOM-Tail D1 保留） | build 0 / 14 套件 PASS / EXIT=0 |
-| **Phase 2 ✅** | `ExecuteInstance(ref VMInstanceState inst)` → `ExecuteInstance(ref CPUData cpu, ref VMData vmd)`；5 callsite 迁移（VMWorld TickInstance/Tick/XCALL recursion + VMEngine InvokeOnTransient/Batch）；SYSCALL 派发处通过 `Unsafe.As<CPUData, VMInstanceState>(ref cpu)` 恢复 wrapper ref 传旧 ABI（依赖 `[StructLayout(Sequential)]` 首字段不变量；VOM-Tail D1 落地时删除该 shim） | build 0 / 14 套件 PASS / EXIT=0 / P01=55.3 ns / P02=57.2 ns |
+| **Phase 2 ✅** | `ExecuteInstance(ref VMInstanceState inst)` → `ExecuteInstance(ref CPUData cpu, ref VMData vmd)`；5 callsite 迁移（VMWorld TickInstance/Tick/XCALL recursion + VMEngine InvokeOnTransient/Batch）；SYSCALL 派发处通过 `fixed (CPUData* p = &cpu) { (VMInstanceState*)p }` 指针重解释恢复 wrapper ref 传旧 ABI（依赖 `[StructLayout(Sequential)]` 首字段不变量；VOM-Tail D7 已替换原 `Unsafe.As` shim 以兼容 Unity netstandard2.1，D1=C 后 shim 永久保留） | build 0 / 14 套件 PASS / EXIT=0 / P01=55.3 ns / P02=57.2 ns |
 | **Phase 4-minimal ✅** | 删除 `VMInstanceStateViews.cs`（VOM1 时期 `CPUDataView`/`VMDataView`/`AsCPU`/`AsVM` 死代码）；删除 `VOM1Tests.cs` VW01-VW14 共 14 条对应 assertion | build 0 / 全 PASS / EXIT=0 |
 
 - **Phase 3**（InstancePool SoA split）：整体取消。P01/P02 是单实例工作负载，AOS vs SoA 触及相同 cache line，假说证伪（见 §零）。如 VOM9-perf 调研得出多实例 Tick 强动机可独立立项 VOM12-SoA。
-- **Phase 4-full**（SYSCALL ABI 硬切）：已移交 VOM-Tail。任务列表见 [Step_VOM_Overview §八 D1](Step_VOM_Overview.md)。
+- **Phase 4-full**（SYSCALL ABI 硬切）：已接受为长期债务（VOM-Tail D1=C，2026-04-26 决策）。任务列表见 [Step_VOM_Overview §八 D1](Step_VOM_Overview.md)（已废弃，仅作历史保留）。
 
 ---
 

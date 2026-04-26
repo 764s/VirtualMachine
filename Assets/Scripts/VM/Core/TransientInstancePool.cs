@@ -71,6 +71,8 @@ namespace FFVM
         /// <summary>Return a slot to the pool. Caller must not retain refs after this.</summary>
         public void Return(int id)
         {
+            // [VOM-Tail D5] Regression guard for transient slots. See InstancePool.Free.
+            InstancePool.AssertModuleVarRegRangeIsZero(ref _slots[id], "TransientInstancePool.Return");
             _free[_top] = id;
             _top++;
         }

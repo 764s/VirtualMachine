@@ -1,7 +1,7 @@
 # Step VOM Overview: VM 对象模型转向落地总入口
 
 > **位置**: VM_Summary 串行需求列表 → 特性区 → 转向落地（S1-S9）。
-> **状态**: ✅ VOM1-VOM11 已完成（VOM8 含 VOM8a 内部 ref 局部化；VOM9 Phase 1+2+4-minimal ✅，Phase 3 取消，Phase 4-full 推迟至 VOM-Tail；VOM10 Phase A 无代码改动 + Phase B.1-B.3 ModuleVar 旧轨迁移完成，B.4 Debug 断言推迟见 §八 D5，C.2 微基准复测已由 VOM11 A.6 完成并在 §八 D6 结案；**VOM11** A.1 lazy reset + MVars 安全带 + A.4 simplified poison（fill-only）+ A.5 测试 T1-T5 12/12 PASS + A.6 重测全部落地，B08-equivalent (T4 Rent+Return) **1.29 ns/op**（−85% vs 8.8 baseline）、F1=80.3/F2=78.4 ns、P03 alloc=0）。**2026-04-26 二次修订**：VOM9 perf 假说证伪（见 VOM9 §零），契约重写，新增 §八 推迟项登记。
+> **状态**: ✅ VOM1-VOM11 + **VOM-Tail** 已完成（VOM-Tail 2026-04-26：D1 选方案 C 接受为长期债务 / D4 同接受 / D5 落地 `[Conditional("DEBUG_VM")]` 断言 / D7 修复 Unity 2022.3 编译失败 CS0122+CS1708；详见 §八）。VOM8 含 VOM8a 内部 ref 局部化；VOM9 Phase 1+2+4-minimal ✅，Phase 3 取消，Phase 4-full 已接受为长期债务（D1=C）；VOM10 Phase A 无代码改动 + Phase B.1-B.3 ModuleVar 旧轨迁移完成，B.4 Debug 断言已由 VOM-Tail D5 落地，C.2 微基准复测已由 VOM11 A.6 完成；**VOM11** A.1 lazy reset + MVars 安全带 + A.4 simplified poison（fill-only）+ A.5 测试 T1-T5 12/12 PASS + A.6 重测全部落地，B08-equivalent (T4 Rent+Return) **1.29 ns/op**（−85% vs 8.8 baseline）、F1=80.3/F2=78.4 ns、P03 alloc=0。**2026-04-26 二次修订**：VOM9 perf 假说证伪（见 VOM9 §零），契约重写，新增 §八 推迟项登记。
 > **来源**: [D_VM_ObjectModel_IdealAndGap §四 调整点](../Discussion/D_VM_ObjectModel_IdealAndGap.md)。
 > **契约源**: [D_VM_ObjectModel_Transition.md](../Discussion/D_VM_ObjectModel_Transition.md)（五对象 / 四调用契约 / 性能天花板）。
 
@@ -130,32 +130,33 @@ VOM7→8→9→10→11 严格串行；每步仅在前置完成后启动。
 
 | ID | 名称 | 阻断原因 / 根本原因 | 移交目标 | 状态 |
 |----|------|---------------------|----------|------|
-| **D1** | SYSCALL ABI 硬切：`SyscallHandler(ref VMInstanceState)` → `(ref VMInstanceView)` + VMInstanceState wrapper 退役 SYSCALL 表面 | `SyscallArgs` legacy 路径用 `unsafe VMInstanceState* _state`（Unity C# 9 / netstandard2.1），而 `VMInstanceView` 是含 `Span` 的 ref struct 不可取地址。需先决策方案 A（升级 Unity / 弃 legacy）/ B（改 SyscallHandler 用 `(ref CPUData, ref VMData)`，VOM9 Phase 1 投入失效）/ C（接受为长期债务）。推荐 C。 | **VOM-Tail**（未立项，待 Unity 升级窗口或方案决策） | 推迟 |
+| **D1** | SYSCALL ABI 硬切：`SyscallHandler(ref VMInstanceState)` → `(ref VMInstanceView)` + VMInstanceState wrapper 退役 SYSCALL 表面 | `SyscallArgs` legacy 路径用 `unsafe VMInstanceState* _state`（Unity C# 9 / netstandard2.1），而 `VMInstanceView` 是含 `Span` 的 ref struct 不可取地址。**2026-04-26 决策：选方案 C，接受为长期债务**。理由：方案 A 需 Unity 升级窗口（不在控制内），方案 B 须重写 ~150 SYSCALL handler 站点且报废 VOM9 Phase 1 投入。 | 不立项（保留为已知接受项；Phase 1 VMInstanceView pass-through API 作未来重启资产保留） | 已接受（方案 C，长期债务） |
 | **D2** | InstancePool SoA split（`Cpus[]` + `Datas[]` 物理分开） | 假说"P01/P02 通过 SoA 回收 +11 ns"已证伪。P01/P02 是单 transient 实例工作负载，AOS 与 SoA 触及相同 cache line。多实例 Tick 受益场景未被 gated。 | **取消**（如 VOM9-perf 调研得出多实例 Tick 强动机可独立立项 VOM12-SoA） | 取消 |
 | **D3** | +11 ns 性能债真因调研（VOM8 引入，VOM8a 证实为布局成本而非 ref-property 间接） | 真因疑似 (a) JIT 对 nested CPUData/VMData 结构 codegen / inlining 启发；(b) CPUData 内部字段顺序与 VOM6 flat 布局某 hot 字段 cache 偏移差异。需独立调研。 | **VOM9-perf**（未立项调研，无固定 deliverable） | 调研待启动 |
-| **D4** | VMInstanceState 类型本身退役 | 仍是 InstancePool 存储 / ScriptDebugger / DapServer / Tests 的工作类型；其 SYSCALL ABI 表面身份与 D1 绑定。D1 解锁前不退役。 | 绑定 D1 | 推迟 |
-| **D5** | VOM10 B.4：Debug 断言 `Registers.Raw[ModuleVarRegBase..]` 不再被任何热路径写入 | VOM10 已通过全工程 grep 验证 4 处迁移点之外无写入残留；新增 `[Conditional("DEBUG_VM")]` 断言收益边际，主要价值是回归保护。Compiler 中 `ModuleVarRegBase` 仍作虚拟寄存器空间分隔常量使用，断言需精确区分"指令操作数计算" vs "实际 register file 写入"。 | **VOM-Tail** 任务列表（与 D1 选 A/B 任一执行时合并实施一次性扫描） | 推迟 |
+| **D4** | VMInstanceState 类型本身退役 | 仍是 InstancePool 存储 / ScriptDebugger / DapServer / Tests 的工作类型；其 SYSCALL ABI 表面身份与 D1 绑定。D1=C 后类型永久保留。 | 绑定 D1 | 已接受（方案 C，长期债务） |
+| **D5** | VOM10 B.4：Debug 断言 `Registers.Raw[ModuleVarRegBase..]` 不再被任何热路径写入 | 已落地为 `[Conditional("DEBUG_VM")]` 单一断言入口 `InstancePool.AssertModuleVarRegRangeIsZero`，挂载于 `InstancePool.Free` 与 `TransientInstancePool.Return`。Release 零开销（call site 与 method body 由编译器移除）。与 VOM11 A.4 `DEBUG_VM_POISON` 共存（poison 哨兵被识别为合法"未触碰"值）。 | **VOM-Tail**（已完成 2026-04-26） | 已完成 |
+| **D7** | Unity 2022.3 编译失败（CS0122 `Unsafe` 不可访问 / CS1708 fixed buffer 经值返回属性访问） | VOM9 Phase 2 SYSCALL shim 用 `System.Runtime.CompilerServices.Unsafe.As`（Unity netstandard2.1 下不可访问）；XCALL 路径经 `targetInst.Registers` 值返回属性触发 CS1708。修复：(1) shim 改 `fixed (CPUData* p = &cpu) { (VMInstanceState*)p }` 指针重解释，跨平台合法；(2) `targetInst.Registers.Raw` → `targetInst.Cpu.Registers.Raw` 走字段链。两改动均零行为变更，net7+ 与 Unity 路径等价。 | **VOM-Tail**（已完成 2026-04-26） | 已完成 |
 | **D6** | VOM10 C.2：P01-P03 / B07 / B09 / B10 微基准复测，记录到 benchmark_results.md（VOM10 列） | 原计划推迟至 VOM-Tail 统一复测；后续已在 VOM11 A.6 一并完成并落库（含 P01/P02/P03 与 B09/B10、F1/F2/B08-equivalent）。 | **VOM11 A.6**（已完成） | 已完成 |
 
-### D1 附录：VOM-Tail 立项时的可执行细节
+### D1 附录：方案 C 已选定（任务清单已废弃）
 
-> 本附录从原 VOM9 Phase 4-full 任务列表迁入，作为 D1 解锁后的现成任务清单。VOM-Tail 立项时直接消费本节，无需重新设计。
+> **2026-04-26 决策**：D1 选方案 C，接受为长期债务。下方原 VOM-Tail 任务清单（T1-T7）作为历史信息保留，**不再执行**。如未来 Unity 升级窗口打开（净 5/6 + C# 11）或需要重启 D1，可直接消费本节恢复执行。
 
-**前置决策**（必须三选一）：
+**前置决策记录**（三选一，已选 C）：
 
-- **方案 A**：放弃 legacy path 支持。要求 Unity 项目升至 Unity 6 / .NET Standard 2.1+ 且开启 C# 11，或 KOF98 切换到 StandaloneRunner 模式。
-- **方案 B**：新增 `SyscallArgs(ref CPUData cpu, ref VMData vmd)` 第三构造函数 + `unsafe CPUData* _cpu; VMData* _data;` 字段，避开 ref struct 限制。代价：新 SyscallHandler delegate 签名 `(ref CPUData, ref VMData)`，VOM9 Phase 1 的 VMInstanceView pass-through API 失去用武之地，lambda body 必须改 `s.Registers` → `cpu.Registers` 等（~150 站点全量）。
-- **方案 C**（推荐）：保留 SyscallHandler ABI 不变，接受为长期债务。VOM-Tail 不立项，Overview §八 D1 / D4 长期保留为"已知接受项"。
+- **方案 A**（未选）：放弃 legacy path 支持。要求 Unity 项目升至 Unity 6 / .NET Standard 2.1+ 且开启 C# 11，或 KOF98 切换到 StandaloneRunner 模式。
+- **方案 B**（未选）：新增 `SyscallArgs(ref CPUData cpu, ref VMData vmd)` 第三构造函数 + `unsafe CPUData* _cpu; VMData* _data;` 字段，避开 ref struct 限制。代价：新 SyscallHandler delegate 签名 `(ref CPUData, ref VMData)`，VOM9 Phase 1 的 VMInstanceView pass-through API 失去用武之地，lambda body 必须改 `s.Registers` → `cpu.Registers` 等（~150 站点全量）。
+- **方案 C**（✅ 已选）：保留 SyscallHandler ABI 不变，接受为长期债务。VOM-Tail 不就 D1 立项，§八 D1 / D4 长期保留为"已知接受项"。VOM9 Phase 1 的 VMInstanceView pass-through API 保留为未来重启资产，不删除。
 
-**选 A 后的任务清单**（选 B 需重新设计任务列表）：
+**~~选 A 后的任务清单~~**（已废弃，仅作历史保留）：
 
-- [ ] **T1** `SyscallTable.SyscallHandler` 签名：`delegate void(ref VMInstanceState, ...)` → `delegate void(ref VMInstanceView, ...)`
-- [ ] **T2** `SyscallArgs` 双路径分别适配（modern 路径直接换 `ref VMInstanceView _state`；legacy 路径删除）
-- [ ] **T3** ExecuteInstance SYSCALL 派发处构造 `new VMInstanceView(ref cpu, ref vmd)` 传 handler；删除 VOM9 Phase 2 留下的 `Unsafe.As<CPUData, VMInstanceState>` shim（[VMWorld.cs](../../Assets/Scripts/VM/Core/VMWorld.cs) 派发位点）
-- [ ] **T4** PowerShell 全工程批量正则替换 `\((\s*)ref VMInstanceState (\w+)\s*\)` → `($1ref VMInstanceView $2)` 在 KOF98 / Sandbox / src/FFVM.Cli / Assets/Scripts/VM/Tests / StandaloneRunner / VMInstance façade
-- [ ] **T5** ScriptDebugger.FindStepOutIP / GetVariables / GetCallStack 三处 `ref VMInstanceState` 签名 → 推荐**保留**（这些不在 SYSCALL ABI 表面，无需改造）
-- [ ] **T6** **保留** `VMInstanceState` 类型本身（D4 不退役类型，仅退役其作为 SYSCALL ABI 表面的身份）—— 仍是 InstancePool 存储和 ScriptDebugger / DapServer / Tests 的工作类型
-- [ ] **T7** 验收：build 0 errors / 全 PASS / EXIT=0 / SYSCALL handler delegate 类型为 `(ref VMInstanceView, ...)` / 性能维持 VOM9 Phase 2 水平（不要求回收 +11 ns，该项归 VOM9-perf）
+- [ ] ~~**T1** `SyscallTable.SyscallHandler` 签名：`delegate void(ref VMInstanceState, ...)` → `delegate void(ref VMInstanceView, ...)`~~
+- [ ] ~~**T2** `SyscallArgs` 双路径分别适配（modern 路径直接换 `ref VMInstanceView _state`；legacy 路径删除）~~
+- [ ] ~~**T3** ExecuteInstance SYSCALL 派发处构造 `new VMInstanceView(ref cpu, ref vmd)` 传 handler；删除 VOM9 Phase 2 留下的 `Unsafe.As<CPUData, VMInstanceState>` shim~~ — Shim 已在 VOM-Tail D7 修复中替换为 `fixed`-pointer reinterpret（Unity 兼容，仍保留为 D1=C 桥接）
+- [ ] ~~**T4** PowerShell 全工程批量正则替换 `\((\s*)ref VMInstanceState (\w+)\s*\)` → `($1ref VMInstanceView $2)`~~
+- [ ] ~~**T5** ScriptDebugger.FindStepOutIP / GetVariables / GetCallStack 三处~~
+- [ ] ~~**T6** 保留 `VMInstanceState` 类型本身~~ — 已转为 D4=已接受
+- [ ] ~~**T7** 验收~~
 
 ---
 

@@ -449,17 +449,21 @@ namespace FFVM
                                 cpu.ErrorFlag = VMError.PanicReadOnlyViolation;
                                 return;
                             }
-                            // [VOM9 Phase 2] SYSCALL ABI is still (ref VMInstanceState).
-                            // VMInstanceState is [StructLayout(Sequential)] with Cpu as the
-                            // first field, and cpu/vmd here are refs into the same pool slot
-                            // (Phase 2 keeps single-array Pool.Instances[]). Recover the
-                            // wrapper ref via Unsafe.As on cpu — safe transition shim that
-                            // disappears in Phase 4 when SyscallHandler takes VMInstanceView.
-                            ref VMInstanceState inst = ref System.Runtime.CompilerServices.Unsafe.As<CPUData, VMInstanceState>(ref cpu);
+                            // [VOM-Tail D1=C] SYSCALL ABI remains (ref VMInstanceState) as long-term
+                            // accepted debt. VMInstanceState is [StructLayout(Sequential)] with Cpu as the
+                            // first field, and cpu/vmd here are refs into the same pool slot (single-array
+                            // Pool.Instances[]). Recover the wrapper ref via fixed-pointer reinterpret — works
+                            // identically under Unity netstandard2.1 / C# 9 (where System.Runtime.CompilerServices.Unsafe
+                            // is inaccessible) and under .NET 7+ / C# 11. Both VMInstanceState and CPUData are
+                            // unmanaged blittable structs, so the reinterpret is well-defined.
                             cpu.StateFlags |= VMStateFlags.HostExecuting;
                             try
                             {
-                                st.Invoke(op.A, ref inst);
+                                fixed (CPUData* pCpu = &cpu)
+                                {
+                                    VMInstanceState* pInst = (VMInstanceState*)pCpu;
+                                    st.Invoke(op.A, ref *pInst);
+                                }
                             }
                             finally
                             {
@@ -1130,8 +1134,11 @@ namespace FFVM
                             };
 
                             // Copy parameters: caller scratch r0..r(paramCount-1) 鈫?target scratch r0..r(paramCount-1)
+                            // [VOM-Tail D7] Access via Cpu field path: under Unity (C# 9) Registers is a value-returned
+                            // property and `targetInst.Registers.Raw` triggers CS1708 (fixed buffer must be accessed
+                            // through a local or field). Cpu.Registers.Raw is field-chain access and compiles on both paths.
                             int paramCount = exportFunc.ParamCount;
-                            fixed (long* targetRaw = targetInst.Registers.Raw)
+                            fixed (long* targetRaw = targetInst.Cpu.Registers.Raw)
                             {
                                 Number* targetRegs = (Number*)targetRaw;
                                 for (int p = 0; p < paramCount; p++)
@@ -1160,8 +1167,9 @@ namespace FFVM
 
                             // Restore caller 鈥?re-pin caller registers (may have moved if same instance)
                             // Read return value from target r0 BEFORE restoring caller
+                            // [VOM-Tail D7] Use Cpu.Registers.Raw field-chain path (avoids CS1708 under Unity C# 9).
                             Number returnVal;
-                            fixed (long* targetRaw2 = Pool.Instances[targetId].Registers.Raw)
+                            fixed (long* targetRaw2 = Pool.Instances[targetId].Cpu.Registers.Raw)
                             {
                                 returnVal = ((Number*)targetRaw2)[0];
                             }

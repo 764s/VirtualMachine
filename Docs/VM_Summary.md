@@ -172,9 +172,10 @@ Docs/
 | VOM6 | 🟢 | [Batch 调用入口 + 摊销基准](Plan/Step_VOM6_Batch.md) | S9 | VOM3 |
 | VOM7 | 🟢 | [CPUData / VMData / MVarRegisters 类型加法](Plan/Step_VOM7_CPUData_VMData_Types.md) | 妥协 A.1 | VOM6 |
 | VOM8 | 🟢 | [VMInstanceState 包装 + VOM8a 内部 ref 局部化](Plan/Step_VOM8_FieldMigration_Engine.md) | 妥协 A.2 | VOM7 |
-| VOM9 | 🟢 | [VMInstanceView pass-through API + ExecuteInstance dual-ref](Plan/Step_VOM9_SoA_SyscallBreak.md)（Phase 1+2+4-minimal；Phase 3 取消；Phase 4-full 移交 VOM-Tail） | 妥协 A.3 | VOM8 |
-| VOM10 | 🟢 | [façade 精简 + ModuleVar 清理](Plan/Step_VOM10_Facade_ModuleVar_Cleanup.md)（B.4 / C.2 推迟见 Overview §八 D5/D6） | — | VOM9 |
+| VOM9 | 🟢 | [VMInstanceView pass-through API + ExecuteInstance dual-ref](Plan/Step_VOM9_SoA_SyscallBreak.md)（Phase 1+2+4-minimal；Phase 3 取消；Phase 4-full 已接受为长期债务 D1=C，见 Overview §八） | 妥协 A.3 | VOM8 |
+| VOM10 | 🟢 | [façade 精简 + ModuleVar 清理](Plan/Step_VOM10_Facade_ModuleVar_Cleanup.md)（B.4 由 VOM-Tail D5 落地；C.2 由 VOM11 A.6 落地；见 Overview §八） | — | VOM9 |
 | VOM11 | 🟢 | [Lazy Rent Reset](Plan/Step_VOM11_LazyRentReset.md) — 妥协 B 消除（B08-equiv 1.29 ns / −85%；F1/F2 −10 ns；P03 alloc=0） | 妥协 B | VOM10 |
+| VOM-Tail | 🟢 | D1=C 接受 / D4=C 接受 / D5 Debug 断言落地 / D7 Unity 2022.3 CS0122+CS1708 编译修复（详见 [Overview §八](Plan/Step_VOM_Overview.md)） | — | VOM11 |
 
 ---
 

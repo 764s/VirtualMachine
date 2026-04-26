@@ -94,6 +94,11 @@ namespace FFVM
             if (!inst.IsAlive)
                 return;
 
+            // [VOM-Tail D5] Regression guard: after VOM10 the [ModuleVarRegBase..MaxRegisters)
+            // window of the register file MUST never be written by any opcode (module variables
+            // moved to Data.MVars). Verify on every Free under DEBUG_VM. Zero overhead in Release.
+            AssertModuleVarRegRangeIsZero(ref inst, "InstancePool.Free");
+
             // O9: Swap-remove from active list (also updates ActiveCount via alias)
             int idx = inst.ActiveListIndex;
             int last = ActiveListCount - 1;
@@ -112,6 +117,38 @@ namespace FFVM
             Bindings[instanceId] = null;
             FreeStack[FreeTop] = instanceId;
             FreeTop++;
+        }
+
+        /// <summary>
+        /// [VOM-Tail D5] Single assertion entry: verifies the module-variable region of the
+        /// register file (<c>[ModuleVarRegBase..MaxRegisters)</c>) was not touched during the
+        /// instance's lifetime. After VOM10 all four MVar opcodes (LOAD_MVAR / STORE_MVAR /
+        /// XLOAD_MVAR / XSTORE_MVAR) read/write <c>Data.MVars</c> exclusively; any non-zero
+        /// value here indicates a regression. <see cref="System.Diagnostics.ConditionalAttribute"/>
+        /// removes both call sites and method body in Release builds (no DEBUG_VM define).
+        /// </summary>
+        [System.Diagnostics.Conditional("DEBUG_VM")]
+        internal static unsafe void AssertModuleVarRegRangeIsZero(ref VMInstanceState inst, string callsite)
+        {
+            // Coexist with VOM11 A.4 DEBUG_VM_POISON: the poison sentinel
+            // 0xDEADBEEFDEADBEEF is written by TransientInstancePool.Rent before any opcode
+            // executes, so it represents "untouched", not a regression.
+            const long PoisonSentinel = unchecked((long)0xDEADBEEFDEADBEEFUL);
+            fixed (long* raw = inst.Cpu.Registers.Raw)
+            {
+                for (int i = VMConstants.ModuleVarRegBase; i < VMConstants.MaxRegisters; i++)
+                {
+                    long v = raw[i];
+                    if (v != 0L && v != PoisonSentinel)
+                    {
+                        throw new System.InvalidOperationException(
+                            $"D5 regression @ {callsite}: Registers.Raw[{i}] = 0x{v:X16} " +
+                            $"(expected 0 or poison; ModuleVarRegBase={VMConstants.ModuleVarRegBase}). " +
+                            "Some opcode wrote into the legacy module-variable register window. " +
+                            "All MVar writes must target Data.MVars after VOM10.");
+                    }
+                }
+            }
         }
     }
 }
