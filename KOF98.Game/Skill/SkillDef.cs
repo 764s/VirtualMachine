@@ -4,12 +4,10 @@ namespace KOF98.Game
 {
     /// <summary>
     /// Static definition of a skill.
-    ///
-    /// In this layer (game framework) a skill is identified by metadata +
-    /// a factory that creates an <see cref="ISkillBehavior"/> instance.
-    /// The framework does not know whether the behavior is implemented
-    /// by a CS simulation object or by a VM-instance wrapper —
-    /// both implement the same <see cref="ISkillBehavior"/>.
+    /// Identified by metadata + a factory that creates an <see cref="ISkillBehavior"/>
+    /// instance. The framework does not know whether the behavior is implemented
+    /// by a CS simulation object or by a VM-instance wrapper — both implement the
+    /// same interface.
     /// </summary>
     public class SkillDef
     {
@@ -37,47 +35,25 @@ namespace KOF98.Game
 
         // ── Layered Candidate Pool Fields ────────────────────────
 
-        /// <summary>
-        /// Stances in which this skill is a valid candidate.
-        /// Null or empty = no stance restriction.
-        /// </summary>
         public Stance[] AllowedStances;
 
-        /// <summary>
-        /// Activation priority within the candidate pool.
-        /// Numerically lower = stronger (tried first). Default = 100.
-        /// Different from legacy <see cref="Priority"/> which is used for
-        /// the fallback interrupt comparison.
-        /// </summary>
+        /// <summary>Numerically lower = stronger. Default = 100.</summary>
         public int ActivationPriority = 100;
 
-        /// <summary>
-        /// Interrupt priority — numerically lower = stronger.
-        /// A candidate may interrupt the currently active skill only if its
-        /// InterruptPriority is &lt;= the active skill's ActivationPriority.
-        /// Default = 100.
-        /// </summary>
+        /// <summary>Numerically lower = stronger. Default = 100.</summary>
         public int InterruptPriority = 100;
 
-        // ── Activation Conditions ────────────────────────────────
+        // ── Activation guard ─────────────────────────────────────
 
         /// <summary>
         /// Host-side activation guard: returns true if this skill can activate
-        /// given the character/input state. Null = always activatable (subject
-        /// to stance + interrupt filters).
-        ///
-        /// This is the C# analogue of the FFS "first-frame return" pattern:
-        /// when the future VM layer is added, a wrapper can call
-        /// VMWorld probing to mirror this check. Keeping it as a separate
-        /// host hook lets the CS simulation layer skip the probe overhead.
+        /// given the candidate context. Null = always activatable (subject to
+        /// stance + interrupt filters).
         /// </summary>
-        public Func<Character, PlayerInput, bool> CanActivate;
+        public Func<SkillActivationContext, bool> CanActivate;
 
         // ── Collision Box Frames (static action data) ────────────
-        /// <summary>
-        /// Collision box timeline for this skill's action.
-        /// Defines which boxes are active on which frames.
-        /// </summary>
+
         public CollisionBoxFrame[] CollisionFrames = Array.Empty<CollisionBoxFrame>();
 
         public SkillDef() { }
@@ -100,9 +76,8 @@ namespace KOF98.Game
     {
         public int StartFrame;
         public int EndFrame;    // Exclusive
-
         public CollisionBoxType BoxType;
-        public int GroupId;     // Attack group ID (for hitboxes)
+        public int GroupId;
         public FRect Box;
 
         public CollisionBoxFrame(int start, int end, CollisionBoxType type, int groupId, FRect box)
@@ -115,14 +90,11 @@ namespace KOF98.Game
         }
     }
 
-    /// <summary>
-    /// Type of collision box.
-    /// </summary>
     public enum CollisionBoxType : byte
     {
-        Hurtbox = 0,   // Can be hit
-        Hitbox = 1,    // Deals damage
-        Blockbox = 2,  // Block detection
-        Pushbox = 3,   // Push resolution
+        Hurtbox = 0,
+        Hitbox = 1,
+        Blockbox = 2,
+        Pushbox = 3,
     }
 }

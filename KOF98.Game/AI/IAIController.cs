@@ -1,77 +1,58 @@
 namespace KOF98.Game
 {
-    /// <summary>
-    /// Interface for AI controllers.
-    /// Each AI implementation produces PlayerInput for a character each frame.
-    ///
-    /// Extension point: AI can be implemented as:
-    /// - Host-side C# (this interface)
-    /// - In a separate VM-backed library, an AI controller that wraps a VM script instance
-    /// </summary>
+    /// <summary>Provides per-frame input for an AI-controlled character.</summary>
     public interface IAIController
     {
-        /// <summary>
-        /// Produce input for the controlled character this frame.
-        /// </summary>
-        /// <param name="scene">Current game scene for reading state.</param>
-        /// <param name="charId">ID of the controlled character.</param>
-        /// <returns>Input to apply to the character.</returns>
-        PlayerInput GetInput(GameScene scene, int charId);
+        PlayerInput GetInput(GameScene scene, int charEntity);
     }
 
-    /// <summary>
-    /// Placeholder AI that does nothing. For P2 slot when no AI is assigned.
-    /// </summary>
+    /// <summary>No-op AI — returns empty input.</summary>
     public class NullAI : IAIController
     {
-        public static readonly NullAI Instance = new NullAI();
-        public PlayerInput GetInput(GameScene scene, int charId) => PlayerInput.Empty;
+        public PlayerInput GetInput(GameScene scene, int charEntity) => PlayerInput.Empty;
     }
 
     /// <summary>
-    /// Simple dummy AI that walks toward the opponent and occasionally attacks.
-    /// Placeholder for testing — will be replaced by VM-scripted AI.
+    /// Minimal demo AI: walks toward the nearest opponent, throws an LP at
+    /// short range. Intentionally dumb — kept for sanity testing only.
     /// </summary>
     public class SimpleAI : IAIController
     {
-        private int _actionTimer;
-        private int _seed;
+        public float AttackRange = 1.0f;
+        public int AttackCooldownFrames = 30;
 
-        public SimpleAI(int seed = 42)
+        private int _cooldown;
+
+        public PlayerInput GetInput(GameScene scene, int charEntity)
         {
-            _seed = seed;
-        }
+            var w = scene.World;
+            if (!w.IsAliveSlot(charEntity)) return PlayerInput.Empty;
 
-        public PlayerInput GetInput(GameScene scene, int charId)
-        {
-            var ch = scene.Characters.Get(charId);
-            if (ch == null || !ch.IsAlive) return PlayerInput.Empty;
+            int target = w.FindNearestOpponent(charEntity);
+            if (target < 0) return PlayerInput.Empty;
 
-            var opponent = scene.Characters.FindNearestOpponent(charId);
-            if (opponent == null) return PlayerInput.Empty;
+            float selfX = w.Transform[charEntity].Position.X;
+            float targetX = w.Transform[target].Position.X;
+            float dx = targetX - selfX;
+            float dist = System.Math.Abs(dx);
 
             InputButton held = InputButton.None;
-            float dist = ch.Body.Position.HDistanceTo(opponent.Body.Position);
+            InputButton pressed = InputButton.None;
 
-            // Walk toward opponent
-            if (dist > 1.5f)
+            if (dist > AttackRange)
             {
-                held |= opponent.Body.Position.X > ch.Body.Position.X
-                    ? InputButton.Right : InputButton.Left;
+                held |= dx > 0 ? InputButton.Right : InputButton.Left;
             }
-            else
+            else if (_cooldown <= 0)
             {
-                // In range: occasionally attack using simple LCG for deterministic randomness
-                _actionTimer++;
-                _seed = (_seed * 1103515245 + 12345) & 0x7FFFFFFF; // LCG (glibc constants)
-                if (_actionTimer > 30 && (_seed % 4) == 0)
-                {
-                    held |= InputButton.LP;
-                    _actionTimer = 0;
-                }
+                held |= InputButton.LP;
+                pressed |= InputButton.LP;
+                _cooldown = AttackCooldownFrames;
             }
 
-            return new PlayerInput { Held = held, Pressed = held };
+            if (_cooldown > 0) _cooldown--;
+
+            return new PlayerInput { Held = held, Pressed = pressed };
         }
     }
 }

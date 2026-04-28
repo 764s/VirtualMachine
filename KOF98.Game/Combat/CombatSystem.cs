@@ -3,8 +3,8 @@ using System.Collections.Generic;
 namespace KOF98.Game
 {
     /// <summary>
-    /// Describes a pending hit that needs to be resolved.
-    /// Produced by skill scripts (via syscall), consumed by CombatSystem.
+    /// Describes a pending hit produced by a skill behavior, consumed by
+    /// <see cref="CombatSystem"/>. Attacker/Target are entity slot indices.
     /// </summary>
     public struct HitEvent
     {
@@ -14,7 +14,6 @@ namespace KOF98.Game
         public int DamageType;
         public float EnergyCoeff;
 
-        // ── Knockback ────────────────────────────────────────────
         public int HitstunStartFrame;
         public int HitstunDuration;
         public int HitstunLevel;
@@ -22,11 +21,10 @@ namespace KOF98.Game
 
         public float HorizKBDist;
         public int HorizKBDuration;
-        public float HorizKBSpeed;   // Speed mode (-1 = use dist mode)
+        public float HorizKBSpeed;
         public float VertKBSpeed;
         public int VertKBDuration;
 
-        // ── Self effects ─────────────────────────────────────────
         public int SelfHitstunStart;
         public int SelfHitstunDuration;
         public float SelfHorizKBDist;
@@ -35,117 +33,118 @@ namespace KOF98.Game
         public float SelfVertKBAccel;
         public float CornerKBSelfDist;
         public int CornerKBSelfDuration;
+
+        /// <summary>
+        /// Hit-pause: number of frames both attacker and target freeze on impact.
+        /// 0 = no hit-pause (legacy behavior). Stacking is max(old, new).
+        /// </summary>
+        public int HitPauseFrames;
     }
 
     /// <summary>
-    /// Combat resolution system.
-    /// Collects hit events from skill scripts and applies damage, hitstun, and knockback.
+    /// Combat resolution system. Applies pending hit events to ECS components.
     /// </summary>
     public class CombatSystem
     {
-        /// <summary>Pending hit events to process this frame.</summary>
-        public List<HitEvent> PendingHits = new();
+        public List<HitEvent> PendingHits = new List<HitEvent>();
 
-        /// <summary>
-        /// Process all pending hit events. Called once per frame after skills run.
-        /// </summary>
-        public void ProcessHits(CharacterManager chars)
+        public void EnqueueHit(HitEvent hit) => PendingHits.Add(hit);
+
+        public void ProcessHits(GameScene scene)
         {
+            var world = scene.World;
             for (int i = 0; i < PendingHits.Count; i++)
-            {
-                ProcessSingleHit(chars, PendingHits[i]);
-            }
+                ApplyHit(scene, world, PendingHits[i]);
             PendingHits.Clear();
         }
 
-        private void ProcessSingleHit(CharacterManager chars, HitEvent hit)
+        private static void ApplyHit(GameScene scene, GameWorld world, HitEvent hit)
         {
-            var target = chars.Get(hit.TargetId);
-            var attacker = chars.Get(hit.AttackerId);
-            if (target == null || attacker == null || !target.IsAlive) return;
+            int target = hit.TargetId;
+            int attacker = hit.AttackerId;
 
-            // Apply damage
-            float damage = hit.DamageCoeff * 10f; // Base damage formula (placeholder)
-            target.HP -= damage;
-            if (target.HP <= 0)
+            if (!world.IsAliveSlot(target) || !world.IsAliveSlot(attacker)) return;
+            if (!world.Life[target].IsAlive) return;
+
+            // Damage
+            float damage = hit.DamageCoeff * 10f;
+            world.Life[target].HP -= damage;
+            if (world.Life[target].HP <= 0)
             {
-                target.HP = 0;
-                target.IsAlive = false;
-                target.SetTag(GameConstants.TAG_DEATH);
+                world.Life[target].HP = 0;
+                world.Life[target].IsAlive = false;
+                world.SetTag(target, GameConstants.TAG_DEATH);
             }
 
-            // Apply power gain
+            // Power gain on attacker
             float powerGain = damage * 0.01f * hit.EnergyCoeff;
-            attacker.Power = System.Math.Min(attacker.Power + powerGain, attacker.Data.MaxPower);
+            float newPower = world.Life[attacker].Power + powerGain;
+            float maxPower = world.Identity[attacker].Data?.MaxPower ?? GameConstants.DefaultMaxPower;
+            if (newPower > maxPower) newPower = maxPower;
+            world.Life[attacker].Power = newPower;
 
-            // Apply hitstun to target
+            // Hitstun on target
             if (hit.HitstunDuration > 0)
             {
-                target.HitstunFrames = hit.HitstunDuration;
-                target.SetTag(GameConstants.TAG_HIT);
+                world.Status[target].HitstunFrames = hit.HitstunDuration;
+                world.SetTag(target, GameConstants.TAG_HIT);
             }
 
-            // Apply knockback to target
-            ApplyKnockback(target, attacker, hit);
+            ApplyKnockback(world, target, attacker, hit);
+            ApplySelfEffects(world, attacker, hit);
 
-            // Apply self effects to attacker
-            ApplySelfEffects(attacker, hit);
+            if (hit.HitPauseFrames > 0)
+            {
+                scene.PauseCharacter(attacker, hit.HitPauseFrames);
+                scene.PauseCharacter(target, hit.HitPauseFrames);
+            }
         }
 
-        private void ApplyKnockback(Character target, Character attacker, HitEvent hit)
+        private static void ApplyKnockback(GameWorld world, int target, int attacker, HitEvent hit)
         {
-            int kbDir = attacker.Body.Position.X < target.Body.Position.X ? 1 : -1;
+            int kbDir = world.Transform[attacker].Position.X < world.Transform[target].Position.X ? 1 : -1;
+            ref var phys = ref world.Physics[target];
 
-            // Horizontal knockback
             if (hit.HorizKBSpeed > 0)
             {
-                // Speed mode (until landing)
-                target.Body.Velocity = new FVec2(hit.HorizKBSpeed * kbDir, target.Body.Velocity.Y);
+                phys.Velocity = new FVec2(hit.HorizKBSpeed * kbDir, phys.Velocity.Y);
             }
             else if (hit.HorizKBDist > 0 && hit.HorizKBDuration > 0)
             {
-                // Distance mode
                 float speed = hit.HorizKBDist / hit.HorizKBDuration;
-                target.Body.Velocity = new FVec2(speed * kbDir, target.Body.Velocity.Y);
+                phys.Velocity = new FVec2(speed * kbDir, phys.Velocity.Y);
             }
 
-            // Vertical knockback
             if (hit.VertKBSpeed > 0)
             {
-                target.Body.Velocity = new FVec2(target.Body.Velocity.X, hit.VertKBSpeed);
-                target.Body.IsGrounded = false;
-                target.SetTag(GameConstants.TAG_AIR_STATE);
+                phys.Velocity = new FVec2(phys.Velocity.X, hit.VertKBSpeed);
+                phys.IsGrounded = false;
+                world.SetTag(target, GameConstants.TAG_AIR_STATE);
             }
         }
 
-        private void ApplySelfEffects(Character attacker, HitEvent hit)
+        private static void ApplySelfEffects(GameWorld world, int attacker, HitEvent hit)
         {
             if (hit.SelfHitstunDuration > 0)
             {
-                attacker.HitstunFrames = hit.SelfHitstunDuration;
+                world.Status[attacker].HitstunFrames = hit.SelfHitstunDuration;
             }
+
+            ref var phys = ref world.Physics[attacker];
+            int facingSign = world.Transform[attacker].FacingSign;
 
             if (hit.SelfHorizKBDist > 0 && hit.SelfHorizKBDuration > 0)
             {
                 float speed = hit.SelfHorizKBDist / hit.SelfHorizKBDuration;
-                // Self knockback is in the facing direction
-                attacker.Body.Velocity = new FVec2(
-                    speed * attacker.FacingSign, attacker.Body.Velocity.Y);
+                phys.Velocity = new FVec2(speed * facingSign, phys.Velocity.Y);
             }
 
             if (hit.SelfVertKBSpeed != 0)
             {
-                attacker.Body.Velocity = new FVec2(
-                    attacker.Body.Velocity.X, hit.SelfVertKBSpeed);
-                attacker.Body.Acceleration = new FVec2(0, hit.SelfVertKBAccel);
-                attacker.Body.IsGrounded = false;
+                phys.Velocity = new FVec2(phys.Velocity.X, hit.SelfVertKBSpeed);
+                phys.Acceleration = new FVec2(0, hit.SelfVertKBAccel);
+                phys.IsGrounded = false;
             }
-        }
-
-        /// <summary>Queue a hit event for processing.</summary>
-        public void EnqueueHit(HitEvent hit)
-        {
-            PendingHits.Add(hit);
         }
     }
 }

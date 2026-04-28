@@ -3,67 +3,57 @@ using System.Collections.Generic;
 namespace KOF98.Game
 {
     /// <summary>
-    /// Aggregated input for a single frame, submitted to GameScene.Step().
-    /// Contains scene-level commands and per-character inputs.
+    /// External commands queued for the next scene step (spawn character,
+    /// set AI controller, etc.) and per-character input for that step.
     /// </summary>
     public class SceneInput
     {
-        /// <summary>Scene-level commands (create character, reset round, etc.).</summary>
-        public List<ISceneCommand> Commands = new();
+        public List<ISceneCommand> Commands = new List<ISceneCommand>();
 
-        /// <summary>Per-character input. Key = character ID.</summary>
-        public Dictionary<int, PlayerInput> CharacterInputs = new();
-
-        public void AddCommand(ISceneCommand cmd) => Commands.Add(cmd);
-        public void SetInput(int charId, PlayerInput input) => CharacterInputs[charId] = input;
-
-        public void Clear()
-        {
-            Commands.Clear();
-            CharacterInputs.Clear();
-        }
+        /// <summary>
+        /// Per-character input keyed by character entity slot index
+        /// (the same id that GameScene.SpawnCharacter returned).
+        /// </summary>
+        public Dictionary<int, PlayerInput> CharacterInputs = new Dictionary<int, PlayerInput>();
     }
 
-    /// <summary>
-    /// Interface for scene-level commands.
-    /// Commands are executed at the start of each frame before character updates.
-    /// </summary>
     public interface ISceneCommand
     {
-        void Execute(GameScene scene);
+        void Apply(GameScene scene);
     }
 
-    /// <summary>Create a new character in the scene.</summary>
+    /// <summary>Spawn a new character in the scene.</summary>
     public class CreateCharacterCommand : ISceneCommand
     {
         public int Team;
         public CharacterData Data;
         public FVec2 StartPosition;
 
-        public CreateCharacterCommand(int team, CharacterData data, FVec2 startPos)
+        public CreateCharacterCommand(int team, CharacterData data, FVec2 startPosition)
         {
             Team = team;
             Data = data;
-            StartPosition = startPos;
+            StartPosition = startPosition;
         }
 
-        public void Execute(GameScene scene)
+        public void Apply(GameScene scene)
         {
-            scene.Characters.CreateCharacter(Team, Data, StartPosition);
+            CharacterFactory.Spawn(scene.World, Team, Data, StartPosition);
         }
     }
 
-    /// <summary>Assign an AI controller to a character.</summary>
+    /// <summary>Attach an AI controller to a character.</summary>
     public class SetAICommand : ISceneCommand
     {
-        public int CharId;
+        public int CharacterEntity;
         public IAIController AI;
 
-        public SetAICommand(int charId, IAIController ai) { CharId = charId; AI = ai; }
-
-        public void Execute(GameScene scene)
+        public SetAICommand(int charEntity, IAIController ai)
         {
-            scene.SetAI(CharId, AI);
+            CharacterEntity = charEntity;
+            AI = ai;
         }
+
+        public void Apply(GameScene scene) => scene.SetAI(CharacterEntity, AI);
     }
 }
