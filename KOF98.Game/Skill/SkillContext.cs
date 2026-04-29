@@ -19,9 +19,9 @@ namespace KOF98.Game
 
         // ── Static character data ────────────────────────────────
 
-        public CharacterData Data => GameCatalog.GetCharacter(World.Identity[Entity].CharacterId);
-        public CharacterMovementDef Movement => GameCatalog.GetCharacterMovement(World.Identity[Entity].CharacterId);
-        public CharacterStatsDef Stats => GameCatalog.GetCharacterStats(World.Identity[Entity].CharacterId);
+        public CharacterData Data => GameCatalog.Characters[World.Identity[Entity].CharacterId];
+        public CharacterMovementDef Movement => GameCatalog.Movements[GameCatalog.Characters[World.Identity[Entity].CharacterId].MovementId];
+        public CharacterStatsDef Stats => GameCatalog.Stats[GameCatalog.Characters[World.Identity[Entity].CharacterId].StatsId];
         public int Team => World.Identity[Entity].Team;
         public SkillDef CurrentSkillDef => GameCatalog.GetSkill(World.Skill[Entity].ActiveSkillId);
         public int CurrentSkillFrame => World.Skill[Entity].SkillFrame;
@@ -85,9 +85,9 @@ namespace KOF98.Game
             Input = input;
         }
 
-        public CharacterData Data => GameCatalog.GetCharacter(World.Identity[Entity].CharacterId);
-        public CharacterMovementDef Movement => GameCatalog.GetCharacterMovement(World.Identity[Entity].CharacterId);
-        public CharacterStatsDef Stats => GameCatalog.GetCharacterStats(World.Identity[Entity].CharacterId);
+        public CharacterData Data => GameCatalog.Characters[World.Identity[Entity].CharacterId];
+        public CharacterMovementDef Movement => GameCatalog.Movements[GameCatalog.Characters[World.Identity[Entity].CharacterId].MovementId];
+        public CharacterStatsDef Stats => GameCatalog.Stats[GameCatalog.Characters[World.Identity[Entity].CharacterId].StatsId];
         public Direction Facing => World.Transform[Entity].Facing;
         public int FacingSign => World.Transform[Entity].FacingSign;
         public bool IsGrounded => World.Physics[Entity].IsGrounded;

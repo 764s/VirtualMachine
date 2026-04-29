@@ -59,9 +59,9 @@ namespace KOF98.CsSim
                                      && ctx.Input.GetForwardDir(ctx.Facing) < 0,
             };
 
-            int idleId = GameCatalog.RegisterSkill(idle);
-            int walkFwdId = GameCatalog.RegisterSkill(walkFwd);
-            int walkBackId = GameCatalog.RegisterSkill(walkBack);
+            int idleId = GameCatalog.AllocSkill(idle);
+            int walkFwdId = GameCatalog.AllocSkill(walkFwd);
+            int walkBackId = GameCatalog.AllocSkill(walkBack);
 
             var stats = new CharacterStatsDef
             {
@@ -83,7 +83,10 @@ namespace KOF98.CsSim
                 IdleSkillIndex = LOCAL_IDLE,
             };
 
-            GameCatalog.RegisterCharacter(data, stats, movement, loadout);
+            data.StatsId        = GameCatalog.Stats.Alloc(stats);
+            data.MovementId     = GameCatalog.Movements.Alloc(movement);
+            data.SkillLoadoutId = GameCatalog.SkillLoadouts.Alloc(loadout);
+            GameCatalog.AllocCharacter(data);
             return data;
         }
     }

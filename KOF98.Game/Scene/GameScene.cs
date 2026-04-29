@@ -122,7 +122,7 @@ namespace KOF98.Game
             {
                 if (!World.IsAliveSlot(e) || World.Kinds[e] != EntityKind.Character) continue;
 
-                World.Life[e].HP = GameCatalog.GetCharacterStats(World.Identity[e].CharacterId).MaxHP;
+                World.Life[e].HP = GameCatalog.Stats[GameCatalog.Characters[World.Identity[e].CharacterId].StatsId].MaxHP;
                 World.Life[e].Power = 0f;
                 World.Life[e].IsAlive = true;
                 World.Status[e] = default;

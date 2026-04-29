@@ -13,7 +13,7 @@ namespace KOF98.Game
             if (!id.IsValid) return -1;
 
             var data = GameCatalog.GetCharacter(characterId);
-            var stats = GameCatalog.GetCharacterStats(characterId);
+            var stats = data != null ? GameCatalog.Stats[data.StatsId] : default;
 
             int e = id.Index;
             world.Identity[e] = new IdentityComponent { Team = team, CharacterId = characterId };

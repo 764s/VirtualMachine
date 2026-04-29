@@ -9,6 +9,11 @@ namespace KOF98.Game
         public int CatalogCharacterId;
         public string Name;
 
+        // Handles into GameCatalog static pools.
+        public int StatsId        = GameCatalog.InvalidId;
+        public int MovementId     = GameCatalog.InvalidId;
+        public int SkillLoadoutId = GameCatalog.InvalidId;
+
         // ── Collision ────────────────────────────────────────────
         public FRect StandPushBox = new FRect(0, 0.55f, GameConstants.DefaultPushboxHalfWidth, GameConstants.DefaultPushboxHalfHeight);
         public FRect CrouchPushBox = new FRect(0, 0.35f, GameConstants.DefaultPushboxHalfWidth, 0.35f);

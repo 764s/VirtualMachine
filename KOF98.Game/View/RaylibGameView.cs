@@ -366,8 +366,8 @@ namespace KOF98.Game
 
             if (p1 >= 0)
             {
-                var data1 = GameCatalog.GetCharacter(w.Identity[p1].CharacterId);
-                var stats1 = GameCatalog.GetCharacterStats(w.Identity[p1].CharacterId);
+                var data1 = GameCatalog.Characters[w.Identity[p1].CharacterId];
+                var stats1 = GameCatalog.Stats[data1.StatsId];
                 DrawHPBar(StageLeft, barY, barW, barH, w.Life[p1].HP,
                     stats1.MaxHP, false);
                 DrawTextF(data1?.Name ?? "P1", StageLeft, barY - 16, 16, P1Color);
@@ -377,8 +377,8 @@ namespace KOF98.Game
 
             if (p2 >= 0)
             {
-                var data2 = GameCatalog.GetCharacter(w.Identity[p2].CharacterId);
-                var stats2 = GameCatalog.GetCharacterStats(w.Identity[p2].CharacterId);
+                var data2 = GameCatalog.Characters[w.Identity[p2].CharacterId];
+                var stats2 = GameCatalog.Stats[data2.StatsId];
                 DrawHPBar(StageRight - barW, barY, barW, barH, w.Life[p2].HP,
                     stats2.MaxHP, true);
                 string p2Name = data2?.Name ?? "P2";

@@ -89,7 +89,7 @@ namespace KOF98.Game
             // Power gain on attacker
             float powerGain = damage * 0.01f * hit.EnergyCoeff;
             float newPower = world.Life[attacker].Power + powerGain;
-            var stats = GameCatalog.GetCharacterStats(world.Identity[attacker].CharacterId);
+            var stats = GameCatalog.Stats[GameCatalog.Characters[world.Identity[attacker].CharacterId].StatsId];
             float maxPower = stats.MaxPower;
             if (newPower > maxPower) newPower = maxPower;
             world.Life[attacker].Power = newPower;

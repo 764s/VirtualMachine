@@ -28,7 +28,7 @@ namespace KOF98.Game
 
                 if (!w.Skill[e].IsSkillActive)
                 {
-                    var loadout = GameCatalog.GetCharacterSkillLoadout(w.Identity[e].CharacterId);
+                    var loadout = GameCatalog.SkillLoadouts[GameCatalog.Characters[w.Identity[e].CharacterId].SkillLoadoutId];
                     if (loadout.IdleSkillIndex >= 0
                         && loadout.IdleSkillIndex < (loadout.SkillIds?.Length ?? 0))
                     {
@@ -49,7 +49,7 @@ namespace KOF98.Game
                 return;
             }
 
-            var loadout = GameCatalog.GetCharacterSkillLoadout(w.Identity[entity].CharacterId);
+            var loadout = GameCatalog.SkillLoadouts[GameCatalog.Characters[w.Identity[entity].CharacterId].SkillLoadoutId];
             if (loadout.SkillIds == null || loadout.SkillIds.Length == 0) return;
 
             ref var skill = ref w.Skill[entity];
