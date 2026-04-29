@@ -3,9 +3,9 @@ namespace KOF98.Game
     /// <summary>
     /// Two-tier time clock for the simulation:
     ///
-    ///   Scene line     — global heartbeat. Drives <see cref="GameScene.FrameNumber"/>
-    ///                    and round / match timing. Always advances unless the
-    ///                    menu pause (<see cref="GameScene.IsPaused"/>) is held.
+    ///   Scene line     — global heartbeat stored in <see cref="GameWorld.SceneFrameLine"/>.
+    ///                    Drives <see cref="GameScene.FrameNumber"/> and round /
+    ///                    match timing.
     ///   Character line — per-entity heartbeat stored in
     ///                    <see cref="FrameLineComponent"/>. A character with
     ///                    <c>PauseFrames &gt; 0</c> is frozen this frame:
@@ -19,6 +19,13 @@ namespace KOF98.Game
     /// </summary>
     public static class FrameLineSystem
     {
+        /// <summary>True if the scene line is frozen this frame.</summary>
+        public static bool IsScenePaused(GameWorld world)
+        {
+            if (world == null) return false;
+            return world.SceneFrameLine.PauseFrames > 0;
+        }
+
         /// <summary>True if the character entity is frozen this frame.</summary>
         public static bool IsCharacterPaused(GameWorld world, int entity)
         {
@@ -27,14 +34,26 @@ namespace KOF98.Game
             return world.FrameLine[entity].PauseFrames > 0;
         }
 
-        /// <summary>Add (max-stacked) pause frames to a single character.</summary>
-        public static void PauseCharacter(GameWorld world, int entity, int frames)
+        /// <summary>True if the entity is frozen by either the scene line or its own line.</summary>
+        public static bool IsEntityFrozen(GameWorld world, int entity)
+            => IsScenePaused(world) || IsCharacterPaused(world, entity);
+
+        /// <summary>Queue max-stacked pause frames for a single character, starting next frame.</summary>
+        public static void RequestCharacterPause(GameWorld world, int entity, int frames)
         {
             if (frames <= 0) return;
             if (entity < 0 || entity >= GameWorld.MaxEntities) return;
             if (!world.IsAliveSlot(entity)) return;
             ref var fl = ref world.FrameLine[entity];
-            if (frames > fl.PauseFrames) fl.PauseFrames = frames;
+            if (frames > fl.RequestedPauseFrames) fl.RequestedPauseFrames = frames;
+        }
+
+        /// <summary>Queue max-stacked scene pause frames, starting next frame.</summary>
+        public static void RequestScenePause(GameWorld world, int frames)
+        {
+            if (frames <= 0 || world == null) return;
+            ref var fl = ref world.SceneFrameLine;
+            if (frames > fl.RequestedPauseFrames) fl.RequestedPauseFrames = frames;
         }
 
         /// <summary>
@@ -50,6 +69,10 @@ namespace KOF98.Game
                 ref var fl = ref world.FrameLine[e];
                 if (fl.PauseFrames > 0) fl.PauseFrames--;
                 else fl.LocalFrame++;
+
+                if (fl.RequestedPauseFrames > fl.PauseFrames)
+                    fl.PauseFrames = fl.RequestedPauseFrames;
+                fl.RequestedPauseFrames = 0;
             }
         }
 
@@ -58,10 +81,15 @@ namespace KOF98.Game
         /// is decremented here so a freshly requested time-stop covers the
         /// next frame, not the current one.
         /// </summary>
-        public static void AdvanceScene(GameScene scene)
+        public static void AdvanceScene(GameWorld world)
         {
-            if (scene.GlobalPauseFrames > 0) scene.GlobalPauseFrames--;
-            scene.GlobalFrame++;
+            ref var fl = ref world.SceneFrameLine;
+            if (fl.PauseFrames > 0) fl.PauseFrames--;
+            fl.GlobalFrame++;
+
+            if (fl.RequestedPauseFrames > fl.PauseFrames)
+                fl.PauseFrames = fl.RequestedPauseFrames;
+            fl.RequestedPauseFrames = 0;
         }
     }
 }

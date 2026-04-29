@@ -1,5 +1,3 @@
-using System.Collections.Generic;
-
 namespace KOF98.Game
 {
     /// <summary>
@@ -55,18 +53,45 @@ namespace KOF98.Game
 
         public readonly SkillComponent[] Skill = new SkillComponent[MaxEntities];
         public readonly FrameLineComponent[] FrameLine = new FrameLineComponent[MaxEntities];
+        public SceneFrameLineComponent SceneFrameLine;
+
+        /// <summary>
+        /// Transient per-entity behavior cache. NOT part of the snapshot —
+        /// rebuilt on snapshot restore from <see cref="SkillComponent.ActiveSkillId"/>.
+        /// </summary>
+        public readonly ISkillBehavior[] ActiveBehaviors = new ISkillBehavior[MaxEntities];
 
         public readonly ProjectileComponent[] Projectile = new ProjectileComponent[MaxEntities];
         public readonly EffectComponent[] Effect = new EffectComponent[MaxEntities];
         public readonly LifetimeComponent[] Lifetime = new LifetimeComponent[MaxEntities];
 
-        public readonly Dictionary<int, float>[] Blackboards = new Dictionary<int, float>[MaxEntities];
+        public readonly float[] BlackboardValues = new float[MaxEntities * GameConstants.MaxBlackboardKeys];
+        public readonly bool[] BlackboardHasValue = new bool[MaxEntities * GameConstants.MaxBlackboardKeys];
 
-        // ── Counts ───────────────────────────────────────────────
+        // ── Combat pending hit queue (was CombatSystem instance state) ──
+
+        public readonly HitEvent[] PendingHits = new HitEvent[GameConstants.MaxPendingHits];
+        public int PendingHitCount;
+
+        // ── Round state singleton (was GameScene fields) ───────────────────
+
+        public RoundStateComponent RoundState;
+
+        // ── AI per-character slot (was GameScene._aiControllers + SimpleAI._cooldown) ──
+
+        public readonly AIKind[] AIKinds = new AIKind[GameConstants.MaxCharacters];
+        public readonly AIStateComponent[] AIState = new AIStateComponent[GameConstants.MaxCharacters];
+
+        // ── Counts ──────────────────────────────────────────────────────────────
 
         public int CharacterCount;
         public int ProjectileCount;
         public int EffectCount;
+
+        public GameWorld()
+        {
+            RoundState.WinnerSlot = -1;
+        }
 
         // ── Slot allocation ──────────────────────────────────────
 
@@ -142,15 +167,25 @@ namespace KOF98.Game
             Kinds[index] = EntityKind.None;
 
             // Clear heap-referencing component fields so we do not leak
-            // SkillInstance / Dictionary / CharacterData into the next reuse.
+            // CharacterData or behavior handles into the next reuse.
             Skill[index] = default;
+            Skill[index].ActiveSkillId = GameCatalog.InvalidId;
+            Skill[index].PendingSkillId = GameCatalog.InvalidId;
+            ActiveBehaviors[index] = null;
             Identity[index] = default;
+            Identity[index].CharacterId = GameCatalog.InvalidId;
             Tags[index] = default;
             FrameLine[index] = default;
             HitBoxCounts[index] = 0;
             HurtBoxCounts[index] = 0;
-            // Blackboard: keep dictionary instance for reuse but clear it
-            Blackboards[index]?.Clear();
+            ClearBlackboard(index);
+
+            // Character-only slot-scoped state.
+            if (index < GameConstants.MaxCharacters)
+            {
+                AIKinds[index] = AIKind.None;
+                AIState[index] = default;
+            }
         }
 
         // ── Aliveness queries ────────────────────────────────────
@@ -212,15 +247,36 @@ namespace KOF98.Game
 
         public void SetBlackboard(int entity, int key, float value)
         {
-            var bb = Blackboards[entity] ?? (Blackboards[entity] = new Dictionary<int, float>());
-            bb[key] = value;
+            if (!IsValidBlackboardSlot(entity, key)) return;
+            int index = BlackboardIndex(entity, key);
+            BlackboardValues[index] = value;
+            BlackboardHasValue[index] = true;
         }
 
         public float GetBlackboard(int entity, int key)
         {
-            var bb = Blackboards[entity];
-            return bb != null && bb.TryGetValue(key, out var v) ? v : 0f;
+            if (!IsValidBlackboardSlot(entity, key)) return 0f;
+            int index = BlackboardIndex(entity, key);
+            return BlackboardHasValue[index] ? BlackboardValues[index] : 0f;
         }
+
+        public void ClearBlackboard(int entity)
+        {
+            if (entity < 0 || entity >= MaxEntities) return;
+            int start = entity * GameConstants.MaxBlackboardKeys;
+            for (int i = 0; i < GameConstants.MaxBlackboardKeys; i++)
+            {
+                BlackboardValues[start + i] = 0f;
+                BlackboardHasValue[start + i] = false;
+            }
+        }
+
+        private static bool IsValidBlackboardSlot(int entity, int key)
+            => entity >= 0 && entity < MaxEntities
+                && key >= 0 && key < GameConstants.MaxBlackboardKeys;
+
+        private static int BlackboardIndex(int entity, int key)
+            => entity * GameConstants.MaxBlackboardKeys + key;
 
         // ── Find helpers ─────────────────────────────────────────
 

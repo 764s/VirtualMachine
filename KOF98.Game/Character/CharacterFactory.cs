@@ -2,19 +2,24 @@ namespace KOF98.Game
 {
     /// <summary>
     /// Builds a fully-initialized character entity in a <see cref="GameWorld"/>.
+    /// Accepts a catalog character id; the live <see cref="CharacterData"/>
+    /// is resolved through <see cref="GameCatalog"/>.
     /// </summary>
     public static class CharacterFactory
     {
-        public static int Spawn(GameWorld world, int team, CharacterData data, FVec2 position)
+        public static int Spawn(GameWorld world, int team, int characterId, FVec2 position)
         {
             var id = world.SpawnCharacter();
             if (!id.IsValid) return -1;
 
+            var data = GameCatalog.GetCharacter(characterId);
+            var stats = GameCatalog.GetCharacterStats(characterId);
+
             int e = id.Index;
-            world.Identity[e] = new IdentityComponent { Team = team, Data = data };
+            world.Identity[e] = new IdentityComponent { Team = team, CharacterId = characterId };
             world.Life[e] = new LifeComponent
             {
-                HP = data?.MaxHP ?? GameConstants.DefaultMaxHP,
+                HP = stats.MaxHP,
                 Power = 0f,
                 IsAlive = true,
             };
@@ -45,6 +50,9 @@ namespace KOF98.Game
             world.HitBoxCounts[e] = 0;
 
             world.Skill[e] = default;
+            world.Skill[e].ActiveSkillId = GameCatalog.InvalidId;
+            world.Skill[e].PendingSkillId = GameCatalog.InvalidId;
+            world.ActiveBehaviors[e] = null;
             world.FrameLine[e] = default;
             return e;
         }

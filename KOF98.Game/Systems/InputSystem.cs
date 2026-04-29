@@ -1,5 +1,3 @@
-using System.Collections.Generic;
-
 namespace KOF98.Game
 {
     /// <summary>
@@ -7,21 +5,20 @@ namespace KOF98.Game
     /// </summary>
     public static class InputSystem
     {
-        public static void Apply(GameScene scene, SceneInput input,
-            Dictionary<int, IAIController> aiControllers)
+        public static void Apply(GameWorld world, SceneInput input)
         {
-            var w = scene.World;
+            var w = world;
             for (int e = 0; e < GameConstants.MaxCharacters; e++)
             {
                 if (!w.IsAliveSlot(e) || w.Kinds[e] != EntityKind.Character) continue;
 
-                if (input.CharacterInputs.TryGetValue(e, out var p))
+                if (input.HasCharacterInput[e])
                 {
-                    w.Input[e].Current = p;
+                    w.Input[e].Current = input.CharacterInputs[e];
                 }
-                else if (aiControllers != null && aiControllers.TryGetValue(e, out var ai))
+                else if (w.AIKinds[e] != AIKind.None)
                 {
-                    w.Input[e].Current = ai.GetInput(scene, e);
+                    w.Input[e].Current = AISystem.GetInput(world, e);
                 }
                 else
                 {

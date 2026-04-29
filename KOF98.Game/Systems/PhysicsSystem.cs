@@ -20,7 +20,7 @@ namespace KOF98.Game
             for (int e = 0; e < GameConstants.MaxCharacters; e++)
             {
                 if (!world.IsAliveSlot(e) || world.Kinds[e] != EntityKind.Character) continue;
-                if (FrameLineSystem.IsCharacterPaused(world, e)) continue;
+                if (FrameLineSystem.IsEntityFrozen(world, e)) continue;
 
                 ref var phys = ref world.Physics[e];
                 ref var tr = ref world.Transform[e];

@@ -11,7 +11,7 @@ namespace KOF98.CsSim
 
         public SkillTickResult Tick(SkillContext ctx)
         {
-            float speed = -ctx.Data.BackWalkSpeed * ctx.GetFacingSign();
+            float speed = -ctx.Movement.BackWalkSpeed * ctx.GetFacingSign();
             ctx.SetVelocity(speed, 0f);
             return SkillTickResult.Running;
         }

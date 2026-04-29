@@ -213,7 +213,7 @@ namespace KOF98.Game
             Color bodyColor = isP1 ? P1Body : P2Body;
             Color outlineColor = isP1 ? P1Color : P2Color;
 
-            bool frozen = scene.IsCharacterFrozen(e);
+            bool frozen = FrameLineSystem.IsEntityFrozen(w, e);
 
             if (!w.Life[e].IsAlive)
             {
@@ -248,7 +248,7 @@ namespace KOF98.Game
                 outlineColor);
 
             string label = isP1 ? "P1" : "P2";
-            var data = w.Identity[e].Data;
+            var data = GameCatalog.GetCharacter(w.Identity[e].CharacterId);
             if (data?.Name != null) label = data.Name;
             int textW = MeasureTextF(label, 12);
             DrawTextF(label, cx - textW / 2, cy - CharacterHeight - 14, 12, outlineColor);
@@ -354,8 +354,9 @@ namespace KOF98.Game
             int p2 = FindCharacterByTeam(w, 1);
 
             DrawTextF("KOF98 练习模式 — ECS", 10, 8, 20, new Color(220, 200, 160, 255));
-            string frameText = $"线F: {scene.GlobalFrame}  回合: {scene.RoundNumber}";
-            if (scene.GlobalPauseFrames > 0) frameText += $"  时停{scene.GlobalPauseFrames}f";
+            ref var sceneLine = ref w.SceneFrameLine;
+            string frameText = $"线F: {sceneLine.GlobalFrame}  回合: {scene.RoundNumber}";
+            if (sceneLine.PauseFrames > 0) frameText += $"  时停{sceneLine.PauseFrames}f";
             int ftw = MeasureTextF(frameText, 16);
             DrawTextF(frameText, ScreenWidth - ftw - 10, 10, 16, DebugText);
 
@@ -365,24 +366,26 @@ namespace KOF98.Game
 
             if (p1 >= 0)
             {
-                var data1 = w.Identity[p1].Data;
+                var data1 = GameCatalog.GetCharacter(w.Identity[p1].CharacterId);
+                var stats1 = GameCatalog.GetCharacterStats(w.Identity[p1].CharacterId);
                 DrawHPBar(StageLeft, barY, barW, barH, w.Life[p1].HP,
-                    data1?.MaxHP ?? GameConstants.DefaultMaxHP, false);
+                    stats1.MaxHP, false);
                 DrawTextF(data1?.Name ?? "P1", StageLeft, barY - 16, 16, P1Color);
                 DrawPowerBar(StageLeft, barY + barH + 4, 120, 8, w.Life[p1].Power,
-                    data1?.MaxPower ?? GameConstants.DefaultMaxPower);
+                    stats1.MaxPower);
             }
 
             if (p2 >= 0)
             {
-                var data2 = w.Identity[p2].Data;
+                var data2 = GameCatalog.GetCharacter(w.Identity[p2].CharacterId);
+                var stats2 = GameCatalog.GetCharacterStats(w.Identity[p2].CharacterId);
                 DrawHPBar(StageRight - barW, barY, barW, barH, w.Life[p2].HP,
-                    data2?.MaxHP ?? GameConstants.DefaultMaxHP, true);
+                    stats2.MaxHP, true);
                 string p2Name = data2?.Name ?? "P2";
                 int nameW = MeasureTextF(p2Name, 16);
                 DrawTextF(p2Name, StageRight - nameW, barY - 16, 16, P2Color);
                 DrawPowerBar(StageRight - 120, barY + barH + 4, 120, 8, w.Life[p2].Power,
-                    data2?.MaxPower ?? GameConstants.DefaultMaxPower);
+                    stats2.MaxPower);
             }
 
             int legendY = StageBottom + 8;
@@ -453,9 +456,9 @@ namespace KOF98.Game
                 ref var tr = ref w.Transform[e];
                 ref var phys = ref w.Physics[e];
                 ref var fl = ref w.FrameLine[e];
-                var inst = w.Skill[e].ActiveSkill;
-                string skillName = inst?.Def?.Name ?? "none";
-                int skillFrame = inst?.Frame ?? 0;
+                ref var skill = ref w.Skill[e];
+                string skillName = GameCatalog.GetSkill(skill.ActiveSkillId)?.Name ?? "none";
+                int skillFrame = skill.IsSkillActive ? skill.SkillFrame : 0;
                 string tag = w.Identity[e].Team == 0 ? "P1" : "P2";
 
                 string info = $"[{tag}] 位置=({tr.Position.X:F2},{tr.Position.Y:F2}) "

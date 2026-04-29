@@ -1,5 +1,3 @@
-using System.Collections.Generic;
-
 namespace KOF98.Game
 {
     /// <summary>
@@ -8,10 +6,8 @@ namespace KOF98.Game
     /// it breaks all skill timing assumptions.
     ///
     /// Two-tier frame line:
-    ///   Scene line     — <see cref="FrameNumber"/>/<see cref="GlobalFrame"/>;
-    ///                    always advances unless the menu pause holds. Round
-    ///                    timer / external commands / input collection ride on
-    ///                    the scene line.
+    ///   Scene line     — <see cref="GameWorld.SceneFrameLine"/>. Round timer /
+    ///                    external commands / input collection ride on the scene line.
     ///   Character line — <see cref="FrameLineComponent"/> per character.
     ///                    A character with <c>PauseFrames &gt; 0</c> is frozen
     ///                    this frame: physics / skill ticks / status decrement
@@ -20,7 +16,7 @@ namespace KOF98.Game
     /// Step order:
     ///   1.  Apply external commands (spawn / SetAI / etc.).
     ///   2.  Apply per-frame inputs (player + AI).
-    ///   --  if (!IsSceneFrozen) {
+    ///   --  if (!FrameLineSystem.IsScenePaused(World)) {
     ///   3.    Skill selection &amp; activation (with idle fallback).
     ///   4.    Update collision boxes for the new frame.
     ///   5.    Auto-face nearest opponent.
@@ -33,54 +29,43 @@ namespace KOF98.Game
     ///   12.   Round-over check.
     ///   13.   FrameLineSystem.AdvanceCharacters(world).
     ///   --  }
-    ///   14. FrameLineSystem.AdvanceScene + FrameNumber++.
+    ///   14. FrameLineSystem.AdvanceScene.
     /// </summary>
     public class GameScene
     {
         public readonly GameWorld World = new GameWorld();
-        public readonly CombatSystem Combat = new CombatSystem();
 
-        /// <summary>Scene-line frame counter. Alias of <see cref="GlobalFrame"/>.</summary>
-        public int FrameNumber;
+        /// <summary>Compatibility alias for the scene-line frame counter.</summary>
+        public int FrameNumber => World.SceneFrameLine.GlobalFrame;
 
-        /// <summary>Scene-line frame counter (frame line terminology).</summary>
-        public int GlobalFrame;
-
-        /// <summary>Remaining global pause frames (time-stop on the scene line).</summary>
-        public int GlobalPauseFrames;
-
-        public int RoundNumber;
+        // Round-state delegating accessors (state lives on World.RoundState).
+        public int RoundNumber
+        {
+            get => World.RoundState.RoundNumber;
+            set => World.RoundState.RoundNumber = value;
+        }
 
         /// <summary>Menu / external pause — distinct from in-game time-stop.</summary>
-        public bool IsPaused;
-        public bool IsRoundOver;
+        public bool IsPaused
+        {
+            get => World.RoundState.IsPaused;
+            set => World.RoundState.IsPaused = value;
+        }
+
+        public bool IsRoundOver
+        {
+            get => World.RoundState.IsRoundOver;
+            set => World.RoundState.IsRoundOver = value;
+        }
 
         /// <summary>Entity slot index of the round winner, or -1 if no winner / draw.</summary>
-        public int WinnerId = -1;
-
-        private readonly Dictionary<int, IAIController> _aiControllers = new Dictionary<int, IAIController>();
+        public int WinnerId
+        {
+            get => World.RoundState.WinnerSlot;
+            set => World.RoundState.WinnerSlot = value;
+        }
 
         public GameScene() { }
-
-        // ── Frame line API ───────────────────────────────────────
-
-        /// <summary>True while the scene line is frozen by an in-game time-stop.</summary>
-        public bool IsSceneFrozen => GlobalPauseFrames > 0;
-
-        /// <summary>True if the given character entity is frozen this frame.</summary>
-        public bool IsCharacterFrozen(int entity)
-            => IsSceneFrozen || FrameLineSystem.IsCharacterPaused(World, entity);
-
-        /// <summary>Pause a single character for <paramref name="frames"/> frames (max-stacked).</summary>
-        public void PauseCharacter(int entity, int frames)
-            => FrameLineSystem.PauseCharacter(World, entity, frames);
-
-        /// <summary>Pause the entire scene line for <paramref name="frames"/> frames (max-stacked).</summary>
-        public void PauseScene(int frames)
-        {
-            if (frames <= 0) return;
-            if (frames > GlobalPauseFrames) GlobalPauseFrames = frames;
-        }
 
         // ── Frame loop ───────────────────────────────────────────
 
@@ -89,29 +74,29 @@ namespace KOF98.Game
             // Step 1: external commands always run.
             if (input != null)
             {
-                for (int i = 0; i < input.Commands.Count; i++)
+                for (int i = 0; i < input.CommandCount; i++)
                     input.Commands[i].Apply(this);
-                input.Commands.Clear();
+                input.ClearCommands();
             }
 
             if (IsPaused || IsRoundOver) return;
 
             // Step 2: input collection always runs (preserves pre-input during time-stop).
-            InputSystem.Apply(this, input ?? new SceneInput(), _aiControllers);
+            InputSystem.Apply(World, input ?? new SceneInput());
 
-            if (!IsSceneFrozen)
+            if (!FrameLineSystem.IsScenePaused(World))
             {
                 // Step 3-6.
-                SkillSystem.SelectAndActivate(this);
+                SkillSystem.SelectAndActivate(World);
                 SkillSystem.UpdateCollisionBoxes(World);
                 AutoFaceSystem.Run(World);
                 PhysicsSystem.Step(World);
 
                 // Step 7: tick skills + advance skill Frame + decrement status.
-                SkillSystem.TickAndAdvance(this);
+                SkillSystem.TickAndAdvance(World);
 
                 // Step 8: combat (hits enqueued by behaviors during Tick).
-                Combat.ProcessHits(this);
+                CombatSystem.ProcessHits(World);
 
                 // Step 9-11: pushbox / projectiles / effects.
                 CollisionSystem.ResolvePushBoxes(World);
@@ -126,8 +111,7 @@ namespace KOF98.Game
             }
 
             // Step 14: scene line always advances.
-            FrameLineSystem.AdvanceScene(this);
-            FrameNumber = GlobalFrame;
+            FrameLineSystem.AdvanceScene(World);
         }
 
         // ── Round management ─────────────────────────────────────
@@ -138,7 +122,7 @@ namespace KOF98.Game
             {
                 if (!World.IsAliveSlot(e) || World.Kinds[e] != EntityKind.Character) continue;
 
-                World.Life[e].HP = World.Identity[e].Data?.MaxHP ?? GameConstants.DefaultMaxHP;
+                World.Life[e].HP = GameCatalog.GetCharacterStats(World.Identity[e].CharacterId).MaxHP;
                 World.Life[e].Power = 0f;
                 World.Life[e].IsAlive = true;
                 World.Status[e] = default;
@@ -163,22 +147,23 @@ namespace KOF98.Game
                 if (World.IsAliveSlot(e)) World.DestroyAt(e);
             }
 
-            Combat.PendingHits.Clear();
-            FrameNumber = 0;
-            GlobalFrame = 0;
-            GlobalPauseFrames = 0;
+            CombatSystem.Clear(World);
+            World.SceneFrameLine = default;
             RoundNumber++;
             IsRoundOver = false;
             WinnerId = -1;
         }
 
-        public void SetAI(int charEntity, IAIController ai)
+        public void SetAI(int charEntity, AIKind kind)
         {
-            if (ai == null) _aiControllers.Remove(charEntity);
-            else _aiControllers[charEntity] = ai;
+            if (charEntity < 0 || charEntity >= GameConstants.MaxCharacters) return;
+            World.AIKinds[charEntity] = kind;
+            World.AIState[charEntity] = default;
         }
 
-        public bool IsAIControlled(int charEntity) => _aiControllers.ContainsKey(charEntity);
+        public bool IsAIControlled(int charEntity)
+            => charEntity >= 0 && charEntity < GameConstants.MaxCharacters
+                && World.AIKinds[charEntity] != AIKind.None;
 
         private void CheckRoundOver()
         {

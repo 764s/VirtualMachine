@@ -1,4 +1,4 @@
-using System.Collections.Generic;
+using System.Diagnostics;
 
 namespace KOF98.Game
 {
@@ -42,23 +42,33 @@ namespace KOF98.Game
     }
 
     /// <summary>
-    /// Combat resolution system. Applies pending hit events to ECS components.
+    /// Combat resolution system. Stateless: pending hit queue lives on
+    /// <see cref="GameWorld.PendingHits"/> / <see cref="GameWorld.PendingHitCount"/>
+    /// so it participates in snapshot capture/restore.
     /// </summary>
-    public class CombatSystem
+    public static class CombatSystem
     {
-        public List<HitEvent> PendingHits = new List<HitEvent>();
-
-        public void EnqueueHit(HitEvent hit) => PendingHits.Add(hit);
-
-        public void ProcessHits(GameScene scene)
+        public static void EnqueueHit(GameWorld world, in HitEvent hit)
         {
-            var world = scene.World;
-            for (int i = 0; i < PendingHits.Count; i++)
-                ApplyHit(scene, world, PendingHits[i]);
-            PendingHits.Clear();
+            if (world.PendingHitCount >= world.PendingHits.Length)
+            {
+                Debug.Assert(false, "Pending hit queue overflow");
+                return;
+            }
+
+            world.PendingHits[world.PendingHitCount++] = hit;
         }
 
-        private static void ApplyHit(GameScene scene, GameWorld world, HitEvent hit)
+        public static void Clear(GameWorld world) => world.PendingHitCount = 0;
+
+        public static void ProcessHits(GameWorld world)
+        {
+            for (int i = 0; i < world.PendingHitCount; i++)
+                ApplyHit(world, world.PendingHits[i]);
+            world.PendingHitCount = 0;
+        }
+
+        private static void ApplyHit(GameWorld world, HitEvent hit)
         {
             int target = hit.TargetId;
             int attacker = hit.AttackerId;
@@ -79,7 +89,8 @@ namespace KOF98.Game
             // Power gain on attacker
             float powerGain = damage * 0.01f * hit.EnergyCoeff;
             float newPower = world.Life[attacker].Power + powerGain;
-            float maxPower = world.Identity[attacker].Data?.MaxPower ?? GameConstants.DefaultMaxPower;
+            var stats = GameCatalog.GetCharacterStats(world.Identity[attacker].CharacterId);
+            float maxPower = stats.MaxPower;
             if (newPower > maxPower) newPower = maxPower;
             world.Life[attacker].Power = newPower;
 
@@ -95,8 +106,8 @@ namespace KOF98.Game
 
             if (hit.HitPauseFrames > 0)
             {
-                scene.PauseCharacter(attacker, hit.HitPauseFrames);
-                scene.PauseCharacter(target, hit.HitPauseFrames);
+                FrameLineSystem.RequestCharacterPause(world, attacker, hit.HitPauseFrames);
+                FrameLineSystem.RequestCharacterPause(world, target, hit.HitPauseFrames);
             }
         }
 

@@ -2,29 +2,29 @@ namespace KOF98.Game
 {
     /// <summary>
     /// Per-call context passed to <see cref="ISkillBehavior"/> methods.
-    /// Wraps a (world, entity, instance) triple and exposes the host
+    /// Wraps a (world, entity) pair and exposes the host
     /// capabilities a skill behavior needs — modeled after the GameSyscalls
     /// surface that a future VM instance would have access to.
     /// </summary>
     public struct SkillContext
     {
         public GameWorld World;
-        public GameScene Scene;
         public int Entity;
-        public SkillInstance Instance;
 
-        public SkillContext(GameWorld world, GameScene scene, int entity, SkillInstance instance)
+        public SkillContext(GameWorld world, int entity)
         {
             World = world;
-            Scene = scene;
             Entity = entity;
-            Instance = instance;
         }
 
         // ── Static character data ────────────────────────────────
 
-        public CharacterData Data => World.Identity[Entity].Data;
+        public CharacterData Data => GameCatalog.GetCharacter(World.Identity[Entity].CharacterId);
+        public CharacterMovementDef Movement => GameCatalog.GetCharacterMovement(World.Identity[Entity].CharacterId);
+        public CharacterStatsDef Stats => GameCatalog.GetCharacterStats(World.Identity[Entity].CharacterId);
         public int Team => World.Identity[Entity].Team;
+        public SkillDef CurrentSkillDef => GameCatalog.GetSkill(World.Skill[Entity].ActiveSkillId);
+        public int CurrentSkillFrame => World.Skill[Entity].SkillFrame;
 
         // ── Input queries ────────────────────────────────────────
 
@@ -85,7 +85,9 @@ namespace KOF98.Game
             Input = input;
         }
 
-        public CharacterData Data => World.Identity[Entity].Data;
+        public CharacterData Data => GameCatalog.GetCharacter(World.Identity[Entity].CharacterId);
+        public CharacterMovementDef Movement => GameCatalog.GetCharacterMovement(World.Identity[Entity].CharacterId);
+        public CharacterStatsDef Stats => GameCatalog.GetCharacterStats(World.Identity[Entity].CharacterId);
         public Direction Facing => World.Transform[Entity].Facing;
         public int FacingSign => World.Transform[Entity].FacingSign;
         public bool IsGrounded => World.Physics[Entity].IsGrounded;

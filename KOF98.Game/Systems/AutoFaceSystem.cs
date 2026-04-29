@@ -12,7 +12,7 @@ namespace KOF98.Game
             {
                 if (!world.IsAliveSlot(e) || world.Kinds[e] != EntityKind.Character) continue;
                 if (!world.Life[e].IsAlive) continue;
-                if (FrameLineSystem.IsCharacterPaused(world, e)) continue;
+                if (FrameLineSystem.IsEntityFrozen(world, e)) continue;
 
                 if (world.HasTag(e, GameConstants.TAG_ATTACK)) continue;
                 if (world.Status[e].HitstunFrames > 0) continue;

@@ -15,61 +15,62 @@ namespace KOF98.Game
     {
         // ── Step 3: skill selection + idle fallback ──────────────
 
-        public static void SelectAndActivate(GameScene scene)
+        public static void SelectAndActivate(GameWorld world)
         {
-            var w = scene.World;
+            var w = world;
             for (int e = 0; e < GameConstants.MaxCharacters; e++)
             {
                 if (!w.IsAliveSlot(e) || w.Kinds[e] != EntityKind.Character) continue;
                 if (!w.Life[e].IsAlive) continue;
-                if (FrameLineSystem.IsCharacterPaused(w, e)) continue;
+                if (FrameLineSystem.IsEntityFrozen(w, e)) continue;
 
-                TryActivate(scene, e, w.Input[e].Current);
+                TryActivate(w, e, w.Input[e].Current);
 
-                if (w.Skill[e].ActiveSkill == null)
+                if (!w.Skill[e].IsSkillActive)
                 {
-                    var data = w.Identity[e].Data;
-                    if (data != null && data.IdleSkillIndex >= 0
-                        && data.IdleSkillIndex < (data.Skills?.Length ?? 0))
+                    var loadout = GameCatalog.GetCharacterSkillLoadout(w.Identity[e].CharacterId);
+                    if (loadout.IdleSkillIndex >= 0
+                        && loadout.IdleSkillIndex < (loadout.SkillIds?.Length ?? 0))
                     {
-                        Activate(scene, e, data.Skills[data.IdleSkillIndex]);
+                        Activate(w, e, loadout.SkillIds[loadout.IdleSkillIndex]);
                     }
                 }
             }
         }
 
-        public static void TryActivate(GameScene scene, int entity, PlayerInput input)
+        public static void TryActivate(GameWorld w, int entity, PlayerInput input)
         {
-            var w = scene.World;
-
             // Pending (force-activation bypass)
-            if (w.Skill[entity].PendingSkillDef != null)
+            if (w.Skill[entity].PendingSkillId >= 0)
             {
-                var pending = w.Skill[entity].PendingSkillDef;
-                w.Skill[entity].PendingSkillDef = null;
-                Activate(scene, entity, pending);
+                int pendingId = w.Skill[entity].PendingSkillId;
+                w.Skill[entity].PendingSkillId = GameCatalog.InvalidId;
+                Activate(w, entity, pendingId);
                 return;
             }
 
-            var data = w.Identity[entity].Data;
-            if (data == null || data.Skills == null || data.Skills.Length == 0) return;
+            var loadout = GameCatalog.GetCharacterSkillLoadout(w.Identity[entity].CharacterId);
+            if (loadout.SkillIds == null || loadout.SkillIds.Length == 0) return;
 
+            ref var skill = ref w.Skill[entity];
             var stance = w.GetStance(entity);
-            var active = w.Skill[entity].ActiveSkill;
-            int currentActPriority = active?.Def?.ActivationPriority ?? int.MaxValue;
-            bool hasActiveSkill = active != null && active.IsActive;
+            var activeDef = GameCatalog.GetSkill(skill.ActiveSkillId);
+            int currentActPriority = activeDef?.ActivationPriority ?? int.MaxValue;
+            bool hasActiveSkill = skill.IsSkillActive && activeDef != null;
 
             SkillDef best = null;
+            int bestSkillId = GameCatalog.InvalidId;
             int bestActivationPriority = int.MaxValue;
 
             var actCtx = new SkillActivationContext(w, entity, input);
 
-            var skills = data.Skills;
-            for (int i = 0; i < skills.Length; i++)
+            var skillIds = loadout.SkillIds;
+            for (int i = 0; i < skillIds.Length; i++)
             {
-                var def = skills[i];
+                int sid = skillIds[i];
+                var def = GameCatalog.GetSkill(sid);
                 if (def == null) continue;
-                if (active != null && def == active.Def) continue;
+                if (activeDef != null && sid == skill.ActiveSkillId) continue;
 
                 // Layer 1: stance grouping.
                 if (def.AllowedStances != null && def.AllowedStances.Length > 0)
@@ -85,7 +86,7 @@ namespace KOF98.Game
                 // Layer 2: interrupt check (numerically lower = stronger).
                 if (hasActiveSkill && def.InterruptPriority > currentActPriority)
                 {
-                    if (def.Priority <= (active.Def?.Priority ?? -1))
+                    if (def.Priority <= (activeDef?.Priority ?? -1))
                         continue;
                 }
 
@@ -99,49 +100,62 @@ namespace KOF98.Game
                         && (best == null || def.Priority > best.Priority)))
                 {
                     best = def;
+                    bestSkillId = sid;
                     bestActivationPriority = def.ActivationPriority;
                 }
             }
 
-            if (best != null)
-                Activate(scene, entity, best);
+            if (bestSkillId >= 0)
+                Activate(w, entity, bestSkillId);
         }
 
-        public static void Activate(GameScene scene, int entity, SkillDef def)
+        public static void Activate(GameWorld w, int entity, int skillId)
         {
-            Deactivate(scene, entity);
+            Deactivate(w, entity);
 
+            var def = GameCatalog.GetSkill(skillId);
             if (def == null || def.BehaviorFactory == null) return;
 
-            var w = scene.World;
             var behavior = def.BehaviorFactory();
-            var inst = new SkillInstance(def, entity, behavior);
+            ref var skill = ref w.Skill[entity];
+            skill.ActiveSkillId = skillId;
+            skill.SkillFrame = 0;
+            skill.IsSkillActive = true;
+            skill.SkillMutexFlags = 0;
+            w.ActiveBehaviors[entity] = behavior;
 
-            w.Skill[entity].ActiveSkill = inst;
             w.ClearAllTags(entity);
             w.Tags[entity].ActiveTags = def.Tags;
 
-            var ctx = new SkillContext(w, scene, entity, inst);
+            var ctx = new SkillContext(w, entity);
             behavior.Spawn(ctx);
         }
 
-        public static void Deactivate(GameScene scene, int entity)
+        public static void Deactivate(GameWorld w, int entity)
         {
-            var w = scene.World;
-            var inst = w.Skill[entity].ActiveSkill;
-            if (inst == null) return;
+            ref var skill = ref w.Skill[entity];
+            if (!skill.IsSkillActive) return;
 
-            if (inst.Behavior != null)
+            var behavior = w.ActiveBehaviors[entity];
+            if (behavior != null)
             {
-                var ctx = new SkillContext(w, scene, entity, inst);
-                inst.Behavior.Kill(ctx);
+                var ctx = new SkillContext(w, entity);
+                behavior.Kill(ctx);
             }
 
-            inst.IsActive = false;
-            w.Skill[entity].ActiveSkill = null;
+            ClearActiveSkill(ref skill);
+            w.ActiveBehaviors[entity] = null;
             w.ClearAllTags(entity);
             w.ClearHitBoxes(entity);
             w.ClearHurtBoxes(entity);
+        }
+
+        private static void ClearActiveSkill(ref SkillComponent skill)
+        {
+            skill.ActiveSkillId = GameCatalog.InvalidId;
+            skill.SkillFrame = 0;
+            skill.IsSkillActive = false;
+            skill.SkillMutexFlags = 0;
         }
 
         public static void ClearForRound(GameWorld world, int entity)
@@ -150,6 +164,9 @@ namespace KOF98.Game
             // skill behavior cannot push side-effects into a round that has
             // already ended. The caller is expected to also reset tags/boxes.
             world.Skill[entity] = default;
+            world.Skill[entity].ActiveSkillId = GameCatalog.InvalidId;
+            world.Skill[entity].PendingSkillId = GameCatalog.InvalidId;
+            world.ActiveBehaviors[entity] = null;
         }
 
         // ── Step 4: enter-frame collision box update ─────────────
@@ -160,12 +177,14 @@ namespace KOF98.Game
             {
                 if (!world.IsAliveSlot(e) || world.Kinds[e] != EntityKind.Character) continue;
                 if (!world.Life[e].IsAlive) continue;
-                if (FrameLineSystem.IsCharacterPaused(world, e)) continue;
+                if (FrameLineSystem.IsEntityFrozen(world, e)) continue;
 
-                var inst = world.Skill[e].ActiveSkill;
-                if (inst == null || !inst.IsActive) continue;
+                ref var skill = ref world.Skill[e];
+                if (!skill.IsSkillActive) continue;
+                var def = GameCatalog.GetSkill(skill.ActiveSkillId);
+                if (def == null) continue;
 
-                var frames = inst.Def.CollisionFrames;
+                var frames = def.CollisionFrames;
                 if (frames == null || frames.Length == 0) continue;
 
                 world.HitBoxCounts[e] = 0;
@@ -174,7 +193,7 @@ namespace KOF98.Game
                 for (int i = 0; i < frames.Length; i++)
                 {
                     ref var cf = ref frames[i];
-                    if (inst.Frame < cf.StartFrame || inst.Frame >= cf.EndFrame) continue;
+                    if (skill.SkillFrame < cf.StartFrame || skill.SkillFrame >= cf.EndFrame) continue;
 
                     switch (cf.BoxType)
                     {
@@ -209,36 +228,39 @@ namespace KOF98.Game
 
         // ── Step 7: tick behaviors, advance frame, status countdown ─
 
-        public static void TickAndAdvance(GameScene scene)
+        public static void TickAndAdvance(GameWorld w)
         {
-            var w = scene.World;
             for (int e = 0; e < GameConstants.MaxCharacters; e++)
             {
                 if (!w.IsAliveSlot(e) || w.Kinds[e] != EntityKind.Character) continue;
                 if (!w.Life[e].IsAlive) continue;
-                if (FrameLineSystem.IsCharacterPaused(w, e)) continue;
+                if (FrameLineSystem.IsEntityFrozen(w, e)) continue;
 
-                var inst = w.Skill[e].ActiveSkill;
-                if (inst != null && inst.IsActive && inst.Behavior != null)
+                ref var skill = ref w.Skill[e];
+                if (skill.IsSkillActive)
                 {
-                    var ctx = new SkillContext(w, scene, e, inst);
-                    var result = inst.Behavior.Tick(ctx);
+                    var def = GameCatalog.GetSkill(skill.ActiveSkillId);
+                    var behavior = w.ActiveBehaviors[e];
+                    if (def != null && behavior != null)
+                    {
+                        var ctx = new SkillContext(w, e);
+                        var result = behavior.Tick(ctx);
 
-                    if (result == SkillTickResult.Completed)
-                    {
-                        Deactivate(scene, e);
-                    }
-                    else if (!inst.Def.IsLooping
-                        && inst.Def.TotalFrames > 0
-                        && inst.Frame >= inst.Def.TotalFrames)
-                    {
-                        Deactivate(scene, e);
+                        if (result == SkillTickResult.Completed)
+                        {
+                            Deactivate(w, e);
+                        }
+                        else if (!def.IsLooping
+                            && def.TotalFrames > 0
+                            && skill.SkillFrame >= def.TotalFrames)
+                        {
+                            Deactivate(w, e);
+                        }
                     }
                 }
 
                 // Frame counter advance for collision-frame tracking.
-                var advInst = w.Skill[e].ActiveSkill;
-                if (advInst != null) advInst.Frame++;
+                if (w.Skill[e].IsSkillActive) w.Skill[e].SkillFrame++;
 
                 // Status countdown is gated by the character frame line so
                 // a paused character does not bleed hitstun / blockstun.

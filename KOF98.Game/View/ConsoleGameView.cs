@@ -23,11 +23,11 @@ namespace KOF98.Game
             {
                 if (!w.IsAliveSlot(e) || w.Kinds[e] != EntityKind.Character) continue;
 
-                string name = w.Identity[e].Data?.Name ?? $"E{e}";
+                string name = GameCatalog.GetCharacter(w.Identity[e].CharacterId)?.Name ?? $"E{e}";
                 var pos = w.Transform[e].Position;
                 float hp = w.Life[e].HP;
                 int hs = w.Status[e].HitstunFrames;
-                string skill = w.Skill[e].ActiveSkill?.Def?.Name ?? "-";
+                string skill = GameCatalog.GetSkill(w.Skill[e].ActiveSkillId)?.Name ?? "-";
                 Console.Write($"  [{name} T{w.Identity[e].Team} hp{hp:F0} hs{hs} pos({pos.X:F2},{pos.Y:F2}) {skill}]");
             }
             Console.WriteLine();

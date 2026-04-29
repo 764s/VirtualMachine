@@ -11,7 +11,7 @@ namespace KOF98.Game
     /// </summary>
     public class SkillDef
     {
-        public int Id;
+        public int CatalogSkillId;
         public string Name;
 
         /// <summary>Total frames of the skill action (-1 = infinite/looping like idle).</summary>
@@ -60,7 +60,7 @@ namespace KOF98.Game
 
         public SkillDef(int id, string name, int totalFrames, int priority, int tags, bool looping = false)
         {
-            Id = id;
+            CatalogSkillId = id;
             Name = name;
             TotalFrames = totalFrames;
             Priority = priority;

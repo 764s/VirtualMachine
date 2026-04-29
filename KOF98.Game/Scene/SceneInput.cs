@@ -1,5 +1,3 @@
-using System.Collections.Generic;
-
 namespace KOF98.Game
 {
     /// <summary>
@@ -8,13 +6,42 @@ namespace KOF98.Game
     /// </summary>
     public class SceneInput
     {
-        public List<ISceneCommand> Commands = new List<ISceneCommand>();
+        public readonly ISceneCommand[] Commands = new ISceneCommand[GameConstants.MaxSceneCommands];
+        public int CommandCount;
 
-        /// <summary>
-        /// Per-character input keyed by character entity slot index
-        /// (the same id that GameScene.SpawnCharacter returned).
-        /// </summary>
-        public Dictionary<int, PlayerInput> CharacterInputs = new Dictionary<int, PlayerInput>();
+        public readonly PlayerInput[] CharacterInputs = new PlayerInput[GameConstants.MaxCharacters];
+        public readonly bool[] HasCharacterInput = new bool[GameConstants.MaxCharacters];
+
+        public void ClearCharacterInputs()
+        {
+            for (int i = 0; i < GameConstants.MaxCharacters; i++)
+            {
+                CharacterInputs[i] = PlayerInput.Empty;
+                HasCharacterInput[i] = false;
+            }
+        }
+
+        public void SetCharacterInput(int characterEntity, PlayerInput input)
+        {
+            if (characterEntity < 0 || characterEntity >= GameConstants.MaxCharacters) return;
+            CharacterInputs[characterEntity] = input;
+            HasCharacterInput[characterEntity] = true;
+        }
+
+        public bool EnqueueCommand(ISceneCommand command)
+        {
+            if (command == null) return true;
+            if (CommandCount >= Commands.Length) return false;
+            Commands[CommandCount++] = command;
+            return true;
+        }
+
+        public void ClearCommands()
+        {
+            for (int i = 0; i < CommandCount; i++)
+                Commands[i] = null;
+            CommandCount = 0;
+        }
     }
 
     public interface ISceneCommand
@@ -26,19 +53,19 @@ namespace KOF98.Game
     public class CreateCharacterCommand : ISceneCommand
     {
         public int Team;
-        public CharacterData Data;
+        public int CharacterId;
         public FVec2 StartPosition;
 
-        public CreateCharacterCommand(int team, CharacterData data, FVec2 startPosition)
+        public CreateCharacterCommand(int team, int characterId, FVec2 startPosition)
         {
             Team = team;
-            Data = data;
+            CharacterId = characterId;
             StartPosition = startPosition;
         }
 
         public void Apply(GameScene scene)
         {
-            CharacterFactory.Spawn(scene.World, Team, Data, StartPosition);
+            CharacterFactory.Spawn(scene.World, Team, CharacterId, StartPosition);
         }
     }
 
@@ -46,14 +73,14 @@ namespace KOF98.Game
     public class SetAICommand : ISceneCommand
     {
         public int CharacterEntity;
-        public IAIController AI;
+        public AIKind Kind;
 
-        public SetAICommand(int charEntity, IAIController ai)
+        public SetAICommand(int charEntity, AIKind kind)
         {
             CharacterEntity = charEntity;
-            AI = ai;
+            Kind = kind;
         }
 
-        public void Apply(GameScene scene) => scene.SetAI(CharacterEntity, AI);
+        public void Apply(GameScene scene) => scene.SetAI(CharacterEntity, Kind);
     }
 }
