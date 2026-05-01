@@ -56,14 +56,23 @@ jobs:
 
       - name: Run Tests
         run: |
+          # Trust dotnet exit code (Program.Main exits 1 if UnityEngine.Debug.LogError
+          # was called or TestHarness recorded any failures). The grep below is a
+          # belt-and-suspenders fallback in case a future change loses the exit-code
+          # path.
+          set -o pipefail
           dotnet run --project StandaloneRunner/StandaloneRunner.csproj -c Release --no-build 2>&1 | tee test-output.txt
-          # Fail if any test failed
+          dotnet_exit=${PIPESTATUS[0]}
+          if [ "$dotnet_exit" != "0" ]; then
+            echo "::error::Test runner exited with code $dotnet_exit"
+            exit "$dotnet_exit"
+          fi
           if grep -q '\[FAIL\]' test-output.txt; then
-            echo "::error::One or more tests FAILED"
+            echo "::error::Detected [FAIL] markers in test output despite zero exit code"
             exit 1
           fi
           # Extract summary
-          grep 'passed' test-output.txt
+          grep -E 'passed|ALL TESTS' test-output.txt || true
 
       - name: Upload test log
         if: always()

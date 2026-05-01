@@ -55,5 +55,21 @@ public static class Program
         VOM6Tests.RunAll();
         VOM7Tests.RunAll();
         VOM11Tests.RunAll();
+
+        // Centralized fail-fast: any [FAIL] (which always goes through
+        // UnityEngine.Debug.LogError under Assets/Scripts/VM/Tests/) increments
+        // LogErrorCount. Optional TestHarness adoption also routes through it.
+        int failed = UnityEngine.Debug.LogErrorCount + TestHarness.TotalFailed;
+        int passed = TestHarness.TotalPassed;
+        if (failed > 0)
+        {
+            System.Console.Error.WriteLine(
+                $"===== ALL TESTS: passed>={passed} failed={failed} =====");
+            System.Console.Error.WriteLine(
+                "::error::One or more tests FAILED (exit code 1)");
+            System.Environment.Exit(1);
+        }
+        System.Console.WriteLine(
+            $"===== ALL TESTS: passed>={passed} failed=0 =====");
     }
 }
