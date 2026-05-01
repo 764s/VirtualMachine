@@ -197,6 +197,9 @@ Rules:
 - If context is null or empty, use `context=<none>`.
 - Migrated strict call sites must pass a stable context string whose runtime value is exactly `TypeName.MemberName`.
 - Examples: `SkillSystem.Activate`, `SkillContext.Data`, and `GameScene.ResetRound`.
+- `TypeName` is the unqualified C# type name without namespace.
+- For nested types, use `OuterType.InnerType.MemberName`.
+- For generic types, omit generic arity and type arguments.
 - The context may be written as a string literal.
 - The context may be composed from `nameof`, for example `$"{nameof(SkillSystem)}.{nameof(SkillSystem.Activate)}"`.
 - `nameof(TypeName)` alone is not acceptable because it loses the operation boundary.
@@ -303,6 +306,8 @@ Debug access:
 - `ConsoleGameView` character and skill display. Both character and skill text must use the exact matching `DebugDescribe*` result for the handle being displayed.
 - `RaylibGameView` labels, HUD text, and diagnostic display.
   - Text labels must use `DebugDescribe*`.
+  - Numeric widgets that need definition values must first use optional access, for example `TryGetCharacter` followed by `TryGetStats`.
+  - Debug strings are for display text only; do not parse `DebugDescribe*` output to recover numeric data.
   - HP/power bars and other numeric definition-dependent widgets must not be rendered for that entity on that frame when required character or stats definitions are missing.
   - Do not draw empty, disabled, or default-zero bars.
   - Do not substitute placeholder numeric values.
@@ -330,9 +335,10 @@ If no persistent test project exists when this contract is applied, the first im
 
 - Path: `KOF98.Game.Tests/KOF98.Game.Tests.csproj`.
 - Style: framework-free console test project.
+- Framework-free means no xUnit, NUnit, MSTest, `Microsoft.NET.Test.Sdk`, or other test-framework package.
 - Reference: `KOF98.Game/KOF98.Game.csproj`.
 - Dependencies: no package dependencies.
-- Entry point: `Program.cs` runs the focused contract checks.
+- Entry point: `Program.cs` runs the focused contract checks with plain assertion helper methods.
 - Failure mode: throw exceptions or return a non-zero exit code.
 
 Required first-implementation validation commands:
