@@ -89,7 +89,7 @@ namespace FFVM.Debug
                         responseBody = HandleLaunch(arguments);
                         break;
                     case "setBreakpoints":
-                        responseBody = HandleSetBreakpointsCore(arguments);
+                        responseBody = HandleSetBreakpointsLaunch(arguments);
                         break;
                     case "configurationDone":
                         // Configuration phase complete. No state change needed —
@@ -140,6 +140,82 @@ namespace FFVM.Debug
         // ============================================================
         // Launch-mode specific handlers
         // ============================================================
+
+        /// <summary>
+        /// Launch-mode setBreakpoints with <c>source.path</c> bucketing (Phase 1 "止血"):
+        ///
+        /// <list type="bullet">
+        /// <item>If <c>source.path</c> matches the launched <c>_scriptPath</c>, route to the
+        /// module-scoped handler at slot 0 — this clears only slot-0 breakpoints, so requests
+        /// for unrelated files cannot overwrite the main script's breakpoints.</item>
+        /// <item>If <c>source.path</c> is provided but does not match the main script (e.g. an
+        /// included file or an unrelated buffer), return all entries as <c>verified:false</c>
+        /// without touching debugger state. This avoids "looks set but hits the wrong line"
+        /// because launch mode currently only debugs a single program / file.</item>
+        /// <item>If <c>source.path</c> is missing, fall back to the legacy path for back-compat.</item>
+        /// </list>
+        ///
+        /// Long-term fix (file-aware SourceMap + per-frame source) is tracked separately;
+        /// this method only contains the minimal "stop the bleeding" routing change.
+        /// </summary>
+        private JsonObject HandleSetBreakpointsLaunch(JsonObject arguments)
+        {
+            var source = arguments?.GetObject("source");
+            string sourcePath = source?.GetString("path");
+
+            if (string.IsNullOrEmpty(sourcePath))
+            {
+                // No path provided — preserve legacy single-file behaviour.
+                return HandleSetBreakpointsCore(arguments);
+            }
+
+            if (!string.IsNullOrEmpty(_scriptPath) && PathsEqual(sourcePath, _scriptPath))
+            {
+                // Main script — use module-scoped handler so only slot-0 breakpoints are touched.
+                return HandleSetBreakpointsForModule(arguments, 0, _program);
+            }
+
+            // Foreign file — return unverified, do not mutate any debugger state.
+            return BuildAllUnverifiedResponse(arguments);
+        }
+
+        private static bool PathsEqual(string a, string b)
+        {
+            if (string.IsNullOrEmpty(a) || string.IsNullOrEmpty(b))
+                return false;
+            try
+            {
+                string fa = Path.GetFullPath(a);
+                string fb = Path.GetFullPath(b);
+                return string.Equals(fa, fb, StringComparison.OrdinalIgnoreCase);
+            }
+            catch
+            {
+                return string.Equals(a, b, StringComparison.OrdinalIgnoreCase);
+            }
+        }
+
+        private static JsonObject BuildAllUnverifiedResponse(JsonObject arguments)
+        {
+            var body = new JsonObject();
+            var breakpointsList = new List<object>();
+            var breakpointsArr = arguments?.GetArray("breakpoints");
+            if (breakpointsArr != null)
+            {
+                foreach (var bpObj in breakpointsArr)
+                {
+                    int line = 0;
+                    if (bpObj is JsonObject bpJson)
+                        line = bpJson.GetInt("line");
+                    var bp = new JsonObject();
+                    bp.Set("verified", false);
+                    bp.Set("line", line);
+                    breakpointsList.Add(bp);
+                }
+            }
+            body.Set("breakpoints", breakpointsList);
+            return body;
+        }
 
         private JsonObject HandleLaunch(JsonObject arguments)
         {

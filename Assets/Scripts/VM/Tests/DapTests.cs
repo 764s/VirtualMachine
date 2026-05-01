@@ -943,6 +943,115 @@ func main() {
         }
 
         // ================================================================
+        // F. setBreakpoints source.path bucketing (Phase 1 "止血")
+        // ================================================================
+
+        // ===== Test DAP-F01: foreign source.path returns unverified, does not clear existing =====
+        // Scenario: client first sets a real breakpoint on the launched script, then sends
+        // setBreakpoints for an unrelated file. The unrelated request must NOT clear the
+        // existing breakpoint, and must report all of its own entries as verified=false.
+        {
+            string scriptPath = Path.Combine(Path.GetTempPath(), $"dap_f01_{Guid.NewGuid()}.ffs");
+            string foreignPath = Path.Combine(Path.GetTempPath(), $"dap_f01_other_{Guid.NewGuid()}.ffs");
+            File.WriteAllText(scriptPath, @"
+func main() {
+    var x: int = 42
+    var y: int = 7
+    var z: int = x + y
+}");
+
+            try
+            {
+                var session = new DapBatchSession();
+                session.AddRequest("initialize", new JsonObject());
+                session.AddLaunch(scriptPath);
+                // 1) Real breakpoint at line 5 (z = x + y) for the launched script
+                session.AddRequest("setBreakpoints", MakeSetBreakpointsArgs(scriptPath, 5));
+                // 2) Foreign request for a different file — must not clear (1)
+                session.AddRequest("setBreakpoints", MakeSetBreakpointsArgs(foreignPath, 3, 4));
+                session.AddRequest("configurationDone", new JsonObject());
+                session.AddContinue();
+                session.AddRequest("disconnect", new JsonObject());
+                session.Run();
+
+                session.SkipUntilResponse("launch");
+
+                var bp1 = session.ExpectResponse("setBreakpoints");
+                var bps1 = bp1?.GetObject("body")?.GetArray("breakpoints");
+                Assert(bps1 != null && bps1.Count == 1, "DAP-F01: main-script setBreakpoints returned 1 entry");
+                Assert((bps1?[0] as JsonObject)?.GetBool("verified") == true,
+                    "DAP-F01: main-script breakpoint verified=true");
+
+                var bp2 = session.ExpectResponse("setBreakpoints");
+                Assert(bp2?.GetBool("success") == true, "DAP-F01: foreign setBreakpoints request succeeded");
+                var bps2 = bp2?.GetObject("body")?.GetArray("breakpoints");
+                Assert(bps2 != null && bps2.Count == 2,
+                    $"DAP-F01: foreign setBreakpoints returned 2 entries, got {bps2?.Count}");
+                bool allUnverified = true;
+                if (bps2 != null)
+                {
+                    foreach (var entry in bps2)
+                    {
+                        if ((entry as JsonObject)?.GetBool("verified") != false)
+                            allUnverified = false;
+                    }
+                }
+                Assert(allUnverified, "DAP-F01: foreign breakpoints all verified=false");
+
+                // Existing breakpoint must still hit — proves foreign request did not clear state.
+                session.ExpectResponse("configurationDone");
+                var stopped = session.ExpectEvent("stopped");
+                Assert(stopped != null, "DAP-F01: existing main-script breakpoint still hits after foreign request");
+                Assert(stopped?.GetObject("body")?.GetString("reason") == "breakpoint",
+                    "DAP-F01: stopped reason = breakpoint");
+            }
+            finally
+            {
+                if (File.Exists(scriptPath)) File.Delete(scriptPath);
+            }
+        }
+
+        // ===== Test DAP-F02: matching source.path applies breakpoints (path normalization) =====
+        // Scenario: source.path differs in casing/separator from the launch program path
+        // but resolves to the same file via Path.GetFullPath. The breakpoint must still verify.
+        {
+            string scriptPath = Path.Combine(Path.GetTempPath(), $"dap_f02_{Guid.NewGuid()}.ffs");
+            File.WriteAllText(scriptPath, @"
+func main() {
+    var x: int = 1
+    var y: int = 2
+}");
+            // Build an unnormalized variant that still resolves to the same file
+            string unnormalized = Path.Combine(Path.GetDirectoryName(scriptPath) ?? ".", ".",
+                Path.GetFileName(scriptPath));
+
+            try
+            {
+                var session = new DapBatchSession();
+                session.AddRequest("initialize", new JsonObject());
+                session.AddLaunch(scriptPath);
+                session.AddRequest("setBreakpoints", MakeSetBreakpointsArgs(unnormalized, 4));
+                session.AddRequest("configurationDone", new JsonObject());
+                session.AddContinue();
+                session.AddRequest("disconnect", new JsonObject());
+                session.Run();
+
+                session.SkipUntilResponse("launch");
+
+                var bpResp = session.ExpectResponse("setBreakpoints");
+                Assert(bpResp?.GetBool("success") == true, "DAP-F02: setBreakpoints success");
+                var bps = bpResp?.GetObject("body")?.GetArray("breakpoints");
+                Assert(bps != null && bps.Count == 1, "DAP-F02: one breakpoint returned");
+                Assert((bps?[0] as JsonObject)?.GetBool("verified") == true,
+                    "DAP-F02: unnormalized-but-equivalent path verified=true");
+            }
+            finally
+            {
+                if (File.Exists(scriptPath)) File.Delete(scriptPath);
+            }
+        }
+
+        // ================================================================
         // Summary
         // ================================================================
         Debug.Log($"\n===== DapTests: {passed} passed, {failed} failed =====");
