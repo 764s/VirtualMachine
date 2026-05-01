@@ -74,13 +74,13 @@ public static class TestHarness
         if (condition)
         {
             s_suitePassed++;
-            s_totalPassed++;
+            System.Threading.Interlocked.Increment(ref s_totalPassed);
             Debug.Log($"[PASS] {testName}");
         }
         else
         {
             s_suiteFailed++;
-            s_totalFailed++;
+            System.Threading.Interlocked.Increment(ref s_totalFailed);
             Debug.LogError($"[FAIL] {testName}");
         }
     }

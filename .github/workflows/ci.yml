@@ -71,8 +71,8 @@ jobs:
             echo "::error::Detected [FAIL] markers in test output despite zero exit code"
             exit 1
           fi
-          # Extract summary
-          grep -E 'passed|ALL TESTS' test-output.txt || true
+          # Extract aggregated summary line (added by Program.Main)
+          grep -E '^===== ALL TESTS:' test-output.txt || true
 
       - name: Upload test log
         if: always()
