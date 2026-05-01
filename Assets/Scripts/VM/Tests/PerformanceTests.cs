@@ -18,19 +18,12 @@ public static class PerformanceTests
     {
         int passed = 0;
         int failed = 0;
+        TestHarness.BeginSuite("PerformanceTests");
 
         void Assert(bool condition, string testName)
         {
-            if (condition)
-            {
-                Debug.Log($"[PASS] {testName}");
-                passed++;
-            }
-            else
-            {
-                Debug.LogError($"[FAIL] {testName}");
-                failed++;
-            }
+            if (condition) passed++; else failed++;
+            TestHarness.Assert(condition, testName);
         }
 
         // ===== Test P01: 0 GC in bytecode Tick loop (basic) =====
@@ -1115,6 +1108,7 @@ public static class PerformanceTests
         // ===== Summary =====
         Debug.Log($"========================================");
         Debug.Log($"Performance Tests: {passed} passed, {failed} failed");
+        TestHarness.EndSuite();
         Debug.Log($"========================================");
     }
 }

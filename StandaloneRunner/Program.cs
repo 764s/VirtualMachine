@@ -55,5 +55,23 @@ public static class Program
         VOM6Tests.RunAll();
         VOM7Tests.RunAll();
         VOM11Tests.RunAll();
+
+        // Centralized fail-fast: any [FAIL] always goes through
+        // UnityEngine.Debug.LogError (legacy suites and TestHarness alike),
+        // so LogErrorCount is the single source of truth. TestHarness.TotalFailed
+        // is exposed for diagnostic logging only.
+        int failed = UnityEngine.Debug.LogErrorCount;
+        int harnessPassed = TestHarness.TotalPassed;
+        int harnessFailed = TestHarness.TotalFailed;
+        if (failed > 0)
+        {
+            System.Console.Error.WriteLine(
+                $"===== ALL TESTS: failed={failed} (harness passed={harnessPassed} failed={harnessFailed}) =====");
+            System.Console.Error.WriteLine(
+                "::error::One or more tests FAILED (exit code 1)");
+            System.Environment.Exit(1);
+        }
+        System.Console.WriteLine(
+            $"===== ALL TESTS: failed=0 (harness passed={harnessPassed}) =====");
     }
 }

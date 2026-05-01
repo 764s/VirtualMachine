@@ -20,14 +20,15 @@ public static class VOM11Tests
 
     private static void Assert(bool cond, string name)
     {
-        if (cond) { Debug.Log($"[PASS] {name}"); _passed++; }
-        else { Debug.LogError($"[FAIL] {name}"); _failed++; }
+        if (cond) _passed++; else _failed++;
+        TestHarness.Assert(cond, name);
     }
 
     public static void RunAll()
     {
         _passed = 0;
         _failed = 0;
+        TestHarness.BeginSuite("VOM11Tests");
 
         Test_T1_RegisterResidualNotObserved();
         Test_T2_ReadOnlyViolation_NextCallIsClean();
@@ -36,6 +37,7 @@ public static class VOM11Tests
         Test_T5_ZeroAllocOver100Calls();
 
         Debug.Log($"[VOM11Tests] {_passed} passed, {_failed} failed");
+        TestHarness.EndSuite();
         if (_failed > 0)
             throw new Exception($"VOM11Tests failed: {_failed} assertion(s)");
     }
@@ -199,13 +201,14 @@ public static class VOM11Tests
         const double Gate = 5.0;
         if (nsPerOp <= Gate)
         {
-            Debug.Log($"[PASS] VOM11.T4_RentReturnRoundtrip | {nsPerOp:F2} ns/op (gate ≤ {Gate} ns, {totalOps} ops)");
             _passed++;
+            TestHarness.Assert(true, $"VOM11.T4_RentReturnRoundtrip | {nsPerOp:F2} ns/op (gate ≤ {Gate} ns, {totalOps} ops)");
         }
         else
         {
             Debug.Log($"[PASS-WARN] VOM11.T4_RentReturnRoundtrip | {nsPerOp:F2} ns/op exceeds gate {Gate} ns (warn-only, {totalOps} ops)");
             _passed++;
+            TestHarness.RecordPass();
         }
     }
 

@@ -21,8 +21,8 @@ public static class VOM7Tests
 
     private static void Assert(bool cond, string name)
     {
-        if (cond) { Debug.Log($"[PASS] {name}"); _passed++; }
-        else { Debug.LogError($"[FAIL] {name}"); _failed++; }
+        if (cond) _passed++; else _failed++;
+        TestHarness.Assert(cond, name);
     }
 
     private static void AssertEq(int actual, int expected, string name)
@@ -34,6 +34,7 @@ public static class VOM7Tests
     {
         _passed = 0;
         _failed = 0;
+        TestHarness.BeginSuite("VOM7Tests");
 
         Test_MVarRegisters_Size();
         Test_VMData_Blittable();
@@ -43,6 +44,7 @@ public static class VOM7Tests
         Test_VMInstanceView_Roundtrip();
 
         Debug.Log($"[VOM7Tests] {_passed} passed, {_failed} failed");
+        TestHarness.EndSuite();
         if (_failed > 0)
             throw new Exception($"VOM7Tests failed: {_failed} assertion(s)");
     }

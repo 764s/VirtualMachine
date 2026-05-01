@@ -20,19 +20,12 @@ public static class LspDatabaseQueryTests
 	{
 		int passed = 0;
 		int failed = 0;
+		TestHarness.BeginSuite("LspDatabaseQueryTests");
 
 		void Assert(bool condition, string testName)
 		{
-			if (condition)
-			{
-				Debug.Log($"[PASS] {testName}");
-				passed++;
-			}
-			else
-			{
-				Debug.LogError($"[FAIL] {testName}");
-				failed++;
-			}
+			if (condition) passed++; else failed++;
+			TestHarness.Assert(condition, testName);
 		}
 
 		var facade = new InMemoryLspQueryFacade();
@@ -922,6 +915,7 @@ public static class LspDatabaseQueryTests
 		}
 
 		Debug.Log($"[LspDatabaseQueryTests] Completed. Passed={passed}, Failed={failed}");
+		TestHarness.EndSuite();
 	}
 
 	private static CodeDatabaseSnapshot BuildSnapshot(IIndexSnapshot indexSnapshot, IReadOnlyList<DataFact> facts = null)

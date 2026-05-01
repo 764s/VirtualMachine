@@ -16,19 +16,12 @@ public static class CompilerTests
     {
         int passed = 0;
         int failed = 0;
+        TestHarness.BeginSuite("CompilerTests");
 
         void Assert(bool condition, string testName)
         {
-            if (condition)
-            {
-                Debug.Log($"[PASS] {testName}");
-                passed++;
-            }
-            else
-            {
-                Debug.LogError($"[FAIL] {testName}");
-                failed++;
-            }
+            if (condition) passed++; else failed++;
+            TestHarness.Assert(condition, testName);
         }
 
         var compiler = new BytecodeCompiler();
@@ -12645,5 +12638,6 @@ func main() {
         Debug.Log($"========================================");
         Debug.Log($"Compiler Tests: {passed} passed, {failed} failed");
         Debug.Log($"========================================");
+        TestHarness.EndSuite();
     }
 }

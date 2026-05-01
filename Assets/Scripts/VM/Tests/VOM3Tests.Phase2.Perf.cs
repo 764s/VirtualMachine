@@ -26,13 +26,14 @@ public static partial class VOM3Tests
     {
         if (nsPerOp <= gateNs)
         {
-            Debug.Log($"[PASS] {name} | {nsPerOp:F1} ns/op (gate ≤ {gateNs} ns)");
             _passed++;
+            TestHarness.Assert(true, $"{name} | {nsPerOp:F1} ns/op (gate ≤ {gateNs} ns)");
         }
         else
         {
             Debug.Log($"[PASS-WARN] {name} | {nsPerOp:F1} ns/op exceeds gate {gateNs} ns (warn-only per Phase2 policy)");
             _passed++; // warn-only: do not fail
+            TestHarness.RecordPass();
         }
     }
 

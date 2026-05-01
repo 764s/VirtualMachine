@@ -32,11 +32,12 @@ public static class LspCoverageMatrixTests
 	{
 		int passed = 0;
 		int failed = 0;
+		TestHarness.BeginSuite("LspCoverageMatrixTests");
 
 		void Assert(bool condition, string testName)
 		{
-			if (condition) { Debug.Log("[PASS] " + testName); passed++; }
-			else { Debug.LogError("[FAIL] " + testName); failed++; }
+			if (condition) passed++; else failed++;
+			TestHarness.Assert(condition, testName);
 		}
 
 		// LCM-01: registry shape is valid.
@@ -70,6 +71,7 @@ public static class LspCoverageMatrixTests
 		Assert(total > 0 && impl > 0, "LCM-03: report emits non-empty matrix");
 
 		Debug.Log("LspCoverageMatrixTests: " + passed + " passed, " + failed + " failed.");
+		TestHarness.EndSuite();
 	}
 
 	private static string ResolveTestsRoot()

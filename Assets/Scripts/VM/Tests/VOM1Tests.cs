@@ -11,19 +11,12 @@ public static class VOM1Tests
     {
         int passed = 0;
         int failed = 0;
+        TestHarness.BeginSuite("VOM1Tests");
 
         void Assert(bool cond, string name)
         {
-            if (cond)
-            {
-                Debug.Log($"[PASS] {name}");
-                passed++;
-            }
-            else
-            {
-                Debug.LogError($"[FAIL] {name}");
-                failed++;
-            }
+            if (cond) passed++; else failed++;
+            TestHarness.Assert(cond, name);
         }
 
         // ----- MethodHandle.Invalid -----
@@ -100,6 +93,7 @@ public static class VOM1Tests
 
         // ----- Summary -----
         Debug.Log($"[VOM1Tests] {passed} passed, {failed} failed");
+        TestHarness.EndSuite();
         if (failed > 0)
         {
             throw new System.Exception($"VOM1Tests failed: {failed} assertion(s)");

@@ -66,9 +66,9 @@ func plain(a: int, b: int): int {
         try
         {
             VMEngine.StaticReadOnlyCall(world, 0, handle, new Arguments(argBuf), new ReturnSlot(retBuf));
-            Debug.LogError("[FAIL] VOM2.P2_03_NonReadOnlyRejectedByEngine (expected VMABIException)"); _failed++;
+            _failed++; TestHarness.Assert(false, "VOM2.P2_03_NonReadOnlyRejectedByEngine (expected VMABIException)");
         }
-        catch (VMABIException) { Debug.Log("[PASS] VOM2.P2_03_NonReadOnlyRejectedByEngine"); _passed++; }
+        catch (VMABIException) { _passed++; TestHarness.Assert(true, "VOM2.P2_03_NonReadOnlyRejectedByEngine"); }
     }
 
     private static void Phase2_04_ReadOnlyComposesWithExport()
