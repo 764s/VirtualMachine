@@ -21,8 +21,8 @@ This contract is judged by two properties:
    - If an element is missing, different sessions are expected to diverge and the contract is not idempotently applicable.
 
 2. Association
-   - Any two execution ideas must naturally and uniquely lead from the former to the latter.
-   - Equivalent execution ideas must collapse to one implementation path, not several acceptable shapes.
+   - For sequential implementation steps, each step must naturally and uniquely determine the next step.
+   - For alternative approaches to the same requirement, equivalent ideas must collapse to one chosen implementation path, not several acceptable shapes.
    - If two plausible paths remain, this contract must choose one unless a later task explicitly reopens the choice.
 
 Application rule: if a later implementation idea conflicts with these quality rules, change this contract first or ask for clarification. Do not silently implement a weaker interpretation.
