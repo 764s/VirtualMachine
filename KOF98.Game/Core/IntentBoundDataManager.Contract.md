@@ -143,7 +143,12 @@ Required methods:
 
 Debug access must not mutate manager state and must not throw for invalid handles.
 Debug access must be used by views, console output, diagnostics, and migration probes when a readable fallback is needed.
-Debug-classified display call sites must call the matching `DebugDescribe*` method for the displayed definition handle. They must not replace an invalid-handle result with legacy placeholders such as `"-"`, `"none"`, `"?"`, or an entity id string. UI code may add labels, prefixes, layout, colors, or truncation around the returned string, but the returned missing-definition text must remain visible and unchanged when the handle is invalid or missing.
+Debug-classified display call sites must follow these rules:
+
+- Call the matching `DebugDescribe*` method for the displayed definition handle.
+- Do not replace an invalid-handle result with legacy placeholders such as `"-"`, `"none"`, `"?"`, or an entity id string.
+- UI code may add labels, prefixes, layout, colors, or truncation around the returned string.
+- When the handle is invalid or missing, the returned missing-definition text must remain visible and unchanged.
 
 ## Required debug text
 
@@ -168,7 +173,6 @@ Rules:
 - If the pool is empty, use `valid=empty` instead of `valid=0..-1`.
 - `{contextSuffix}` is empty when `context` is null or empty.
 - `{contextSuffix}` is ` context={context}` when context is present.
-- Text displays for optional dependent data must prefer debug descriptions over default values. Numeric or bar displays that depend on optional definition data must be omitted when the definition is missing; they must not draw default-zero bars that make missing data look valid.
 
 ## Required exception semantics
 
@@ -191,7 +195,12 @@ Rules:
 - `{validRange}` is `empty` when the pool count is zero.
 - `{validRange}` is `0..{Count - 1}` otherwise.
 - If context is null or empty, use `context=<none>`.
-- Migrated strict call sites must pass a stable context string in `TypeName.MemberName` form, for example `SkillSystem.Activate`, `SkillContext.Data`, or `GameScene.ResetRound`. Do not use only `nameof(TypeName)` for migrated call sites, because that loses the operation boundary needed for deterministic diagnostics.
+- Migrated strict call sites must pass a stable context string whose runtime value is exactly `TypeName.MemberName`.
+- Examples: `SkillSystem.Activate`, `SkillContext.Data`, and `GameScene.ResetRound`.
+- The context may be written as a string literal.
+- The context may be composed from `nameof`, for example `$"{nameof(SkillSystem)}.{nameof(SkillSystem.Activate)}"`.
+- `nameof(TypeName)` alone is not acceptable because it loses the operation boundary.
+- `nameof(MemberName)` alone is not acceptable because it loses the owning type.
 - Do not include stack traces, random ids, frame numbers, timestamps, or logging categories in the message.
 
 ## Required behavior
@@ -292,7 +301,11 @@ Optional access:
 Debug access:
 
 - `ConsoleGameView` character and skill display. Both character and skill text must use the exact matching `DebugDescribe*` result for the handle being displayed.
-- `RaylibGameView` labels, HUD text, and diagnostic display. Text labels must use `DebugDescribe*`; HP/power bars and other numeric definition-dependent widgets must be skipped when required character or stats definitions are missing.
+- `RaylibGameView` labels, HUD text, and diagnostic display.
+  - Text labels must use `DebugDescribe*`.
+  - HP/power bars and other numeric definition-dependent widgets must not be rendered for that entity on that frame when required character or stats definitions are missing.
+  - Do not draw empty, disabled, or default-zero bars.
+  - Do not substitute placeholder numeric values.
 - `KOF98_CS/Program.cs` winner display. Winner text must use `DebugDescribeCharacter`.
 
 If a future implementation finds a call site not listed here, classify it by intent before editing it. Do not pick an API by convenience.
@@ -313,7 +326,15 @@ Focused tests must cover these cases:
 - `GameSnapshot` does not serialize definition data.
 
 Tests should be focused and should not require Raylib, FFVM, or the existing `KOF98/` app.
-If no persistent test project exists when this contract is applied, the first implementation must add a framework-free console test project at `KOF98.Game.Tests/KOF98.Game.Tests.csproj`. The project must reference `KOF98.Game/KOF98.Game.csproj`, avoid package dependencies, run the focused contract checks from `Program.cs`, and fail by throwing exceptions or returning a non-zero exit code.
+If no persistent test project exists when this contract is applied, the first implementation must add one with these requirements:
+
+- Path: `KOF98.Game.Tests/KOF98.Game.Tests.csproj`.
+- Style: framework-free console test project.
+- Reference: `KOF98.Game/KOF98.Game.csproj`.
+- Dependencies: no package dependencies.
+- Entry point: `Program.cs` runs the focused contract checks.
+- Failure mode: throw exceptions or return a non-zero exit code.
+
 Required first-implementation validation commands:
 
 - `dotnet build KOF98.Game/KOF98.Game.csproj -c Release`
