@@ -24,19 +24,12 @@ public static class LspServerNewTests
     {
         int passed = 0;
         int failed = 0;
+        TestHarness.BeginSuite("LspServerNewTests");
 
         void Assert(bool condition, string testName)
         {
-            if (condition)
-            {
-                Debug.Log($"[PASS] {testName}");
-                passed++;
-            }
-            else
-            {
-                Debug.LogError($"[FAIL] {testName}");
-                failed++;
-            }
+            if (condition) passed++; else failed++;
+            TestHarness.Assert(condition, testName);
         }
 
         // ================================================================
@@ -5859,6 +5852,7 @@ public static class LspServerNewTests
         }
 
         Debug.Log($"[LspServerNewTests] Completed. Passed={passed}, Failed={failed}");
+        TestHarness.EndSuite();
     }
 
     private static JsonObject BuildInitializeParams(string rootPath)

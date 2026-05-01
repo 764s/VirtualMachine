@@ -15,8 +15,8 @@ public static partial class VOM2Tests
 
     private static void Assert(bool cond, string name)
     {
-        if (cond) { Debug.Log($"[PASS] {name}"); _passed++; }
-        else { Debug.LogError($"[FAIL] {name}"); _failed++; }
+        if (cond) _passed++; else _failed++;
+        TestHarness.Assert(cond, name);
     }
 
     /// <summary>
@@ -41,6 +41,7 @@ public static partial class VOM2Tests
     {
         _passed = 0;
         _failed = 0;
+        TestHarness.BeginSuite("VOM2Tests");
 
         RunAbiTypeTests();
         RunStaticReadOnlyCallTests();
@@ -48,6 +49,7 @@ public static partial class VOM2Tests
         RunPhase2ReadOnlyTests();
 
         Debug.Log($"[VOM2Tests] {_passed} passed, {_failed} failed");
+        TestHarness.EndSuite();
         if (_failed > 0)
         {
             throw new Exception($"VOM2Tests failed: {_failed} assertion(s)");

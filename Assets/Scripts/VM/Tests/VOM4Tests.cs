@@ -15,8 +15,8 @@ public static partial class VOM4Tests
 
     private static void Assert(bool cond, string name)
     {
-        if (cond) { Debug.Log($"[PASS] {name}"); _passed++; }
-        else { Debug.LogError($"[FAIL] {name}"); _failed++; }
+        if (cond) _passed++; else _failed++;
+        TestHarness.Assert(cond, name);
     }
 
     /// <summary>
@@ -40,6 +40,7 @@ public static partial class VOM4Tests
     {
         _passed = 0;
         _failed = 0;
+        TestHarness.BeginSuite("VOM4Tests");
 
         RunBasicTests();
         RunHandleTests();
@@ -47,6 +48,7 @@ public static partial class VOM4Tests
         RunPerfTests();
 
         Debug.Log($"[VOM4Tests] {_passed} passed, {_failed} failed");
+        TestHarness.EndSuite();
         if (_failed > 0)
             throw new Exception($"VOM4Tests failed: {_failed} assertion(s)");
     }

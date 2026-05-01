@@ -1,21 +1,25 @@
 using UnityEngine;
 
 /// <summary>
-/// Optional centralized test harness for FFVM test suites.
+/// Centralized test harness for FFVM test suites.
 ///
-/// Existing legacy suites (TreeWalkerTests, CompilerTests, VOM*Tests, ...) keep
-/// their local <c>int passed/failed</c> + <c>Assert</c>-lambda pattern and are
-/// fully captured by <see cref="UnityEngine.Debug"/>'s LogErrorCount in
-/// StandaloneRunner. New suites SHOULD opt in to this harness so we get:
+/// All ~18 standalone test suites under <c>Assets/Scripts/VM/Tests/</c> route
+/// their pass/fail counters through this harness via thin <c>Assert</c>
+/// shims that delegate to <see cref="Assert(bool, string)"/>. Suites bracket
+/// their work with <see cref="BeginSuite"/> / <see cref="EndSuite"/> so we get:
 ///
-///   1. structured per-suite summaries (Passed/Failed counts),
+///   1. structured per-suite summaries (Passed/Failed counts + begin/end banners),
 ///   2. cross-suite aggregate totals visible to <c>Program.Main</c> for the
-///      final exit-code decision,
+///      final exit-code decision (single source of truth: any
+///      <see cref="Debug.LogError"/> still trips fail-fast independently),
 ///   3. consistent <c>[PASS]</c>/<c>[FAIL]</c> log format usable by CI grep
 ///      tools as a belt-and-suspenders fallback.
 ///
-/// Migration is incremental and OPT-IN — there is no requirement to convert
-/// legacy suites in a single change. See Docs/Plan for the rollout plan.
+/// New suites should follow the same convention: call <c>BeginSuite</c> at the
+/// top of <c>RunAll()</c>, <c>EndSuite</c> at the bottom, and route every
+/// assertion through <see cref="Assert(bool, string)"/> (directly or via a
+/// thin local shim that also maintains a local pass/fail counter for the
+/// suite's own end-of-run summary line).
 ///
 /// Typical usage:
 /// <code>
@@ -85,7 +89,8 @@ public static class TestHarness
         }
     }
 
-    /// <summary>End the current suite and emit a summary line.</summary>
+    /// <summary>
+    /// End the current suite and emit a summary line.</summary>
     public static void EndSuite()
     {
         if (!s_suiteOpen) return;
@@ -93,5 +98,18 @@ public static class TestHarness
             $"===== Suite end: {s_currentSuite} | passed={s_suitePassed} failed={s_suiteFailed} =====");
         s_suiteOpen = false;
         s_currentSuite = null;
+    }
+
+    /// <summary>
+    /// Record an already-logged passing assertion in the harness counters.
+    /// Use this for cases where the test wants to print a custom log line
+    /// (e.g. <c>[PASS-WARN]</c> with perf metrics) but still wants the result
+    /// counted by the centralized harness for the final ALL TESTS summary.
+    /// Does NOT itself emit any <c>[PASS]</c> output.
+    /// </summary>
+    public static void RecordPass()
+    {
+        s_suitePassed++;
+        System.Threading.Interlocked.Increment(ref s_totalPassed);
     }
 }

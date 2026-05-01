@@ -29,9 +29,9 @@ public static partial class VOM2Tests
         try
         {
             VMEngine.StaticReadOnlyCall(world, 0, handle, new Arguments(argBuf), new ReturnSlot(retBuf));
-            Debug.LogError("[FAIL] VOM2.FAIL01_ArgCountTooFew (expected VMABIException)"); _failed++;
+            _failed++; TestHarness.Assert(false, "VOM2.FAIL01_ArgCountTooFew (expected VMABIException)");
         }
-        catch (VMABIException) { Debug.Log("[PASS] VOM2.FAIL01_ArgCountTooFew"); _passed++; }
+        catch (VMABIException) { _passed++; TestHarness.Assert(true, "VOM2.FAIL01_ArgCountTooFew"); }
     }
 
     private static void AbiViolation_ArgCountTooMany(VMWorld world, MethodHandle handle)
@@ -41,9 +41,9 @@ public static partial class VOM2Tests
         try
         {
             VMEngine.StaticReadOnlyCall(world, 0, handle, new Arguments(argBuf), new ReturnSlot(retBuf));
-            Debug.LogError("[FAIL] VOM2.FAIL02_ArgCountTooMany (expected VMABIException)"); _failed++;
+            _failed++; TestHarness.Assert(false, "VOM2.FAIL02_ArgCountTooMany (expected VMABIException)");
         }
-        catch (VMABIException) { Debug.Log("[PASS] VOM2.FAIL02_ArgCountTooMany"); _passed++; }
+        catch (VMABIException) { _passed++; TestHarness.Assert(true, "VOM2.FAIL02_ArgCountTooMany"); }
     }
 
     private static void AbiViolation_ReturnSlotTooSmall(VMWorld world, MethodHandle handle)
@@ -53,9 +53,9 @@ public static partial class VOM2Tests
         try
         {
             VMEngine.StaticReadOnlyCall(world, 0, handle, new Arguments(argBuf), new ReturnSlot(Span<Number>.Empty));
-            Debug.LogError("[FAIL] VOM2.FAIL03_ReturnSlotTooSmall (expected VMABIException)"); _failed++;
+            _failed++; TestHarness.Assert(false, "VOM2.FAIL03_ReturnSlotTooSmall (expected VMABIException)");
         }
-        catch (VMABIException) { Debug.Log("[PASS] VOM2.FAIL03_ReturnSlotTooSmall"); _passed++; }
+        catch (VMABIException) { _passed++; TestHarness.Assert(true, "VOM2.FAIL03_ReturnSlotTooSmall"); }
     }
 
     private static void AbiViolation_UnresolvedHandle(VMWorld world)
@@ -65,9 +65,9 @@ public static partial class VOM2Tests
         try
         {
             VMEngine.StaticReadOnlyCall(world, 0, MethodHandle.Invalid, new Arguments(argBuf), new ReturnSlot(retBuf));
-            Debug.LogError("[FAIL] VOM2.FAIL04_UnresolvedHandle (expected VMABIException)"); _failed++;
+            _failed++; TestHarness.Assert(false, "VOM2.FAIL04_UnresolvedHandle (expected VMABIException)");
         }
-        catch (VMABIException) { Debug.Log("[PASS] VOM2.FAIL04_UnresolvedHandle"); _passed++; }
+        catch (VMABIException) { _passed++; TestHarness.Assert(true, "VOM2.FAIL04_UnresolvedHandle"); }
     }
 
     private static void AbiViolation_StaleHandle()
@@ -86,9 +86,9 @@ public static partial class VOM2Tests
         try
         {
             VMEngine.StaticReadOnlyCall(worldS, 0, staleHandle, new Arguments(argBuf), new ReturnSlot(retBuf));
-            Debug.LogError("[FAIL] VOM2.FAIL05_StaleHandle (expected VMABIException)"); _failed++;
+            _failed++; TestHarness.Assert(false, "VOM2.FAIL05_StaleHandle (expected VMABIException)");
         }
-        catch (VMABIException) { Debug.Log("[PASS] VOM2.FAIL05_StaleHandle"); _passed++; }
+        catch (VMABIException) { _passed++; TestHarness.Assert(true, "VOM2.FAIL05_StaleHandle"); }
     }
 
     private static void AbiViolation_ModuleNotLoaded(VMWorld world, MethodHandle handle)
@@ -98,9 +98,9 @@ public static partial class VOM2Tests
         try
         {
             VMEngine.StaticReadOnlyCall(world, 7, handle, new Arguments(argBuf), new ReturnSlot(retBuf));
-            Debug.LogError("[FAIL] VOM2.FAIL06_ModuleNotLoaded (expected VMABIException)"); _failed++;
+            _failed++; TestHarness.Assert(false, "VOM2.FAIL06_ModuleNotLoaded (expected VMABIException)");
         }
-        catch (VMABIException) { Debug.Log("[PASS] VOM2.FAIL06_ModuleNotLoaded"); _passed++; }
+        catch (VMABIException) { _passed++; TestHarness.Assert(true, "VOM2.FAIL06_ModuleNotLoaded"); }
     }
 
     private static void AbiViolation_WorldNull(MethodHandle handle)
@@ -109,8 +109,8 @@ public static partial class VOM2Tests
         try
         {
             VMEngine.StaticReadOnlyCall(null, 0, handle, Arguments.Empty, new ReturnSlot(retBuf));
-            Debug.LogError("[FAIL] VOM2.FAIL07_WorldNull (expected VMABIException)"); _failed++;
+            _failed++; TestHarness.Assert(false, "VOM2.FAIL07_WorldNull (expected VMABIException)");
         }
-        catch (VMABIException) { Debug.Log("[PASS] VOM2.FAIL07_WorldNull"); _passed++; }
+        catch (VMABIException) { _passed++; TestHarness.Assert(true, "VOM2.FAIL07_WorldNull"); }
     }
 }

@@ -19,19 +19,12 @@ public static class TreeWalkerTests
     {
         int passed = 0;
         int failed = 0;
+        TestHarness.BeginSuite("TreeWalkerTests");
 
         void Assert(bool condition, string testName)
         {
-            if (condition)
-            {
-                Debug.Log($"[PASS] {testName}");
-                passed++;
-            }
-            else
-            {
-                Debug.LogError($"[FAIL] {testName}");
-                failed++;
-            }
+            if (condition) passed++; else failed++;
+            TestHarness.Assert(condition, testName);
         }
 
         // ===== Test 1: Arithmetic =====
@@ -1721,5 +1714,6 @@ public static class TreeWalkerTests
         Debug.Log($"========================================");
         Debug.Log($"TreeWalker Tests: {passed} passed, {failed} failed");
         Debug.Log($"========================================");
+        TestHarness.EndSuite();
     }
 }

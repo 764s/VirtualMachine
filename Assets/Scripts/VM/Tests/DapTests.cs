@@ -22,19 +22,12 @@ public static class DapTests
     {
         int passed = 0;
         int failed = 0;
+        TestHarness.BeginSuite("DapTests");
 
         void Assert(bool condition, string testName)
         {
-            if (condition)
-            {
-                Debug.Log($"[PASS] {testName}");
-                passed++;
-            }
-            else
-            {
-                Debug.LogError($"[FAIL] {testName}");
-                failed++;
-            }
+            if (condition) passed++; else failed++;
+            TestHarness.Assert(condition, testName);
         }
 
         // ================================================================
@@ -953,6 +946,7 @@ func main() {
         // Summary
         // ================================================================
         Debug.Log($"\n===== DapTests: {passed} passed, {failed} failed =====");
+        TestHarness.EndSuite();
     }
 
     // ============================================================
