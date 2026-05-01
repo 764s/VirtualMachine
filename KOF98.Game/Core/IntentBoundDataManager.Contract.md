@@ -143,12 +143,6 @@ Required methods:
 
 Debug access must not mutate manager state and must not throw for invalid handles.
 Debug access must be used by views, console output, diagnostics, and migration probes when a readable fallback is needed.
-Debug-classified display call sites must follow these rules:
-
-- Call the matching `DebugDescribe*` method for the displayed definition handle.
-- Do not replace an invalid-handle result with legacy placeholders such as `"-"`, `"none"`, `"?"`, or an entity id string.
-- UI code may add labels, prefixes, layout, colors, or truncation around the returned string.
-- When the handle is invalid or missing, the returned missing-definition text must remain visible and unchanged.
 
 ## Required debug text
 
@@ -195,16 +189,6 @@ Rules:
 - `{validRange}` is `empty` when the pool count is zero.
 - `{validRange}` is `0..{Count - 1}` otherwise.
 - If context is null or empty, use `context=<none>`.
-- All migrated strict call sites must use the mandatory context format `TypeName.MemberName`.
-- Migrated strict call sites must pass a stable context string whose runtime value is exactly `TypeName.MemberName`.
-- Examples: `SkillSystem.Activate`, `SkillContext.Data`, and `GameScene.ResetRound`.
-- `TypeName` is the unqualified C# type name without namespace.
-- For nested types, use `OuterType.InnerType.MemberName`.
-- For generic types, omit generic arity and type arguments.
-- The context may be written as a string literal.
-- The context may be composed from `nameof`, for example `$"{nameof(SkillSystem)}.{nameof(SkillSystem.Activate)}"`.
-- `nameof(TypeName)` alone is not acceptable because it loses the operation boundary.
-- `nameof(MemberName)` alone is not acceptable because it loses the owning type.
 - Do not include stack traces, random ids, frame numbers, timestamps, or logging categories in the message.
 
 ## Required behavior
@@ -304,17 +288,9 @@ Optional access:
 
 Debug access:
 
-- `ConsoleGameView` character and skill display. Both character and skill text must use the exact matching `DebugDescribe*` result for the handle being displayed.
+- `ConsoleGameView` character and skill display.
 - `RaylibGameView` labels, HUD text, and diagnostic display.
-  - Text labels must use `DebugDescribe*`.
-  - Numeric widgets that need definition values must first use optional access, for example `TryGetCharacter` followed by `TryGetStats`.
-  - Debug strings are for display text only; do not parse `DebugDescribe*` output to recover numeric data.
-  - HP/power bars and other numeric definition-dependent widgets must not be rendered for that entity on that frame when required character or stats definitions are missing.
-  - Not rendered means no bar fill, no bar background, no numeric text, no missing-data placeholder, and no reserved widget rectangle for that missing widget.
-  - Other unrelated UI elements keep their normal positions.
-  - Do not draw empty, disabled, or default-zero bars.
-  - Do not substitute placeholder numeric values.
-- `KOF98_CS/Program.cs` winner display. Winner text must use `DebugDescribeCharacter`.
+- `KOF98_CS/Program.cs` winner display.
 
 If a future implementation finds a call site not listed here, classify it by intent before editing it. Do not pick an API by convenience.
 
@@ -334,24 +310,6 @@ Focused tests must cover these cases:
 - `GameSnapshot` does not serialize definition data.
 
 Tests should be focused and should not require Raylib, FFVM, or the existing `KOF98/` app.
-If no persistent test project exists when this contract is applied, the first implementation must add one with these requirements:
-
-- Path: `KOF98.Game.Tests/KOF98.Game.Tests.csproj`.
-- Style: framework-free console test project.
-- Framework-free means no xUnit, NUnit, MSTest, `Microsoft.NET.Test.Sdk`, or other test-framework package.
-- Rationale: the repository currently has no persistent KOF98.Game test project, and this first implementation must avoid new package dependencies while still producing repeatable contract checks.
-- Reference: `KOF98.Game/KOF98.Game.csproj`.
-- Dependencies: no package dependencies.
-- Entry point: `Program.cs` runs the focused contract checks with plain assertion helper methods.
-- Failure mode: throw exceptions or return a non-zero exit code.
-
-Required first-implementation validation commands:
-
-- `dotnet build KOF98.Game/KOF98.Game.csproj -c Release`
-- `dotnet build KOF98.CsSim/KOF98.CsSim.csproj -c Release`
-- `dotnet run --project KOF98.Game.Tests/KOF98.Game.Tests.csproj -c Release`
-
-The first implementation must not add a `KOF98/` validation command unless a later task explicitly migrates or changes the existing `KOF98/` app. This contract intentionally preserves `KOF98/` as out of scope.
 
 ## Implementation boundaries
 
