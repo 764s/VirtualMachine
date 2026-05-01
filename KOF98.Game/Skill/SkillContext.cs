@@ -2,56 +2,61 @@ namespace KOF98.Game
 {
     /// <summary>
     /// Per-call context passed to <see cref="ISkillBehavior"/> methods.
-    /// Exposes the host capabilities a skill behavior needs — modeled after
-    /// the GameSyscalls surface that a VM instance would have access to.
-    ///
-    /// Keep this surface minimal and close to VMWorld semantics so that:
-    ///   - CS simulation behaviors call methods that mirror FFS syscalls.
-    ///   - The future VM-layer wrapper (VMSkillBehavior) gets the same
-    ///     context shape, simplifying side-by-side comparison.
+    /// Wraps a (world, entity) pair and exposes the host
+    /// capabilities a skill behavior needs — modeled after the GameSyscalls
+    /// surface that a future VM instance would have access to.
     /// </summary>
     public struct SkillContext
     {
-        /// <summary>The character owning the skill instance.</summary>
-        public Character Self;
+        public GameWorld World;
+        public int Entity;
 
-        /// <summary>The scene this skill is running in (for cross-character queries).</summary>
-        public GameScene Scene;
-
-        /// <summary>The skill instance currently running.</summary>
-        public SkillInstance Instance;
-
-        public SkillContext(Character self, GameScene scene, SkillInstance instance)
+        public SkillContext(GameWorld world, int entity)
         {
-            Self = self;
-            Scene = scene;
-            Instance = instance;
+            World = world;
+            Entity = entity;
         }
 
-        // ── Input queries (mirror IsInputHeld / IsInputPressed / GetInputDir syscalls) ──
+        // ── Static character data ────────────────────────────────
 
-        public bool IsInputHeld(InputButton btn) => Self.CurrentInput.IsHeld(btn);
-        public bool IsInputPressed(InputButton btn) => Self.CurrentInput.IsPressed(btn);
+        public CharacterData Data => GameCatalog.Characters[World.Identity[Entity].CharacterId];
+        public CharacterMovementDef Movement => GameCatalog.Movements[GameCatalog.Characters[World.Identity[Entity].CharacterId].MovementId];
+        public CharacterStatsDef Stats => GameCatalog.Stats[GameCatalog.Characters[World.Identity[Entity].CharacterId].StatsId];
+        public int Team => World.Identity[Entity].Team;
+        public SkillDef CurrentSkillDef => GameCatalog.GetSkill(World.Skill[Entity].ActiveSkillId);
+        public int CurrentSkillFrame => World.Skill[Entity].SkillFrame;
+
+        // ── Input queries ────────────────────────────────────────
+
+        public bool IsInputHeld(InputButton btn) => World.Input[Entity].Current.IsHeld(btn);
+        public bool IsInputPressed(InputButton btn) => World.Input[Entity].Current.IsPressed(btn);
+
         /// <summary>+1 = forward (relative to facing), -1 = backward, 0 = neutral.</summary>
-        public int GetInputDir() => Self.CurrentInput.GetForwardDir(Self.Facing);
+        public int GetInputDir() => World.Input[Entity].Current.GetForwardDir(World.Transform[Entity].Facing);
 
-        // ── Character state (mirror IsGrounded / GetPosX / etc. syscalls) ──
+        // ── Character state ──────────────────────────────────────
 
-        public bool IsGrounded() => Self.IsGrounded;
-        public float GetPosX() => Self.Body.Position.X;
-        public float GetPosY() => Self.Body.Position.Y;
-        public Direction GetFacing() => Self.Facing;
-        public int GetFacingSign() => Self.FacingSign;
+        public bool IsGrounded() => World.Physics[Entity].IsGrounded;
+        public float GetPosX() => World.Transform[Entity].Position.X;
+        public float GetPosY() => World.Transform[Entity].Position.Y;
+        public Direction GetFacing() => World.Transform[Entity].Facing;
+        public int GetFacingSign() => World.Transform[Entity].FacingSign;
 
-        // ── Character control (mirror SetVelocity / SetFacing syscalls) ──
+        // ── Character control ────────────────────────────────────
 
-        public void SetVelocity(float vx, float vy) =>
-            Self.Body.Velocity = new FVec2(vx, vy);
+        public void SetVelocity(float vx, float vy)
+        {
+            World.Physics[Entity].Velocity = new FVec2(vx, vy);
+        }
+
+        public void SetFacing(Direction facing)
+        {
+            World.Transform[Entity].Facing = facing;
+        }
 
         /// <summary>
-        /// Compute the raw move direction along X in world space, derived from input
-        /// and facing. Same semantics as common/input.ffs getMoveDirX():
-        /// returns +1, -1 or 0 in world coordinates.
+        /// Raw move direction in world space derived from input + facing.
+        /// Returns +1, -1 or 0. Same semantics as common/input.ffs getMoveDirX().
         /// </summary>
         public float GetMoveDirX()
         {
@@ -60,5 +65,34 @@ namespace KOF98.Game
             if (right == left) return 0f;
             return right ? 1f : -1f;
         }
+    }
+
+    /// <summary>
+    /// Read-only context passed to <see cref="SkillDef.CanActivate"/>.
+    /// Exposes just what an activation guard needs without leaking
+    /// mutable internals.
+    /// </summary>
+    public struct SkillActivationContext
+    {
+        public GameWorld World;
+        public int Entity;
+        public PlayerInput Input;
+
+        public SkillActivationContext(GameWorld world, int entity, PlayerInput input)
+        {
+            World = world;
+            Entity = entity;
+            Input = input;
+        }
+
+        public CharacterData Data => GameCatalog.Characters[World.Identity[Entity].CharacterId];
+        public CharacterMovementDef Movement => GameCatalog.Movements[GameCatalog.Characters[World.Identity[Entity].CharacterId].MovementId];
+        public CharacterStatsDef Stats => GameCatalog.Stats[GameCatalog.Characters[World.Identity[Entity].CharacterId].StatsId];
+        public Direction Facing => World.Transform[Entity].Facing;
+        public int FacingSign => World.Transform[Entity].FacingSign;
+        public bool IsGrounded => World.Physics[Entity].IsGrounded;
+        public bool IsAlive => World.Life[Entity].IsAlive;
+        public Stance Stance => World.GetStance(Entity);
+        public bool HasTag(int tagBit) => World.HasTag(Entity, tagBit);
     }
 }

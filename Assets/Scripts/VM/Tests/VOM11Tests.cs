@@ -138,10 +138,10 @@ public static class VOM11Tests
         Span<Number> args = stackalloc Number[rows];   // 1 param per row
         Span<Number> rets = stackalloc Number[rows];   // 1 return per row
         Span<VMError> errs = stackalloc VMError[rows];
-        args[0] = new Number(1);
-        args[1] = new Number(0); // poison row
-        args[2] = new Number(3);
-        args[3] = new Number(4);
+        args[0] = Number.FromInt(1);
+        args[1] = Number.FromInt(0); // poison row
+        args[2] = Number.FromInt(3);
+        args[3] = Number.FromInt(4);
 
         var plan = new BatchPlan(h, rows, args, rets, errs);
 

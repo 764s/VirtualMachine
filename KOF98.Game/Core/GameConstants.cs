@@ -32,6 +32,9 @@ namespace KOF98.Game
         public const int MaxProjectiles = 32;
         public const int MaxEffects = 64;
         public const int MaxActiveSkillsPerCharacter = 4;
+        public const int MaxBlackboardKeys = 32;
+        public const int MaxPendingHits = 64;
+        public const int MaxSceneCommands = 16;
 
         // ── Skill Tags (bitfield positions) ──────────────────────
         public const int TAG_IDLE = 0;

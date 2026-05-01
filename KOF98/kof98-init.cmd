@@ -100,9 +100,7 @@ echo [OK] KOF98 build succeeded.
 ) > KOF98\run-kof98.cmd
 echo [OK] Generated KOF98\run-kof98.cmd
 
-:: --- Step 5: Generate VS Code debug configuration from templates
-
-if not exist ".vscode" mkdir ".vscode"
+:: --- Step 5: Upsert VS Code debug configuration -----------------
 
 :: Detect TargetFramework from KOF98.csproj (e.g. net8.0)
 set "NET_TFM=net8.0"
@@ -112,30 +110,15 @@ for /f "tokens=*" %%L in ('findstr /i "TargetFramework" KOF98\KOF98.csproj') do 
     )
 )
 
-:: Generate launch.json from template (replace __NET_TFM__)
-if exist "KOF98\launch.json.template" (
-    (for /f "usebackq delims=" %%L in ("KOF98\launch.json.template") do (
-        set "LINE=%%L"
-        setlocal enabledelayedexpansion
-        echo(!LINE:__NET_TFM__=%NET_TFM%!
-        endlocal
-    )) > ".vscode\launch.json"
-)
-
-:: Copy tasks.json from template (no substitution needed)
-if exist "KOF98\tasks.json.template" (
-    copy /y "KOF98\tasks.json.template" ".vscode\tasks.json" >nul
-)
-
-if exist ".vscode\launch.json" (
-    echo [OK] Generated .vscode/launch.json  ^(C# + FFVM debug, TFM=%NET_TFM%^)
+if exist "KOF98\merge-vscode-config.ps1" (
+    powershell -NoProfile -ExecutionPolicy Bypass -File "KOF98\merge-vscode-config.ps1" -RepoRoot "%CD%" -Profile "KOF98" -NetTfm "%NET_TFM%"
+    if errorlevel 1 (
+        echo [WARN] Could not upsert .vscode\launch.json / tasks.json
+    ) else (
+        echo [OK] Upserted .vscode\launch.json / .vscode\tasks.json  ^(KOF98 + FFVM, TFM=%NET_TFM%^)
+    )
 ) else (
-    echo [WARN] Could not generate launch.json
-)
-if exist ".vscode\tasks.json" (
-    echo [OK] Generated .vscode/tasks.json
-) else (
-    echo [WARN] Could not generate tasks.json
+    echo [WARN] Missing helper script: KOF98\merge-vscode-config.ps1
 )
 
 :: --- Step 6: Build ffvm-cli (LSP / DAP server) ----------------

@@ -1,152 +1,146 @@
 namespace KOF98.Game
 {
     /// <summary>
-    /// Collision detection and resolution system.
-    /// Handles hit detection (hitbox vs hurtbox), block detection, and push resolution.
+    /// Collision detection and pushbox resolution over ECS components.
     /// </summary>
-    public class CollisionSystem
+    public static class CollisionSystem
     {
         /// <summary>
-        /// Check if a character's attack group hits any opponent's hurtbox.
-        /// Returns the first hit target ID, or -1 if no hit.
+        /// Check whether the attacker's hitbox of the given group overlaps any
+        /// opponent's hurtbox. Returns the first hit target's entity index, or
+        /// -1 if no hit.
         /// </summary>
-        public int CheckAttackHit(CharacterManager chars, int attackerId, int groupId)
+        public static int CheckAttackHit(GameWorld world, int attacker, int groupId)
         {
-            var attacker = chars.Get(attackerId);
-            if (attacker == null) return -1;
+            if (!world.IsAliveSlot(attacker)) return -1;
 
-            // Find the hitbox for the given group
             FRect hitbox = FRect.Empty;
-            for (int i = 0; i < attacker.HitBoxCount; i++)
+            int hitCount = world.HitBoxCounts[attacker];
+            for (int i = 0; i < hitCount; i++)
             {
-                if (attacker.HitBoxes[i].GroupId == groupId)
-                {
-                    hitbox = attacker.HitBoxes[i].Box;
-                    break;
-                }
+                ref var entry = ref world.HitBox(attacker, i);
+                if (entry.GroupId == groupId) { hitbox = entry.Box; break; }
             }
             if (hitbox.IsEmpty) return -1;
 
-            int facingSign = attacker.FacingSign;
-            hitbox.GetWorldBounds(attacker.Body.Position, facingSign,
+            int facingSign = world.Transform[attacker].FacingSign;
+            hitbox.GetWorldBounds(world.Transform[attacker].Position, facingSign,
                 out float hMinX, out float hMinY, out float hMaxX, out float hMaxY);
 
-            // Check against all opponents' hurtboxes
-            for (int i = 0; i < chars.Count; i++)
-            {
-                var target = chars.Get(i);
-                if (target == null || target.Id == attackerId
-                    || target.Team == attacker.Team || !target.IsAlive)
-                    continue;
+            int attackerTeam = world.Identity[attacker].Team;
 
-                int targetFacing = target.FacingSign;
-                for (int j = 0; j < target.HurtBoxCount; j++)
+            for (int t = 0; t < GameConstants.MaxCharacters; t++)
+            {
+                if (t == attacker) continue;
+                if (!world.IsAliveSlot(t) || world.Kinds[t] != EntityKind.Character) continue;
+                if (world.Identity[t].Team == attackerTeam) continue;
+                if (!world.Life[t].IsAlive) continue;
+
+                int targetFacing = world.Transform[t].FacingSign;
+                int hurtCount = world.HurtBoxCounts[t];
+                for (int j = 0; j < hurtCount; j++)
                 {
-                    target.HurtBoxes[j].GetWorldBounds(target.Body.Position, targetFacing,
+                    ref var hurt = ref world.HurtBox(t, j);
+                    hurt.GetWorldBounds(world.Transform[t].Position, targetFacing,
                         out float tMinX, out float tMinY, out float tMaxX, out float tMaxY);
 
                     if (FRect.Overlaps(hMinX, hMinY, hMaxX, hMaxY, tMinX, tMinY, tMaxX, tMaxY))
-                        return target.Id;
+                        return t;
                 }
             }
             return -1;
         }
 
-        /// <summary>
-        /// Check if a character's attack group is blocked by any opponent.
-        /// Returns the blocking target ID, or -1 if not blocked.
-        /// </summary>
-        public int CheckAttackBlocked(CharacterManager chars, int attackerId, int groupId)
+        public static int CheckAttackBlocked(GameWorld world, int attacker, int groupId)
         {
-            var attacker = chars.Get(attackerId);
-            if (attacker == null) return -1;
+            if (!world.IsAliveSlot(attacker)) return -1;
 
             FRect hitbox = FRect.Empty;
-            for (int i = 0; i < attacker.HitBoxCount; i++)
+            int hitCount = world.HitBoxCounts[attacker];
+            for (int i = 0; i < hitCount; i++)
             {
-                if (attacker.HitBoxes[i].GroupId == groupId)
-                {
-                    hitbox = attacker.HitBoxes[i].Box;
-                    break;
-                }
+                ref var entry = ref world.HitBox(attacker, i);
+                if (entry.GroupId == groupId) { hitbox = entry.Box; break; }
             }
             if (hitbox.IsEmpty) return -1;
 
-            int facingSign = attacker.FacingSign;
-            hitbox.GetWorldBounds(attacker.Body.Position, facingSign,
+            int facingSign = world.Transform[attacker].FacingSign;
+            hitbox.GetWorldBounds(world.Transform[attacker].Position, facingSign,
                 out float hMinX, out float hMinY, out float hMaxX, out float hMaxY);
 
-            for (int i = 0; i < chars.Count; i++)
+            int attackerTeam = world.Identity[attacker].Team;
+
+            for (int t = 0; t < GameConstants.MaxCharacters; t++)
             {
-                var target = chars.Get(i);
-                if (target == null || target.Id == attackerId
-                    || target.Team == attacker.Team || !target.IsAlive)
-                    continue;
+                if (t == attacker) continue;
+                if (!world.IsAliveSlot(t) || world.Kinds[t] != EntityKind.Character) continue;
+                if (world.Identity[t].Team == attackerTeam) continue;
+                if (!world.Life[t].IsAlive) continue;
 
-                // Target must be in block state and have a block box
-                if (!target.HasTag(GameConstants.TAG_BLOCK)) continue;
-                if (target.BlockBox.IsEmpty) continue;
+                if (!world.HasTag(t, GameConstants.TAG_BLOCK)) continue;
+                if (world.BlockBoxes[t].IsEmpty) continue;
 
-                int targetFacing = target.FacingSign;
-                target.BlockBox.GetWorldBounds(target.Body.Position, targetFacing,
+                int targetFacing = world.Transform[t].FacingSign;
+                world.BlockBoxes[t].GetWorldBounds(world.Transform[t].Position, targetFacing,
                     out float tMinX, out float tMinY, out float tMaxX, out float tMaxY);
 
                 if (FRect.Overlaps(hMinX, hMinY, hMaxX, hMaxY, tMinX, tMinY, tMaxX, tMaxY))
-                    return target.Id;
+                    return t;
             }
             return -1;
         }
 
         /// <summary>
-        /// Resolve pushbox overlaps between characters.
-        /// Prevents characters from overlapping by pushing them apart equally.
+        /// Resolve pushbox overlaps between alive characters. Pushes the
+        /// pair apart equally and re-clamps to stage bounds.
         /// </summary>
-        public void ResolvePushBoxes(CharacterManager chars)
+        public static void ResolvePushBoxes(GameWorld world)
         {
-            for (int i = 0; i < chars.Count; i++)
+            for (int i = 0; i < GameConstants.MaxCharacters; i++)
             {
-                var a = chars.Get(i);
-                if (a == null || !a.IsAlive) continue;
+                if (!world.IsAliveSlot(i) || world.Kinds[i] != EntityKind.Character) continue;
+                if (!world.Life[i].IsAlive) continue;
 
-                for (int j = i + 1; j < chars.Count; j++)
+                for (int j = i + 1; j < GameConstants.MaxCharacters; j++)
                 {
-                    var b = chars.Get(j);
-                    if (b == null || !b.IsAlive) continue;
+                    if (!world.IsAliveSlot(j) || world.Kinds[j] != EntityKind.Character) continue;
+                    if (!world.Life[j].IsAlive) continue;
 
-                    ResolvePushPair(a, b);
+                    ResolvePair(world, i, j);
                 }
             }
         }
 
-        private void ResolvePushPair(Character a, Character b)
+        private static void ResolvePair(GameWorld world, int a, int b)
         {
-            a.PushBox.GetWorldBounds(a.Body.Position, a.FacingSign,
+            ref var aTr = ref world.Transform[a];
+            ref var bTr = ref world.Transform[b];
+
+            world.PushBoxes[a].GetWorldBounds(aTr.Position, aTr.FacingSign,
                 out float aMinX, out float aMinY, out float aMaxX, out float aMaxY);
-            b.PushBox.GetWorldBounds(b.Body.Position, b.FacingSign,
+            world.PushBoxes[b].GetWorldBounds(bTr.Position, bTr.FacingSign,
                 out float bMinX, out float bMinY, out float bMaxX, out float bMaxY);
 
             if (!FRect.Overlaps(aMinX, aMinY, aMaxX, aMaxY, bMinX, bMinY, bMaxX, bMaxY))
                 return;
 
-            // Calculate horizontal overlap and push apart
             float overlapLeft = aMaxX - bMinX;
             float overlapRight = bMaxX - aMinX;
             float push = (overlapLeft < overlapRight ? overlapLeft : overlapRight) * 0.5f;
 
-            if (a.Body.Position.X < b.Body.Position.X)
+            if (aTr.Position.X < bTr.Position.X)
             {
-                a.Body.Position = new FVec2(a.Body.Position.X - push, a.Body.Position.Y);
-                b.Body.Position = new FVec2(b.Body.Position.X + push, b.Body.Position.Y);
+                aTr.Position = new FVec2(aTr.Position.X - push, aTr.Position.Y);
+                bTr.Position = new FVec2(bTr.Position.X + push, bTr.Position.Y);
             }
             else
             {
-                a.Body.Position = new FVec2(a.Body.Position.X + push, a.Body.Position.Y);
-                b.Body.Position = new FVec2(b.Body.Position.X - push, b.Body.Position.Y);
+                aTr.Position = new FVec2(aTr.Position.X + push, aTr.Position.Y);
+                bTr.Position = new FVec2(bTr.Position.X - push, bTr.Position.Y);
             }
 
-            // Re-clamp to stage bounds
-            a.Body.ClampToStage();
-            b.Body.ClampToStage();
+            PhysicsSystem.ClampToStage(ref aTr.Position);
+            PhysicsSystem.ClampToStage(ref bTr.Position);
         }
     }
 }

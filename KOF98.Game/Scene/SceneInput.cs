@@ -1,69 +1,86 @@
-using System.Collections.Generic;
-
 namespace KOF98.Game
 {
     /// <summary>
-    /// Aggregated input for a single frame, submitted to GameScene.Step().
-    /// Contains scene-level commands and per-character inputs.
+    /// External commands queued for the next scene step (spawn character,
+    /// set AI controller, etc.) and per-character input for that step.
     /// </summary>
     public class SceneInput
     {
-        /// <summary>Scene-level commands (create character, reset round, etc.).</summary>
-        public List<ISceneCommand> Commands = new();
+        public readonly ISceneCommand[] Commands = new ISceneCommand[GameConstants.MaxSceneCommands];
+        public int CommandCount;
 
-        /// <summary>Per-character input. Key = character ID.</summary>
-        public Dictionary<int, PlayerInput> CharacterInputs = new();
+        public readonly PlayerInput[] CharacterInputs = new PlayerInput[GameConstants.MaxCharacters];
+        public readonly bool[] HasCharacterInput = new bool[GameConstants.MaxCharacters];
 
-        public void AddCommand(ISceneCommand cmd) => Commands.Add(cmd);
-        public void SetInput(int charId, PlayerInput input) => CharacterInputs[charId] = input;
-
-        public void Clear()
+        public void ClearCharacterInputs()
         {
-            Commands.Clear();
-            CharacterInputs.Clear();
+            for (int i = 0; i < GameConstants.MaxCharacters; i++)
+            {
+                CharacterInputs[i] = PlayerInput.Empty;
+                HasCharacterInput[i] = false;
+            }
+        }
+
+        public void SetCharacterInput(int characterEntity, PlayerInput input)
+        {
+            if (characterEntity < 0 || characterEntity >= GameConstants.MaxCharacters) return;
+            CharacterInputs[characterEntity] = input;
+            HasCharacterInput[characterEntity] = true;
+        }
+
+        public bool EnqueueCommand(ISceneCommand command)
+        {
+            if (command == null) return true;
+            if (CommandCount >= Commands.Length) return false;
+            Commands[CommandCount++] = command;
+            return true;
+        }
+
+        public void ClearCommands()
+        {
+            for (int i = 0; i < CommandCount; i++)
+                Commands[i] = null;
+            CommandCount = 0;
         }
     }
 
-    /// <summary>
-    /// Interface for scene-level commands.
-    /// Commands are executed at the start of each frame before character updates.
-    /// </summary>
     public interface ISceneCommand
     {
-        void Execute(GameScene scene);
+        void Apply(GameScene scene);
     }
 
-    /// <summary>Create a new character in the scene.</summary>
+    /// <summary>Spawn a new character in the scene.</summary>
     public class CreateCharacterCommand : ISceneCommand
     {
         public int Team;
-        public CharacterData Data;
+        public int CharacterId;
         public FVec2 StartPosition;
 
-        public CreateCharacterCommand(int team, CharacterData data, FVec2 startPos)
+        public CreateCharacterCommand(int team, int characterId, FVec2 startPosition)
         {
             Team = team;
-            Data = data;
-            StartPosition = startPos;
+            CharacterId = characterId;
+            StartPosition = startPosition;
         }
 
-        public void Execute(GameScene scene)
+        public void Apply(GameScene scene)
         {
-            scene.Characters.CreateCharacter(Team, Data, StartPosition);
+            CharacterFactory.Spawn(scene.World, Team, CharacterId, StartPosition);
         }
     }
 
-    /// <summary>Assign an AI controller to a character.</summary>
+    /// <summary>Attach an AI controller to a character.</summary>
     public class SetAICommand : ISceneCommand
     {
-        public int CharId;
-        public IAIController AI;
+        public int CharacterEntity;
+        public AIKind Kind;
 
-        public SetAICommand(int charId, IAIController ai) { CharId = charId; AI = ai; }
-
-        public void Execute(GameScene scene)
+        public SetAICommand(int charEntity, AIKind kind)
         {
-            scene.SetAI(CharId, AI);
+            CharacterEntity = charEntity;
+            Kind = kind;
         }
+
+        public void Apply(GameScene scene) => scene.SetAI(CharacterEntity, Kind);
     }
 }
