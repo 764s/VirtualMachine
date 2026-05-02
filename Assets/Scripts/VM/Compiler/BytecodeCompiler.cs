@@ -60,6 +60,14 @@ namespace FFVM.Compiler
         private List<int> _sourceLines;
         private int _currentLine;  // updated from AST nodes during compilation
 
+        // DAP-F Phase 2: Source File Map — parallel to _instructions, records file id for each emitted instruction.
+        // _fileIdTable maps OriginFile string (or null → 0 = main) to a stable index.
+        // _sourceFiles[0] is always the main compilation unit.
+        private List<int> _sourceFileIds;
+        private List<string> _sourceFiles;
+        private Dictionary<string, int> _fileIdTable;
+        private int _currentFileId;
+
         // DBG2: Symbol Table — collected during compilation
         private List<SymbolEntry> _symbolEntries;
         private string _currentFunctionName;  // current function being compiled
@@ -431,6 +439,13 @@ namespace FFVM.Compiler
             _inlinedCalleesPerFunc = new Dictionary<string, HashSet<string>>();
             _sourceLines = new List<int>();
             _currentLine = 0;
+            // DAP-F Phase 2: initialise file-id tracking. Slot 0 is reserved for the main file
+            // and resolved lazily when the first per-function origin is encountered (or stays "" if absent).
+            _sourceFileIds = new List<int>();
+            _sourceFiles = new List<string> { _mainFilePath ?? "" };
+            _fileIdTable = new Dictionary<string, int>(System.StringComparer.Ordinal);
+            if (_mainFilePath != null) _fileIdTable[_mainFilePath] = 0;
+            _currentFileId = 0;
             _symbolEntries = new List<SymbolEntry>();
 
             // Lang-8: Initialize service bindings for svc.member unified syntax
@@ -684,7 +699,9 @@ namespace FFVM.Compiler
                     _stringConstants.Count > 0 ? _stringConstants.ToArray() : null,
                     _jumpTables.Count > 0 ? _jumpTables.ToArray() : null,
                     _nextExtendedReg,
-                    exportTable
+                    exportTable,
+                    _sourceFileIds.ToArray(),
+                    _sourceFiles.ToArray()
                 ),
                 Errors = _errors,
                 Warnings = _warnings.Count > 0 ? _warnings : null,
@@ -715,6 +732,7 @@ namespace FFVM.Compiler
             _stmtOrder = 0;
             _currentFunctionName = func.Name;
             _currentOriginFile = func.OriginFile;  // Lang-15
+            _currentFileId = GetOrCreateFileId(func.OriginFile);  // DAP-F Phase 2
 
             // Reset source line to the function declaration line so that
             // parameter-binding MOVEs (emitted before the body) map to the
@@ -2256,6 +2274,23 @@ namespace FFVM.Compiler
             _wideA.Add(a);  // O8: preserve full int A value
             // DBG1: record source line for this instruction
             _sourceLines.Add(_currentLine);
+            // DAP-F Phase 2: parallel per-IP file id (defaults to main = 0)
+            _sourceFileIds.Add(_currentFileId);
+        }
+
+        /// <summary>
+        /// DAP-F Phase 2: resolve an origin-file string (from preprocessor / parser)
+        /// to a stable file id, registering a new entry if needed. Null/empty origin maps to slot 0.
+        /// </summary>
+        private int GetOrCreateFileId(string originFile)
+        {
+            if (string.IsNullOrEmpty(originFile)) return 0;
+            if (_fileIdTable.TryGetValue(originFile, out int existing))
+                return existing;
+            int id = _sourceFiles.Count;
+            _sourceFiles.Add(originFile);
+            _fileIdTable[originFile] = id;
+            return id;
         }
 
         /// <summary>
@@ -5296,6 +5331,7 @@ namespace FFVM.Compiler
             var savedInlineExitJumps = _inlineExitJumps;
             var savedInlineDestReg = _inlineDestReg;
             var savedOriginFile = _currentOriginFile;   // Lang-15: save caller's origin
+            var savedFileId = _currentFileId;            // DAP-F Phase 2
 
             _variables = new Dictionary<string, int>(savedVars);      // copy parent scope
             _constValues = new Dictionary<string, Number>(savedConsts);
@@ -5303,6 +5339,7 @@ namespace FFVM.Compiler
             _liveRanges = null; // disable F4 register release inside inline body
             _stmtOrder = 0;
             _currentOriginFile = func.OriginFile;  // Lang-15: switch to inlined function's origin
+            _currentFileId = GetOrCreateFileId(func.OriginFile);  // DAP-F Phase 2
 
             // Lang-15: inject private module vars/consts/struct types for inlined function's origin
             if (func.OriginFile != null && func.OriginFile != savedOriginFile)
@@ -5397,6 +5434,7 @@ namespace FFVM.Compiler
             _inlineExitJumps = savedInlineExitJumps;
             _inlineDestReg = savedInlineDestReg;
             _currentOriginFile = savedOriginFile;  // Lang-15: restore caller's origin
+            _currentFileId = savedFileId;          // DAP-F Phase 2
 
             resultReg = actualDest;
 

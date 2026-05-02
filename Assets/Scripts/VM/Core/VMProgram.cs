@@ -61,6 +61,21 @@ namespace FFVM
         /// <summary>DBG1: IP → source line number mapping. Parallel array to Instructions. Null in release builds.</summary>
         public readonly int[] SourceMap;
 
+        /// <summary>
+        /// DAP-F Phase 2: IP → source file id mapping. Parallel array to <see cref="SourceMap"/>.
+        /// Null when <see cref="SourceMap"/> is null. Each entry is an index into <see cref="SourceFiles"/>;
+        /// 0 is always the main compilation unit. Sentinel slot carries -1.
+        /// </summary>
+        public readonly int[] SourceFileMap;
+
+        /// <summary>
+        /// DAP-F Phase 2: file id → source file path. Index 0 is the main compilation unit;
+        /// subsequent indices correspond to included files (preprocessor <c>OriginFile</c>).
+        /// Strings are stored as the compiler saw them; callers should normalise before comparison
+        /// (e.g. via <see cref="System.IO.Path.GetFullPath(string)"/>).
+        /// </summary>
+        public readonly string[] SourceFiles;
+
         /// <summary>DBG2: Variable symbol table for debugging. Null in release builds.</summary>
         public readonly SymbolEntry[] SymbolTable;
 
@@ -88,7 +103,7 @@ namespace FFVM
         public VMProgram(Instruction[] instructions, Number[] constants, int requiredRegisters,
             FunctionEntry[] functions = null, int[] sourceMap = null, SymbolEntry[] symbolTable = null,
             string[] stringConstants = null, int[][] jumpTables = null, int requiredExtendedRegisters = 0,
-            ExportTable exportTable = null)
+            ExportTable exportTable = null, int[] sourceFileMap = null, string[] sourceFiles = null)
         {
             // O15: append SENTINEL — allows removing per-instruction boundary check in ExecuteInstance.
             var withSentinel = new Instruction[instructions.Length + 1];
@@ -113,11 +128,56 @@ namespace FFVM
                 SourceMap = null;
             }
 
+            // DAP-F Phase 2: SourceFileMap parallels SourceMap and must be the same length
+            // (including sentinel). When the caller does not provide one, default every IP to
+            // file id 0 so consumers always have a valid array to read from.
+            if (sourceMap != null)
+            {
+                var srcFileMap = new int[sourceMap.Length + 1];
+                if (sourceFileMap != null)
+                {
+                    int copyLen = System.Math.Min(sourceFileMap.Length, sourceMap.Length);
+                    System.Array.Copy(sourceFileMap, srcFileMap, copyLen);
+                }
+                srcFileMap[sourceMap.Length] = -1;
+                SourceFileMap = srcFileMap;
+            }
+            else
+            {
+                SourceFileMap = null;
+            }
+
+            SourceFiles = sourceFiles;
+
             SymbolTable = symbolTable;
             StringConstants = stringConstants ?? System.Array.Empty<string>();
             JumpTables = jumpTables ?? System.Array.Empty<int[]>();
             RequiredExtendedRegisters = requiredExtendedRegisters;
             ExportTable = exportTable;
+        }
+
+        /// <summary>
+        /// DAP-F Phase 2: resolve a client-supplied source path to a <see cref="SourceFiles"/> index.
+        /// Comparison is path-normalised + case-insensitive (matches <c>DapServer.PathsEqual</c>).
+        /// Returns -1 if the path is empty, the program has no debug info, or no file matches.
+        /// </summary>
+        public int TryFindFileId(string sourcePath)
+        {
+            if (string.IsNullOrEmpty(sourcePath) || SourceFiles == null) return -1;
+            string target;
+            try { target = System.IO.Path.GetFullPath(sourcePath); }
+            catch { target = sourcePath; }
+            for (int i = 0; i < SourceFiles.Length; i++)
+            {
+                string candidate = SourceFiles[i];
+                if (string.IsNullOrEmpty(candidate)) continue;
+                string normalized;
+                try { normalized = System.IO.Path.GetFullPath(candidate); }
+                catch { normalized = candidate; }
+                if (string.Equals(normalized, target, System.StringComparison.OrdinalIgnoreCase))
+                    return i;
+            }
+            return -1;
         }
 
         /// <summary>
