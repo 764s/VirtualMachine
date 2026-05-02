@@ -79,6 +79,9 @@ namespace FFVM.Debug
 
         /// <summary>
         /// Handle the "stackTrace" request. Returns call stack frames with source info.
+        /// DAP-F Phase 3: each frame uses its own SourceFileId (from <c>VMProgram.SourceFiles</c>)
+        /// so frames in included files report their real path; falls back to <c>_scriptPath</c>
+        /// when debug info is missing.
         /// </summary>
         protected JsonObject HandleStackTrace()
         {
@@ -97,11 +100,20 @@ namespace FFVM.Debug
                     frame.Set("line", entry.SourceLine);
                     frame.Set("column", 1); // FFVM source map only tracks line numbers
 
-                    if (!string.IsNullOrEmpty(_scriptPath))
+                    // DAP-F Phase 3: prefer per-frame source file from SourceFiles[fileId];
+                    // fall back to _scriptPath when fileId is 0 / out of range or SourceFiles is null.
+                    string framePath = ResolveFrameSourcePath(entry.SourceFileId);
+                    if (!string.IsNullOrEmpty(framePath))
                     {
                         var source = new JsonObject();
-                        source.Set("name", Path.GetFileName(_scriptPath));
-                        source.Set("path", Path.GetFullPath(_scriptPath));
+                        source.Set("name", Path.GetFileName(framePath));
+                        // Path.GetFullPath can throw on malformed paths from compiler input
+                        // (e.g. an OriginFile that contains invalid characters). The fallback
+                        // to the raw path is acceptable because (a) it is still a valid string
+                        // for the client to display, and (b) breakpoint matching uses the same
+                        // try/catch pattern in TryFindFileId, so consistency is preserved.
+                        try { source.Set("path", Path.GetFullPath(framePath)); }
+                        catch { source.Set("path", framePath); }
                         frame.Set("source", source);
                     }
 
@@ -112,6 +124,22 @@ namespace FFVM.Debug
             body.Set("stackFrames", stackFrames);
             body.Set("totalFrames", stackFrames.Count);
             return body;
+        }
+
+        /// <summary>
+        /// DAP-F Phase 3: pick the source path for a stack frame given its file id.
+        /// Returns the program's <c>SourceFiles[fileId]</c> when available and non-empty;
+        /// otherwise returns <c>_scriptPath</c> so legacy single-file flows keep working.
+        /// </summary>
+        private string ResolveFrameSourcePath(int fileId)
+        {
+            if (_program != null && _program.SourceFiles != null
+                && fileId >= 0 && fileId < _program.SourceFiles.Length)
+            {
+                string p = _program.SourceFiles[fileId];
+                if (!string.IsNullOrEmpty(p)) return p;
+            }
+            return _scriptPath;
         }
 
         /// <summary>
@@ -313,8 +341,19 @@ namespace FFVM.Debug
         /// </summary>
         protected JsonObject HandleSetBreakpointsForModule(JsonObject arguments, int moduleSlot, VMProgram moduleProgram)
         {
-            // Clear only this module's breakpoints (not all modules)
-            _debugger?.ClearBreakpoints(moduleSlot);
+            return HandleSetBreakpointsForModule(arguments, moduleSlot, moduleProgram, 0);
+        }
+
+        /// <summary>
+        /// DAP-F Phase 2: file-aware "setBreakpoints". Verifies each requested line against
+        /// <c>SourceMap</c> + <c>SourceFileMap</c> at the supplied <paramref name="fileId"/>, and
+        /// stores breakpoints in the per-(slot, fileId) bucket so requests for different files
+        /// in the same module no longer overwrite each other.
+        /// </summary>
+        protected JsonObject HandleSetBreakpointsForModule(JsonObject arguments, int moduleSlot, VMProgram moduleProgram, int fileId)
+        {
+            // Clear only this (module, file) pair so other files' breakpoints are preserved.
+            _debugger?.ClearBreakpoints(moduleSlot, fileId);
 
             var body = new JsonObject();
             var breakpointsList = new List<object>();
@@ -322,6 +361,8 @@ namespace FFVM.Debug
             var breakpointsArr = arguments?.GetArray("breakpoints");
             if (breakpointsArr != null)
             {
+                int[] map = moduleProgram?.SourceMap;
+                int[] fileMap = moduleProgram?.SourceFileMap;
                 foreach (var bpObj in breakpointsArr)
                 {
                     int line = 0;
@@ -330,18 +371,20 @@ namespace FFVM.Debug
 
                     bool verified = false;
 
-                    if (moduleProgram?.SourceMap != null && line > 0)
+                    if (map != null && line > 0)
                     {
-                        for (int ip = 0; ip < moduleProgram.SourceMap.Length; ip++)
+                        for (int ip = 0; ip < map.Length; ip++)
                         {
-                            if (moduleProgram.SourceMap[ip] == line)
-                            {
-                                verified = true;
-                                break;
-                            }
+                            if (map[ip] != line) continue;
+                            // Match fileId when SourceFileMap is available; otherwise accept
+                            // any IP on this line (legacy single-file programs).
+                            if (fileMap != null && ip < fileMap.Length && fileMap[ip] != fileId)
+                                continue;
+                            verified = true;
+                            break;
                         }
                         if (verified)
-                            _debugger?.AddBreakpoint(moduleSlot, line);
+                            _debugger?.AddBreakpoint(moduleSlot, fileId, line);
                     }
                     else if (line > 0)
                     {

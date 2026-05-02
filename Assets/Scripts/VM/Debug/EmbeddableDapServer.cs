@@ -309,7 +309,9 @@ namespace FFVM.Debug
             var source = arguments?.GetObject("source");
             string sourcePath = source?.GetString("path");
 
-            // Try to resolve source path → moduleSlot
+            // Try to resolve source path → (moduleSlot, fileId).
+            // First match against registered module main paths; then, if no module match,
+            // probe each module's SourceFiles for an included-file match (DAP-F Phase 2).
             if (!string.IsNullOrEmpty(sourcePath))
             {
                 string normalizedSource = Path.GetFullPath(sourcePath);
@@ -322,7 +324,21 @@ namespace FFVM.Debug
                         int moduleSlot = kv.Key;
                         var moduleProgram = _world?.Modules.Get(moduleSlot);
                         Console.WriteLine($"[DAP] setBreakpoints: resolved '{Path.GetFileName(sourcePath)}' → module {moduleSlot}");
-                        return HandleSetBreakpointsForModule(arguments, moduleSlot, moduleProgram);
+                        return HandleSetBreakpointsForModule(arguments, moduleSlot, moduleProgram, 0);
+                    }
+                }
+
+                // DAP-F Phase 2: included-file probe across all loaded modules.
+                foreach (var kv in _moduleScriptPaths)
+                {
+                    int moduleSlot = kv.Key;
+                    var moduleProgram = _world?.Modules.Get(moduleSlot);
+                    if (moduleProgram == null) continue;
+                    int fileId = moduleProgram.TryFindFileId(sourcePath);
+                    if (fileId > 0)
+                    {
+                        Console.WriteLine($"[DAP] setBreakpoints: resolved '{Path.GetFileName(sourcePath)}' → module {moduleSlot} (included fileId={fileId})");
+                        return HandleSetBreakpointsForModule(arguments, moduleSlot, moduleProgram, fileId);
                     }
                 }
 

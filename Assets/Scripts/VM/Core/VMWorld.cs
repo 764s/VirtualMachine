@@ -363,6 +363,8 @@ namespace FFVM
             // Cache debugger reference for the duration of this execution burst
             var dbg = Debugger;
             var srcMap = (dbg != null) ? program.SourceMap : null;
+            // DAP-F Phase 2: parallel file-id map for file-aware breakpoint checks.
+            var srcFileMap = (dbg != null) ? program.SourceFileMap : null;
 
             // DC: WasInCleanup flag packed into high bit of CallFrame.CleanupBase.
             // Allows InCleanup state to be saved/restored across nested cleanup calls.
@@ -395,7 +397,7 @@ namespace FFVM
                     // --- Breakpoint check (zero overhead when Debugger is null) ---
                     if (srcMap != null)
                     {
-                        if (dbg.CheckBreakpoint(vmd.InstanceId, cpu.IP, srcMap, cpu.CallStackDepth, vmd.ModuleSlot) && dbg.HaltOnBreakpoint)
+                        if (dbg.CheckBreakpoint(vmd.InstanceId, cpu.IP, srcMap, srcFileMap, cpu.CallStackDepth, vmd.ModuleSlot) && dbg.HaltOnBreakpoint)
                         {
                             // DAP mode: halt BEFORE executing the instruction so the user
                             // sees the breakpoint line as the current line in stackTrace.

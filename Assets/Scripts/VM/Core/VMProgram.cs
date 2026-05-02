@@ -64,7 +64,9 @@ namespace FFVM
         /// <summary>
         /// DAP-F Phase 2: IP → source file id mapping. Parallel array to <see cref="SourceMap"/>.
         /// Null when <see cref="SourceMap"/> is null. Each entry is an index into <see cref="SourceFiles"/>;
-        /// 0 is always the main compilation unit. Sentinel slot carries -1.
+        /// 0 is always the main compilation unit. The trailing slot — parallel to the
+        /// <c>SENTINEL</c> instruction appended at the end of <see cref="Instructions"/> /
+        /// <see cref="SourceMap"/> — carries -1 to signal "not a real instruction".
         /// </summary>
         public readonly int[] SourceFileMap;
 

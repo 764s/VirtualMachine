@@ -142,21 +142,18 @@ namespace FFVM.Debug
         // ============================================================
 
         /// <summary>
-        /// Launch-mode setBreakpoints with <c>source.path</c> bucketing (Phase 1 "止血"):
+        /// Launch-mode setBreakpoints with <c>source.path</c> + file-id routing (DAP-F Phase 2).
         ///
         /// <list type="bullet">
-        /// <item>If <c>source.path</c> matches the launched <c>_scriptPath</c>, route to the
-        /// module-scoped handler at slot 0 — this clears only slot-0 breakpoints, so requests
-        /// for unrelated files cannot overwrite the main script's breakpoints.</item>
-        /// <item>If <c>source.path</c> is provided but does not match the main script (e.g. an
-        /// included file or an unrelated buffer), return all entries as <c>verified:false</c>
-        /// without touching debugger state. This avoids "looks set but hits the wrong line"
-        /// because launch mode currently only debugs a single program / file.</item>
-        /// <item>If <c>source.path</c> is missing, fall back to the legacy path for back-compat.</item>
+        /// <item>If <c>source.path</c> matches the launched <c>_scriptPath</c>, route to slot 0,
+        /// fileId 0 — the main compilation unit.</item>
+        /// <item>If <c>source.path</c> matches an included file recorded in
+        /// <see cref="VMProgram.SourceFiles"/> (via <see cref="VMProgram.TryFindFileId"/>),
+        /// route to slot 0 with that fileId so breakpoints in headers actually verify and hit.</item>
+        /// <item>If <c>source.path</c> is provided but cannot be resolved to a known compilation unit,
+        /// return all entries as <c>verified:false</c> without touching debugger state.</item>
+        /// <item>If <c>source.path</c> is missing, fall back to the legacy line-only path for back-compat.</item>
         /// </list>
-        ///
-        /// Long-term fix (file-aware SourceMap + per-frame source) is tracked separately;
-        /// this method only contains the minimal "stop the bleeding" routing change.
         /// </summary>
         private JsonObject HandleSetBreakpointsLaunch(JsonObject arguments)
         {
@@ -171,11 +168,18 @@ namespace FFVM.Debug
 
             if (!string.IsNullOrEmpty(_scriptPath) && PathsEqual(sourcePath, _scriptPath))
             {
-                // Main script — use module-scoped handler so only slot-0 breakpoints are touched.
-                return HandleSetBreakpointsForModule(arguments, 0, _program);
+                // Main script — slot 0, fileId 0.
+                return HandleSetBreakpointsForModule(arguments, 0, _program, 0);
             }
 
-            // Foreign file — return unverified, do not mutate any debugger state.
+            // DAP-F Phase 2: try resolving against included files recorded in SourceFiles.
+            int fileId = _program != null ? _program.TryFindFileId(sourcePath) : -1;
+            if (fileId > 0)
+            {
+                return HandleSetBreakpointsForModule(arguments, 0, _program, fileId);
+            }
+
+            // Foreign / unknown file — return unverified, do not mutate any debugger state.
             return BuildAllUnverifiedResponse(arguments);
         }
 
@@ -247,9 +251,13 @@ namespace FFVM.Debug
                 }
             }
 
-            // Compile the script
+            // Compile the script. DAP-F Phase 2: enable include resolution so cross-file
+            // breakpoints (set on included files) can be verified against SourceFileMap.
             var compiler = new BytecodeCompiler();
-            var result = compiler.Compile(source, "main", syscalls, syscallTable);
+            string scriptDirForIncludes = Path.GetDirectoryName(Path.GetFullPath(_scriptPath)) ?? ".";
+            var fileResolver = new FileSystemFileResolver(scriptDirForIncludes);
+            string mainAbsPath = Path.GetFullPath(_scriptPath);
+            var result = compiler.Compile(source, "main", syscalls, syscallTable, fileResolver, mainAbsPath);
 
             if (!result.Success)
                 throw new InvalidOperationException($"launch: compilation failed: {string.Join("; ", result.Errors)}");

@@ -1052,6 +1052,371 @@ func main() {
         }
 
         // ================================================================
+        // X. DAP-F Phase 2/3: file-aware breakpoints + per-frame source path
+        // ================================================================
+
+        // Shared fixture builder: writes a main script + included file in the same temp dir.
+        // The two files deliberately share line numbers so we can prove file-aware routing.
+        // Returns (mainPath, libPath); caller is responsible for cleanup.
+        (string mainPath, string libPath) WriteCrossFileFixture(string tag, string mainBody, string libBody)
+        {
+            string dir = Path.Combine(Path.GetTempPath(), $"dap_{tag}_{Guid.NewGuid():N}");
+            Directory.CreateDirectory(dir);
+            string libPath = Path.Combine(dir, "lib.ffs");
+            string mainPath = Path.Combine(dir, "main.ffs");
+            File.WriteAllText(libPath, libBody);
+            File.WriteAllText(mainPath, mainBody);
+            return (mainPath, libPath);
+        }
+
+        void CleanupFixture(string mainPath)
+        {
+            try
+            {
+                string dir = Path.GetDirectoryName(mainPath);
+                if (!string.IsNullOrEmpty(dir) && Directory.Exists(dir))
+                    Directory.Delete(dir, true);
+            }
+            catch { /* best-effort */ }
+        }
+
+        // ===== Test DAP-X01: included file source.path verifies + hits =====
+        // Setting a breakpoint inside an included file must verify against SourceFileMap and
+        // actually halt execution when the included function runs.
+        {
+            // Lib defines helper(); main calls it. The breakpoint goes on helper's body line.
+            string libBody =
+                "func helper(): int {\n" +
+                "    var a: int = 11\n" +     // line 2 in lib.ffs — target
+                "    return a\n" +
+                "}\n";
+            string mainBody =
+                "include \"lib.ffs\"\n" +
+                "func main() {\n" +
+                "    var r: int = helper()\n" +  // line 3 in main.ffs
+                "    var s: int = r + 1\n" +
+                "}\n";
+            var (mainPath, libPath) = WriteCrossFileFixture("x01", mainBody, libBody);
+            try
+            {
+                var session = new DapBatchSession();
+                session.AddRequest("initialize", new JsonObject());
+                session.AddLaunch(mainPath);
+                session.AddRequest("setBreakpoints", MakeSetBreakpointsArgs(libPath, 2));
+                session.AddRequest("configurationDone", new JsonObject());
+                session.AddContinue();
+                session.AddRequest("disconnect", new JsonObject());
+                session.Run();
+
+                session.SkipUntilResponse("launch");
+                var bpResp = session.ExpectResponse("setBreakpoints");
+                Assert(bpResp?.GetBool("success") == true, "DAP-X01: setBreakpoints success");
+                var bps = bpResp?.GetObject("body")?.GetArray("breakpoints");
+                Assert(bps != null && bps.Count == 1, "DAP-X01: 1 entry returned");
+                Assert((bps?[0] as JsonObject)?.GetBool("verified") == true,
+                    "DAP-X01: included-file breakpoint verified=true");
+
+                var stopped = session.ExpectEvent("stopped");
+                Assert(stopped != null, "DAP-X01: included-file breakpoint actually halts execution");
+                Assert(stopped?.GetObject("body")?.GetString("reason") == "breakpoint",
+                    "DAP-X01: stopped reason = breakpoint");
+            }
+            finally { CleanupFixture(mainPath); }
+        }
+
+        // ===== Test DAP-X02: same line number in main vs included → no cross-trigger =====
+        // Both files have a "var a: int = 1" on line 3. A breakpoint set ONLY on the
+        // included file's line 3 must not fire when main.ffs reaches its own line 3.
+        {
+            string libBody =
+                "func helper(): int {\n" +     // 1
+                "    // pad\n" +                // 2
+                "    var a: int = 1\n" +        // 3 — included target
+                "    return a\n" +              // 4
+                "}\n";                          // 5
+            string mainBody =
+                "include \"lib.ffs\"\n" +       // 1
+                "func main() {\n" +             // 2
+                "    var a: int = 1\n" +        // 3 — same line number as lib, should NOT fire
+                "    var r: int = helper()\n" + // 4
+                "}\n";                          // 5
+            var (mainPath, libPath) = WriteCrossFileFixture("x02", mainBody, libBody);
+            try
+            {
+                var session = new DapBatchSession();
+                session.AddRequest("initialize", new JsonObject());
+                session.AddLaunch(mainPath);
+                // BP only on included line 3
+                session.AddRequest("setBreakpoints", MakeSetBreakpointsArgs(libPath, 3));
+                session.AddRequest("configurationDone", new JsonObject());
+                session.AddContinue();
+                session.AddStackTrace();   // captured at the stop
+                session.AddRequest("disconnect", new JsonObject());
+                session.Run();
+
+                session.SkipUntilResponse("launch");
+                var bpResp = session.ExpectResponse("setBreakpoints");
+                var bps = bpResp?.GetObject("body")?.GetArray("breakpoints");
+                Assert((bps?[0] as JsonObject)?.GetBool("verified") == true,
+                    "DAP-X02: included-file BP verified");
+
+                var stopped = session.ExpectEvent("stopped");
+                Assert(stopped != null, "DAP-X02: stopped event received");
+
+                // Get stackTrace and confirm the top frame source.path is lib.ffs (Phase 3 check)
+                var stResp = session.ExpectResponse("stackTrace");
+                var frames = stResp?.GetObject("body")?.GetArray("stackFrames");
+                Assert(frames != null && frames.Count >= 1, "DAP-X02: stackFrames present");
+                var topFrame = frames?[0] as JsonObject;
+                int hitLine = topFrame?.GetInt("line") ?? -1;
+                Assert(hitLine == 3, $"DAP-X02: stopped at line 3 (got {hitLine})");
+                string topPath = topFrame?.GetObject("source")?.GetString("path");
+                Assert(!string.IsNullOrEmpty(topPath) &&
+                    string.Equals(Path.GetFullPath(topPath), Path.GetFullPath(libPath),
+                        StringComparison.OrdinalIgnoreCase),
+                    $"DAP-X02 (Phase 3): top frame source.path is lib.ffs, got '{topPath}'");
+            }
+            finally { CleanupFixture(mainPath); }
+        }
+
+        // ===== Test DAP-X03: per-file buckets — second setBreakpoints does not clear first =====
+        // First request sets a BP in main.ffs; second request sets a BP in lib.ffs.
+        // Both must remain active and both must hit (in order: main first, then lib).
+        {
+            string libBody =
+                "func helper(): int {\n" +     // 1
+                "    var b: int = 7\n" +        // 2 — lib BP
+                "    return b\n" +              // 3
+                "}\n";
+            string mainBody =
+                "include \"lib.ffs\"\n" +       // 1
+                "func main() {\n" +             // 2
+                "    var x: int = 1\n" +        // 3 — main BP
+                "    var r: int = helper()\n" + // 4
+                "}\n";
+            var (mainPath, libPath) = WriteCrossFileFixture("x03", mainBody, libBody);
+            try
+            {
+                var session = new DapBatchSession();
+                session.AddRequest("initialize", new JsonObject());
+                session.AddLaunch(mainPath);
+                session.AddRequest("setBreakpoints", MakeSetBreakpointsArgs(mainPath, 3));
+                session.AddRequest("setBreakpoints", MakeSetBreakpointsArgs(libPath, 2));
+                session.AddRequest("configurationDone", new JsonObject());
+                session.AddContinue();   // resume past the first hit
+                session.AddContinue();   // resume past the second hit
+                session.AddRequest("disconnect", new JsonObject());
+                session.Run();
+
+                session.SkipUntilResponse("launch");
+                var bp1 = session.ExpectResponse("setBreakpoints");
+                Assert((bp1?.GetObject("body")?.GetArray("breakpoints")?[0] as JsonObject)?.GetBool("verified") == true,
+                    "DAP-X03: main BP verified");
+                var bp2 = session.ExpectResponse("setBreakpoints");
+                Assert((bp2?.GetObject("body")?.GetArray("breakpoints")?[0] as JsonObject)?.GetBool("verified") == true,
+                    "DAP-X03: lib BP verified after second setBreakpoints");
+
+                var stopped1 = session.ExpectEvent("stopped");
+                Assert(stopped1 != null, "DAP-X03: first stop received (main)");
+                var stopped2 = session.ExpectEvent("stopped");
+                Assert(stopped2 != null, "DAP-X03: second stop received (lib) — proves first request was NOT cleared");
+            }
+            finally { CleanupFixture(mainPath); }
+        }
+
+        // ===== Test DAP-X04: unknown source.path → unverified, no state change =====
+        // After setting a real BP in lib.ffs, a setBreakpoints for an unrelated file
+        // (not the launch program, not a known included file) must return unverified
+        // and must not clear the lib breakpoint.
+        {
+            string libBody =
+                "func helper(): int {\n" +
+                "    var z: int = 9\n" +     // 2 — lib BP
+                "    return z\n" +
+                "}\n";
+            string mainBody =
+                "include \"lib.ffs\"\n" +
+                "func main() {\n" +
+                "    var r: int = helper()\n" +
+                "}\n";
+            var (mainPath, libPath) = WriteCrossFileFixture("x04", mainBody, libBody);
+            string foreignPath = Path.Combine(Path.GetTempPath(), $"dap_x04_foreign_{Guid.NewGuid():N}.ffs");
+            try
+            {
+                var session = new DapBatchSession();
+                session.AddRequest("initialize", new JsonObject());
+                session.AddLaunch(mainPath);
+                session.AddRequest("setBreakpoints", MakeSetBreakpointsArgs(libPath, 2));
+                session.AddRequest("setBreakpoints", MakeSetBreakpointsArgs(foreignPath, 1, 2));
+                session.AddRequest("configurationDone", new JsonObject());
+                session.AddContinue();
+                session.AddRequest("disconnect", new JsonObject());
+                session.Run();
+
+                session.SkipUntilResponse("launch");
+                var bpLib = session.ExpectResponse("setBreakpoints");
+                Assert((bpLib?.GetObject("body")?.GetArray("breakpoints")?[0] as JsonObject)?.GetBool("verified") == true,
+                    "DAP-X04: lib BP verified");
+
+                var bpForeign = session.ExpectResponse("setBreakpoints");
+                var foreignBps = bpForeign?.GetObject("body")?.GetArray("breakpoints");
+                bool allUnverified = foreignBps != null && foreignBps.Count == 2;
+                if (allUnverified)
+                {
+                    foreach (var b in foreignBps)
+                        if ((b as JsonObject)?.GetBool("verified") == true) { allUnverified = false; break; }
+                }
+                Assert(allUnverified, "DAP-X04: foreign-path breakpoints all verified=false");
+
+                var stopped = session.ExpectEvent("stopped");
+                Assert(stopped != null, "DAP-X04: lib BP still hits after unrelated request");
+            }
+            finally { CleanupFixture(mainPath); }
+        }
+
+        // ===== Test DAP-X05: path normalization for included files =====
+        // Sending source.path with redundant "./" segments must still resolve to the same fileId.
+        {
+            string libBody =
+                "func helper(): int {\n" +
+                "    var q: int = 5\n" +     // 2
+                "    return q\n" +
+                "}\n";
+            string mainBody =
+                "include \"lib.ffs\"\n" +
+                "func main() {\n" +
+                "    var r: int = helper()\n" +
+                "}\n";
+            var (mainPath, libPath) = WriteCrossFileFixture("x05", mainBody, libBody);
+            // Build an unnormalized variant of libPath
+            string unnormalizedLib = Path.Combine(Path.GetDirectoryName(libPath) ?? ".", ".",
+                Path.GetFileName(libPath));
+            try
+            {
+                var session = new DapBatchSession();
+                session.AddRequest("initialize", new JsonObject());
+                session.AddLaunch(mainPath);
+                session.AddRequest("setBreakpoints", MakeSetBreakpointsArgs(unnormalizedLib, 2));
+                session.AddRequest("configurationDone", new JsonObject());
+                session.AddContinue();
+                session.AddRequest("disconnect", new JsonObject());
+                session.Run();
+
+                session.SkipUntilResponse("launch");
+                var bpResp = session.ExpectResponse("setBreakpoints");
+                var bps = bpResp?.GetObject("body")?.GetArray("breakpoints");
+                Assert((bps?[0] as JsonObject)?.GetBool("verified") == true,
+                    "DAP-X05: unnormalized included path verified");
+
+                var stopped = session.ExpectEvent("stopped");
+                Assert(stopped != null, "DAP-X05: BP still hits with unnormalized path");
+            }
+            finally { CleanupFixture(mainPath); }
+        }
+
+        // ===== Test DAP-X06: diamond include — owner-only attribution =====
+        // base.ffs is included by both a.ffs and b.ffs, both included by main.ffs.
+        // A breakpoint in base.ffs must hit when base.ffs's function runs (regardless of caller),
+        // and is recorded under base.ffs's fileId (not duplicated for each include path).
+        {
+            string baseBody =
+                "func basef(): int {\n" +
+                "    var v: int = 99\n" +    // 2
+                "    return v\n" +
+                "}\n";
+            string aBody =
+                "include \"base.ffs\"\n" +
+                "func via_a(): int { return basef() }\n";
+            string bBody =
+                "include \"base.ffs\"\n" +
+                "func via_b(): int { return basef() }\n";
+            string mainBody =
+                "include \"a.ffs\"\n" +
+                "include \"b.ffs\"\n" +
+                "func main() {\n" +
+                "    var r: int = via_a() + via_b()\n" +
+                "}\n";
+            string dir = Path.Combine(Path.GetTempPath(), $"dap_x06_{Guid.NewGuid():N}");
+            Directory.CreateDirectory(dir);
+            string basePath = Path.Combine(dir, "base.ffs");
+            string aPath = Path.Combine(dir, "a.ffs");
+            string bPath = Path.Combine(dir, "b.ffs");
+            string mainPath = Path.Combine(dir, "main.ffs");
+            File.WriteAllText(basePath, baseBody);
+            File.WriteAllText(aPath, aBody);
+            File.WriteAllText(bPath, bBody);
+            File.WriteAllText(mainPath, mainBody);
+            try
+            {
+                var session = new DapBatchSession();
+                session.AddRequest("initialize", new JsonObject());
+                session.AddLaunch(mainPath);
+                session.AddRequest("setBreakpoints", MakeSetBreakpointsArgs(basePath, 2));
+                session.AddRequest("configurationDone", new JsonObject());
+                session.AddContinue();   // first hit: from via_a
+                session.AddContinue();   // second hit: from via_b
+                session.AddRequest("disconnect", new JsonObject());
+                session.Run();
+
+                session.SkipUntilResponse("launch");
+                var bpResp = session.ExpectResponse("setBreakpoints");
+                Assert((bpResp?.GetObject("body")?.GetArray("breakpoints")?[0] as JsonObject)?.GetBool("verified") == true,
+                    "DAP-X06: base.ffs BP verified through diamond include");
+
+                var s1 = session.ExpectEvent("stopped");
+                Assert(s1 != null, "DAP-X06: first stop in basef (via_a path)");
+                var s2 = session.ExpectEvent("stopped");
+                Assert(s2 != null, "DAP-X06: second stop in basef (via_b path) — diamond include hits twice as expected");
+            }
+            finally
+            {
+                try { Directory.Delete(dir, true); } catch { }
+            }
+        }
+
+        // ===== Test DAP-X07 (Phase 3): top-level main frame reports main.ffs source =====
+        // When execution stops at a BP inside main.ffs, the top frame's source.path must be
+        // main.ffs, not the included file. (Counterpart to X02 which checked included path.)
+        {
+            string libBody =
+                "func helper(): int { return 1 }\n";
+            string mainBody =
+                "include \"lib.ffs\"\n" +       // 1
+                "func main() {\n" +             // 2
+                "    var x: int = 1\n" +        // 3 — main BP
+                "    var r: int = helper()\n" + // 4
+                "}\n";
+            var (mainPath, libPath) = WriteCrossFileFixture("x07", mainBody, libBody);
+            try
+            {
+                var session = new DapBatchSession();
+                session.AddRequest("initialize", new JsonObject());
+                session.AddLaunch(mainPath);
+                session.AddRequest("setBreakpoints", MakeSetBreakpointsArgs(mainPath, 3));
+                session.AddRequest("configurationDone", new JsonObject());
+                session.AddContinue();
+                session.AddStackTrace();
+                session.AddRequest("disconnect", new JsonObject());
+                session.Run();
+
+                session.SkipUntilResponse("launch");
+                session.ExpectResponse("setBreakpoints");
+                var stopped = session.ExpectEvent("stopped");
+                Assert(stopped != null, "DAP-X07: stopped at main BP");
+
+                var stResp = session.ExpectResponse("stackTrace");
+                var frames = stResp?.GetObject("body")?.GetArray("stackFrames");
+                var top = frames?[0] as JsonObject;
+                string topPath = top?.GetObject("source")?.GetString("path");
+                Assert(!string.IsNullOrEmpty(topPath) &&
+                    string.Equals(Path.GetFullPath(topPath), Path.GetFullPath(mainPath),
+                        StringComparison.OrdinalIgnoreCase),
+                    $"DAP-X07 (Phase 3): top frame source.path is main.ffs, got '{topPath}'");
+            }
+            finally { CleanupFixture(mainPath); }
+        }
+
+        // ================================================================
         // Summary
         // ================================================================
         Debug.Log($"\n===== DapTests: {passed} passed, {failed} failed =====");

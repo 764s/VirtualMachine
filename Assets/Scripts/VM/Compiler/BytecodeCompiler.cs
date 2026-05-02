@@ -443,7 +443,7 @@ namespace FFVM.Compiler
             // and resolved lazily when the first per-function origin is encountered (or stays "" if absent).
             _sourceFileIds = new List<int>();
             _sourceFiles = new List<string> { _mainFilePath ?? "" };
-            _fileIdTable = new Dictionary<string, int>(System.StringComparer.Ordinal);
+            _fileIdTable = new Dictionary<string, int>(System.StringComparer.OrdinalIgnoreCase);
             if (_mainFilePath != null) _fileIdTable[_mainFilePath] = 0;
             _currentFileId = 0;
             _symbolEntries = new List<SymbolEntry>();
